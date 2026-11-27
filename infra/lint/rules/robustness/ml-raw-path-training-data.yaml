@@ -12,8 +12,9 @@ prompt: |-
   recipe-drift check also fall away, because both ride on the handle's record.
   Build components with the versioned data builders (`tokenized`, `pretokenized`,
   `apply`) and assemble the mix with `mixture()`
-  (`lib/marin/src/marin/experiment/data.py`); the fingerprint then covers the
-  source pin plus the transform config. Register pre-existing output with
+  (`lib/marin/src/marin/experiment/data.py`); the fingerprint covers dependency
+  identities and the transform config. Record source pins in adoption metadata
+  and bump fixed versions when recipes or pins change. Register pre-existing output with
   `ArtifactStep.adopt(name, version, source=…)` instead of pointing at it raw.
   See docs/references/sft-mixes.md.
 
@@ -36,7 +37,8 @@ prompt: |-
 
   **Good example:**
   ```python
-  handle = tokenized("sft-v7", tokenizer=marin_tokenizer, raw=normalize_variant, glob="**/*.parquet", version="2026.11.05")
+  handle = pretokenized("sft-v7", repo_id="org/sft-v7-cache", revision="<immutable commit>",
+                        tokenizer=marin_tokenizer, version="2026.11.05")
   data = lambda ctx: mixture(ctx, train={handle: 1.0})
 
   handle = ArtifactStep.adopt("sft-v7-cache", "2026.11.05", "gs://marin-us-central2/tokenized/sft-v7",

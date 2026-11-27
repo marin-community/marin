@@ -2,9 +2,10 @@
 
 An SFT mix is [`mixture()`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/experiment/data.py)
 over versioned artifact handles. Every component carries a `name@version` identity
-and a fingerprint, so the exact mix of a run is recoverable from its
-`.artifact.json` record. This page defines the three layers of a mix (source,
-variant, mix) and the recovery procedure.
+and a recipe fingerprint. The run's `.artifact.json` record identifies its mix;
+recovering the source bytes also requires immutable inputs and retained provenance.
+This page defines the three layers of a mix (source, variant, mix) and the recovery
+procedure.
 
 RL task sources are cataloged as `RlDataSource` entries
 ([source.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py);
@@ -31,6 +32,40 @@ chat), `rendered` (Marin chat template), and `normalized` (deduplicated text).
 is the registry row for text and pretraining sources; its `normalize_steps` chain
 ends at the normalized output that downstream steps tokenize.
 
+Datakit sources expose `StepSpec`s, not `ArtifactStep` handles. Build the chosen
+source's normalization graph first, then adopt the completed output in the
+experiment that defines the mix. `apply()` does not turn a `StepSpec` into a
+dependency, and `lower()` converts only from `ArtifactStep` to `StepSpec`.
+
+For an already-built `source: DatakitChatSource`, retain its upstream revision
+pins in `upstream_pins` and register the normalized output:
+
+```python
+from marin.execution.lazy import ArtifactStep
+from marin.experiment.data import tokenized
+
+normalized = source.normalized
+raw = ArtifactStep.adopt(
+    f"sft/{source.name}/normalized",
+    "2026.11.27",
+    source=normalized.output_path,
+    config={"step": normalized.name_with_hash, "upstream_pins": upstream_pins},
+)
+cache = tokenized(
+    f"sft/{source.name}/tokenized",
+    version="2026.11.27",
+    tokenizer=marin_tokenizer,
+    raw=raw,
+    glob="outputs/main/*.parquet",
+)
+```
+
+Adoption records the selected location and supplied metadata; it neither runs
+Datakit's graph nor reconstructs its upstream provenance. Keep the source's
+receipts and pins, and keep the adopted data immutable. The glob above selects
+normalized main output and excludes the duplicate side output. A variant can
+consume `raw` through `apply()` before tokenization.
+
 Rollout-transcript corpora in
 [`experiments/rollout_data/`](https://github.com/marin-community/marin/tree/main/experiments/rollout_data)
 are ordinary tokenized sources: pre-recorded transcripts used like SFT or
@@ -44,9 +79,17 @@ Build it with
 [`apply()`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/execution/lazy.py)
 or a custom `ArtifactStep` builder in `experiments/**`. A handle input
 contributes its `name@version` to the step identity, and every other input is a
-literal that bears identity, so the variant's fingerprint covers the source pin
-plus the transform config. A changed filter threshold produces a new fingerprint
-and a new output location; the old artifact stays in place.
+literal that bears identity. The variant's fingerprint covers its dependency's
+`name@version` and the transform config; it does not recursively hash the
+dependency's config. Record source pins in the adoption config and bump the
+adopted handle's version when those pins change.
+
+Bump the variant's explicit version whenever its recipe changes, including a
+filter threshold. A changed config changes the fingerprint, but a fixed
+`name@version` still resolves to `{prefix}/{name}/{version}`. If that output
+already exists, the default drift check warns and reuses it. A new version gives
+the changed recipe a distinct output location. Bump downstream tokenized-cache
+and training versions when their dependency identities change too.
 
 ## Mix
 
@@ -81,7 +124,8 @@ revision or name the artifact.
 
 ## Recover a run's mix
 
-Every step output is fingerprint-addressed and carries a `.artifact.json` record
+Produced artifact handles use `{prefix}/{name}/{version}` output paths and carry
+a `.artifact.json` record
 ([artifact.py](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/execution/artifact.py),
 `ArtifactRecord`). `read_record(output_path)` reads it back. The record carries:
 
@@ -104,9 +148,11 @@ For a training run or checkpoint, read the record at the run's output path. The
   pre-existing location, which may carry no record.
 - `shuffle`, `permutation_type`, `tokenizer`.
 
-Each component path carries its own record with the component's `name@version`,
-`fingerprint`, and `deps`. That chain reaches the source pins and the transform
-configs, so it answers which exact bytes trained the model.
+Produced component paths carry records with `name@version`, `fingerprint`, and
+`deps`. For adopted data, read the registration record at its canonical
+`{prefix}/{name}/{version}` path; the source location may have no record. Trace
+the dependency records and adoption config back to the source pins and transform
+configs. Missing receipts or mutable adopted data prevent exact byte recovery.
 
 ```python
 from marin.execution.artifact import read_record
@@ -148,8 +194,8 @@ cache materializes first and the data config cannot drift from the dependencies.
 
 A training component addressed by a literal `s3://` or `gs://` cache prefix, or
 by a bare directory prefix, has no `name@version` identity. The path's contents
-can change under the run, the tokenizer check and the drift check do not apply,
-and the run's record cannot say which bytes trained the model. Pass handles
+can change under the run, the handle-based metadata and drift checks do not apply,
+and the run's record alone cannot identify the source bytes. Pass handles
 instead, and adopt existing data with `pretokenized()` or `adopt()`. The advisory
 lint rule `ml-raw-path-training-data`
 ([infra/lint/rules](https://github.com/marin-community/marin/tree/main/infra/lint/rules/robustness))
