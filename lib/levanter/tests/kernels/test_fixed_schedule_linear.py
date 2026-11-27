@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Run the four-device cases on TPUv4.
+"""Run the four-device cases on v4-8, v5p-8, or v6e-4.
 
 uv run --package marin-levanter --extra tpu --group test pytest -n 0 -m manual \
     lib/levanter/tests/kernels/test_fixed_schedule_linear.py -k four_device
@@ -23,15 +23,15 @@ pytestmark = pytest.mark.manual
 
 
 @pytest.fixture(autouse=True)
-def require_tpu_v4(request):
+def require_supported_tpu(request):
     if jax.default_backend() != "tpu":
         pytest.skip("Pallas fixed-schedule tests require an actual TPU runtime")
     devices = jax.devices()
-    if not devices or "tpu v4" not in devices[0].device_kind.lower():
-        pytest.skip("fixed-schedule linear arithmetic is qualified on TPUv4")
+    if devices[0].device_kind.lower() not in ("tpu v4", "tpu v5", "tpu v5p", "tpu v6 lite", "tpu v6e"):
+        pytest.skip("requires TPU v4, v5p, or v6e")
     if "four_device" not in request.node.name:
         if len(devices) != 1 or len(jax.local_devices()) != 1:
-            pytest.skip("the historical single-device cases require one visible TPUv4 device")
+            pytest.skip("requires one visible TPU device")
     if "four_device" in request.node.name:
         with jax.set_mesh(compact_grug_mesh()):
             yield
@@ -54,7 +54,7 @@ def _inputs(m: int, d: int, input_dtype: jnp.dtype, weight_dtype: jnp.dtype) -> 
 def _four_device_shardings() -> tuple[Mesh, NamedSharding, NamedSharding]:
     devices = jax.devices()
     if len(devices) != 4 or len(jax.local_devices()) != 4:
-        pytest.skip("requires four same-process TPUv4 devices")
+        pytest.skip("requires four same-process TPU devices")
     mesh = compact_grug_mesh()
     row_spec = P(("replica_dcn", "data", "expert"), None)
     return mesh, NamedSharding(mesh, row_spec), NamedSharding(mesh, P(None, None))
@@ -188,7 +188,7 @@ def test_fixed_schedule_four_device_explicit_mesh_matches_replicated_rows(m, d, 
 )
 @pytest.mark.parametrize("d", [128, 256])
 def test_fixed_schedule_four_device_custom_vjp_matches_independent_reference(d, input_dtype, weight_dtype):
-    _, row_sharding, replicated_sharding = _four_device_shardings()
+    mesh, row_sharding, replicated_sharding = _four_device_shardings()
     x, w = _inputs(128, d, input_dtype, weight_dtype)
     row_x = jax.device_put(x, row_sharding)
     replicated_x = jax.device_put(x, replicated_sharding)
@@ -207,16 +207,38 @@ def test_fixed_schedule_four_device_custom_vjp_matches_independent_reference(d, 
         replicated_x, replicated_w, replicated_cotangent
     )
 
-    def reference_loss(x_, w_):
-        return jnp.sum(_highest_reference(x_, w_) * replicated_cotangent)
+    def reference_loss(x_, w_, cotangent):
+        return jnp.sum(_highest_reference(x_, w_) * cotangent)
 
-    reference_dx, reference_dw = jax.jit(jax.grad(reference_loss, argnums=(0, 1)))(replicated_x, replicated_w)
+    def reference_weight_gradient(activations, weights, cotangent):
+        # Differentiate a native dot in FP32 on each row shard. Casting the
+        # local gradients to the storage dtype before their sum can round twice.
+        partial_dw = jax.grad(reference_loss, argnums=1)(
+            activations,
+            weights.astype(jnp.float32),
+            cotangent.astype(jnp.float32),
+        )
+        return jax.lax.psum(partial_dw, "data").astype(weights.dtype)
+
+    reference_grad = jax.jit(jax.grad(reference_loss, argnums=(0, 1)))
+    row_reference_dx, _ = reference_grad(row_x, replicated_w, row_cotangent)
+    replicated_reference_dx, replicated_reference_dw = reference_grad(replicated_x, replicated_w, replicated_cotangent)
+    rounded_x = jax.device_put(np.asarray(x).astype(weight_dtype).astype(np.float32), row_sharding)
+    row_reference_dw = jax.jit(
+        jax.shard_map(
+            reference_weight_gradient,
+            mesh=mesh,
+            in_specs=(row_sharding.spec, replicated_sharding.spec, row_sharding.spec),
+            out_specs=replicated_sharding.spec,
+            check_vma=False,  # Keep the autodiff reduction local to each shard.
+        )
+    )(rounded_x, replicated_w, row_cotangent)
 
     np.testing.assert_array_equal(_raw_bits(primal), _raw_bits(replicated_primal))
-    np.testing.assert_allclose(dx, reference_dx, atol=1e-5, rtol=1e-4)
-    np.testing.assert_allclose(dw, reference_dw, atol=1e-5, rtol=1e-4)
-    np.testing.assert_allclose(dx, replicated_dx, atol=1e-5, rtol=1e-4)
-    np.testing.assert_allclose(dw, replicated_dw, atol=1e-5, rtol=1e-4)
+    np.testing.assert_allclose(dx, row_reference_dx, atol=1e-5, rtol=1e-4)
+    np.testing.assert_allclose(dw, row_reference_dw, atol=1e-5, rtol=1e-4)
+    np.testing.assert_allclose(replicated_dx, replicated_reference_dx, atol=1e-5, rtol=1e-4)
+    np.testing.assert_allclose(replicated_dw, replicated_reference_dw, atol=1e-5, rtol=1e-4)
     assert primal.dtype == dx.dtype == input_dtype
     assert dw.dtype == weight_dtype
     assert primal.sharding == row_sharding
@@ -257,3 +279,27 @@ def test_fixed_schedule_four_device_lowered_forward_backward_have_shard_map_with
         assert "shard_map" in jaxpr_text
         assert "all_gather" not in jaxpr_text
         assert "all_gather" not in stablehlo_text
+
+
+@pytest.mark.parametrize(
+    "input_dtype,weight_dtype",
+    [(jnp.bfloat16, jnp.bfloat16), (jnp.float32, jnp.bfloat16), (jnp.float32, jnp.float32)],
+)
+@pytest.mark.parametrize("d,n", [(385, 1023), (641, 2560)])
+def test_fixed_schedule_four_device_frozen_row_across_batches(input_dtype, weight_dtype, d, n):
+    _, row_sharding, replicated_sharding = _four_device_shardings()
+    rng = np.random.default_rng(23)
+    target = rng.standard_normal((1, d), dtype=np.float32).astype(input_dtype)
+    weights = rng.standard_normal((d, n), dtype=np.float32).astype(weight_dtype)
+    fixed = jax.jit(fixed_schedule_linear)
+    w = jax.device_put(weights, replicated_sharding)
+    expected = np.asarray(fixed(jax.device_put(target, replicated_sharding), w))[0]
+
+    for m in (4, 4 * 127, 4 * 257, 4 * 513):
+        batch = rng.standard_normal((m, d), dtype=np.float32).astype(input_dtype)
+        # Move the row across devices and across local tile boundaries.
+        positions = np.array([0, m // 2 - 1, m - 1])
+        batch[positions] = target
+        actual = np.asarray(fixed(jax.device_put(batch, row_sharding), w))[positions]
+        raw_dtype = np.uint16 if input_dtype == jnp.bfloat16 else np.uint32
+        np.testing.assert_array_equal(actual.view(raw_dtype), np.broadcast_to(expected.view(raw_dtype), actual.shape))

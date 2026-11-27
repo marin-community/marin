@@ -1,11 +1,11 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""TPUv4 fixed-schedule dense projection used by the opt-in Snowball path."""
+"""Batch-invariant TPU dense projection used by the opt-in Snowball path."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from dataclasses import dataclass
 from functools import partial
 import math
 
@@ -19,6 +19,61 @@ from jaxtyping import Array, Float
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 
 _BLOCK_SIZE = 128
+
+
+@dataclass(frozen=True)
+class _BlockSizes:
+    m: int
+    k: int
+    n: int
+
+
+@dataclass(frozen=True)
+class _TileSchedule:
+    k: int
+    small_output: tuple[int, int]
+    decode: tuple[int, int]
+    prefill: tuple[int, int]
+    vocabulary: tuple[int, int]
+
+
+# Each TPU generation keeps the same FP32 reduction order across all row
+# and column tiles. The tuples specify the independent (M, N) dimensions.
+_TILE_SCHEDULES = {
+    "v4": _TileSchedule(
+        k=_BLOCK_SIZE,
+        small_output=(128, 128),
+        decode=(128, 512),
+        prefill=(512, 256),
+        vocabulary=(128, 768),
+    ),
+    "v5p": _TileSchedule(
+        k=512,
+        small_output=(128, 128),
+        decode=(256, 512),
+        prefill=(512, 512),
+        vocabulary=(128, 768),
+    ),
+    "v6e": _TileSchedule(
+        k=256,
+        small_output=(256, 256),
+        decode=(128, 768),
+        prefill=(512, 512),
+        vocabulary=(128, 768),
+    ),
+}
+
+
+def _block_sizes(generation: str, rows: int, columns: int) -> _BlockSizes:
+    schedule = _TILE_SCHEDULES[generation]
+    # Avoid padding the weight matrix of wide vocabulary projections.
+    if columns >= 8192 and columns % schedule.vocabulary[1] == 0:
+        m, n = schedule.vocabulary
+    elif columns >= 1024:
+        m, n = schedule.prefill if rows >= 512 else schedule.decode
+    else:
+        m, n = schedule.small_output
+    return _BlockSizes(m, schedule.k, n)
 
 
 class FixedScheduleLinearUnsupportedError(NotImplementedError):
@@ -113,15 +168,27 @@ def _canonicalize_partition_spec(spec: P, mesh: jax.sharding.Mesh | jax.sharding
     return P(*canonical_entries)
 
 
+def _tpu_generation() -> str:
+    if jax.default_backend() != "tpu":
+        raise FixedScheduleLinearUnsupportedError("fixed-schedule projections require the TPU backend")
+    kind = jax.devices()[0].device_kind
+    match kind.lower():
+        case "tpu v4":
+            return "v4"
+        case "tpu v5" | "tpu v5p":
+            return "v5p"
+        case "tpu v6 lite" | "tpu v6e":
+            return "v6e"
+    raise FixedScheduleLinearUnsupportedError(f"fixed-schedule projections require TPU v4, v5p, or v6e; got {kind}")
+
+
 def _validate_four_device_mesh(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> None:
     if jax.device_count() != 4 or jax.local_device_count() != 4:
         raise FixedScheduleLinearUnsupportedError(
-            "multi-device fixed-schedule projections require exactly four same-process TPUv4 devices; "
+            "multi-device fixed-schedule projections require exactly four same-process TPU devices; "
             f"got global={jax.device_count()}, local={jax.local_device_count()}"
         )
     devices = jax.devices()
-    if any("tpu v4" not in device.device_kind.lower() for device in devices):
-        raise FixedScheduleLinearUnsupportedError("the four-device fixed-schedule mesh requires TPUv4 devices")
     if tuple(size for size in mesh.shape.values() if size > 1) != (4,):
         raise FixedScheduleLinearUnsupportedError(
             "the four-device fixed-schedule mesh must have a single axis spanning all four devices"
@@ -132,7 +199,7 @@ def _validate_four_device_mesh(mesh: jax.sharding.Mesh | jax.sharding.AbstractMe
     if isinstance(mesh, jax.sharding.Mesh):
         mesh_devices = tuple(mesh.devices.flat)
         if len(mesh_devices) != 4 or set(mesh_devices) != set(devices):
-            raise FixedScheduleLinearUnsupportedError("the four-device mesh must contain all four local TPUv4 devices")
+            raise FixedScheduleLinearUnsupportedError("the four-device mesh must contain all four local TPU devices")
 
 
 def _validate_named_sharding(x: jax.Array, w: jax.Array) -> tuple[NamedSharding, P, P, P, P] | None:
@@ -199,14 +266,7 @@ def _validate_named_sharding(x: jax.Array, w: jax.Array) -> tuple[NamedSharding,
     return x_sharding, x_spec, w_spec, x_public_spec, w_public_spec
 
 
-def _validate(x: jax.Array, w: jax.Array) -> tuple[int, int, int]:
-    if jax.default_backend() != "tpu":
-        raise FixedScheduleLinearUnsupportedError("fixed-schedule projections require the TPU backend")
-    device_kind = jax.devices()[0].device_kind.lower()
-    if "tpu v4" not in device_kind:
-        raise FixedScheduleLinearUnsupportedError(
-            "fixed-schedule projections require a TPU v4 device; got " + jax.devices()[0].device_kind
-        )
+def _validate(x: jax.Array, w: jax.Array) -> None:
     if x.ndim != 2 or w.ndim != 2:
         raise FixedScheduleLinearUnsupportedError(f"expected x=[M,D], w=[D,N], got {x.shape} and {w.shape}")
     if x.shape[1] != w.shape[0]:
@@ -214,29 +274,33 @@ def _validate(x: jax.Array, w: jax.Array) -> tuple[int, int, int]:
     supported_dtypes = (jnp.dtype(jnp.float32), jnp.dtype(jnp.bfloat16))
     if x.dtype not in supported_dtypes or w.dtype not in supported_dtypes:
         raise FixedScheduleLinearUnsupportedError("x and w must use float32 or bfloat16 storage")
-    if x.shape[1] % _BLOCK_SIZE or w.shape[1] % _BLOCK_SIZE:
-        raise FixedScheduleLinearUnsupportedError(
-            f"projection dimensions must be multiples of {_BLOCK_SIZE}: {x.shape} and {w.shape}"
-        )
-    return x.shape[0], x.shape[1], w.shape[1]
+    if not all((x.shape[0], x.shape[1], w.shape[1])):
+        raise FixedScheduleLinearUnsupportedError(f"projection dimensions must be positive: {x.shape} and {w.shape}")
 
 
-def _pallas_forward_local(x: jax.Array, w: jax.Array) -> jax.Array:
-    m, d, n = _validate(x, w)
+def _pallas_forward_local(x: jax.Array, w: jax.Array, *, generation: str) -> jax.Array:
+    return _pallas_forward_tiled(x, w, blocks=_block_sizes(generation, x.shape[0], w.shape[1]))
+
+
+def _pallas_forward_tiled(x: jax.Array, w: jax.Array, *, blocks: _BlockSizes) -> jax.Array:
+    m, d = x.shape
+    n = w.shape[1]
+    bm, bk, bn = blocks.m, blocks.k, blocks.n
     x_compute = x.astype(w.dtype)
-    m_padded = (m + _BLOCK_SIZE - 1) // _BLOCK_SIZE * _BLOCK_SIZE
-    x_padded = jnp.pad(x_compute, ((0, m_padded - m), (0, 0)))
-    k_steps = d // _BLOCK_SIZE
+    pad_m, pad_k, pad_n = -m % bm, -d % bk, -n % bn
+    x_padded = jnp.pad(x_compute, ((0, pad_m), (0, pad_k)))
+    w_padded = jnp.pad(w, ((0, pad_k), (0, pad_n)))
+    k_steps = (d + pad_k) // bk
     kernel = _make_fixed_schedule_kernel(k_steps)
-    output_spec = jax.ShapeDtypeStruct((m_padded, n), x.dtype)
+    output_spec = jax.ShapeDtypeStruct((m + pad_m, n + pad_n), x.dtype)
     input_specs = [
-        pl.BlockSpec((_BLOCK_SIZE, _BLOCK_SIZE), lambda i, j, k: (i, k)),
-        pl.BlockSpec((_BLOCK_SIZE, _BLOCK_SIZE), lambda i, j, k: (k, j)),
+        pl.BlockSpec((bm, bk), lambda i, j, k: (i, k)),
+        pl.BlockSpec((bk, bn), lambda i, j, k: (k, j)),
     ]
-    body_cost = pl.estimate_cost(_cost_reference, x_compute, w)
+    body_cost = pl.estimate_cost(_cost_reference, x_padded, w_padded)
     cost_estimate = with_io_bytes_accessed(
         body_cost,
-        kernel_inputs_specs=(x_padded, w),
+        kernel_inputs_specs=(x_padded, w_padded),
         kernel_outputs_specs=output_spec,
     )
     output = pl.pallas_call(
@@ -244,18 +308,21 @@ def _pallas_forward_local(x: jax.Array, w: jax.Array) -> jax.Array:
         grid_spec=pltpu.PrefetchScalarGridSpec(
             num_scalar_prefetch=0,
             in_specs=input_specs,
-            out_specs=pl.BlockSpec((_BLOCK_SIZE, _BLOCK_SIZE), lambda i, j, k: (i, j)),
-            scratch_shapes=[pltpu.VMEM((_BLOCK_SIZE, _BLOCK_SIZE), jnp.float32)],
-            grid=(m_padded // _BLOCK_SIZE, n // _BLOCK_SIZE, k_steps),
+            out_specs=pl.BlockSpec((bm, bn), lambda i, j, k: (i, j)),
+            scratch_shapes=[pltpu.VMEM((bm, bn), jnp.float32)],
+            grid=((m + pad_m) // bm, (n + pad_n) // bn, k_steps),
         ),
         out_shape=output_spec,
         compiler_params=pltpu.CompilerParams(dimension_semantics=("parallel", "parallel", "arbitrary")),
         cost_estimate=cost_estimate,
-    )(x_padded, w)
-    return output[:m].astype(x.dtype)
+    )(x_padded, w_padded)
+    return output[:m, :n]
 
 
 def _pallas_forward(x: jax.Array, w: jax.Array) -> jax.Array:
+    generation = _tpu_generation()
+    _validate(x, w)
+    body = partial(_pallas_forward_local, generation=generation)
     sharding = _validate_named_sharding(x, w)
     if sharding is None:
         for name, value in (("x", x), ("w", w)):
@@ -265,10 +332,9 @@ def _pallas_forward(x: jax.Array, w: jax.Array) -> jax.Array:
                 raise FixedScheduleLinearUnsupportedError(
                     f"{name} must be fully addressable on the single visible device"
                 )
-        return _pallas_forward_local(x, w)
+        return body(x, w)
 
     x_sharding, _, _, x_public_spec, w_public_spec = sharding
-    body: Callable[[jax.Array, jax.Array], jax.Array] = _pallas_forward_local
     local_output = jax.shard_map(
         body,
         mesh=x_sharding.mesh,
@@ -281,12 +347,12 @@ def _pallas_forward(x: jax.Array, w: jax.Array) -> jax.Array:
 
 @jax.custom_vjp
 def fixed_schedule_linear(x: Float[Array, "M D"], w: Float[Array, "D N"]) -> Float[Array, "M N"]:
-    """Apply the measured fixed BM=BK=BN=128 TPU projection schedule.
+    """Apply a batch-invariant dense projection on TPU v4, v5p, or v6e.
 
-    The forward is fixed over the token dimension and uses DEFAULT products with FP32
-    accumulation. Activations are cast to the weight storage dtype for the contraction and
-    outputs are restored to the activation storage dtype. The custom backward uses HIGHEST-
-    precision FP32 GEMMs.
+    Each TPU generation uses a fixed contraction order with FP32 accumulation.
+    Batch size and row sharding may change the output tiling. The forward
+    casts activations to the weight dtype and returns the activation dtype.
+    The custom backward uses FP32 GEMMs at HIGHEST precision.
     """
     return _pallas_forward(x, w)
 
