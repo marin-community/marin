@@ -144,6 +144,8 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
         resources = ResourceConfig.with_tpu(_tpu_types_from_env())
         wandb_group = "canary-ferry-moe"
         wandb_tags = ["canary", "ferry", "grug", "moe"]
+        wandb_finish_timeout = WandbConfig.background_finish_timeout
+        wandb_teardown_timeout = WandbConfig.service_teardown_timeout
 
         # This hardware smoke canary uses a ~21 MB prebuilt cache; restart sampling
         # repeats it for the configured token budget.
@@ -165,6 +167,13 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
         gpu_type = os.environ.get("CANARY_GPU_TYPE", "H100")
         gpu_count = env_int("CANARY_GPU_COUNT", 8)
         gpu_replicas = env_int("CANARY_GPU_REPLICAS", 1)
+        # The default W&B finish and teardown bounds (120 s + 60 s) keep multi-host jobs
+        # inside the JAX shutdown-barrier deadline. A single replica is one host with no
+        # such barrier, and the canary trains for ~90 s, so a stalled upload holds the
+        # whole run: wait longer for it to drain.
+        single_host = gpu_replicas == 1
+        wandb_finish_timeout = 600.0 if single_host else WandbConfig.background_finish_timeout
+        wandb_teardown_timeout = 300.0 if single_host else WandbConfig.service_teardown_timeout
         model = CANARY_MODEL
 
         attention_implementation = os.environ.get("CANARY_ATTENTION_IMPLEMENTATION", _GPU_FA4_CUTE_ATTENTION)
@@ -245,6 +254,8 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
             mode=wandb_mode,
             name=None,
             replicate_path=ctx.output_path,
+            background_finish_timeout=wandb_finish_timeout,
+            service_teardown_timeout=wandb_teardown_timeout,
         )
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
