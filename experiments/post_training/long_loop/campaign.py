@@ -66,6 +66,20 @@ PER_TASK_IMAGE_MACHINE = {
     "startup_timeout": 600,
     "cleanup_timeout": 60,
 }
+# The template for the tasks that declare environment_requirements.required_backend = "daytona"
+# (the x86-only Lego-X contexts the user ruling routes to Daytona): the task artifact carries the
+# routing decision, this map only supplies the machine shape for the declared backend.
+DAYTONA_REQUIRED_MACHINE = {
+    "backend": "daytona",
+    "cpus": 2,
+    "memory_mb": 4096,
+    "storage_mb": 10240,
+    "gpus": 0,
+    "network": "allow",
+    "user": None,
+    "startup_timeout": 600,
+    "cleanup_timeout": 60,
+}
 CAMPAIGN_SECRET_NAMES = (
     "CW_KEY_ID",
     "CW_KEY_SECRET",
@@ -104,6 +118,12 @@ def place_per_task_images(recipe: dict, mix: CampaignMix) -> None:
             **task_spec.get(placement, {}),
             **{dataset: dict(PER_TASK_IMAGE_MACHINE) for dataset in per_task},
         }
+    # Tasks that declare required_backend = "daytona" (the routed x86-only Lego-X contexts)
+    # resolve their machines from this backend template; it is inert for every other task.
+    task_spec["task_machine_by_backend"] = {
+        **task_spec.get("task_machine_by_backend", {}),
+        "daytona": dict(DAYTONA_REQUIRED_MACHINE),
+    }
 
 
 def campaign_round(mix: CampaignMix, version: str, *, max_steps: int) -> AdoptedRlRound:

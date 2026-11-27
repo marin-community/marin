@@ -17,8 +17,25 @@ from skyrl_gym.nemotron_python_tools import (
     NemotronPythonSession,
 )
 from skyrl_train.dataset.tasks import canonical_task_spec
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import (
+    AnswerType,
+    CommandSemantics,
+    ConversationInput,
+    DockerBuildContext,
+    EnvironmentRequirements,
+    FileReward,
+    PlainText,
+    ResourceGroups,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
+    Source,
+    TaskSpec,
+    TextMessage,
+    VerifierCommand,
+)
 from taskcompendium.runtime.environment import validate_machine_spec
+from taskcompendium.runtime.resources import inline_resource
 
 FIXTURE = Path(__file__).with_name("fixtures") / "math_tir_task.json"
 LOCAL_MACHINE = {
@@ -68,6 +85,57 @@ def test_required_backend_round_trips_and_selects_its_machine():
     assert canonical_task_spec(task, CONFIG).task_machine.backend == "local"
     with pytest.raises(ValueError, match="required local backend"):
         canonical_task_spec(task, {**CONFIG, "task_machine_by_backend": {}})
+
+
+def _daytona_routed_task() -> TaskSpec:
+    """A Lego-shaped task whose x86-only build contexts declare the Daytona backend."""
+    build = DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM ubuntu:22.04\n"),))
+    environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_build=build,
+        required_backend=Backend.DAYTONA,
+    )
+    grader = ScriptGrader(
+        argv=("cp", "/source-reward.txt", "/logs/verifier/reward.txt"),
+        cwd="/",
+        environment=EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS,
+            docker_build=build,
+            required_backend=Backend.DAYTONA,
+        ),
+        answer_path=None,
+        collect=(VerifierCommand(argv=("bash", "-c", "true")),),
+        reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),)),
+    )
+    return TaskSpec(
+        id="lego-x-terminal-lego-15k-fixture",
+        source=Source(
+            dataset="Lego-X/Terminal-Lego-15k", revision="a" * 40, row="fixture/task-1", importer_revision="v1"
+        ),
+        context=ConversationInput(events=(TextMessage(role="user", content="route me to daytona"),)),
+        environment_requirements=environment,
+        answer_type=AnswerType.WORKSPACE_STATE,
+        answer_format=PlainText(),
+        grader=grader,
+        resources=ResourceGroups(all=(), worker=(), oracle=(), verifier=()),
+        tags=("harbor",),
+    )
+
+
+def test_required_backend_routes_the_verifier_to_the_same_backend():
+    """The x86-only Daytona-routed tasks' verifier must not fall back to the LOCAL package verifier."""
+    task = _daytona_routed_task()
+    config = {
+        **CONFIG,
+        "task_machine_by_backend": {"local": LOCAL_MACHINE, "daytona": DAYTONA_MACHINE},
+        "verifier_machine_by_dataset": {task.source.dataset: {**LOCAL_MACHINE, "backend": "local"}},
+    }
+    lowered = canonical_task_spec(task, config)
+    assert lowered.task_machine.backend == "daytona"
+    assert lowered.verifier_machine.backend == "daytona"
+    # Without the daytona template the routing fails closed instead of silently binding LOCAL.
+    with pytest.raises(ValueError, match="required daytona backend"):
+        canonical_task_spec(task, {**config, "task_machine_by_backend": {"local": LOCAL_MACHINE}})
 
 
 class _Factory:

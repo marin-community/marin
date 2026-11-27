@@ -13,10 +13,12 @@ from skyrl_train.dataset.tasks import canonical_task_spec
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
+    Backend,
     CommandSemantics,
     ConversationInput,
     ConversationToolCall,
     ConversationTrace,
+    DockerBuildContext,
     EnvironmentRequirements,
     FileReward,
     FunctionDefinition,
@@ -30,6 +32,7 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.runtime.reply_status import reply_status_files
+from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.long_loop.campaign_runtime import bind_runtime
 
@@ -137,3 +140,41 @@ def test_dataset_placement_keeps_its_backend_under_runtime_shapes():
     row = {"task_spec": task.model_dump_json(), "runtime": {"verifier_machine": {"memory_mb": 4096}}}
     lowered = TaskRolloutSpec.model_validate_json(bind_runtime(row, config)["task_rollout_spec"])
     assert (lowered.verifier_machine.backend, lowered.verifier_machine.memory_mb) == ("local", 4096)
+
+
+def test_required_backend_routes_the_verifier_machine_too():
+    """A task that declares its backend routes its grader there as well (the routed x86-only rows)."""
+    build = DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM ubuntu:22.04\n"),))
+    environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_build=build,
+        required_backend=Backend.DAYTONA,
+    )
+    task = TaskSpec(
+        id="lego-x-terminal-lego-15k-routed-fixture",
+        source=Source(dataset="Lego-X/Terminal-Lego-15k", revision="1", row="0", importer_revision="1"),
+        context=ConversationInput(events=(TextMessage(role="user", content="configure the task"),)),
+        environment_requirements=environment,
+        answer_type=AnswerType.WORKSPACE_STATE,
+        answer_format=PlainText(),
+        grader=ScriptGrader(
+            argv=("cp", "/source-reward.txt", "/logs/verifier/reward.txt"),
+            cwd="/",
+            environment=EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS,
+                docker_build=build,
+            ),
+            answer_path=None,
+        ),
+    )
+    local = {**VERIFIER, "backend": "local"}
+    config = {
+        **CONFIG,
+        "task_machine_by_dataset": {task.source.dataset: local},
+        "verifier_machine_by_dataset": {task.source.dataset: local},
+        "task_machine_by_backend": {"daytona": VERIFIER},
+    }
+    lowered = canonical_task_spec(task, config)
+    assert (lowered.task_machine.backend, lowered.verifier_machine.backend) == ("daytona", "daytona")
+    with pytest.raises(ValueError, match="required daytona backend"):
+        canonical_task_spec(task, {**config, "task_machine_by_backend": {}})

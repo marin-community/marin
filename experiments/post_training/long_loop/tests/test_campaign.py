@@ -29,6 +29,7 @@ from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Exe
 
 from experiments.post_training.long_loop import campaign
 from experiments.post_training.long_loop.campaign import (
+    DAYTONA_REQUIRED_MACHINE,
     LOCAL_DISK_ROOT,
     LOCAL_REGISTRY_AUTH_SECRET,
     PER_TASK_IMAGE_MACHINE,
@@ -493,3 +494,6 @@ def test_per_task_image_mix_places_actor_and_grader_on_local():
     ]
     for placement in ("task_machine_by_dataset", "verifier_machine_by_dataset"):
         assert task_spec[placement] == {"laion/rts-1k-rootless-apptainer": PER_TASK_IMAGE_MACHINE}
+    # Tasks that declare required_backend = "daytona" (the routed x86-only Lego-X contexts)
+    # resolve their machines from this backend template; it is inert for every other task.
+    assert task_spec["task_machine_by_backend"]["daytona"] == DAYTONA_REQUIRED_MACHINE

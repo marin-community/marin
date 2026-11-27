@@ -61,7 +61,8 @@ def task_evaluation_identity(task: dict, selection: SelectionManifest | None) ->
 
 def with_evaluation_identities(dataset: Dataset, identities: Iterable[TaskEvaluationIdentity | None]) -> Dataset:
     return dataset.add_column(
-        TASK_EVALUATION_IDENTITY, [identity.model_dump_json() if identity is not None else None for identity in identities]
+        TASK_EVALUATION_IDENTITY,
+        [identity.model_dump_json() if identity is not None else None for identity in identities],
     )
 
 
@@ -207,9 +208,7 @@ def source_row_task(
         source_session["max_turns"] = int(row_turn_limit)
     session = {**source_session, **config.pop("session", {}), "task_session": session_name}
     requirements = (
-        EnvironmentRequirements()
-        if machine is None
-        else EnvironmentRequirements.model_validate(machine["requirements"])
+        EnvironmentRequirements() if machine is None else EnvironmentRequirements.model_validate(machine["requirements"])
     )
     runtime = None if machine is None else MachineRuntimeSpec.model_validate(machine["runtime"])
     task = source_task(prompt, row, config, source, environment=requirements)
@@ -238,9 +237,11 @@ def canonical_task_spec(task: TaskSpec, config: Mapping[str, Any]) -> TaskRollou
     harness = (
         ASSISTANT_PREFIX_HARNESS
         if continues_assistant
-        else TOOL_FREE_HARNESS
-        if task.completion_protocol == TOOL_FREE_HARNESS
-        else config["harness_by_dataset"].get(task.source.dataset, config["default_harness"])
+        else (
+            TOOL_FREE_HARNESS
+            if task.completion_protocol == TOOL_FREE_HARNESS
+            else config["harness_by_dataset"].get(task.source.dataset, config["default_harness"])
+        )
     )
     session = {**config["session"], "task_session": harness}
     if task.source.dataset in config["max_turns_by_dataset"]:
@@ -271,6 +272,11 @@ def canonical_task_spec(task: TaskSpec, config: Mapping[str, Any]) -> TaskRollou
         machine = config.get("verifier_machine_by_dataset", {}).get(task.source.dataset) or (
             config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]
         )
+        if required is not None:
+            # A task that declares its backend routes its verifier there too: the grader
+            # environment builds on the same backend, and validate_machine_spec refuses a
+            # backend whose factory cannot serve the declared requirement.
+            machine = required_backend_machine(config, required)
         verifier = MachineRuntimeSpec.model_validate(machine)
     return rollout_spec(task, session, task_machine=task_machine, verifier_machine=verifier)
 
