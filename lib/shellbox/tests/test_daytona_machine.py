@@ -159,7 +159,7 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
             ) as client:
                 params = CreateSandboxFromSnapshotParams(name="fixture", snapshot="fixture")
                 if failure in {"rejected_post", "prolonged_throttle"}:
-                    sandbox = await _create_sandbox(client, params, 60)
+                    sandbox = await _create_sandbox(client, params, 60, deadline=math.inf)
                     assert sandbox.id == "created-once"
                     attempts = 2 if failure == "rejected_post" else 10
                     assert requests == ["POST"] * attempts
@@ -174,19 +174,19 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
 
                             expiration = asyncio.create_task(expire_when_waiting())
                             try:
-                                await _create_sandbox(client, params, 60)
+                                await _create_sandbox(client, params, 60, deadline=math.inf)
                             finally:
                                 await expiration
                     assert requests == ["POST"]
                 elif failure == "cancelled":
-                    task = asyncio.create_task(_create_sandbox(client, params, 60))
+                    task = asyncio.create_task(_create_sandbox(client, params, 60, deadline=math.inf))
                     await waiting.wait()
                     task.cancel()
                     with pytest.raises(asyncio.CancelledError):
                         await task
                     assert requests == ["POST"]
                 else:
-                    sandbox = await _create_sandbox(client, params, 60)
+                    sandbox = await _create_sandbox(client, params, 60, deadline=math.inf)
                     assert sandbox.id == "created-once"
                     assert requests == ["POST", "GET", "POST", "GET"]
                     assert len(delays) == 1 and delays[0] >= 17
@@ -195,13 +195,16 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
 
 
 @pytest.mark.parametrize(
-    ("message", "retried"),
+    ("message", "budget", "posts_before_failure"),
     [
-        ("Total CPU limit exceeded. Maximum allowed: 6000.", True),
-        ("CPU request 5 exceeds maximum allowed per sandbox (4).", False),
+        ("Total CPU limit exceeded. Maximum allowed: 6000.", math.inf, None),
+        ("Total disk limit exceeded. Maximum allowed: 20000GiB.", 0.1, 1),
+        ("CPU request 5 exceeds maximum allowed per sandbox (4).", math.inf, 1),
     ],
 )
-def test_daytona_creation_waits_for_exhausted_quota_and_rejects_oversized_requests(monkeypatch, message, retried):
+def test_daytona_creation_waits_for_exhausted_quota_until_its_deadline(
+    monkeypatch, message, budget, posts_before_failure
+):
     async def scenario():
         posts = []
 
@@ -224,14 +227,15 @@ def test_daytona_creation_waits_for_exhausted_quota_and_rejects_oversized_reques
                 DaytonaConfig(api_key="fixture", api_url=str(server.make_url("")).rstrip("/"))
             ) as client:
                 params = CreateSandboxFromSnapshotParams(name="fixture", snapshot="fixture")
-                if retried:
-                    sandbox = await _create_sandbox(client, params, 60)
+                deadline = asyncio.get_running_loop().time() + budget
+                if posts_before_failure is None:
+                    sandbox = await _create_sandbox(client, params, 60, deadline=deadline)
                     assert sandbox.id == "created"
                     assert len(posts) == 3
                 else:
-                    with pytest.raises(DaytonaError):
-                        await _create_sandbox(client, params, 60)
-                    assert len(posts) == 1
+                    with pytest.raises(DaytonaError, match=re.escape(message.split(".")[0])):
+                        await _create_sandbox(client, params, 60, deadline=deadline)
+                    assert len(posts) == posts_before_failure
 
     asyncio.run(scenario())
 
@@ -251,7 +255,7 @@ def test_daytona_creation_reports_a_sandbox_removed_while_starting_as_unavailabl
             ) as client:
                 params = CreateSandboxFromSnapshotParams(name="fixture", snapshot="fixture")
                 with pytest.raises(MachineUnavailable):
-                    await _create_sandbox(client, params, 60)
+                    await _create_sandbox(client, params, 60, deadline=math.inf)
 
     asyncio.run(scenario())
 

@@ -118,16 +118,21 @@ def _quota_exhausted(error: DaytonaError) -> bool:
 
 
 async def _create_sandbox(
-    client: AsyncDaytona, params: CreateSandboxFromSnapshotParams | CreateSandboxFromImageParams, timeout: float
+    client: AsyncDaytona,
+    params: CreateSandboxFromSnapshotParams | CreateSandboxFromImageParams,
+    timeout: float,
+    *,
+    deadline: float,
 ) -> AsyncSandbox:
     """Retry throttling and exhausted quota, using a caller-owned name to recover an accepted creation.
 
     Daytona checks and reserves quota inside the create request, so a rejected
-    creation left no sandbox behind. ``timeout`` bounds each attempt; the caller's
-    deadline bounds the retries.
+    creation left no sandbox behind. ``timeout`` bounds each attempt, and
+    ``deadline``, an event-loop time, bounds the quota retries.
 
     Raises:
         MachineUnavailable: Daytona removed the sandbox before it started.
+        DaytonaError: The quota stayed exhausted until the next retry would pass ``deadline``.
     """
     assert params.name is not None
     backoff = ExponentialBackoff(initial=1, maximum=30, factor=2, jitter=0.5)
@@ -157,6 +162,8 @@ async def _create_sandbox(
             if not _quota_exhausted(error):
                 raise
             delay = backoff.next_interval()
+            if asyncio.get_running_loop().time() + delay >= deadline:
+                raise
             logger.warning("Retrying Daytona creation after exhausted quota: delay=%.3f: %s", delay, error)
             await sleep(delay)
 
@@ -820,7 +827,7 @@ class DaytonaMachineFactory:
         async with AsyncExitStack() as lifetime:
             client = await lifetime.enter_async_context(self._clients()())
             timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
-            async with asyncio.timeout(timeout):
+            async with asyncio.timeout(timeout) as startup:
                 self._check_spec(spec)
                 request = snapshot_request_for_spec(spec)
                 name = f"shellbox-{uuid.uuid4().hex}"
@@ -843,7 +850,7 @@ class DaytonaMachineFactory:
                         image=daytona_image(request.source), resources=request.resources, **sandbox_fields
                     )
                 lifetime.push_async_callback(_delete_named_sandbox, client, name)
-                sandbox = await _create_sandbox(client, params, timeout=timeout)
+                sandbox = await _create_sandbox(client, params, timeout=timeout, deadline=startup.when())
             if self.auto_stop_interval:
                 keepalive = asyncio.create_task(_keep_active(sandbox, self.auto_stop_interval * 60 / 3))
                 lifetime.push_async_callback(_stop_keepalive, keepalive)
