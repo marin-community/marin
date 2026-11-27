@@ -36,3 +36,6 @@ serve:
   - mistral
   - --load-format
   - mistral
+agent:
+  agent_kwargs:
+    thinking_format: chat-template

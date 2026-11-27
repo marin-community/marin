@@ -26,3 +26,6 @@ serve:
   vllm_extra_args:
   - --enable-prefix-caching
   - --enable-expert-parallel
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
