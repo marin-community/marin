@@ -190,6 +190,7 @@ class SourceOrigin(StrEnum):
     NEWFACADE = "Newfacade"
     SCIENCE_ONE = "ScienceOne"
     SYNTHLABS = "SynthLabs"
+    TIGER_LAB = "Tiger-lab"
     TRL = "TRL"
     TASKTROVE = "TaskTrove"
     TEVATRON = "Tevatron"
