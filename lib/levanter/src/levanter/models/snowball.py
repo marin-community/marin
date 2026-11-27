@@ -1454,13 +1454,7 @@ class SnowballTransformer(eqx.Module):
         hidden = self.token_embed.at[token_ids].get(out_sharding=_activation_spec())
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
-        # Scan the layers instead of a Python loop so XLA plans HBM for ONE layer's MoE expert
-        # buffers at a time. Unrolling keeps every layer's buffers live simultaneously (temp scales
-        # linearly with depth), which OOMs the 67B on 8xH100. The stacked blocks + per-layer long
-        # schedule feed a single uniform scan body (June recipe: long layers = every 4th + the last).
         num_blocks = len(self.blocks)
-        stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.blocks)
-        long_schedule = long_attention_layer_mask(num_blocks)
 
         def _scan_layer(carry: Float[Array, "B S D"], layer_data):
             layer, use_long, layer_replay = layer_data
@@ -1481,10 +1475,21 @@ class SnowballTransformer(eqx.Module):
                 return hidden, (routes, None)
             return layer(carry, short_mask, long_mask, use_long), (None, None)
 
-        # Bound routed-expert activation memory during the backward pass as well as forward.
-        hidden, (routes, counts) = jax.lax.scan(
-            jax.checkpoint(_scan_layer), hidden, (stacked, long_schedule, replay_experts)
-        )
+        layer_forward = jax.checkpoint(_scan_layer)
+        if cfg.replay_precision == "zero_kl":
+            # Keep full-depth FP32 weights in their original per-layer buffers.
+            traces = []
+            for index, block in enumerate(self.blocks):
+                layer_replay = None if replay_experts is None else replay_experts[index]
+                hidden, trace = layer_forward(
+                    hidden, (block, _is_long_attention_layer(index, num_blocks), layer_replay)
+                )
+                traces.append(trace)
+            routes, counts = jax.tree.map(lambda *values: jnp.stack(values), *traces)
+        else:
+            stacked = jax.tree.map(lambda *layers: jnp.stack(layers), *self.blocks)
+            long_schedule = long_attention_layer_mask(num_blocks)
+            hidden, (routes, counts) = jax.lax.scan(layer_forward, hidden, (stacked, long_schedule, replay_experts))
         return MoeForwardOutput(self.final_gated_norm(self.final_norm(hidden)), routes, counts)
 
 
@@ -1898,7 +1903,11 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         prefill: bool = False,
         capture_routes: bool = False,
     ) -> SnowballPagedResult:
-        unroll = window_batch is not None or (self._unroll_decode and not prefill)
+        unroll = (
+            self.config.replay_precision == "zero_kl"
+            or window_batch is not None
+            or (self._unroll_decode and not prefill)
+        )
         with self._policy_matmul_precision():
             hidden, caches, routes = self._decode_hidden(
                 input_ids,

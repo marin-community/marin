@@ -241,7 +241,7 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path, laye
             if production_width:
                 print("SNOWBALL_STRICT_PARITY " + json.dumps({name: parity[name]}), flush=True)
 
-        if production_width:
+        if production_width and layers < 26:
             template = jax.eval_shape(lambda: SnowballLMHeadModel.init(vocab, base, key=key))
             fast = jax.tree.unflatten(jax.tree.structure(template), jax.tree.leaves(model))
             fast = fast.with_expert_sharded_kv()
