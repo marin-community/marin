@@ -853,27 +853,27 @@
       "status": "Pending",
       "intended_use": "train",
       "pipeline": {
-        "name": "nemotron_ultra_mopd_ultra_sft_step3200_math_tir-retained-sandbox-mirrored",
+        "name": "nemotron-ultra-mopd-math-tir-sandbox-multiarch",
         "files": [
           "tasks.parquet"
         ],
-        "source": "open-athena/nemotron-ultra-mopd-math-tir-sandbox-mirrored-20261127-v1",
+        "source": "open-athena/nemotron-ultra-mopd-math-tir-sandbox-multiarch-20261127-v1",
         "version": "2026.11.13.1",
-        "revision": "4720147cbe56862e811c9d9dfa913b7677039dd2"
+        "revision": "c51f66a852839f983b01058e8f3bc69ee059f45f"
       },
       "current_release": {
-        "url": "https://huggingface.co/datasets/open-athena/nemotron-ultra-mopd-math-tir-sandbox-mirrored-20261127-v1/tree/4720147cbe56862e811c9d9dfa913b7677039dd2",
-        "repo": "open-athena/nemotron-ultra-mopd-math-tir-sandbox-mirrored-20261127-v1",
-        "revision": "4720147cbe56862e811c9d9dfa913b7677039dd2"
+        "url": "https://huggingface.co/datasets/open-athena/nemotron-ultra-mopd-math-tir-sandbox-multiarch-20261127-v1/tree/c51f66a852839f983b01058e8f3bc69ee059f45f",
+        "repo": "open-athena/nemotron-ultra-mopd-math-tir-sandbox-multiarch-20261127-v1",
+        "revision": "c51f66a852839f983b01058e8f3bc69ee059f45f"
       },
-      "dataset_id": "open-athena/nemotron-ultra-mopd-math-tir-sandbox-mirrored-20261127-v1",
-      "dataset_revision": "4720147cbe56862e811c9d9dfa913b7677039dd2",
+      "dataset_id": "open-athena/nemotron-ultra-mopd-math-tir-sandbox-multiarch-20261127-v1",
+      "dataset_revision": "c51f66a852839f983b01058e8f3bc69ee059f45f",
       "actor_census_input": {
-        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-math-49907deb-retained-20261120-consumer-v1",
+        "dataset_id": "open-athena/nemotron-ultra-mopd-math-tir-sandbox-multiarch-20261127-v1",
         "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/source-publication-v1/nemotron-v2/retained-census/49907debf646334752c0/actor/.artifact.json",
         "carry_forward": null,
         "measured_tasks": 5790,
-        "dataset_revision": "7e120186d5b58fbb91497404eea7c62c50dd5aed",
+        "dataset_revision": "c51f66a852839f983b01058e8f3bc69ee059f45f",
         "converter_version": "2026.11.13.1",
         "task_specs_sha256": "fb2fd26408c7e82ff768c4455329e603ab0b73c3d46947c1466b8a164a84d874",
         "converter_revision": "d2d5a83186a759ecedf255c5c74df3526a56d9ab"
@@ -891,7 +891,15 @@
           "revision": "7e120186d5b58fbb91497404eea7c62c50dd5aed"
         },
         "change": "actor docker_image moved from private us-east1 Artifact Registry to the digest-identical GHCR mirror ghcr.io/marin-community/rl-data-nemo-skills-sandbox@sha256:280e0871...; no other field changed",
-        "evidence": "image-lineage.json and identity-inventory.jsonl in the release; mirror job /benfeuer/mochi-campaign-math-tir-image-mirror-claude-20261127b; LOCAL proof /benfeuer/mochi-campaign-math-tir-local-proof-claude-20261127c"
+        "evidence": "image-lineage.json and identity-inventory.jsonl in the release; mirror job /benfeuer/mochi-campaign-math-tir-image-mirror-claude-20261127b; LOCAL proof /benfeuer/mochi-campaign-math-tir-local-proof-claude-20261127c",
+        "multiarch": {
+          "parent": {
+            "repo": "open-athena/nemotron-ultra-mopd-math-tir-sandbox-mirrored-20261127-v1",
+            "revision": "4720147cbe56862e811c9d9dfa913b7677039dd2"
+          },
+          "change": "actor docker_image moved to the two-platform index ghcr.io/marin-community/rl-data-nemo-skills-sandbox@sha256:fdf1637d... (amd64 entry = original 280e0871..., arm64 entry 73a0cd2c... built from NeMo-Skills b620e79a with one recorded deviation: vedas==0.0.1, deleted from PyPI, installed from a wheel rebuilt from the amd64 image's files); no other field changed",
+          "evidence": "image-lineage.json in the release; CLAUDE-UNBLOCK-STATUS.md (commit derivation, arm64 build)"
+        }
       }
     },
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k": {
@@ -1490,27 +1498,27 @@
       "status": "Pending",
       "intended_use": "train",
       "pipeline": {
-        "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_math_tir-retained-sandbox-mirrored",
+        "name": "nemotron-ultra-rlvr1-math-tir-sandbox-multiarch",
         "files": [
           "tasks.parquet"
         ],
-        "source": "open-athena/nemotron-ultra-rlvr1-math-tir-sandbox-mirrored-20261127-v1",
+        "source": "open-athena/nemotron-ultra-rlvr1-math-tir-sandbox-multiarch-20261127-v1",
         "version": "2026.11.13.1",
-        "revision": "884d8b1131e37a47374c2002b263927d7672dad5"
+        "revision": "f88778fcf8d1a3bee86949aff3085690c845ce7e"
       },
       "current_release": {
-        "url": "https://huggingface.co/datasets/open-athena/nemotron-ultra-rlvr1-math-tir-sandbox-mirrored-20261127-v1/tree/884d8b1131e37a47374c2002b263927d7672dad5",
-        "repo": "open-athena/nemotron-ultra-rlvr1-math-tir-sandbox-mirrored-20261127-v1",
-        "revision": "884d8b1131e37a47374c2002b263927d7672dad5"
+        "url": "https://huggingface.co/datasets/open-athena/nemotron-ultra-rlvr1-math-tir-sandbox-multiarch-20261127-v1/tree/f88778fcf8d1a3bee86949aff3085690c845ce7e",
+        "repo": "open-athena/nemotron-ultra-rlvr1-math-tir-sandbox-multiarch-20261127-v1",
+        "revision": "f88778fcf8d1a3bee86949aff3085690c845ce7e"
       },
-      "dataset_id": "open-athena/nemotron-ultra-rlvr1-math-tir-sandbox-mirrored-20261127-v1",
-      "dataset_revision": "884d8b1131e37a47374c2002b263927d7672dad5",
+      "dataset_id": "open-athena/nemotron-ultra-rlvr1-math-tir-sandbox-multiarch-20261127-v1",
+      "dataset_revision": "f88778fcf8d1a3bee86949aff3085690c845ce7e",
       "actor_census_input": {
-        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-cd9cbcbc-retained-20261120-consumer-v1",
+        "dataset_id": "open-athena/nemotron-ultra-rlvr1-math-tir-sandbox-multiarch-20261127-v1",
         "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/source-publication-v1/nemotron-v2/retained-census/cd9cbcbc3a8b0784ea4a/actor/.artifact.json",
         "carry_forward": null,
         "measured_tasks": 5790,
-        "dataset_revision": "7c2a84bf83e48996ed51dcf4cbf4ace384856efd",
+        "dataset_revision": "f88778fcf8d1a3bee86949aff3085690c845ce7e",
         "converter_version": "2026.11.13.1",
         "task_specs_sha256": "a138518d3ce38794798e75cfb0fa0b526b9ac101f865270f92cddc3080b16bbf",
         "converter_revision": "d2d5a83186a759ecedf255c5c74df3526a56d9ab"
@@ -1528,7 +1536,15 @@
           "revision": "7c2a84bf83e48996ed51dcf4cbf4ace384856efd"
         },
         "change": "actor docker_image moved from private us-east1 Artifact Registry to the digest-identical GHCR mirror ghcr.io/marin-community/rl-data-nemo-skills-sandbox@sha256:280e0871...; no other field changed",
-        "evidence": "image-lineage.json and identity-inventory.jsonl in the release; mirror job /benfeuer/mochi-campaign-math-tir-image-mirror-claude-20261127b; LOCAL proof /benfeuer/mochi-campaign-math-tir-local-proof-claude-20261127c"
+        "evidence": "image-lineage.json and identity-inventory.jsonl in the release; mirror job /benfeuer/mochi-campaign-math-tir-image-mirror-claude-20261127b; LOCAL proof /benfeuer/mochi-campaign-math-tir-local-proof-claude-20261127c",
+        "multiarch": {
+          "parent": {
+            "repo": "open-athena/nemotron-ultra-rlvr1-math-tir-sandbox-mirrored-20261127-v1",
+            "revision": "884d8b1131e37a47374c2002b263927d7672dad5"
+          },
+          "change": "actor docker_image moved to the two-platform index ghcr.io/marin-community/rl-data-nemo-skills-sandbox@sha256:fdf1637d... (amd64 entry = original 280e0871..., arm64 entry 73a0cd2c... built from NeMo-Skills b620e79a with one recorded deviation: vedas==0.0.1, deleted from PyPI, installed from a wheel rebuilt from the amd64 image's files); no other field changed",
+          "evidence": "image-lineage.json in the release; CLAUDE-UNBLOCK-STATUS.md (commit derivation, arm64 build)"
+        }
       }
     },
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k": {
@@ -2275,27 +2291,27 @@
       "status": "Pending",
       "intended_use": "train",
       "pipeline": {
-        "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_math_tir-retained-sandbox-mirrored",
+        "name": "nemotron-ultra-rlvr2-math-tir-sandbox-multiarch",
         "files": [
           "tasks.parquet"
         ],
-        "source": "open-athena/nemotron-ultra-rlvr2-math-tir-sandbox-mirrored-20261127-v1",
+        "source": "open-athena/nemotron-ultra-rlvr2-math-tir-sandbox-multiarch-20261127-v1",
         "version": "2026.11.13.1",
-        "revision": "46c835ef8f77301140a9c0e861194db36dec9d87"
+        "revision": "d5b3226100119737b0ba7c4d20f39ce880be2af4"
       },
       "current_release": {
-        "url": "https://huggingface.co/datasets/open-athena/nemotron-ultra-rlvr2-math-tir-sandbox-mirrored-20261127-v1/tree/46c835ef8f77301140a9c0e861194db36dec9d87",
-        "repo": "open-athena/nemotron-ultra-rlvr2-math-tir-sandbox-mirrored-20261127-v1",
-        "revision": "46c835ef8f77301140a9c0e861194db36dec9d87"
+        "url": "https://huggingface.co/datasets/open-athena/nemotron-ultra-rlvr2-math-tir-sandbox-multiarch-20261127-v1/tree/d5b3226100119737b0ba7c4d20f39ce880be2af4",
+        "repo": "open-athena/nemotron-ultra-rlvr2-math-tir-sandbox-multiarch-20261127-v1",
+        "revision": "d5b3226100119737b0ba7c4d20f39ce880be2af4"
       },
-      "dataset_id": "open-athena/nemotron-ultra-rlvr2-math-tir-sandbox-mirrored-20261127-v1",
-      "dataset_revision": "46c835ef8f77301140a9c0e861194db36dec9d87",
+      "dataset_id": "open-athena/nemotron-ultra-rlvr2-math-tir-sandbox-multiarch-20261127-v1",
+      "dataset_revision": "d5b3226100119737b0ba7c4d20f39ce880be2af4",
       "actor_census_input": {
-        "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-math-5d445c0f-retained-20261120-consumer-v1",
+        "dataset_id": "open-athena/nemotron-ultra-rlvr2-math-tir-sandbox-multiarch-20261127-v1",
         "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/source-publication-v1/nemotron-v2/retained-census/5d445c0f0ff38ab1d734/actor/.artifact.json",
         "carry_forward": null,
         "measured_tasks": 5790,
-        "dataset_revision": "18d99806633f7ae886baf448f5535e8a2b4620ae",
+        "dataset_revision": "d5b3226100119737b0ba7c4d20f39ce880be2af4",
         "converter_version": "2026.11.13.1",
         "task_specs_sha256": "a988b0ab70a2f214821a025e840fb991ab172c31c1673887fd3ec7041f07396b",
         "converter_revision": "d2d5a83186a759ecedf255c5c74df3526a56d9ab"
@@ -2313,7 +2329,15 @@
           "revision": "18d99806633f7ae886baf448f5535e8a2b4620ae"
         },
         "change": "actor docker_image moved from private us-east1 Artifact Registry to the digest-identical GHCR mirror ghcr.io/marin-community/rl-data-nemo-skills-sandbox@sha256:280e0871...; no other field changed",
-        "evidence": "image-lineage.json and identity-inventory.jsonl in the release; mirror job /benfeuer/mochi-campaign-math-tir-image-mirror-claude-20261127b; LOCAL proof /benfeuer/mochi-campaign-math-tir-local-proof-claude-20261127c"
+        "evidence": "image-lineage.json and identity-inventory.jsonl in the release; mirror job /benfeuer/mochi-campaign-math-tir-image-mirror-claude-20261127b; LOCAL proof /benfeuer/mochi-campaign-math-tir-local-proof-claude-20261127c",
+        "multiarch": {
+          "parent": {
+            "repo": "open-athena/nemotron-ultra-rlvr2-math-tir-sandbox-mirrored-20261127-v1",
+            "revision": "46c835ef8f77301140a9c0e861194db36dec9d87"
+          },
+          "change": "actor docker_image moved to the two-platform index ghcr.io/marin-community/rl-data-nemo-skills-sandbox@sha256:fdf1637d... (amd64 entry = original 280e0871..., arm64 entry 73a0cd2c... built from NeMo-Skills b620e79a with one recorded deviation: vedas==0.0.1, deleted from PyPI, installed from a wheel rebuilt from the amd64 image's files); no other field changed",
+          "evidence": "image-lineage.json in the release; CLAUDE-UNBLOCK-STATUS.md (commit derivation, arm64 build)"
+        }
       }
     },
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k": {
