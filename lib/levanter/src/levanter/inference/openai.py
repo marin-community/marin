@@ -56,6 +56,7 @@ from levanter.inference.engine import (
     TokenSequenceLogprobs,
 )
 from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams, format_finish_reason
+from levanter.inference.router_replay import write_router_replay
 from levanter.layers.sampler import LogprobMode
 from levanter.inference.openai_protocol import (
     ChatCompletionRequest,
@@ -1402,14 +1403,7 @@ def _grpc_generate_response(
             )
             scores.extend(output.logprobs)
         if output.expert_routes is not None:
-            experts = output.expert_routes.expert_ids
-            layers, positions, experts_per_token = experts.shape
-            replay = choice.router_replay
-            replay.num_layers = layers
-            replay.num_positions = positions
-            replay.experts_per_token = experts_per_token
-            replay.expert_ids.extend(experts.ravel().tolist())
-            replay.valid.extend(output.expert_routes.valid.tolist())
+            write_router_replay(choice.router_replay, output.expert_routes.expert_ids, output.expert_routes.valid)
     return response
 
 
