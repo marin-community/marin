@@ -500,7 +500,11 @@ def finish_content_review(
         lambda sql, params: query(sql, params)["rows"], prepared.load_id, pipeline_key=prepared.key
     )
     query(
-        "INSERT INTO atlas_review_current VALUES (:load,:source,:key,CAST(:receipt AS JSONB)) ON CONFLICT DO NOTHING",
+        "INSERT INTO atlas_review_current VALUES (:load,:source,:key,CAST(:receipt AS JSONB)) "
+        "ON CONFLICT (load_id,source_id) DO UPDATE SET "
+        "pipeline_key=EXCLUDED.pipeline_key,receipt=EXCLUDED.receipt "
+        "WHERE atlas_review_current.pipeline_key IS DISTINCT FROM EXCLUDED.pipeline_key "
+        "OR atlas_review_current.receipt IS DISTINCT FROM EXCLUDED.receipt",
         {
             "load": prepared.load_id,
             "source": prepared.source_id,

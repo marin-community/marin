@@ -375,6 +375,12 @@ SQL requests and records the prior index in the new index's provenance. Dry run
 performs the same verification without writing. The resulting index still needs
 the normal catalog-stage and catalog-load checks before release.
 
+The content-review loader validates the selected artifact and completes panel
+row checks before publishing its QC presentation pointer. A changed selection
+updates the pointer for that load/source pair to reference the validated panel.
+Historical review rows and catalog declarations remain unchanged by the
+content-review loader.
+
 ## Compose verified public-input rewrites with fresh alignment
 
 The composition-input manifest can contain `public_input_rebindings`, an array

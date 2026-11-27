@@ -4237,7 +4237,7 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
     catalog_database, catalog_query, tmp_path, shared_batch
 ):
     root = str(tmp_path / "sample-browse")
-    publish_sample(root, "sample-browse")
+    publish_sample(root, "qc:" + "a" * 64)
     load_catalog(CurationCatalog(root), catalog_query)
     catalog_query(
         "UPDATE atlas_sources SET declaration=jsonb_set(declaration,'{independent_qc}',"
@@ -4251,6 +4251,14 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
     ][0]
     old_key = before["assessment_key"]
     load_id = before["load_id"]
+    catalog_query(
+        "INSERT INTO atlas_review_current VALUES (:load,'Marin:math',:key,CAST(:receipt AS JSONB))",
+        {
+            "load": load_id,
+            "key": old_key,
+            "receipt": json.dumps({"artifact": {"uri": "s3://fixture/old-panel/.artifact.json", "sha256": "a" * 64}}),
+        },
+    )
     catalog_query(
         "INSERT INTO atlas_sources SELECT (jsonb_populate_record(NULL::atlas_sources, "
         "to_jsonb(s)||jsonb_build_object('id','Marin:unreviewed','assessment_key',NULL))).* "
@@ -4272,6 +4280,7 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
         "SELECT * FROM atlas_items WHERE load_id=:load AND pipeline_key=:key ORDER BY task_id",
         {"load": load_id, "key": old_key},
     )["rows"]
+    historical_items = json.loads(json.dumps(items))
     for row in [*populations, *items]:
         row.pop("load_id", None)
         row["pipeline_key"] = key
@@ -4367,6 +4376,21 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
         "rows"
     ][0]
     assert after == before
+    assert (
+        catalog_query(
+            "SELECT * FROM atlas_items WHERE load_id=:load AND pipeline_key=:key ORDER BY task_id",
+            {"load": load_id, "key": old_key},
+        )["rows"]
+        == historical_items
+    )
+    unselected = json.loads(json.dumps(staged))
+    unselected["receipt"]["artifact"]["uri"] = "s3://fixture/unselected/.artifact.json"
+    with pytest.raises(ValueError):
+        load_content_reviews(unselected, load_id, "Marin:math", catalog_query)
+    assert catalog_query(
+        "SELECT pipeline_key,receipt FROM atlas_review_current WHERE load_id=:load AND source_id='Marin:math'",
+        {"load": load_id},
+    )["rows"] == [{"pipeline_key": key, "receipt": receipt}]
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         page = client.get("/assessment", params={"source_id": "Marin:math", "defect": "ambiguity"}).json()
         assert page["report"]["evidence"]["total"] == 1
