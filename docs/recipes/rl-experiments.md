@@ -352,11 +352,8 @@ under the preset's output root.
    ```
 
 3. The SkyRL nightly workflow on main runs each gated preset with its default inputs. A version
-   with fewer than five completed controls requests runs to reach five as slots open. Otherwise the
-   workflow requests one run per preset. Later workflow runs publish pending results before filling
-   available slots. Snowball's gated presets use Reno H100s within the nightly runner's Iris budget.
-   Each Mochi attempt uses one GB200 rack, with up to three in flight across presets. The nightly
-   runner reserves its shared Iris budget for one model at a time.
+   with fewer than five completed controls requests enough runs to reach five. Otherwise the workflow
+   requests one run per preset. Later workflow runs publish pending results before refilling.
 
    To refresh selected controls, dispatch the workflow on `main` with `controls=true` and a space-separated
    `presets` list. With repository write access, comment `/rl-controls snowball/learning-medium mochi`

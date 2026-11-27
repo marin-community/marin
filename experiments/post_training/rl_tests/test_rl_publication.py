@@ -13,8 +13,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from connectrpc.code import Code
-from connectrpc.errors import ConnectError
 from finestore.rl.rl_progress import Verdict
 from finestore.rl.run_records import (
     AttemptRecord,
@@ -26,7 +24,6 @@ from finestore.rl.run_records import (
     write_evaluations,
 )
 from fsspec.core import url_to_fs
-from iris.client.workload import Device, DeviceKind
 from iris.resources.state import JobState, TaskState
 from marin.execution.artifact import RECORD_FILENAME
 from marin.rl.skyrl_records import read_stored_skyrl_attempts, recorded_launch
@@ -362,114 +359,15 @@ def test_nightly_distinguishes_interruptions_and_failures(
             assert len(marina.rows) == int(tasks is not None)
 
 
-def test_nightly_reserves_mochi_racks_and_skips_duplicate_launches(
-    recorded_runs, monkeypatch, tmp_path, capsys, cache_native_compositions
+def test_nightly_skips_duplicate_coordinator_without_handoff(
+    recorded_runs, monkeypatch, tmp_path, cache_native_compositions
 ):
-    marina, iris = FakeMarina(monkeypatch), FakeIris(monkeypatch)
-    launcher = FakeLauncher(monkeypatch)
-    assert nightly_tick(monkeypatch, tmp_path, "fresh", "mochi") == 0
-    assert sorted(launcher.requests.values()) == [1, 2]
-    launcher.requests.clear()
-    gb200 = Device(DeviceKind.GPU, "GB200", 4)
-    multi = "/atqamar/custom-gpu-experiment"
-    iris.set_job(multi, JobState.PENDING, device=gb200, nodes=36)
-    assert nightly_tick(monkeypatch, tmp_path, "three-slices", "mochi") == 0 and not launcher.requests
-    iris.set_job(multi, JobState.PENDING, device=gb200, nodes=32)
-    list_jobs = iris.list_jobs
-
-    def during_transition(*, state, prefix):
-        return list_jobs(state=JobState.PENDING if state == JobState.BUILDING else state, prefix=prefix)
-
-    with monkeypatch.context() as transition:
-        transition.setattr(iris, "list_jobs", during_transition)
-        assert nightly_tick(transition, tmp_path, "transition", "mochi") == 0
-    assert list(launcher.requests.values()) == [1]
-    launcher.requests.clear()
-    iris.set_job(multi, JobState.SUCCEEDED)
-    speed = "/runner/checkpoints-mochi-rl-controls-speed-medium-running-coordinator"
-    iris.set_job(speed, JobState.RUNNING)
-    iris.set_job(speed + "/training", JobState.RUNNING, device=gb200, nodes=15)
-    pending = tmp_path / "mochi-speed-medium.json"
-    pending.write_text(
-        publication.ControlSubmission(
-            job=speed, outputs=tuple(str(tmp_path / f"unprepared-{n}") for n in range(2))
-        ).model_dump_json()
-    )
-    iris.set_job("/other/users-test", JobState.RUNNING, device=gb200, nodes=54)
-    assert nightly_tick(monkeypatch, tmp_path, "limited", "mochi snowball/speed-medium") == 0
-    assert launcher.requests == {("learning-medium", "limited"): 1}
-    assert "Skipping mochi/speed-medium: pending record" in capsys.readouterr().out
-
-    iris.set_job(multi, JobState.PENDING, device=gb200, nodes=32)
-    assert nightly_tick(monkeypatch, tmp_path, "external", "mochi") == 0
-    assert "Skipping mochi/learning-medium: no free rack" in capsys.readouterr().out
-    assert launcher.requests == {("learning-medium", "limited"): 1}
-
-    pending.unlink()
-    iris.set_job(speed, JobState.SUCCEEDED)
-    iris.set_job(speed + "/training", JobState.SUCCEEDED)
-    iris.set_job(multi, JobState.BUILDING, device=gb200, nodes=32)
-    iris.set_job("/runner/another-experiment/worker", JobState.RUNNING, device=gb200, nodes=17)
-    assert nightly_tick(monkeypatch, tmp_path, "both-owners", "mochi") == 0
-    assert launcher.requests == {("learning-medium", "limited"): 1}
-
-    def unavailable(*, state, prefix):
-        if prefix in {"/runner/", "/atqamar/"}:
-            raise ConnectError(Code.OUT_OF_RANGE, "deep offset")
-        return list_jobs(state=state, prefix=prefix)
-
-    monkeypatch.setattr(iris, "list_jobs", unavailable)
-    iris.set_job(speed, JobState.RUNNING)
-    pending.write_text(
-        publication.ControlSubmission(
-            job=speed, outputs=tuple(str(tmp_path / str(i)) for i in range(3))
-        ).model_dump_json()
-    )
-    assert nightly_tick(monkeypatch, tmp_path, "full", "mochi") == 0
-    assert "Mochi rack scan failed" not in capsys.readouterr().err
-    pending.unlink()
-    iris.set_job(speed, JobState.SUCCEEDED)
-
+    FakeMarina(monkeypatch)
+    iris, launcher = FakeIris(monkeypatch), FakeLauncher(monkeypatch)
     duplicate = "/runner/checkpoints-snowball-rl-controls-speed-medium-lost-reply-coordinator"
     iris.set_job(duplicate, JobState.BUILDING)
     assert nightly_tick(monkeypatch, tmp_path, "lost-reply", "snowball/speed-medium") == 0
-    assert "Skipping snowball/speed-medium: active coordinator" in capsys.readouterr().out
-    iris.set_job(duplicate, JobState.SUCCEEDED)
-    assert nightly_tick(monkeypatch, tmp_path, "scan-failed", "mochi snowball/speed-medium") == 0
-    assert "Mochi rack scan failed:" in capsys.readouterr().err
-    assert launcher.requests == {("learning-medium", "limited"): 1, ("speed-medium", "scan-failed"): 1}
-    assert not marina.rows
-
-
-def test_nightly_reserves_snowball_budget_across_ticks(recorded_runs, monkeypatch, tmp_path, cache_native_compositions):
-    FakeMarina(monkeypatch)
-    iris, launcher = FakeIris(monkeypatch), FakeLauncher(monkeypatch)
-    models = nightly.select_presets("snowball")
-    assert {p.name: nightly._attempt_cost(model, p) for model, p in models} == {
-        "speed-short": 9_996,
-        "data-short": 9_996,
-        "speed-medium": 49_836,
-        "speed-long": 49_836,
-        "learning-medium": 49_836,
-    }
-    assert nightly_tick(monkeypatch, tmp_path, "fresh", "snowball/speed-short snowball/data-short") == 0
-    assert sorted(launcher.requests.values()) == [1, 5]
-    launcher.requests.clear()
-    running = "/runner/checkpoints-snowball-rl-controls-speed-long-running-coordinator"
-    iris.set_job(running, JobState.PENDING)
-    path = tmp_path / "snowball-speed-long.json"
-    path.write_text(publication.ControlSubmission(job=running, outputs=(str(tmp_path / "queued"),)).model_dump_json())
-    assert nightly_tick(monkeypatch, tmp_path, "reserved", "snowball/speed-medium snowball/speed-short mochi") == 0
-    assert launcher.requests == {("speed-short", "reserved"): 1}
-    iris.set_job(running, JobState.KILLED)
-    assert nightly_tick(monkeypatch, tmp_path, "refill", "snowball/speed-medium") == 0
-    assert launcher.requests[("speed-medium", "refill")] == 1
-    assert not path.exists()
-
-    mochi = "/runner/checkpoints-mochi-rl-controls-speed-medium-untracked-coordinator"
-    iris.set_job(mochi, JobState.BUILDING)
-    assert nightly_tick(monkeypatch, tmp_path, "shared", "snowball/speed-medium") == 0
-    assert ("speed-medium", "shared") not in launcher.requests
+    assert not launcher.requests
 
 
 @pytest.mark.parametrize(

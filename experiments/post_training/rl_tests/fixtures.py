@@ -51,7 +51,6 @@ from finestore.rl.strata import (
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from fsspec.config import conf
-from iris.client.workload import ResourceRequest
 from iris.cluster.client.job_info import set_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState
@@ -227,15 +226,13 @@ class FakeIris:
         monkeypatch.setattr(runner, "open_iris_client", lambda **_: nullcontext(self))
         monkeypatch.setattr(rl_nightly_controls, "open_iris_client", lambda **_: nullcontext(self))
 
-    def set_job(self, name, state, *, tasks=None, reason="", message="", device=None, nodes=1):
+    def set_job(self, name, state, *, tasks=None, reason="", message=""):
         job = JobName.from_wire(name)
         self.jobs[job] = SimpleNamespace(
             job_id=job,
             state=state,
             task_state_counts=tasks or {},
             error_message=message,
-            resources=ResourceRequest(0, 0, 0, device),
-            task_count=nodes,
         )
         self.tasks[job] = [SimpleNamespace(error_message=reason)] if reason else []
         return job
