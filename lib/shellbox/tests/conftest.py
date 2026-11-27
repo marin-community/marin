@@ -15,11 +15,12 @@ from itertools import count
 from pathlib import Path
 
 import pytest
-from local_machine_support import LOCK, PYTHON_VERSION, make_factory
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.backends.local.python_environment import PythonEnvironment, UvError, build_python_environment
 from shellbox.backends.local.sandbox import SystemDirectories
 from shellbox.image import PreparedImage, RegistryImage
+
+from lib.shellbox.tests.local_machine_support import LOCK, PYTHON_VERSION, make_factory
 
 HOST_REQUIREMENTS = {
     "requires_host_setsid": "The local Linux guest fake needs the host setsid executable",

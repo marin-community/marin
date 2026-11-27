@@ -8,6 +8,7 @@ import shlex
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+from rigging.filesystem.storage_path import prefix_join
 from omegaconf import DictConfig, OmegaConf
 
 from cloud.iris.rl_config_translation import RL_CONFIG_PAYLOAD_ENV
@@ -83,26 +84,11 @@ def config_task_environment(config: DictConfig) -> dict[str, str]:
 
 
 def _job_scope_fr_dump_path(prefix: str, job_name: str) -> str:
-    """Rewrite a JOB-SCOPED NCCL flight-recorder dump path so its slug segment is the
-    ACTUAL job name, e.g. ``/tmp/fr_dumps/<slug>/nccl_fr_rank`` -> ``/tmp/fr_dumps/
-    <job_name>/nccl_fr_rank``.
-
-    WHY (2026-07-11 FR-slug bug): the 80B configs hardcode
-    ``TORCH_NCCL_DEBUG_INFO_TEMP_FILE: /tmp/fr_dumps/80b-next-cp1/nccl_fr_rank`` in
-    their ``extra_env:``, so a run launched under a DIFFERENT ``--job-name`` (e.g.
-    ``80b-next-cp1-r3d2``) still wrote its FR dumps under the stale ``80b-next-cp1``
-    slug (harmless there, but wrong — a future FR dump would land under the wrong
-    slug). Deriving the slug from the live job name keeps the dump under the right
-    per-job dir. The controller's ``ensure_fr_dump_dir`` mkdir -p's whatever dirname
-    the cvar carries, so overriding the cvar here is sufficient.
-
-    ONLY rewrites the job-scoped ``.../fr_dumps/<slug>/<file>`` pattern; a bare
-    generic path (``/tmp/nccl_fr_rank``, which every non-80B iris config uses) has no
-    slug segment and is returned UNCHANGED (byte-identical for those configs)."""
-    parent = os.path.dirname(prefix)  # e.g. /tmp/fr_dumps/<slug>
-    grandparent = os.path.dirname(parent)  # e.g. /tmp/fr_dumps
+    """Put the current job name into a job-scoped flight-recorder directory."""
+    parent = os.path.dirname(prefix)
+    grandparent = os.path.dirname(parent)
     if os.path.basename(grandparent) != "fr_dumps":
-        return prefix  # not a job-scoped fr_dumps path; leave it
+        return prefix
     return os.path.join(grandparent, job_name, os.path.basename(prefix))
 
 
@@ -116,7 +102,7 @@ def build_config_task_command(args: SimpleNamespace) -> list[str]:
         "bash",
         f"{MARINSKYRL_TASK_ROOT}/cloud/iris/node_entrypoint.sh",
         launch_config.task_path,
-        f"{args.rendezvous_dir.rstrip('/')}/interconnect-gate",
+        prefix_join(args.rendezvous_dir, "interconnect-gate"),
         *(["--pynccl-init"] if args.runtime_profile is RuntimeProfile.MEGATRON else []),
         *(["--gate-single-nvlink-domain"] if single_domain else []),
     ]

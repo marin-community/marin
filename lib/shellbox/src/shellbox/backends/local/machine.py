@@ -268,7 +268,7 @@ class LocalMachineFactory:
         disk = await self._allocate_disk(spec)
         try:
             root, layers = sandbox._machine_directories(
-                None if overlaid_workdir else workdir, copy_on_write=copy_on_write, disk=disk
+                None if overlaid_workdir else workdir, system_directories=self.system_directories, disk=disk
             )
         except BaseException:
             if disk is not None:

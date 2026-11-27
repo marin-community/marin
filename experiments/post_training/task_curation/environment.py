@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
-from shellbox.backends.local.machine import SYSTEM_DIRECTORIES
+from shellbox.backends.local.sandbox import SYSTEM_DIRECTORIES
 from taskcompendium.models import DOCKER_IMAGE_PATTERN
 
 PINNED_IMAGE = re.compile(DOCKER_IMAGE_PATTERN)

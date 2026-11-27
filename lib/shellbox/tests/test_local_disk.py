@@ -38,8 +38,10 @@ pytestmark = [pytest.mark.manual, pytest.mark.asyncio]
 
 # Large ext4 writes can fail with a usable tail block remaining. Exhaust that
 # tail in the guest before asserting a failed command at the actual block limit.
+# Keep diagnostics off quota-backed spools: closing a nonempty spool would free
+# its blocks before the host observes the final filesystem state.
 OVERFLOW_SCRIPT = (
-    '/bin/dd if=/dev/zero of="$1" bs=1048576 count=128; '
+    '/bin/dd if=/dev/zero of="$1" bs=1048576 count=128 2>/dev/null; '
     'while :; do /bin/dd if=/dev/zero bs=1 count=1024 >> "$1" 2>/dev/null || exit; done'
 )
 

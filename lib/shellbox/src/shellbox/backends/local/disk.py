@@ -31,8 +31,18 @@ GUARD_SOURCE = Path(disk_lifecycle.__file__).read_text()
 POOL_CACHE_LOCK = threading.Lock()
 
 
+@dataclass(frozen=True)
+class PoolIdentity:
+    pid: int
+    mount_namespace: int
+    root: Path
+    device: int
+    inode: int
+
+
 @dataclass
 class _PoolEntry:
+    identity: PoolIdentity
     lock: LockType = field(default_factory=threading.Lock)
     pool: "LocalDiskPool | None" = None
 
@@ -50,18 +60,18 @@ def _verified_local_disk_pool(root: Path) -> "LocalDiskPool":
     root = root.resolve()
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     identity = root.stat()
-    key = (os.getpid(), mount_namespace, root, identity.st_dev, identity.st_ino)
+    key = PoolIdentity(os.getpid(), mount_namespace, root, identity.st_dev, identity.st_ino)
     with POOL_CACHE_LOCK:
         entry = _pool_entry(key)
     with entry.lock:
         if entry.pool is None:
-            entry.pool = LocalDiskPool(root)
+            entry.pool = LocalDiskPool(entry.identity.root)
         return entry.pool
 
 
 @lru_cache(maxsize=POOL_CACHE_SIZE)
-def _pool_entry(key: tuple[int, int, Path, int, int]) -> _PoolEntry:
-    return _PoolEntry()
+def _pool_entry(key: PoolIdentity) -> _PoolEntry:
+    return _PoolEntry(key)
 
 
 @dataclass
@@ -161,7 +171,7 @@ class LocalDiskPool:
             raise UnsupportedMachineSpec(f"LOCAL disk enforcement host probe failed: {error}") from error
 
     def _reclaim(self) -> None:
-        for directory in self.root.glob("sandbox-*"):
+        for directory in self.root.glob(f"{disk_lifecycle.ALLOCATION_PREFIX}*"):
             try:
                 lease_file = (directory / disk_lifecycle.LEASE_FILE).open("a")
             except FileNotFoundError:
@@ -179,7 +189,7 @@ class LocalDiskPool:
         with (self.root / disk_lifecycle.POOL_LOCK_FILE).open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             self._reclaim()
-            directory = Path(tempfile.mkdtemp(prefix="sandbox-", dir=self.root))
+            directory = Path(tempfile.mkdtemp(prefix=disk_lifecycle.ALLOCATION_PREFIX, dir=self.root))
             with ExitStack() as resources:
                 errors = resources.enter_context(tempfile.TemporaryFile())
                 guardian = subprocess.Popen(

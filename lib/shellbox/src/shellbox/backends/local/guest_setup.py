@@ -19,7 +19,7 @@ from shellbox.machine import (
 async def start_host_machine(
     machine: LocalMachine, overlaid_workdir: PurePosixPath | None, tools: tuple[str, ...]
 ) -> None:
-    """Make a workdir that lies in the machine's layer, then check that each requested tool runs."""
+    """Make a workdir that lies in the machine's layer, then check that each requested tool is executable."""
     if overlaid_workdir is not None:
         made = await machine._control('exec mkdir -p -- "$1"', overlaid_workdir)
         if made.exit_code != 0:

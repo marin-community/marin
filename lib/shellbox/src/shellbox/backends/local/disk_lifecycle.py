@@ -21,6 +21,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+ALLOCATION_PREFIX = "sandbox-"
 BACKING_IMAGE = "disk.img"
 POOL_LOCK_FILE = "pool.lock"
 LEASE_FILE = "lease"

@@ -11,13 +11,6 @@ import uuid
 from pathlib import Path
 
 import pytest
-from local_machine_support import (
-    SPEC,
-    _member,
-    _stream,
-    on_machine,
-    run_command,
-)
 from shellbox.backends.local.runtime import LocalMachine
 from shellbox.backends.local.sandbox import _archive
 from shellbox.backends.local.transfers import unpack_local_archive
@@ -29,6 +22,14 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
 )
 from shellbox.transfer import download_files
+
+from lib.shellbox.tests.local_machine_support import (
+    SPEC,
+    _member,
+    _stream,
+    on_machine,
+    run_command,
+)
 
 
 def test_recursive_download_preserves_hardlinks_as_files_and_literal_names(factory, tmp_path):

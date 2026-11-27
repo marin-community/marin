@@ -12,15 +12,6 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from local_machine_support import (
-    ACCESS_PROBE,
-    SPEC,
-    THREAD_BOMB,
-    access_outcomes,
-    make_factory,
-    on_machine,
-    run_command,
-)
 from shellbox.backends.local.launch import COMMAND_NICENESS
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.backends.local.runtime import LocalMachine
@@ -36,6 +27,16 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
 )
 from shellbox.task import ContainerSpec, TaskSpec
+
+from lib.shellbox.tests.local_machine_support import (
+    ACCESS_PROBE,
+    SPEC,
+    THREAD_BOMB,
+    access_outcomes,
+    make_factory,
+    on_machine,
+    run_command,
+)
 
 
 def test_local_factory_reports_unsupported_host(monkeypatch):

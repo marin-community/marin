@@ -20,12 +20,12 @@ DISK_RESOURCE = "ephemeral-storage"
 NODE_RESOURCE_FRACTION = 0.80
 
 
-def _parse_quantity_to_gib(q: str) -> float:
+def _parse_quantity_to_gib(quantity: str) -> float:
     """Parse a Kubernetes or Iris byte quantity to GiB."""
-    q = q.strip()
+    quantity = quantity.strip()
     for suf, mult in (("Ki", 2**10), ("Mi", 2**20), ("Gi", 2**30), ("Ti", 2**40), ("Pi", 2**50)):
-        if q.endswith(suf):
-            return float(q[: -len(suf)]) * mult / 2**30
+        if quantity.endswith(suf):
+            return float(quantity[: -len(suf)]) * mult / 2**30
     for suf, mult in (
         ("KB", 1e3),
         ("MB", 1e6),
@@ -38,9 +38,9 @@ def _parse_quantity_to_gib(q: str) -> float:
         ("T", 1e12),
         ("P", 1e15),
     ):
-        if q.endswith(suf):
-            return float(q[: -len(suf)]) * mult / 2**30
-    return float(q) / 2**30  # plain bytes
+        if quantity.endswith(suf):
+            return float(quantity[: -len(suf)]) * mult / 2**30
+    return float(quantity) / 2**30  # plain bytes
 
 
 @dataclass(frozen=True)

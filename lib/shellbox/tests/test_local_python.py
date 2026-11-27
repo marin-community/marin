@@ -11,12 +11,6 @@ import tarfile
 from pathlib import Path
 
 import pytest
-from local_machine_support import (
-    PYTHON_VERSION,
-    SPEC,
-    make_factory,
-    on_machine,
-)
 from shellbox.backends.local.python_environment import (
     UvError,
     resolve_python_environment,
@@ -25,6 +19,13 @@ from shellbox.machine import (
     Command,
     MachineSpec,
     PackageSpec,
+)
+
+from lib.shellbox.tests.local_machine_support import (
+    PYTHON_VERSION,
+    SPEC,
+    make_factory,
+    on_machine,
 )
 
 

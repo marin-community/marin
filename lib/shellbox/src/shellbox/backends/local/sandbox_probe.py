@@ -17,15 +17,13 @@ from shellbox.machine import (
 )
 
 
-def _prepare_sandbox(
+def _sandbox_error(
     bwrap: Path, system_directories: sandbox.SystemDirectories, mounts: tuple[Mount, ...], environment: dict[str, str]
 ) -> str | None:
     """Return why namespace creation or command entry fails, or None when both work."""
 
     async def probe() -> str | None:
-        root, layers = sandbox._machine_directories(
-            None, copy_on_write=system_directories is sandbox.SystemDirectories.COPY_ON_WRITE
-        )
+        root, layers = sandbox._machine_directories(None, system_directories=system_directories)
         machine = LocalMachine(
             MachineSpec(HostImage(), workdir="/"),
             bwrap=bwrap,
@@ -65,7 +63,7 @@ def _working_bwrap(
 ) -> Path:
     errors = []
     for candidate in candidates:
-        error = _prepare_sandbox(candidate, system_directories, mounts, environment)
+        error = _sandbox_error(candidate, system_directories, mounts, environment)
         if error is None:
             return candidate
         errors.append(f"{candidate}: {error}")

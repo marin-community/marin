@@ -14,15 +14,6 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from local_machine_support import (
-    CONNECT_PROBE,
-    HTTP_CLIENT,
-    SPEC,
-    make_factory,
-    on_machine,
-    private_task_spec,
-    run_command,
-)
 from shellbox.backends.local.runtime import LocalMachine
 from shellbox.http_service import HttpRequest, HttpResponse, serve_http
 from shellbox.machine import (
@@ -34,6 +25,16 @@ from shellbox.machine import (
     NetworkPolicy,
 )
 from shellbox.task import ContainerSpec, ReadinessProbe, ServiceEndpoint, TaskSpec, single_container_task
+
+from lib.shellbox.tests.local_machine_support import (
+    CONNECT_PROBE,
+    HTTP_CLIENT,
+    SPEC,
+    make_factory,
+    on_machine,
+    private_task_spec,
+    run_command,
+)
 
 
 def test_persistent_machine_hides_host_processes_and_drops_all_privilege(factory):

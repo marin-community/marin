@@ -13,13 +13,6 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from local_machine_support import (
-    ROOT_DELIVERY_QUIESCE_PROGRAM,
-    ROOT_DELIVERY_QUIESCE_SCRIPT,
-    SPEC,
-    make_factory,
-    on_machine,
-)
 from shellbox.backends.local.runtime import LocalMachine
 from shellbox.machine import (
     Command,
@@ -28,6 +21,14 @@ from shellbox.machine import (
     NetworkPolicy,
 )
 from shellbox.task import ContainerSpec, TaskSpec
+
+from lib.shellbox.tests.local_machine_support import (
+    ROOT_DELIVERY_QUIESCE_PROGRAM,
+    ROOT_DELIVERY_QUIESCE_SCRIPT,
+    SPEC,
+    make_factory,
+    on_machine,
+)
 
 
 @pytest.mark.parametrize("members", [1, 2], ids=["machine", "task"])

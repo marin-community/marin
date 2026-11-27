@@ -15,6 +15,7 @@ import tempfile
 from collections.abc import Iterable
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 
 from shellbox.backends.local import launch
 from shellbox.backends.local.disk import LocalDisk
@@ -101,7 +102,7 @@ SHARED_MEMORY = "/dev/shm"
 """Python's multiprocessing creates its semaphores here."""
 SCRATCH = PurePosixPath("/tmp")
 HOME = PurePosixPath("/home/shellbox")
-CONTROL_ENVIRONMENT = {"PATH": "/usr/bin:/bin", "HOME": str(HOME), "LANG": "C.UTF-8"}
+CONTROL_ENVIRONMENT = MappingProxyType({"PATH": "/usr/bin:/bin", "HOME": str(HOME), "LANG": "C.UTF-8"})
 """The environment of the backend's own commands, such as transfers; ``MachineSpec.env`` does not reach them."""
 ROOT_MODE = 0o755
 """Lets a command that runs as another user traverse the machine's root directory."""
@@ -344,7 +345,7 @@ def _check_mounts(mounts: tuple[Mount, ...]) -> None:
 
 
 def _machine_directories(
-    workdir: PurePosixPath | None, *, copy_on_write: bool, disk: LocalDisk | None = None
+    workdir: PurePosixPath | None, *, system_directories: SystemDirectories, disk: LocalDisk | None = None
 ) -> tuple[Path, Path | None]:
     """A new machine's root, with ``workdir`` made in it, and its layers when its system directories are overlaid."""
     root = disk.data / "root" if disk is not None else Path(tempfile.mkdtemp(prefix="shellbox-local-"))
@@ -352,7 +353,7 @@ def _machine_directories(
     layers = None
     try:
         _prepare_root(root, workdir)
-        if copy_on_write:
+        if system_directories is SystemDirectories.COPY_ON_WRITE:
             layers = disk.data / "layers" if disk is not None else Path(tempfile.mkdtemp(prefix="shellbox-layers-"))
             _prepare_layers(layers)
     except BaseException:

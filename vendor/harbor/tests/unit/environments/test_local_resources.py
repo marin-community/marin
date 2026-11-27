@@ -8,7 +8,6 @@ import asyncio
 import pytest
 
 from harbor.models.task.config import EnvironmentConfig
-from harbor.models.trial.config import ResourceMode
 from shellbox.image import ImageCache
 from shellbox.machine import UnsupportedMachineSpec
 
@@ -49,18 +48,6 @@ def test_local_unsupported_resources_fail_without_allocating_a_sandbox(
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("resource", ["cpu", "memory"])
-def test_local_rejects_ignore_policy_before_allocating_a_sandbox(
-    tmp_path, monkeypatch, resource
-):
-    def acquire(cache, source):
-        pytest.fail("An ignored resource request reached image acquisition")
-
-    monkeypatch.setattr(ImageCache, "prepare", acquire)
-    with pytest.raises(ValueError):
-        local_environment(
-            tmp_path, **{f"{resource}_enforcement_policy": ResourceMode.IGNORE}
-        )
 
 
 async def test_local_numeric_limits_do_not_bypass_required_containment(

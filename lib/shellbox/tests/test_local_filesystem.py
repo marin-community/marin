@@ -8,13 +8,6 @@ import uuid
 from pathlib import Path, PurePosixPath
 
 import pytest
-from local_machine_support import (
-    SPEC,
-    make_factory,
-    on_machine,
-    root_commands,
-    run_command,
-)
 from shellbox.backends.local.runtime import LocalMachine
 from shellbox.backends.local.sandbox import SystemDirectories, _submounts
 from shellbox.machine import (
@@ -24,6 +17,14 @@ from shellbox.machine import (
     Mount,
     Result,
     UnsupportedMachineSpec,
+)
+
+from lib.shellbox.tests.local_machine_support import (
+    SPEC,
+    make_factory,
+    on_machine,
+    root_commands,
+    run_command,
 )
 
 
