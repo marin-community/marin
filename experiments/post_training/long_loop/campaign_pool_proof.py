@@ -15,11 +15,13 @@ from marin.execution.lazy import run
 from marin.experiment.cli import graph_handles
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from rolloutengine.models import TASK_ROLLOUT_COLUMN, TaskRolloutSpec
+from rolloutengine.models import TaskRolloutSpec
 
 from experiments.post_training.long_loop.campaign import campaign_graph, campaign_round
 from experiments.post_training.long_loop.campaign_data import load_mix, retained_task
 from experiments.post_training.long_loop.campaign_stall_e2e import run_proof
+
+TASK_ROLLOUT_COLUMN = "task_rollout_spec"
 
 
 def prove_pool(mix_id: str, version: str, source_commit: str, output: str) -> dict:
