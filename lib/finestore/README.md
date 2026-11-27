@@ -425,7 +425,10 @@ and CPU report readers need no trainer or inference-engine dependencies.
 `finestore.rl.run_records` defines numeric metrics keyed by `(attempt_id, step, name)`
 and typed attempt fields keyed by `(attempt_id, field)` in the same store under
 `<export_root>/run-records`. The evaluations table stores scored task rows keyed by
-`(attempt_id, step, evaluation, task_id)`. `update_attempt` commits a writer's supplied fields;
+`(attempt_id, step, evaluation, task_id)`. The `evaluation_traces` table stores full
+evaluation turns keyed by `(attempt_id, step, evaluation, trace_index)`;
+`read_evaluation_traces` filters them by attempt, profile and step.
+`update_attempt` commits a writer's supplied fields;
 omitted fields remain stored and explicit null clears a field. Native configuration,
 terminal result, startup information and checkpoint ancestry have separate fields.
 `read_attempt_metrics` joins only that attempt and its known bounded ancestors;

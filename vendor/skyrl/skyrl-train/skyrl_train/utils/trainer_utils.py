@@ -6,7 +6,6 @@ from skyrl_train.workers.worker import PPORayActorGroup
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 import os
 from loguru import logger
-import json
 import torch
 from torch.utils.data import Dataset, Subset
 from skyrl_train.trajectory_runners.trajectory_processing import (
@@ -16,33 +15,15 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 )
 from skyrl_train.trajectory_runners.base import TrajectoryBatch
 from skyrl_train.config.reward_shaping import DEFAULT_ACCEPTED_STOP_REASONS
-from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAILURE
-from transformers import AutoTokenizer
 from skyrl_train.io import io
 from skyrl_train.metric_names import ENVIRONMENT_METRIC_PREFIX
-from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.checkpoint_listing import extract_step_from_path, list_checkpoint_dirs
 from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX
 from skyrl_train.dataset import PromptDataset
 from torchdata.stateful_dataloader import StatefulDataLoader
 from skyrl_train.batch_metrics import consumed_stop_metrics
-from skyrl_train.task_inputs import TrajectoryMetadata
 
 BasicType = Union[int, float, str, bool, type(None)]
-EVAL_DIAGNOSTIC_FIELDS = frozenset(
-    {
-        GRADING_DURATION_SECONDS,
-        GRADING_FAILURE,
-        "exception_type",
-        "cause_error_type",
-        "operation",
-        "timed_out",
-        "machine_operation",
-        "provider_status_code",
-        "provider_sdk_call",
-        "provider_rate_limits",
-    }
-)
 
 
 class ResumeMode(Enum):
@@ -262,86 +243,6 @@ def calculate_per_dataset_metrics(
 
     return eval_metrics
 
-
-def dump_per_dataset_eval_results(
-    dump_dir_path: str,
-    tokenizer: AutoTokenizer,
-    trajectory_batch: TrajectoryBatch,
-    metadata: List[TrajectoryMetadata],
-    uids: List[str],
-    *,
-    attempt_id: str,
-    step: int,
-    ordinals: List[int],
-):
-    """Write detailed evaluation answers grouped by data source."""
-
-    # Prepare common data
-    input_prompts = [tokenizer.decode(prompt) for prompt in trajectory_batch["prompt_token_ids"]]
-    output_responses = [tokenizer.decode(response) for response in trajectory_batch["response_ids"]]
-    stop_reasons = trajectory_batch.get("stop_reasons") or [None] * len(input_prompts)
-
-    # Group indices by data source
-    data_source_indices = {}
-    for i, row in enumerate(metadata):
-        data_source = row.data_source
-        if data_source is None:
-            data_source = "unknown"
-        if data_source not in data_source_indices:
-            data_source_indices[data_source] = []
-        data_source_indices[data_source].append(i)
-
-    # Dump per-dataset files
-    for data_source, indices in data_source_indices.items():
-        sanitized_data_source = sanitize_data_source(data_source)
-        filename = join_resource_path(dump_dir_path, f"{sanitized_data_source}.jsonl")
-
-        with io.open_file(filename, "w") as f:
-            for i in indices:
-                verification = (trajectory_batch.get("verification_results") or [None] * len(input_prompts))[i]
-                entry = {
-                    "uid": uids[i],
-                    "attempt_id": attempt_id,
-                    "step": step,
-                    "ordinal": ordinals[i],
-                    "is_last_step": (trajectory_batch.get("is_last_step") or [True] * len(input_prompts))[i],
-                    "identity_disposition": "task_spec" if trajectory_batch.get("task_ids") else "preference_input",
-                    "task_id": (trajectory_batch.get("task_ids") or [None] * len(input_prompts))[i],
-                    "prompt_token_ids": trajectory_batch["prompt_token_ids"][i],
-                    "response_token_ids": trajectory_batch["response_ids"][i],
-                    "input_prompt": input_prompts[i],
-                    "output_response": output_responses[i],
-                    # The parsed conversation the grader read: tool calls, observations and the final answer.
-                    "messages": (trajectory_batch.get("evidence_messages") or [None] * len(input_prompts))[i],
-                    "score": trajectory_batch["rewards"][i],
-                    "stop_reason": stop_reasons[i],
-                    "exception_type": (trajectory_batch.get("exception_types") or [None] * len(input_prompts))[i],
-                    "error_treatment": (trajectory_batch.get("error_treatments") or [None] * len(input_prompts))[i],
-                    "server_error": (trajectory_batch.get("server_errors") or [None] * len(input_prompts))[i],
-                    "env_class": metadata[i].metric_class,
-                    "subset_id": metadata[i].subset_id,
-                    "data_source": data_source,
-                    "env_metrics": (trajectory_batch.get("env_metrics") or [{}] * len(input_prompts))[i],
-                    # Keep operational categories, not arbitrary verifier references or credentials.
-                    "verification": None
-                    if verification is None
-                    else {
-                        "status": verification.status.value,
-                        "reason": verification.reason,
-                        "score": verification.score,
-                        "passed": verification.passed,
-                        "score_min": verification.score_min,
-                        "score_max": verification.score_max,
-                        "diagnostics": {
-                            key: value
-                            for key, value in verification.diagnostics.items()
-                            if key in EVAL_DIAGNOSTIC_FIELDS
-                        },
-                    },
-                }
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-
-        logger.info(f"Dumped eval data for {data_source} to {filename}")
 
 def _evaluation_dataset(dataset: PromptDataset, num_prompts: int | None, seed: int) -> Dataset:
     if num_prompts is None:

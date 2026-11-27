@@ -621,11 +621,24 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
                         tracker.log(invalid, step=9)
             tracker.log({"startup/ready": 1}, step=0)
             if resume:
-                batch = {"task_ids": ["task"], "response_ids": [[1]], "rewards": [1.0], "task_outcomes": [Outcome.GRADED]}
+                batch = {
+                    "task_ids": ["task"],
+                    "prompt_token_ids": [[0]],
+                    "response_ids": [[1]],
+                    "rewards": [1.0],
+                    "task_outcomes": [Outcome.GRADED],
+                }
                 rollouts = _EvaluationRollouts(
                     batch, ["answer"], [TrajectoryMetadata("task", "fixture")], [0], [], batch
                 )
-                _persist_evaluation(config, 3, None, rollouts, export_root)
+                _persist_evaluation(
+                    config,
+                    3,
+                    SimpleNamespace(decode=str),
+                    rollouts,
+                    val_set_name=None,
+                    records_export_root=export_root,
+                )
 
     monkeypatch.setattr(skyrl_entrypoint, "get_job_info", lambda: SimpleNamespace(job_id="/tests/bootstrap-trainer"))
 

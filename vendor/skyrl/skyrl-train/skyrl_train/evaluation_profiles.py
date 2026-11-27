@@ -1,6 +1,7 @@
 """Resolve trainer.callbacks[*].additional_evaluations into recorded native configuration.
 
-Named results use eval/<name>/ metrics and <trainer.export_path>/<name>/ outputs.
+Named results use eval/<name>/ metrics. The default grader report directory for
+each named profile is <trainer.export_path>/<name>/.
 """
 
 from collections.abc import Mapping
@@ -13,6 +14,7 @@ from skyrlrecipe.declared import EvaluationProfile
 
 
 DEFAULT_EVALUATION_STEPS = 5
+EVALUATION_METRIC_PREFIX = "eval/"
 
 
 def _declared_profiles(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -107,7 +109,9 @@ def validate_evaluation_schedule(
         callback for callback in config.trainer.get("callbacks") or () if callback.get("type") == "evaluation"
     ]
     if any(callback.get("eval_steps", DEFAULT_EVALUATION_STEPS) > 0 for callback in evaluations):
-        final_prefixes = tuple(f"eval/{name}/" for name, profile in profiles.items() if profile.schedule == "final")
+        final_prefixes = tuple(
+            evaluation_metric_prefix(name) for name, profile in profiles.items() if profile.schedule == "final"
+        )
         for callback in evaluations:
             inputs = set(callback.get("stop_when") or {})
             inputs.update(key for members in (callback.get("metric_groups") or {}).values() for key in members)
@@ -119,8 +123,14 @@ def validate_evaluation_schedule(
                 )
 
 
+def evaluation_metric_prefix(name: str | None) -> str:
+    """Return the metric namespace for an evaluation profile."""
+    return EVALUATION_METRIC_PREFIX if name is None else f"{EVALUATION_METRIC_PREFIX}{name}/"
+
+
 def additional_evaluation_metrics(metrics: Mapping[str, float], name: str) -> dict[str, float]:
-    return {f"eval/{name}/{key.removeprefix('eval/')}": value for key, value in metrics.items()}
+    prefix = evaluation_metric_prefix(name)
+    return {prefix + key.removeprefix(EVALUATION_METRIC_PREFIX): value for key, value in metrics.items()}
 
 
 def evaluation_profile_config(cfg: DictConfig, profile: EvaluationProfile, name: str | None = None) -> DictConfig:

@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from multiprocessing.context import ForkServerContext
 
-from finestore.rl.run_records import read_attempts, read_evaluations
+from finestore.rl.run_records import read_attempts, read_evaluation_traces, read_evaluations
 from marinskyrl.environment_contract import RUN_MODEL_ENV
 import fsspec
 import pyarrow as pa
@@ -25,7 +25,6 @@ from omegaconf import OmegaConf
 from taskcompendium.grading_result import Outcome
 from taskcompendium.grader import verifyit_package
 from verifyit.spec import ExactSpec
-from skyrl_train.evaluate import evaluation_dump_dir
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, source_row_task, write_tasks
 from examples.cat_count.cpu_canary import PROMPT
 from skyrl_gym.envs.cat_count.reward import TARGET_WORD
@@ -262,13 +261,12 @@ def assert_cpu_learning(positive, root: Path, telemetry):
     assert evaluations[0]["eval/reporting/avg_score_improvement"] == 0
     assert evaluations[-1]["eval/reporting/avg_score_improvement"] >= 0.1
     attempt_id = next(reversed(read_attempts(str(root / "exports"))))
-    greedy_path = Path(evaluation_dump_dir(str(root / "exports"), 0, attempt_id=attempt_id)) / "train.jsonl"
-    sampled_path = Path(evaluation_dump_dir(str(root / "exports/sampled"), 0, attempt_id=attempt_id)) / "train.jsonl"
-    greedy_rows = [json.loads(line) for line in greedy_path.read_text().splitlines()]
-    sampled_rows = [json.loads(line) for line in sampled_path.read_text().splitlines()]
+    eval_rows = read_evaluation_traces(str(root / "exports"), attempt_id=attempt_id, step=0)
+    greedy_rows = [row for row in eval_rows if row.data_source == "train" and row.evaluation == "eval/"]
+    sampled_rows = [row for row in eval_rows if row.data_source == "train" and row.evaluation == "eval/sampled/"]
     assert len(sampled_rows) == 8 * len(greedy_rows)
     for prefix, rows in (("eval/train", greedy_rows), ("eval/sampled/train", sampled_rows)):
-        exact = sum((sum(row["score"]) if isinstance(row["score"], list) else row["score"]) == 1.0 for row in rows)
+        exact = sum(row.score == 1.0 for row in rows)
         assert evaluations[0][f"{prefix}/environment/cat_count/exact"] == pytest.approx(exact / len(rows))
     assert any(
         row["name"] == "training_metric_value"
@@ -317,7 +315,7 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
     root = tmp_path / "rloo-n"
     preserved = None
     generated_attempt_id = None
-    original_dump = None
+    original_traces = None
     for steps, resume in ((2, False), (4, True)):
         interval = 3 if resume else 2
         cfg = cat_count_config(root, cat_count_policy, steps=steps, resume=resume, eval_interval=3)
@@ -417,25 +415,24 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         expected_final = [2, 4] if resume else [2]
         assert [row["step"] for row in final_metrics] == expected_final
         assert all(row["eval/full_task_set/all/num_attempted"] == 1 for row in final_metrics)
-        dumped = Path(
-            evaluation_dump_dir(
-                str(root / "exports/full_task_set"), steps, attempt_id="attempt-4" if resume else generated_attempt_id
-            )
+        full_rows = read_evaluation_traces(
+            str(root / "exports"), attempt_id=current_attempt, step=steps, evaluation="eval/full_task_set/"
         )
-        full_rows = [json.loads(line) for path in dumped.glob("*.jsonl") for line in path.read_text().splitlines()]
-        assert {row["task_id"] for row in full_rows} == {"full-task_set-only"}
-        finals = [row for row in full_rows if row["is_last_step"]]
+        assert {row.task_id for row in full_rows} == {"full-task_set-only"}
+        finals = [row for row in full_rows if row.is_last_step]
         assert len(finals) == 1
         if step_wise:
             assert len(full_rows) > len(finals)
-        assert [answer.ordinal for row in task_rows for answer in row.answers] == [row["ordinal"] for row in finals]
-        assert [answer.native_uid for row in task_rows for answer in row.answers] == [row["uid"] for row in finals]
-        boundary_dump = root / "exports" / "dumped_evals" / generated_attempt_id / "global_step_2_evals"
+        assert [answer.ordinal for row in task_rows for answer in row.answers] == [row.ordinal for row in finals]
+        assert [answer.native_uid for row in task_rows for answer in row.answers] == [row.native_uid for row in finals]
+        boundary_traces = read_evaluation_traces(
+            str(root / "exports"), attempt_id=generated_attempt_id, step=2, evaluation="eval/"
+        )
         if not resume:
-            original_dump = {path.name: path.read_bytes() for path in boundary_dump.glob("*.jsonl")}
-            assert original_dump
+            original_traces = boundary_traces
+            assert original_traces
         else:
-            assert {path.name: path.read_bytes() for path in boundary_dump.glob("*.jsonl")} == original_dump
+            assert boundary_traces == original_traces
             at_boundary = [
                 read_evaluations(str(root / "exports"), attempt_id=identity, step=2, evaluation="eval/")
                 for identity in (generated_attempt_id, current_attempt)
@@ -446,16 +443,10 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
                 for identity, rows in zip((generated_attempt_id, current_attempt), at_boundary, strict=True)
             )
             assert all(len(row.answers) == 1 for rows in at_boundary for row in rows)
-        assert not Path(
-            evaluation_dump_dir(
-                str(root / "exports/full_task_set"), 0, attempt_id="attempt-4" if resume else generated_attempt_id
+        for unscheduled_step in (0, 3):
+            assert not read_evaluation_traces(
+                str(root / "exports"), attempt_id=current_attempt, step=unscheduled_step, evaluation="eval/full_task_set/"
             )
-        ).exists()
-        assert not Path(
-            evaluation_dump_dir(
-                str(root / "exports/full_task_set"), 3, attempt_id="attempt-4" if resume else generated_attempt_id
-            )
-        ).exists()
         observed = Counter(
             row["attributes"]["step"]
             for row in cat_count_session
@@ -598,22 +589,14 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     assert str(missing) in str(unavailable.value) and str(cat_count_policy) in str(unavailable.value)
     records = run_process(forkserver_context, root, cfg, run_cat_count_generate)
     metrics, = records
-    rows = [
-        json.loads(line)
-        for line in (
-            Path(
-                evaluation_dump_dir(
-                    str(root / "exports"), None, attempt_id=next(iter(read_attempts(str(root / "exports"))))
-                )
-            )
-            / "train.jsonl"
-        )
-        .read_text()
-        .splitlines()
-    ]
     attempts = read_attempts(str(root / "exports"))
     (attempt_id,) = attempts
     assert attempts[attempt_id].evaluation_storage_version == 1
+    rows = read_evaluation_traces(str(root / "exports"), attempt_id=attempt_id, step=-1, evaluation="eval/")
+    named_rows = read_evaluation_traces(
+        str(root / "exports"), attempt_id=attempt_id, step=-1, evaluation="eval/named_profile/"
+    )
+    assert {row.task_id for row in named_rows} == expected.keys()
     task_rows = read_evaluations(str(root / "exports"), attempt_id=attempt_id, step=-1, evaluation="eval/")
     assert {row.task_id for row in task_rows} == expected.keys()
     assert {row.model for row in task_rows} == {"cat-count-model"}
@@ -631,31 +614,27 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     )
     answers = sorted((answer for row in task_rows for answer in row.answers), key=lambda answer: answer.ordinal)
     assert [answer.ordinal for answer in answers] == list(range(len(rows)))
-    assert {row["attempt_id"] for row in rows} == {attempt_id}
-    assert {row["step"] for row in rows} == {-1} and all(row["is_last_step"] for row in rows)
+    assert {row.attempt_id for row in rows} == {attempt_id}
+    assert {row.step for row in rows} == {-1} and all(row.is_last_step for row in rows)
     assert math.fsum(answer.optimization_reward for answer in answers) / len(answers) == metrics["eval/all/avg_score"]
     scored = [answer.verifier_score for answer in answers if answer.verifier_score is not None]
     assert sum(scored) / len(scored) == pytest.approx(metrics["eval/all/avg_verifier_score"])
     assert len(scored) / len(answers) == metrics["eval/all/verifier_score_coverage"]
-    by_ordinal = {row["ordinal"]: row for row in rows}
+    by_ordinal = {row.ordinal: row for row in rows}
     for task_row in task_rows:
         for answer in task_row.answers:
-            dumped = by_ordinal[answer.ordinal]
+            trace = by_ordinal[answer.ordinal]
             assert (task_row.task_id, answer.native_uid, answer.response_token_count) == (
-                dumped["task_id"], dumped["uid"], len(dumped["response_token_ids"])
+                trace.task_id, trace.native_uid, len(trace.response_token_ids)
             )
-            reward = dumped["score"]
-            assert answer.optimization_reward == (math.fsum(reward) if isinstance(reward, list) else reward)
-            verification = dumped["verification"] or {}
-            assert (answer.error_type, answer.error_treatment) == (dumped["exception_type"], dumped["error_treatment"])
+            assert answer.optimization_reward == trace.score
+            assert (answer.error_type, answer.error_treatment) == (trace.exception_type, trace.error_treatment)
+            verification = trace.verification
+            assert verification is not None
             assert (answer.verification_status, answer.raw_verifier_score, answer.score_min, answer.score_max) == (
-                verification.get("status"), verification.get("score"), verification.get("score_min"),
-                verification.get("score_max"),
+                verification.status, verification.score, verification.score_min, verification.score_max
             )
-            if verification.get("status") == "verified":
-                assert answer.passed == (
-                    verification["passed"] if verification["passed"] is not None else answer.optimization_reward > 0
-                )
+            if verification.status == "verified":
                 assert answer.outcome == "graded"
             else:
                 assert answer.verifier_score is None and not answer.passed and answer.outcome == "unavailable"
@@ -680,10 +659,10 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     assert sum(family_answers) / len(family_answers) == pytest.approx(1 / 3)
     assert metrics["generate/prompts_dropped_too_long"] == 1
     assert len(rows) == 2 * (len(expected) + 1)
-    assert {row["task_id"] for row in rows} == expected.keys()
-    assert all(expected[row["task_id"]] in row["input_prompt"] and row["uid"] != row["task_id"] for row in rows)
-    assert all(len(row["response_token_ids"]) == 8 for row in rows if not row["task_id"].startswith("rollout-error"))
-    tokens = sum(len(row["response_token_ids"]) for row in rows)
+    assert {row.task_id for row in rows} == expected.keys()
+    assert all(expected[row.task_id] in row.input_prompt and row.native_uid != row.task_id for row in rows)
+    assert all(len(row.response_token_ids) == 8 for row in rows if row.task_id != "rollout-error")
+    tokens = sum(len(row.response_token_ids) for row in rows)
     assert metrics["generate/response_tokens"] == tokens
     assert metrics["generate/wall_seconds"] > 0
     generated_tokens = 2 * (len(expected) + 1) * 8

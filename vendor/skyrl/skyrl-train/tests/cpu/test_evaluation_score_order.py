@@ -10,7 +10,7 @@ from dataclasses import replace
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.run_records import read_evaluations
+from finestore.rl.run_records import read_evaluation_traces, read_evaluations
 from finestore.rl.strata import TaskEvaluationIdentity, TaskStrata
 from omegaconf import OmegaConf
 from torchdata.stateful_dataloader import StatefulDataLoader
@@ -178,11 +178,17 @@ def test_evaluation_mean_survives_cancellation_and_completion_order(per_token):
 
 
 @pytest.mark.asyncio
-async def test_evaluation_collector_keeps_task_id_and_scoring_metadata(tmp_path):
+@pytest.mark.parametrize(
+    ("keep_traces", "redact_fields"),
+    [(False, []), (True, []), (True, ["response.messages", "verification_result.reason"])],
+    ids=["scores-only", "full-traces", "redacted-traces"],
+)
+async def test_evaluation_collector_keeps_task_id_and_scoring_metadata(tmp_path, keep_traces, redact_fields):
     config = get_default_config()
     config.trainer.export_path = str(tmp_path)
-    config.trainer.dump_eval_results = False
+    config.trainer.dump_eval_results = keep_traces
     config.trainer.dump_grader_report = True
+    config.generator.trajectory_retention.redact_fields = redact_fields
     config.generator.eval_n_samples_per_prompt = 1
     OmegaConf.update(config, "runtime", {"attempt_id": "eval-attempt", "model": "test-policy"}, force_add=True)
     task = text_task("validation-task")
@@ -196,7 +202,7 @@ async def test_evaluation_collector_keeps_task_id_and_scoring_metadata(tmp_path)
     projection = WholeTaskProjection(config.generator, tokenizer)
     response = TrainingRollout(
         task_id="validation-task",
-        messages=(),
+        messages=({"role": "assistant", "content": "answer"},),
         prompt_token_ids=(1,),
         response_token_ids=(2,),
         loss_mask=(1,),
@@ -222,6 +228,23 @@ async def test_evaluation_collector_keeps_task_id_and_scoring_metadata(tmp_path)
     assert saved.model == "test-policy"
     [answer] = saved.answers
     assert answer.response_token_count == 1
+    traces = read_evaluation_traces(str(tmp_path), attempt_id="eval-attempt", step=0)
+    if keep_traces:
+        assert [trace.evaluation for trace in traces] == ["eval/", "eval/named/"]
+        for trace in traces:
+            assert trace.task_id == task.id
+            if redact_fields:
+                assert trace.messages_json is None
+                assert trace.input_prompt is None and trace.output_response is None
+                assert trace.prompt_token_ids is None and trace.response_token_ids is None
+                assert trace.verification is None
+            else:
+                assert (trace.prompt_token_ids, trace.response_token_ids) == ([1], [2])
+                assert trace.messages_json is not None
+                assert json.loads(trace.messages_json) == [{"role": "assistant", "content": "answer"}]
+                assert trace.verification is not None and trace.verification.score == 1.0
+    else:
+        assert not traces
     report = json.loads((tmp_path / "grader_report.json").read_text())
     assert set(report["evaluation"]) == {"0", "named/0"}
     assert report["evaluation"]["named/0"][0]["subset_id"] == "math"
