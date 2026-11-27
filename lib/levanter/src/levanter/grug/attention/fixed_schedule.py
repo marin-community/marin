@@ -1,0 +1,284 @@
+# Copyright The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Explicitly opt-in fixed-schedule TPUv4 attention for generated fixtures.
+
+The public contract is deliberately narrow: four complete sequence slots are
+sharded over a data mesh axis, each local kernel sees one 256-row sequence,
+and all eight physical cache pages are replicated. This entry point is opt-in.
+"""
+
+from dataclasses import dataclass
+import math
+
+import jax
+import jax.numpy as jnp
+from haliax.partitioning import _get_mesh
+from jax.experimental.pallas.ops.tpu.ragged_paged_attention import ragged_paged_attention
+from jax.experimental.pallas.ops.tpu.ragged_paged_attention.kernel import DEFAULT_MASK_VALUE
+from jax.sharding import NamedSharding, reshard
+from jax.sharding import PartitionSpec as P
+
+
+@dataclass(frozen=True)
+class FixedScheduleSpec:
+    """Static generated-fixture contract for the shared forward."""
+
+    max_num_seqs: int = 4
+    max_kv_len: int = 256
+    num_physical_pages: int = 8
+    pages_per_seq: int = 2
+    page_size: int = 128
+    num_q_heads: int = 2
+    num_kv_heads: int = 1
+    head_dim: int = 128
+    num_queries_per_block: int = 128
+    num_kv_pages_per_block: int = 1
+    sm_scale: float = 1.0 / math.sqrt(128.0)
+    sliding_window: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.max_kv_len != self.pages_per_seq * self.page_size:
+            raise ValueError("max_kv_len must equal pages_per_seq * page_size")
+        if (self.max_num_seqs, self.num_physical_pages) not in ((1, 4), (4, 8)):
+            raise ValueError("the bounded fixture allows only (one adapter slot, four pages) or (data=4, eight pages)")
+        if self.num_q_heads % self.num_kv_heads != 0:
+            raise ValueError("num_q_heads must be divisible by num_kv_heads")
+        if self.head_dim != 128 or self.page_size != 128:
+            raise ValueError("the bounded TPUv4 prototype requires head_dim=page_size=128")
+        if self.num_queries_per_block != 128 or self.num_kv_pages_per_block != 1:
+            raise ValueError("the bounded prototype fixes query blocks to 128 and KV blocks to 1 page")
+        if self.sliding_window is not None and not 0 < self.sliding_window <= self.max_kv_len:
+            raise ValueError("sliding_window must be within the fixed KV capacity")
+
+
+def _page_map_contract(
+    page_indices: jax.Array,
+    spec: FixedScheduleSpec,
+    *,
+    require_unique: bool,
+    num_sequences: int | None = None,
+) -> tuple[jax.Array, jax.Array]:
+    expected_sequences = spec.max_num_seqs if num_sequences is None else num_sequences
+    if page_indices.shape != (expected_sequences, spec.pages_per_seq):
+        raise ValueError(f"page_indices must have the fixed [{expected_sequences}, {spec.pages_per_seq}] shape")
+    if page_indices.dtype != jnp.int32:
+        raise ValueError("page_indices must be int32")
+
+    in_range = jnp.all((page_indices >= 0) & (page_indices < spec.num_physical_pages))
+    flat = page_indices.reshape(-1)
+    distinct = (flat[:, None] != flat[None, :]) | jnp.eye(flat.size, dtype=jnp.bool_)
+    unique = jnp.all(distinct)
+    valid = in_range & (unique if require_unique else jnp.asarray(True))
+    safe = jnp.clip(page_indices, 0, spec.num_physical_pages - 1)
+    return safe, valid
+
+
+def materialize_contiguous_kv(
+    keys: jax.Array,
+    values: jax.Array,
+    page_indices: jax.Array,
+    *,
+    spec: FixedScheduleSpec = FixedScheduleSpec(),
+) -> jax.Array:
+    """Pack contiguous K/V into the exact serving page layout.
+
+    Invalid indices are clipped before the update. Invalid or duplicate maps
+    poison the returned cache with BF16 NaNs. A valid map must be unique and
+    in range because this adapter writes each logical page exactly once.
+    Serving attention itself permits shared physical pages.
+    """
+    expected = (spec.max_num_seqs, spec.max_kv_len, spec.num_kv_heads, spec.head_dim)
+    if keys.shape != expected or values.shape != expected:
+        raise ValueError(
+            f"keys and values must have the fixed [{spec.max_num_seqs}, {spec.max_kv_len}, "
+            f"{spec.num_kv_heads}, {spec.head_dim}] shape"
+        )
+    if keys.dtype not in (jnp.bfloat16, jnp.float32) or values.dtype != keys.dtype:
+        raise ValueError("contiguous keys and values must be BF16 or FP32 with matching dtypes")
+
+    safe_pages, map_valid = _page_map_contract(page_indices, spec, require_unique=True)
+    finite = jnp.all(jnp.isfinite(keys)) & jnp.all(jnp.isfinite(values))
+    safe_keys = jnp.where(jnp.isfinite(keys), keys, 0).astype(jnp.bfloat16)
+    safe_values = jnp.where(jnp.isfinite(values), values, 0).astype(jnp.bfloat16)
+    logical = jnp.stack((safe_keys, safe_values), axis=3).reshape(
+        spec.max_num_seqs,
+        spec.pages_per_seq,
+        spec.page_size,
+        2 * spec.num_kv_heads,
+        spec.head_dim,
+    )
+    pages = jnp.zeros(
+        (spec.num_physical_pages, spec.page_size, 2 * spec.num_kv_heads, spec.head_dim),
+        dtype=jnp.bfloat16,
+    )
+
+    # Indexed placement must see whole logical updates and a replicated page
+    # accumulator. Otherwise each data shard attempts to update a replicated
+    # result with a shard-local slice, which is rejected by Explicit sharding.
+    mesh = _get_mesh()
+    if mesh is not None and not mesh.empty:
+        replicated = NamedSharding(mesh, P())
+        logical = reshard(logical, replicated)
+        pages = reshard(pages, replicated)
+    pages = pages.at[safe_pages.reshape(-1)].set(
+        logical.reshape(-1, spec.page_size, 2 * spec.num_kv_heads, spec.head_dim)
+    )
+    return jnp.where(map_valid & finite, pages, jnp.full_like(pages, jnp.nan))
+
+
+def _local_fixed_attention(
+    q: jax.Array,
+    kv_pages: jax.Array,
+    kv_lens: jax.Array,
+    page_indices: jax.Array,
+    query_lengths: jax.Array,
+    query_positions: jax.Array,
+    query_valid: jax.Array,
+    *,
+    spec: FixedScheduleSpec,
+) -> jax.Array:
+    """Run one complete sequence slot inside the explicit data shard."""
+    q = q[0]
+    query_lengths = query_lengths.reshape((1,))
+    query_positions = query_positions[0]
+    query_valid = query_valid[0]
+
+    safe_pages, pages_in_range = _page_map_contract(page_indices, spec, require_unique=False, num_sequences=1)
+    pages_finite = jnp.all(jnp.isfinite(kv_pages))
+    safe_kv_pages = jnp.where(jnp.isfinite(kv_pages), kv_pages, 0).astype(jnp.bfloat16)
+    lengths_in_range = (query_lengths >= 0) & (query_lengths <= spec.max_kv_len)
+    kv_length_valid = kv_lens == spec.max_kv_len
+    safe_length = jnp.clip(query_lengths, 0, spec.max_kv_len)
+    safe_kv_lens = jnp.where(kv_length_valid, kv_lens, spec.max_kv_len)
+    # The ragged kernel prefetches KV before its no-work predicate. Keep zero
+    # as the logical length, but give that kernel one sanitized dummy query;
+    # query_valid and valid_metadata still erase it or poison invalid input.
+    execution_length = jnp.maximum(safe_length, 1)
+    cu_q_lens = jnp.concatenate((jnp.zeros((1,), dtype=jnp.int32), execution_length))
+
+    row = jnp.arange(spec.max_kv_len, dtype=jnp.int32)
+    in_span = row < safe_length[0]
+    expected_positions = spec.max_kv_len - safe_length[0] + row
+    positions_valid = jnp.all(~query_valid | (in_span & (query_positions == expected_positions)))
+    valid_metadata = (
+        jnp.all(lengths_in_range)
+        & jnp.all(kv_length_valid)
+        & pages_in_range
+        & pages_finite
+        & jnp.all(jnp.isfinite(q))
+        & positions_valid
+    )
+    safe_q = jnp.where(jnp.isfinite(q), q, 0).astype(jnp.float32)
+
+    # The installed kernel applies sm_scale after QK, consumes BF16 page
+    # operands, uses DEFAULT dot precision, and requests FP32 preferred output
+    # types for QK and AV. This context freezes the deliberate DEFAULT choice
+    # instead of inheriting ambient caller state; it does not promise FP32
+    # operand multiplies.
+    with jax.default_matmul_precision("default"):
+        output = ragged_paged_attention(
+            safe_q,
+            safe_kv_pages,
+            safe_kv_lens,
+            safe_pages,
+            cu_q_lens,
+            jnp.asarray([1], dtype=jnp.int32),
+            sm_scale=spec.sm_scale,
+            sliding_window=spec.sliding_window,
+            soft_cap=None,
+            mask_value=DEFAULT_MASK_VALUE,
+            k_scale=None,
+            v_scale=None,
+            num_kv_pages_per_block=spec.num_kv_pages_per_block,
+            num_queries_per_block=spec.num_queries_per_block,
+            vmem_limit_bytes=None,
+        )
+    output = jnp.where(query_valid[:, None, None], output, 0.0)
+    output = jnp.where(valid_metadata, output, jnp.nan)
+    return output[None, ...]
+
+
+def fixed_schedule_attention(
+    q: jax.Array,
+    kv_pages: jax.Array,
+    kv_lens: jax.Array,
+    page_indices: jax.Array,
+    query_lengths: jax.Array,
+    query_positions: jax.Array,
+    query_valid: jax.Array,
+    *,
+    spec: FixedScheduleSpec = FixedScheduleSpec(),
+) -> jax.Array:
+    """Run the shared fixed-schedule forward on explicit data=4 sequence slots.
+
+    With the default spec, shapes are q=[4,256,2,128],
+    kv_pages=[8,128,2,128], kv_lens=[4], page_indices=[4,2],
+    query_lengths=[4], and query_positions and query_valid each [4,256].
+    The function requires an explicit mesh with a data axis of size four.
+    Each shard receives one sequence's metadata and the replicated KV pages. query_lengths=L and valid rows beginning at
+    position 256-L make decode at position p use L=256-p without repacking
+    neighboring sequences.
+    """
+    if q.shape != (spec.max_num_seqs, spec.max_kv_len, spec.num_q_heads, spec.head_dim):
+        raise ValueError("q must have the fixed [4, 256, 2, 128] shape")
+    if q.dtype != jnp.float32:
+        raise ValueError("q must be float32 at the explicit mixed-precision boundary")
+    if spec.max_num_seqs != 4 or spec.num_physical_pages != 8:
+        raise ValueError("the public forward is bounded to data=4 and eight replicated physical pages")
+    if kv_pages.shape != (
+        spec.num_physical_pages,
+        spec.page_size,
+        2 * spec.num_kv_heads,
+        spec.head_dim,
+    ):
+        raise ValueError("kv_pages must have the fixed [8, 128, 2, 128] shape")
+    if kv_pages.dtype != jnp.bfloat16:
+        raise ValueError("kv_pages must be BF16 at the cache boundary")
+    if kv_lens.shape != (spec.max_num_seqs,) or query_lengths.shape != (spec.max_num_seqs,):
+        raise ValueError("kv_lens and query_lengths must have the fixed [4] shape")
+    if query_positions.shape != (spec.max_num_seqs, spec.max_kv_len) or query_valid.shape != query_positions.shape:
+        raise ValueError("query_positions and query_valid must have the fixed [4, 256] shape")
+    if (
+        kv_lens.dtype != jnp.int32
+        or query_lengths.dtype != jnp.int32
+        or query_positions.dtype != jnp.int32
+        or query_valid.dtype != jnp.bool_
+    ):
+        raise ValueError("lengths and positions must be int32 and query_valid must be bool")
+    if page_indices.shape != (spec.max_num_seqs, spec.pages_per_seq) or page_indices.dtype != jnp.int32:
+        raise ValueError("page_indices must be int32 with the fixed [4, 2] shape")
+
+    mesh = _get_mesh()
+    if (
+        mesh is None
+        or getattr(mesh, "empty", False)
+        or int(mesh.shape.get("data", 0)) != spec.max_num_seqs
+        or int(mesh.size) != spec.max_num_seqs
+        or mesh.axis_types[mesh.axis_names.index("data")] != jax.sharding.AxisType.Explicit
+    ):
+        raise ValueError(
+            "fixed_schedule_attention requires a four-device explicit data mesh with singleton extra axes"
+        )
+
+    in_specs = (
+        P("data", None, None, None),
+        P(),
+        P("data"),
+        P("data", None),
+        P("data"),
+        P("data", None),
+        P("data", None),
+    )
+    shard = jax.shard_map(
+        lambda q_, pages_, lens_, indices_, lengths_, positions_, valid_: _local_fixed_attention(
+            q_, pages_, lens_, indices_, lengths_, positions_, valid_, spec=spec
+        ),
+        mesh=mesh,
+        in_specs=in_specs,
+        out_specs=P("data", None, None, None),
+        check_vma=False,
+    )
+    args = (q, kv_pages, kv_lens, page_indices, query_lengths, query_positions, query_valid)
+    args = tuple(jax.sharding.reshard(arg, NamedSharding(mesh, partition)) for arg, partition in zip(args, in_specs))
+    return shard(*args)
