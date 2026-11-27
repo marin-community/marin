@@ -58,6 +58,7 @@ from levanter.inference.openai_protocol import (
     TokensRequest,
     TokensResponse,
 )
+from levanter.inference.router_replay import write_router_replay
 from levanter.inference.utils import INVALID
 from levanter.models.lm_model import LmHeadModel
 from levanter.tokenizers import MarinTokenizer
@@ -915,14 +916,7 @@ def _grpc_generate_response(prompt: list[int], outputs: list[InferenceResponse])
     for output in outputs:
         choice = response.choices.add(token_ids=output.tokens, behavior_logprobs=output.logprobs)
         if output.expert_routes is not None:
-            experts = output.expert_routes.expert_ids
-            layers, positions, experts_per_token = experts.shape
-            replay = choice.router_replay
-            replay.num_layers = layers
-            replay.num_positions = positions
-            replay.experts_per_token = experts_per_token
-            replay.expert_ids.extend(experts.ravel().tolist())
-            replay.valid.extend(output.expert_routes.valid.tolist())
+            write_router_replay(choice.router_replay, output.expert_routes.expert_ids, output.expert_routes.valid)
     return response
 
 

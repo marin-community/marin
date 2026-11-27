@@ -24,13 +24,15 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\"levanter/inference/inference.proto\x12\x15levanter.inference.v1\"\xb0\x02\n\x0fGenerateRequest\x12\x18\n\x10prompt_token_ids\x18\x01 \x03(\r\x12\x16\n\x0emax_new_tokens\x18\x02 \x01(\r\x12\x18\n\x0btemperature\x18\x03 \x01(\x02H\x00\x88\x01\x01\x12\x12\n\x05top_p\x18\x04 \x01(\x02H\x01\x88\x01\x01\x12\x11\n\x04seed\x18\x05 \x01(\rH\x02\x88\x01\x01\x12<\n\x0estop_sequences\x18\x06 \x03(\x0b\x32$.levanter.inference.v1.TokenSequence\x12\x18\n\x0bnum_choices\x18\x07 \x01(\rH\x03\x88\x01\x01\x12\x1f\n\x15\x63\x61pture_router_replay\x18\xd1\x86\x03 \x01(\x08\x42\x0e\n\x0c_temperatureB\x08\n\x06_top_pB\x07\n\x05_seedB\x0e\n\x0c_num_choices\"\"\n\rTokenSequence\x12\x11\n\ttoken_ids\x18\x01 \x03(\r\"\\\n\x10GenerateResponse\x12\x18\n\x10prompt_token_ids\x18\x01 \x03(\r\x12.\n\x07\x63hoices\x18\x02 \x03(\x0b\x32\x1d.levanter.inference.v1.Choice\"t\n\x06\x43hoice\x12\x11\n\ttoken_ids\x18\x01 \x03(\r\x12\x19\n\x11\x62\x65havior_logprobs\x18\x02 \x03(\x02\x12<\n\rrouter_replay\x18\xd1\x86\x03 \x01(\x0b\x32#.levanter.inference.v1.RouterReplay\"w\n\x0cRouterReplay\x12\x12\n\nnum_layers\x18\x01 \x01(\r\x12\x15\n\rnum_positions\x18\x02 \x01(\r\x12\x19\n\x11\x65xperts_per_token\x18\x03 \x01(\r\x12\x12\n\nexpert_ids\x18\x04 \x03(\r\x12\r\n\x05valid\x18\x05 \x03(\x08\x32h\n\tInference\x12[\n\x08Generate\x12&.levanter.inference.v1.GenerateRequest\x1a\'.levanter.inference.v1.GenerateResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\"levanter/inference/inference.proto\x12\x15levanter.inference.v1\"\xb0\x02\n\x0fGenerateRequest\x12\x18\n\x10prompt_token_ids\x18\x01 \x03(\r\x12\x16\n\x0emax_new_tokens\x18\x02 \x01(\r\x12\x18\n\x0btemperature\x18\x03 \x01(\x02H\x00\x88\x01\x01\x12\x12\n\x05top_p\x18\x04 \x01(\x02H\x01\x88\x01\x01\x12\x11\n\x04seed\x18\x05 \x01(\rH\x02\x88\x01\x01\x12<\n\x0estop_sequences\x18\x06 \x03(\x0b\x32$.levanter.inference.v1.TokenSequence\x12\x18\n\x0bnum_choices\x18\x07 \x01(\rH\x03\x88\x01\x01\x12\x1f\n\x15\x63\x61pture_router_replay\x18\xd1\x86\x03 \x01(\x08\x42\x0e\n\x0c_temperatureB\x08\n\x06_top_pB\x07\n\x05_seedB\x0e\n\x0c_num_choices\"\"\n\rTokenSequence\x12\x11\n\ttoken_ids\x18\x01 \x03(\r\"\\\n\x10GenerateResponse\x12\x18\n\x10prompt_token_ids\x18\x01 \x03(\r\x12.\n\x07\x63hoices\x18\x02 \x03(\x0b\x32\x1d.levanter.inference.v1.Choice\"t\n\x06\x43hoice\x12\x11\n\ttoken_ids\x18\x01 \x03(\r\x12\x19\n\x11\x62\x65havior_logprobs\x18\x02 \x03(\x02\x12<\n\rrouter_replay\x18\xd1\x86\x03 \x01(\x0b\x32#.levanter.inference.v1.RouterReplay\"\xbc\x01\n\x0cRouterReplay\x12\x12\n\nnum_layers\x18\x01 \x01(\r\x12\x15\n\rnum_positions\x18\x02 \x01(\r\x12\x19\n\x11\x65xperts_per_token\x18\x03 \x01(\r\x12\r\n\x05valid\x18\x05 \x03(\x08\x12\x12\n\nexpert_ids\x18\x06 \x01(\x0c\x12=\n\x0f\x65xpert_id_dtype\x18\x07 \x01(\x0e\x32$.levanter.inference.v1.ExpertIdDtypeJ\x04\x08\x04\x10\x05*j\n\rExpertIdDtype\x12\x1f\n\x1b\x45XPERT_ID_DTYPE_UNSPECIFIED\x10\x00\x12\x19\n\x15\x45XPERT_ID_DTYPE_UINT8\x10\x01\x12\x1d\n\x19\x45XPERT_ID_DTYPE_UINT16_LE\x10\x02\x32h\n\tInference\x12[\n\x08Generate\x12&.levanter.inference.v1.GenerateRequest\x1a\'.levanter.inference.v1.GenerateResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'levanter.inference.inference_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
+  _globals['_EXPERTIDDTYPE']._serialized_start=807
+  _globals['_EXPERTIDDTYPE']._serialized_end=913
   _globals['_GENERATEREQUEST']._serialized_start=62
   _globals['_GENERATEREQUEST']._serialized_end=366
   _globals['_TOKENSEQUENCE']._serialized_start=368
@@ -39,8 +41,8 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_GENERATERESPONSE']._serialized_end=496
   _globals['_CHOICE']._serialized_start=498
   _globals['_CHOICE']._serialized_end=614
-  _globals['_ROUTERREPLAY']._serialized_start=616
-  _globals['_ROUTERREPLAY']._serialized_end=735
-  _globals['_INFERENCE']._serialized_start=737
-  _globals['_INFERENCE']._serialized_end=841
+  _globals['_ROUTERREPLAY']._serialized_start=617
+  _globals['_ROUTERREPLAY']._serialized_end=805
+  _globals['_INFERENCE']._serialized_start=915
+  _globals['_INFERENCE']._serialized_end=1019
 # @@protoc_insertion_point(module_scope)
