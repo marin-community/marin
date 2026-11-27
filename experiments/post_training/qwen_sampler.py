@@ -68,7 +68,6 @@ def sampler_preset(
     seed: int,
     *,
     layout: Layout,
-    revision: str,
     evaluation_interval: int | None,
     additional_evaluations: tuple[Evaluation, ...] = (),
 ) -> Preset:
@@ -116,7 +115,6 @@ def sampler_preset(
     )
     return Preset(
         name=name,
-        revision=revision,
         tasks=TASKS,
         model=QWEN,
         recipe=Recipe(
@@ -184,7 +182,6 @@ def token_budget_smoke(arm: str, kind: str, epsilon: float) -> Preset:
         epsilon,
         41,
         layout=RNO_PAIR_LAYOUT,
-        revision="2026.11.25.8",
         evaluation_interval=None,
     )
     return with_rollout_token_budget(replace(preset, evaluations=(replace(EVAL, at_start=False),)), 200_000)
@@ -196,7 +193,6 @@ def budget_preset(
     epsilon: float,
     seed: int,
     *,
-    revision: str,
     layout: Layout,
     max_updates: int,
     tokens: int,
@@ -214,7 +210,6 @@ def budget_preset(
         epsilon,
         seed,
         layout=replace(layout, coordinator_timeout_hours=3, job_timeout_seconds=7200),
-        revision=revision,
         evaluation_interval=None,
     )
     return with_rollout_token_budget(replace(preset, evaluations=(evaluation,), held_out_tasks=held_out_tasks), tokens)
@@ -231,7 +226,6 @@ def source_pass_presets(prefix: str, layout: Layout) -> tuple[Preset, ...]:
                 epsilon,
                 83,
                 layout=layout,
-                revision="2026.11.25.12",
                 evaluation_interval=4,
             )
             for arm, kind, epsilon in SOURCE_PASS_ARMS
@@ -242,7 +236,6 @@ def source_pass_presets(prefix: str, layout: Layout) -> tuple[Preset, ...]:
                 kind,
                 epsilon,
                 seed,
-                revision="2026.11.25.13",
                 layout=layout,
                 max_updates=BUDGET_CONFIRM_UPDATES,
                 tokens=BUDGET_CONFIRM_TOKENS,
@@ -259,8 +252,6 @@ def layout_presets(
     prefix: str,
     layout: Layout,
     *,
-    smoke_revision: str,
-    pilot_revision: str,
     pilot_arms: tuple[tuple[str, str, float], ...] = ARMS,
     confirmation: tuple[Evaluation, ...] = (),
 ) -> tuple[Preset, ...]:
@@ -272,14 +263,13 @@ def layout_presets(
             epsilon,
             seed,
             layout=replace(layout, job_timeout_seconds=2700) if stage == "pilot" else layout,
-            revision=revision,
             evaluation_interval=8 if stage == "pilot" else updates,
             additional_evaluations=additional,
         )
-        for stage, updates, seed, suffix, revision, arms, additional in (
-            ("smoke", 4, 17, "", smoke_revision, ARMS, ()),
-            ("pilot", 32, 17, "", pilot_revision, pilot_arms, ()),
-            ("pilot", 32, 29, "-seed29", pilot_revision, pilot_arms, confirmation),
+        for stage, updates, seed, suffix, arms, additional in (
+            ("smoke", 4, 17, "", ARMS, ()),
+            ("pilot", 32, 17, "", pilot_arms, ()),
+            ("pilot", 32, 29, "-seed29", pilot_arms, confirmation),
         )
         for arm, kind, epsilon in arms
     )
@@ -289,23 +279,20 @@ QWEN_SAMPLER = ModelPresets(
     model="qwen3-0.6b",
     namespace="qwen-sampler",
     presets=(
-        *layout_presets("", LAYOUT, smoke_revision="2026.11.25.6", pilot_revision="2026.11.25.6"),
+        *layout_presets("", LAYOUT),
         *layout_presets(
             "rno-pair-",
             RNO_PAIR_LAYOUT,
-            smoke_revision="2026.11.25.6",
-            pilot_revision="2026.11.25.6",
             pilot_arms=RNO_PAIR_PILOT_ARMS,
             confirmation=(FULL_VALIDATION,),
         ),
-        *layout_presets("rno-", RNO_LAYOUT, smoke_revision="2026.11.25.3", pilot_revision="2026.11.25.3"),
+        *layout_presets("rno-", RNO_LAYOUT),
         *(
             budget_preset(
                 f"rno-pair-budget-confirm-{arm}-seed{seed}",
                 kind,
                 epsilon,
                 seed,
-                revision="2026.11.25.9",
                 layout=RNO_PAIR_LAYOUT,
                 max_updates=160,
                 tokens=3_000_000,
@@ -324,7 +311,6 @@ QWEN_SAMPLER = ModelPresets(
                 epsilon,
                 67,
                 layout=RNO_PAIR_LAYOUT,
-                revision="2026.11.25.10",
                 evaluation_interval=4,
             )
             for arm, kind, epsilon in SOURCE_ARMS
@@ -335,7 +321,6 @@ QWEN_SAMPLER = ModelPresets(
                 kind,
                 epsilon,
                 seed,
-                revision="2026.11.25.11",
                 layout=RNO_PAIR_LAYOUT,
                 max_updates=BUDGET_CONFIRM_UPDATES,
                 tokens=BUDGET_CONFIRM_TOKENS,
@@ -362,14 +347,12 @@ QWEN_SAMPLER = ModelPresets(
                 epsilon,
                 17,
                 layout=replace(RNO_PAIR_LAYOUT, job_timeout_seconds=3600),
-                revision="2026.11.25.7",
                 evaluation_interval=1,
             )
             for arm, kind, epsilon in RNO_PAIR_PILOT_ARMS
             if arm in {"fixed", "thompson", "source-only", "source-only-eps05"}
         ),
     ),
-    control_pins={},
 )
 
 

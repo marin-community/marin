@@ -11,7 +11,6 @@ from experiments.post_training import rl
 from experiments.post_training.qwen_sampler import LAYOUT, TASKS, WITHIN_SOURCE_PASS, sampler_preset
 from experiments.post_training.rl_presets import ModelPresets, Preset
 
-RELEASE = "2026.11.26.2"
 STRING_TASKS = "qwen-timing-string-ei@2026.11.26.1"
 POOLS = (("full", TASKS), ("string-ei", STRING_TASKS))
 SEEDS = (101, 103)
@@ -27,7 +26,6 @@ def timing_preset(pool: str, tasks: str, seed: int) -> Preset:
         1.0,
         seed,
         layout=LAYOUT,
-        revision=RELEASE,
         evaluation_interval=None,
     )
     # The native dataset loader opens configured validation paths even when evaluation is disabled.
@@ -46,7 +44,6 @@ QWEN_TIMING = ModelPresets(
     model="qwen3-0.6b",
     namespace="qwen-timing",
     presets=tuple(timing_preset(pool, tasks, seed) for pool, tasks in POOLS for seed in SEEDS),
-    control_pins={},
 )
 
 

@@ -14,7 +14,6 @@ from experiments.post_training.task_curation.qwen_string_mixture import DISCOVER
 
 MIXTURES = {"balanced": (0.5, 0.5), "easy80": (0.8, 0.2), "odd80": (0.2, 0.8)}
 SEEDS = (107, 109)
-RELEASE = "2026.11.26.3"
 MIDPOINT = 1_048_576
 BUDGET = 2 * MIDPOINT
 
@@ -25,7 +24,6 @@ def static_preset(arm: str, seed: int):
         WITHIN_SOURCE_PASS,
         1.0,
         seed,
-        revision=RELEASE,
         layout=LAYOUT,
         max_updates=128,
         tokens=BUDGET,
@@ -46,7 +44,6 @@ STUDY = ModelPresets(
     model="qwen3-0.6b",
     namespace="qwen-string",
     presets=tuple(static_preset(arm, seed) for arm in MIXTURES for seed in SEEDS),
-    control_pins={},
 )
 
 if __name__ == "__main__":
