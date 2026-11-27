@@ -178,3 +178,27 @@ def test_generate_waits_for_kv_pages_when_a_slot_is_free():
         result = engine.generate(requests)
 
     assert result.tokens == [[3, 3, 3], [3], [3]]
+
+
+def test_generate_reserves_pages_needed_during_decode():
+    mesh = create_mesh_from_axis_specs(ici_axes={"model": jax.device_count()}, dcn_axes={})
+    with hax.partitioning.set_mesh(mesh):
+        engine = InferenceEngine.from_model_with_config(
+            model=DummyModel(vocab_size=10),  # type: ignore
+            tokenizer=None,
+            config=InferenceEngineConfig(
+                max_seq_len=8,
+                max_pages=3,
+                page_size=4,
+                max_rounds=1,
+                max_seqs=2,
+                max_seqs_in_prefill=2,
+                max_queued_tokens=4,
+                max_prefill_size=6,
+            ),
+        )
+        params = replace(SeqDecodingParams.default(), max_num_tokens=jnp.int32(8))
+        requests = [Request([1, 2, 4], request_id=i, decode_params=params, n_generations=1) for i in range(2)]
+        result = engine.generate(requests)
+
+    assert result.tokens == [[3] * 5, [3] * 5]

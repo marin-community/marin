@@ -913,13 +913,13 @@ class InferenceEngine:
         """Score a token sequence under this engine's model."""
         return score_token_sequence_logprobs(self.model, token_ids, top_k)
 
-    def _prefill_batch(self, batch: Sequence[Request]) -> _DecodeOutputs | None:
+    def _prefill_batch(self, batch: Sequence[Request], page_requirements: dict[int, int]) -> _DecodeOutputs | None:
         """Admit a batch from the head of the queue that fits in free slots/pages.
 
         Returns the decode outputs for the admitted prefill batch, or None if no work was admitted.
         """
         # Build a single PrefillWork description and run prefill exactly once
-        prefill_work = self._prefill_prompts(batch)
+        prefill_work = self._prefill_prompts(batch, page_requirements)
         if prefill_work is None:
             return None
         new_state = _run_prefill(
@@ -930,27 +930,23 @@ class InferenceEngine:
         self.gen_state, outputs = new_state
         return outputs
 
-    @staticmethod
-    def _prefill_page_count(request: Request, page_size: int) -> int:
-        full_pages, tail = divmod(len(request.prompt_tokens), page_size)
-        # Clones share full prompt pages and copy any partial last page.
-        return full_pages + request.n_generations * bool(tail)
+    def _required_kv_pages(self, request: Request) -> int:
+        page_size = self.config.page_size
+        shared_pages = len(request.prompt_tokens) // page_size
+        # The final sampled token is returned without being written to the KV cache.
+        max_tokens = min(int(request.decode_params.max_num_tokens), self.config.max_seq_len)
+        last_write = max(len(request.prompt_tokens), max_tokens - 1)
+        pages_per_choice = (last_write + page_size - 1) // page_size
+        return shared_pages + request.n_generations * (pages_per_choice - shared_pages)
 
-    def _prefill_prompts(
-        self,
-        requests: Sequence[Request],
-    ) -> PrefillWork | None:
-        """Pack prompt work into a single PrefillWork structure for downstream device execution."""
-
+    def _prefill_prompts(self, requests: Sequence[Request], page_requirements: dict[int, int]) -> PrefillWork | None:
         decode_state = self.gen_state.decode_state
         max_seqs_in_prefill = self.config.max_seqs_in_prefill
         max_prefill_size = self.config.max_prefill_size or self.model.Pos.size
         max_seq_len = decode_state.tokens.axis_size("position")
         max_slots = decode_state.max_seqs
-        page_table = decode_state.page_table
-        free_pages = page_table.num_pages
-        if len(self.free_slots) < max_slots:
-            free_pages = int(jnp.count_nonzero(page_table.page_ref_counts.array == 0))
+        active_ids = {request_id for request_id, _ in self.local_map.values()}
+        available_pages = decode_state.page_table.num_pages - sum(page_requirements[rid] for rid in active_ids)
 
         queue_tokens = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
         queue_slot_ids = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
@@ -990,19 +986,10 @@ class InferenceEngine:
             if len(seq_tokens) + offset > queue_tokens.shape[0] or num_primary >= max_seqs_in_prefill:
                 break
 
-            if len(self.free_slots) < request.n_generations:
-                if max_seqs_in_prefill < request.n_generations:
-                    raise RuntimeError(
-                        f"Request {request.request_id} asked for {request.n_generations} generations, "
-                        f"but max_seqs_in_prefill={max_seqs_in_prefill} is too small to accommodate. "
-                        "Increase max_seqs_in_prefill or reduce n_generations."
-                    )
+            required_pages = page_requirements[request.request_id]
+            if len(self.free_slots) < request.n_generations or required_pages > available_pages:
                 break
-
-            prompt_pages = self._prefill_page_count(request, page_table.page_size)
-            if prompt_pages > free_pages:
-                break
-            free_pages -= prompt_pages
+            available_pages -= required_pages
 
             requested_slot = self.free_slots.pop()
             slot_id = int(requested_slot)
@@ -1115,9 +1102,6 @@ class InferenceEngine:
             raise ValueError("Every request must ask for at least one generation")
 
         page_table = self.gen_state.decode_state.page_table
-        if any(self._prefill_page_count(request, page_table.page_size) > page_table.num_pages for request in requests):
-            raise ValueError("A prompt and its clones must fit within the KV page table")
-
         max_needed = max(int(r.n_generations) for r in requests)
         if max_needed > page_table.max_seqs:
             raise ValueError(
@@ -1137,6 +1121,9 @@ class InferenceEngine:
         if not requests:
             return GenerationResult(tokens=[], logprobs=[], total_generated=0)
         self._validate_generation_requests(requests)
+        page_requirements = {request.request_id: self._required_kv_pages(request) for request in requests}
+        if max(page_requirements.values()) > self.gen_state.decode_state.page_table.num_pages:
+            raise ValueError("A request and its choices must fit within the KV page table")
 
         # for now, reset the engine state between each batch - the engine cannot be called with
         # parallel batches.
@@ -1192,7 +1179,7 @@ class InferenceEngine:
         decode_iteration = 0
         while not _all_done():
             if pending and self.free_slots:
-                prefill_outputs = self._prefill_batch(pending)
+                prefill_outputs = self._prefill_batch(pending, page_requirements)
                 if prefill_outputs is not None:
                     self._extract_outputs(prefill_outputs)
                     pending = [request for request in pending if request.request_id not in self.sequences]
