@@ -160,8 +160,9 @@ def compose_plan(document: dict, expected_fresh_task_count: int, removed_sources
 
     The plan's removed sources leave the retained curriculum: their release sources,
     inventory rows, assignments and coverage statistics are not carried. Sources
-    with fresh alignment leave the retained set. Verified rebindings keep their
-    scored rows with current provenance and any proven retention.
+    with fresh alignment leave the retained set, including inventory entries without
+    prior alignment. Verified rebindings keep their scored rows with current
+    provenance and any proven retention.
     """
     declared_rebound = document.get("rebound")
     if declared_rebound:
@@ -211,8 +212,9 @@ def compose_plan(document: dict, expected_fresh_task_count: int, removed_sources
     omitted = removed | replaced
     old_sources = {source.source_id: source for source in old.sources if source.source_id not in omitted}
     old_sources.update({sid: row.source for sid, row in rebound.items()})
-    retained_inventory = [declaration for declaration in old.inventory if declaration.id not in omitted]
-    if len(old.inventory) - len(retained_inventory) != len(omitted):
+    omitted_inventory = omitted | (fresh_targets & {declaration.id for declaration in old.inventory})
+    retained_inventory = [declaration for declaration in old.inventory if declaration.id not in omitted_inventory]
+    if len(old.inventory) - len(retained_inventory) != len(omitted_inventory):
         raise ValueError("planned removals do not each drop exactly one retained inventory row")
     if not targets.isdisjoint(removed):
         raise ValueError("a target is also a planned removal")

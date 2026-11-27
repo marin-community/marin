@@ -307,6 +307,24 @@ def test_compose_replaces_a_changed_population_without_carrying_its_old_count(tm
     assert plan.replaced_sources == {"Marin:retained"}
 
 
+def test_compose_replaces_an_unaligned_inventory_declaration(tmp_path):
+    document, expected = _composition(tmp_path)
+    old = compose.read_reference(document["old_release"])
+    prior_declaration = _declaration("admitted", "0").model_copy(
+        update={"task_count": 0, "within_source_dedup": deduplication_evidence("fixture", "0", "1", count=0)}
+    )
+    old["inventory"].append(prior_declaration.model_dump(mode="json"))
+    document["old_release"] = _seal_json(tmp_path, "old-release.json", old).model_dump(mode="json")
+
+    plan = compose.compose_plan(document, expected, ())
+    release = compose.compose_release(plan, document, {"uri": "/inputs.json", "sha256": "a" * 64})
+
+    assert len(release.inventory) == 2
+    assert {row.id: row.dataset_revision for row in release.inventory} == {"Marin:retained": "1", "Marin:admitted": "1"}
+    assert {row.source_id: row.task_count for row in release.sources} == {"Marin:retained": 3, "Marin:admitted": 2}
+    assert release.task_count == 5
+
+
 def test_compose_plan_drops_planned_removals_from_the_retained_curriculum(tmp_path):
     """A planned removal never survives into the composed release."""
     document, expected = _composition(tmp_path)
