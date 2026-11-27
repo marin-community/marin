@@ -725,7 +725,7 @@ def pipeline_identity(
     """Everything that can change a source artifact's contents; ``grader`` is the grader's built environment."""
     recipe = source_recipe(pipeline, {}, None)
     execution = config.execution
-    return {
+    identity: dict[str, Any] = {
         "name": pipeline.name,
         "version": pipeline.version,
         "intended_use": pipeline.intended_use,
@@ -749,13 +749,22 @@ def pipeline_identity(
         "quality_policy": asdict(config.quality_policy),
         "verification_policy": asdict(config.verification_policy),
         "filter_policy": asdict(config.filter_policy),
-        "lexical": asdict(config.decontamination.identity) if config.decontamination is not None else None,
         "revisions": {
             "procedure": SOURCE_PIPELINE_REVISION,
             "quality": SOURCE_QUALITY_REVISION,
             "verification": SOURCE_VERIFICATION_REVISION,
         },
     }
+    if config.decontamination is not None:
+        # Key the artifact on the frozen corpus state this source's marks depend
+        # on: the engine identity, with only this source's adopted drop set.
+        # Absent entirely without an engine, so existing artifact digests keep
+        # their pre-field values.
+        engine_identity = asdict(config.decontamination.identity)
+        frozen = engine_identity.pop("frozen_source_drop_sets") or {}
+        engine_identity["frozen_source_drop_set"] = frozen.get(pipeline.name)
+        identity["lexical"] = engine_identity
+    return identity
 
 
 @dataclass(frozen=True)

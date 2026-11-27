@@ -30,6 +30,7 @@ from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.datakit.decontam.eval_families import eval_id_to_family
 from experiments.datakit.testbed.decon_arm import (
     MIN_MATCHED_FEATURES,
     NGRAM_LENGTH,
@@ -83,13 +84,6 @@ def _overlapping_ngrams(text: str, matched_hashes: set[int], ngram: NGramConfig)
             if len(out) >= _MAX_MATCHED_NGRAMS:
                 return out
     return out
-
-
-def eval_id_to_family(eval_id: str) -> str:
-    if uncheatable := _UNCHEATABLE_ID_RE.match(eval_id):
-        return f"uncheatable_{uncheatable['subset']}"
-    m = _SPLIT_RE.match(eval_id)
-    return m.group(1) if m else eval_id
 
 
 def _eval_artifact_dir(eval_id: str) -> str:

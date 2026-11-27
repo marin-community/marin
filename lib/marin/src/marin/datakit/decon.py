@@ -96,6 +96,8 @@ DROP_SET_SAMPLE_SHARDS_PER_SOURCE = 512
 DROP_SET_STAGE_PARTITIONS_PER_SOURCE = 128
 DROP_SET_STAGE_TASKS_PER_WORKER = 4
 DEFAULT_DROP_SET_STAGE_PARTITIONS = 4_000
+INDEX_BATCH_ROWS = 131_072
+"""Rows per batch when streaming an eval hash index for attribution."""
 LARGE_TEXT_STREAMING_THRESHOLD = 1024 * 1024
 DEFAULT_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="4g")
 _TOKEN_PATTERN = re.compile(r"\S+")
@@ -832,6 +834,29 @@ def _make_marker(
             write_parquet_file(iter(reservoir), output_path=flagged_path, schema=_FLAGGED_SCHEMA)
 
     return mark_shard
+
+
+def hash_to_evals(index_path: str, needed_hashes: set[int]) -> dict[int, set[str]]:
+    """Resolve marked feature hashes to their eval record IDs through one hash index.
+
+    Reads the ``eval_hash_index.parquet`` sidecar once, keeping only the
+    hashes a mark actually matched, so the caller can attribute its flags
+    without loading the whole index.
+    """
+    mapping: dict[int, set[str]] = {}
+    with StoragePath(index_path).open("rb") as fh:
+        for batch in pq.ParquetFile(fh).iter_batches(
+            batch_size=INDEX_BATCH_ROWS,
+            columns=["hash", "eval_id"],
+        ):
+            for feature_hash, eval_id in zip(
+                batch.column("hash").to_pylist(),
+                batch.column("eval_id").to_pylist(),
+                strict=True,
+            ):
+                if feature_hash in needed_hashes:
+                    mapping.setdefault(feature_hash, set()).add(str(eval_id))
+    return mapping
 
 
 def decon_to_parquet(

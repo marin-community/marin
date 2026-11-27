@@ -70,10 +70,12 @@ pass `PhaseTelemetry` to the writer to retain counters and the execution ID.
    them could change the quality decision.
 6. **Decontaminate.** With a `decontamination` engine configured, [lexical.py](lexical.py)
    renders every kept row's conversation as text and marks it against the
-   caller's frozen eval corpus. The engine records the measurement —
+   caller's frozen eval corpus. The measurement —
    contaminated count and fraction, overlap statistics, matched benchmark
-   families — in the manifest's `lexical` section and the `lexical/` view, and
-   attributes each match through the corpus hash index. A training source
+   families — is recorded in the manifest's `lexical` section and the `lexical/` view, and
+   attributes each match through the corpus hash index. `measured_tasks` counts the
+   stage's kept (post-filter) population — the rows the source is about to verify and
+   admit — not the raw converter census. A training source
    rejects contaminated kept rows (`lexical:contaminated`) before verification,
    so `final/` holds the retained population; an evaluation or benchmark source
    keeps every task and records the measurement only. Without an engine the

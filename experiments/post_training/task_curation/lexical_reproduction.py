@@ -1,18 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare a rebuilt source census with one sealed branch lexical measurement.
+"""Reproduce one sealed branch lexical measurement through main's lexical stage.
 
 The sealed branch measured the converted census of a source — every converter-emitted
 TaskSpec, exact contracts deduplicated — rendered with the shared conversation renderer,
-and marked it against a frozen eval corpus. This script rebuilds that population from
-the registered converter, adopts the receipt's frozen bloom and drop sets, marks and
-attributes through the Datakit engine, and compares the result with the sealed
-evidence: the branch's frozen text population and its frozen per-task marks.
+and marked it against a frozen eval corpus. This script runs main's FULL source
+pipeline on the same pinned source with the receipt's frozen bloom and drop sets, so
+the stage path itself (population render, mark, attribution, training gate, export)
+produces the evidence, and compares the result with the sealed release: the branch's
+frozen text population, its frozen per-task marks, and its retained population.
 
-A converter that no longer emits a sealed row (for example, a reference the current
-math grader cannot parse) cannot be remeasured; the script reports such rows as a
-population delta and compares the stage output per task over the shared population.
+The pipeline runs without model review (the recipe's rubric is cleared), so the kept
+population is every task the converter emits — the same census the sealed receipt
+measured, minus rows main's converter now rejects. A converter that no longer emits
+a sealed row (for example, a reference the current math grader cannot parse) cannot
+be remeasured; the script reports such rows as a population delta and compares the
+stage output per task over the shared population.
 
 ```bash
 REGISTRY=s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684
@@ -37,31 +41,33 @@ import argparse
 import hashlib
 import json
 import logging
-from collections import Counter
+from collections.abc import Iterable
 from contextlib import ExitStack
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
-from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec, format_conversation
-from taskcompendium.pipeline.conversion import convert_source_row
 from taskcompendium.pipeline.lexical import (
-    POPULATION_SCHEMA,
     TEXT_RENDERER_VERSION,
-    MarkedPopulation,
-    TextPopulation,
-    population_summary,
     summarize_flags,
 )
-from taskcompendium.pipeline.models import ImportRejection, NormalizedTask
-from taskcompendium.pipeline.sources import conversion_context, source_shards, staged_raw_file_rows
+from taskcompendium.pipeline.models import FilterPolicy
+from taskcompendium.pipeline.source_processing import (
+    SourcePipelineConfig,
+    SourcePipelineResult,
+    SourceProcessingMode,
+    run_source_pipeline,
+)
+from taskcompendium.pipeline.source_quality import SourceQualityPolicy
+from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
+from taskcompendium.pipeline.stages import AuditExecution
 from zephyr.context import ZephyrContext
 
 from experiments.post_training.task_curation.campaign import CampaignRuntime
@@ -87,61 +93,11 @@ RECEIPT_FIELDS = (
 FLAG_FIELDS = ("contaminated", "max_overlap", "matched_hashes", "matched_eval_ids", "matched_eval_families")
 
 
-def census_population(source_id: str, source_input: str) -> tuple[list[TaskSpec], dict[str, int]]:
-    """Every converter-emitted TaskSpec of one staged source, before admission gates."""
-    source = all_sources()[source_id]
-    recipe_config = source.config
-    if not hasattr(recipe_config, "convert"):
-        raise ValueError(f"Source has no registered TaskSpec converter: {source_id}")
-    recipe = source_recipe(recipe_config, {}, None)
-    context = conversion_context(recipe)
-    tasks: list[TaskSpec] = []
-    rejections: Counter[str] = Counter()
-    for shard in source_shards(source_input, recipe.source):
-        for record in staged_raw_file_rows(source_input, shard, recipe.source, context):
-            conversion = convert_source_row(record, recipe)
-            if isinstance(conversion.result, NormalizedTask | TaskSpec):
-                tasks.append(conversion.result.task)
-            elif isinstance(conversion.result, ImportRejection):
-                rejections[f"{conversion.result.kind.value}:{conversion.result.reason}"] += 1
-    return tasks, dict(rejections)
-
-
-def contract_identity(task: TaskSpec) -> str:
-    """The complete task contract without provenance, matching the sealed census's dedup key."""
-    document = task.model_dump(mode="json")
-    for field in ("id", "source", "tags", "labels"):
-        document.pop(field, None)
-    return canonical_sha256(document)
-
-
-def deduplicate_contracts(tasks: list[TaskSpec]) -> tuple[list[TaskSpec], int]:
-    """Keep the lowest task ID per exact contract, as the sealed census did."""
-    kept: dict[str, TaskSpec] = {}
-    for task in sorted(tasks, key=lambda task: task.id):
-        identity = contract_identity(task)
-        if identity in kept:
-            continue
-        kept[identity] = task
-    return list(kept.values()), len(tasks) - len(kept)
-
-
-def write_population(tasks: list[TaskSpec], output_path: str, source_name: str) -> TextPopulation:
-    table = pa.Table.from_pylist(
-        [{"id": task.id, "text": format_conversation(task.context.events), "partition_id": 0} for task in tasks],
-        schema=POPULATION_SCHEMA,
-    )
-    path = StoragePath(prefix_join(output_path, "population/part-00000.parquet"))
-    with path.open("wb", auto_mkdir=True) as stream:
-        pq.write_table(table, stream, compression="zstd")
-    return TextPopulation(source=source_name, path=str(StoragePath(output_path) / "population"), task_count=len(tasks))
-
-
-def text_digest(tasks: list[TaskSpec]) -> str:
-    """The sealed census's text digest: a SHA-256 chain over ``[task_id, rendered text]`` in task-ID order."""
+def text_digest_pairs(pairs: Iterable[tuple[str, str]]) -> str:
+    """The sealed census's text digest: a SHA-256 chain over ``[task_id, text]`` in task-ID order."""
     digest = hashlib.sha256()
-    for task in sorted(tasks, key=lambda task: task.id):
-        digest.update(json.dumps([task.id, format_conversation(task.context.events)], ensure_ascii=False).encode())
+    for task_id, text in sorted(pairs):
+        digest.update(json.dumps([task_id, text], ensure_ascii=False).encode())
     return digest.hexdigest()
 
 
@@ -204,6 +160,24 @@ def read_dropped_ids(path: str) -> set[str]:
     return dropped
 
 
+def read_final_population(result: SourcePipelineResult) -> dict[str, str]:
+    """The stage's retained population, rendered from the ``final/`` view."""
+    population: dict[str, str] = {}
+    for file in _parquet_files(prefix_join(result.final_path, "*.parquet")):
+        with StoragePath(file).open("rb") as stream:
+            for batch in pq.ParquetFile(stream).iter_batches(columns=["task_id", "task_json"]):
+                for task_id, task_json in zip(
+                    batch.column("task_id").to_pylist(), batch.column("task_json").to_pylist(), strict=True
+                ):
+                    task = TaskSpec.model_validate_json(task_json)
+                    if task_id in population:
+                        raise ValueError(f"Duplicate task ID in final/: {task_id}")
+                    population[task_id] = format_conversation(task.context.events)
+    if not population:
+        raise FileNotFoundError(f"The stage retained no tasks: {result.final_path}")
+    return population
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -239,21 +213,21 @@ def main() -> None:
         args.output.write_text(json.dumps({"source_id": args.source_id, "plan": "planned"}, indent=2) + "\n")
         return
 
-    marked, census = _measure(args, source, receipt)
-    result = _compare(marked, census, receipt, args)
-    args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    result = _run_stage(args, source, receipt)
+    comparison = _compare(result, receipt, args)
+    args.output.write_text(json.dumps(comparison, indent=2, sort_keys=True) + "\n")
     with StoragePath(prefix_join(args.artifact_root, "reproduction.json")).open("wt", auto_mkdir=True) as stream:
-        stream.write(json.dumps(result, indent=2, sort_keys=True) + "\n")
+        stream.write(json.dumps(comparison, indent=2, sort_keys=True) + "\n")
     logger.info(
         "Reproduction result written to %s and %s: reproduced=%s",
         args.output,
         prefix_join(args.artifact_root, "reproduction.json"),
-        result["reproduced"],
+        comparison["reproduced"],
     )
 
 
-def _measure(args: argparse.Namespace, source: Any, receipt: dict[str, Any]) -> tuple[MarkedPopulation, dict[str, Any]]:
-    """Rebuild the census, adopt the frozen corpus, and mark it through the stage engine."""
+def _run_stage(args: argparse.Namespace, source: Any, receipt: dict[str, Any]) -> SourcePipelineResult:
+    """Run the FULL source pipeline on the staged source with the frozen corpus engine."""
     with ExitStack() as cleanup:
         client = LocalClient()
         cleanup.callback(client.shutdown)
@@ -266,42 +240,49 @@ def _measure(args: argparse.Namespace, source: Any, receipt: dict[str, Any]) -> 
                 with runtime.activate(context):
                     staged = run(download_step(source.config.source, runtime), max_concurrent=1)[0]
                     source_input = staged.path
-                tasks, rejections = census_population(args.source_id, source_input)
-                unique, duplicates = deduplicate_contracts(tasks)
-                logger.info(
-                    "%s: %d converted rows, %d exact duplicates, %d census tasks; rejections %s",
-                    args.source_id,
-                    len(tasks),
-                    duplicates,
-                    len(unique),
-                    rejections,
-                )
-                population = write_population(unique, str(args.output.parent / "population"), source.config.name)
                 engine = DatakitDecontamination(
                     bloom_dir=args.bloom,
                     global_drop_set_dir=args.global_drop_set,
                     eval_corpus_version=receipt["measurement"]["eval_corpus_version"],
                     frozen_source_drop_sets={source.config.name: args.frozen_source_drop_set},
                 )
-                marked = engine.mark_population(population, str(args.output.parent / "marks"), context=context)
-        return marked, {
-            "tasks": tasks,
-            "unique": unique,
-            "converted_rows": len(tasks),
-            "exact_duplicates": duplicates,
-            "converter_rejections": rejections,
-        }
+                recipe = source_recipe(source.config, {}, None)
+                # The sealed receipt measured the converter's census, before model review.
+                # Clearing the rubric keeps this run's kept population equal to that census.
+                recipe = replace(recipe, rubric=None)
+                config = SourcePipelineConfig(
+                    mode=SourceProcessingMode.FULL,
+                    quality_policy=SourceQualityPolicy(),
+                    verification_policy=SourceVerificationPolicy(20, 0, 1, 0.95),
+                    review=None,
+                    execution=AuditExecution(max_workers=args.max_workers, worker_resources=DEFAULT_WORKER_RESOURCES),
+                    filter_policy=FilterPolicy(),
+                    normalized_shards=2,
+                    machines=None,
+                    decontamination=engine,
+                )
+                output = prefix_join(args.artifact_root, "pipeline")
+                return run_source_pipeline(
+                    recipe,
+                    context,
+                    source_input,
+                    output,
+                    config,
+                    mode=SourceProcessingMode.FULL,
+                    canonical_source=recipe.name,
+                )
 
 
-def _compare(
-    marked: MarkedPopulation, census: dict[str, Any], receipt: dict[str, Any], args: argparse.Namespace
-) -> dict[str, Any]:
-    """Compare main's marks with the sealed population, flags, drop manifest and digests."""
-    unique: list[TaskSpec] = census["unique"]
-    main_flags = read_flags(marked.flags_dir)
+def _compare(result: SourcePipelineResult, receipt: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    """Compare the stage run's marks, retained population and digests with the sealed release."""
+    manifest = json.loads(StoragePath(result.manifest_path).read_text())
+    lexical = manifest["lexical"]
+    if lexical is None:
+        raise ValueError("The stage run recorded no lexical measurement")
+    main_flags = read_flags(prefix_join(result.lexical_path, "task_flags"))
     branch_population = read_branch_population(args.branch_population)
     branch_flags = read_flags(args.branch_flags)
-    rendered = {task.id: format_conversation(task.context.events) for task in unique}
+    rendered = read_final_population(result)
     shared = sorted(set(rendered) & set(branch_flags))
     mismatches = [
         {"id": task_id, "field": field, "main": main_flags[task_id][field], "branch": branch_flags[task_id][field]}
@@ -315,52 +296,61 @@ def _compare(
     retained: dict[str, Any] = {}
     if args.branch_drop_manifest:
         branch_dropped = read_dropped_ids(args.branch_drop_manifest)
-        main_dropped = {task_id for task_id in shared if main_flags[task_id]["contaminated"]}
+        sealed_retained = {task_id for task_id in branch_population if task_id not in branch_dropped}
+        main_retained = set(rendered)
         retained = {
-            "branch_dropped_tasks": len(branch_dropped),
-            "main_dropped_shared_tasks": len(main_dropped),
-            "shared_dropped_ids_equal": {task_id for task_id in shared if task_id in branch_dropped} == main_dropped,
-            "shared_retained_tasks": len(shared) - len(main_dropped),
+            "branch_retained_tasks": len(sealed_retained),
+            "main_retained_tasks": len(main_retained),
+            "shared_retained_ids_equal": (
+                {task_id for task_id in sealed_retained if task_id in branch_flags} == main_retained
+            ),
+            "shared_retained_tasks": len(shared) - sum(1 for task_id in shared if task_id in branch_dropped),
         }
 
     digests: dict[str, Any] = {}
     if args.branch_population_record:
         record = read_population_record(args.branch_population_record)
-        shared_tasks = [task for task in unique if task.id in branch_population]
+        shared_tasks = {task_id: text for task_id, text in rendered.items() if task_id in branch_population}
         digests = {
             "branch_text_sha256": record["text_sha256"],
-            "main_census_text_sha256": text_digest(unique),
-            "main_shared_text_sha256": text_digest(shared_tasks),
+            "main_retained_text_sha256": text_digest_pairs(rendered.items()),
+            "main_shared_text_sha256": text_digest_pairs(shared_tasks.items()),
             "branch_task_count": record["task_count"],
-            "main_census_task_count": len(unique),
+            "main_retained_task_count": len(rendered),
             "note": (
                 "task_specs_sha256 is not comparable: the sealed digest pins schema-0.30 "
-                "serializations, main's census is schema-0.31; the population is identified by the "
+                "serializations, main's pipeline is schema-0.31; the population is identified by the "
                 "text digest and per-task text equality instead."
             ),
         }
 
-    full_summary = population_summary(marked.flags_dir)
     fields = {
         name: {
             "receipt": receipt["measurement"][name],
-            "main_full_population": getattr(full_summary, name),
-            "main_shared_population": getattr(main_summary, name),
+            "stage_full_population": lexical[name],
+            "stage_shared_population": getattr(main_summary, name),
             "branch_shared_population": getattr(branch_summary, name),
         }
         for name in RECEIPT_FIELDS
     }
     return {
         "source_id": args.source_id,
+        "stage": {
+            "status": manifest["status"],
+            "raw_population_count": manifest["raw_population_count"],
+            "converted_rows": manifest["raw_population_count"],
+            "measured_population": (
+                "kept rows of the checked audit (the converter census here, because the " "harness clears the rubric)"
+            ),
+            "admission_counts": manifest["admission_counts"],
+        },
         "population": {
-            "converted_rows": census["converted_rows"],
-            "exact_duplicates": census["exact_duplicates"],
-            "converter_rejections": dict(census["converter_rejections"]),
-            "main_census_tasks": len(unique),
             "branch_population_tasks": len(branch_population),
+            "stage_task_flags": len(main_flags),
+            "main_retained_tasks": len(rendered),
             "shared_tasks": len(shared),
-            "branch_only_tasks": sorted(set(branch_population) - set(rendered)),
-            "main_only_tasks": sorted(set(rendered) - set(branch_flags)),
+            "branch_only_tasks": sorted(set(branch_population) - set(main_flags)),
+            "main_only_tasks": sorted(set(main_flags) - set(branch_flags)),
             "shared_texts_equal": all(rendered[task_id] == branch_population[task_id] for task_id in shared),
         },
         "shared_measurement_equal": main_summary == branch_summary,
@@ -372,10 +362,10 @@ def _compare(
         "renderer": TEXT_RENDERER_VERSION,
         "reproduced": (
             not mismatches
-            and not (set(rendered) - set(branch_flags))
+            and not (set(main_flags) - set(branch_flags))
             and main_summary == branch_summary
             and all(rendered[task_id] == branch_population[task_id] for task_id in shared)
-            and (not retained or retained["shared_dropped_ids_equal"])
+            and (not retained or retained["shared_retained_ids_equal"])
         ),
     }
 

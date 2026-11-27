@@ -836,7 +836,9 @@ Sample and full modes run the reviewed procedure below.
    and mark it against the frozen eval corpus (`--lexical-bloom`,
    `--lexical-global-drop-set`, `--lexical-corpus-version`). The measurement —
    contaminated rows, overlap statistics and matched benchmark families — is
-   recorded in the `lexical/` view and the manifest, and a training source
+   recorded in the `lexical/` view and the manifest; its `measured_tasks`
+   counts the kept (post-filter) population the source is about to verify and
+   admit. A training source
    rejects contaminated rows (`lexical:contaminated`) before verification, so
    `final/` holds the retained population. Evaluation and benchmark sources
    keep every task and record the measurement only. Without the engine the

@@ -20,6 +20,7 @@ from marin.datakit.decon import (
     NGramConfig,
     build_all_source_drop_sets,
     decon_to_parquet,
+    hash_to_evals,
 )
 from marin.datakit.normalize import NormalizedData
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -40,7 +41,7 @@ from experiments.datakit.decontam.config import (
     SOURCE_DF_COMMON_MIN_ABS,
     SOURCE_DF_SAMPLE_DOCS,
 )
-from experiments.datakit.decontam.viewer.export_reference_run import _eval_family, _hash_to_evals
+from experiments.datakit.decontam.eval_families import eval_family as _eval_family
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +147,7 @@ class DatakitDecontamination:
                 for batch in pq.ParquetFile(stream).iter_batches(columns=["matched_hashes"]):
                     for hashes in batch.column(0).to_pylist():
                         needed_hashes.update(hashes)
-        hash_evals = _hash_to_evals(index_path, needed_hashes) if needed_hashes else {}
+        hash_evals = hash_to_evals(index_path, needed_hashes) if needed_hashes else {}
         eval_groups: dict[frozenset[str], frozenset[str]] = {}
         hash_groups: dict[int, frozenset[str]] = {}
         for feature_hash, eval_ids in hash_evals.items():
