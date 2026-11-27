@@ -3,8 +3,12 @@
 
 """Lexical scan artifacts are keyed by source and run; foreign directories refuse writes."""
 
+import subprocess
+import sys
+
 import pytest
 
+from experiments.post_training.task_curation import launch_lexical_scan
 from experiments.post_training.task_curation.launch_lexical_scan import (
     artifact_paths,
     build_plan_text,
@@ -80,3 +84,39 @@ def test_allows_fresh_and_own_directories():
 def test_marker_parsing_handles_the_missing_row():
     assert plan_source_slug("population_version\tv\n") is None
     assert plan_source_slug("source_slug\topenswe-zero-task\n") == "openswe-zero-task"
+
+
+def test_failed_submission_raises_with_stderr(monkeypatch, capsys):
+    """A failed iris submission carries the submission's stderr, not a bare exit code."""
+
+    def fake_run(args_list, **kwargs):
+        if "iris" not in args_list:
+            return subprocess.CompletedProcess(args_list, 0)
+        assert kwargs.get("stderr") == subprocess.PIPE
+        return subprocess.CompletedProcess(args_list, 3, stderr="iris: job refused: name already active\n")
+
+    monkeypatch.setattr(launch_lexical_scan.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "launch_lexical_scan.py",
+            "--revision",
+            "a" * 40,
+            "--populations-manifest",
+            "s3://bucket/populations.json",
+            "--source-ids",
+            "s3://bucket/source-ids.json",
+            "--population-version",
+            "v1",
+            "--artifact-version",
+            "2026.11.27.1",
+            "--source-slug",
+            "rst",
+            "--job-name",
+            "atlas-lexical-x",
+        ],
+    )
+    with pytest.raises(SystemExit) as raised:
+        launch_lexical_scan.main()
+    assert "job refused: name already active" in str(raised.value)

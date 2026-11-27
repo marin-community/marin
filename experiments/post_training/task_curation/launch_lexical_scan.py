@@ -217,9 +217,12 @@ def main() -> None:
         "-c",
         command,
     ]
-    completed = subprocess.run(args_list)
+    completed = subprocess.run(args_list, stderr=subprocess.PIPE, text=True)
     if completed.returncode:
-        raise SystemExit(completed.returncode)
+        raise SystemExit(
+            f"lexical scan job submission failed ({completed.returncode}): "
+            f"{(completed.stderr or '').strip()[-2000:]}"
+        )
     print(f"lexical scan job submitted: /benfeuer/{args.job_name}")
     print(f"report will land at: {paths['report']}")
 
