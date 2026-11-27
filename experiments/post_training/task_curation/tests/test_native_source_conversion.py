@@ -4,14 +4,17 @@
 """The native source conversion pins FROM bases and refuses static blockers."""
 
 import json
-import tempfile
 import urllib.error
 import urllib.request
-from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
-from finestore.rl.licenses import LicenseDecision, LicenseDecisionKind, LicenseEvidence
+from finestore.rl.licenses import (
+    LICENSE_RESOLVER_VERSION,
+    LicenseDecision,
+    LicenseDecisionKind,
+    LicenseReceipt,
+    LicenseSourcePin,
+)
 from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import (
     AnswerType,
@@ -32,6 +35,8 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from experiments.post_training.task_curation import native_source_conversion
 from experiments.post_training.task_curation.calibration_inventory import task_blockers
 from experiments.post_training.task_curation.harbor_cohort_conversion import CohortConversionRejected
+from experiments.post_training.task_curation.license_publication import repin_license_receipt
+from experiments.post_training.task_curation.license_resolution import license_evidence
 from experiments.post_training.task_curation.native_source_conversion import (
     BasePin,
     BasePinRejected,
@@ -210,97 +215,54 @@ def test_resolve_base_digest_caches_per_process():
     assert calls == ["python:3.9-bookworm", "ubuntu:22.04"]
 
 
-def test_release_receipt_carries_the_exception_lineage(monkeypatch):
+def test_release_receipt_carries_the_exception_lineage():
     """The published card follows the original upstream, and an approved user exception
-    survives the repackaging with its original pin, date, scope and upstream grant
+    survives the re-pin with its original pin, date, scope and upstream grant
     (repackager rule + coordinator ruling 2026-11-26)."""
-
-    def fake_resolution(target):
-        card = LicenseEvidence(
-            kind="dataset_card",
-            url=f"https://huggingface.co/datasets/{target.dataset_id}/resolve/{target.revision}/README.md",
-            sha256="d" * 64,
-            license_ids=["mit"],
-            quoted_lines=["L3: license: mit"],
-            restrictive_terms=False,
-            unidentified_third_party_terms=False,
-        )
-        return type(
-            "Resolution",
-            (),
-            {
-                "resolved_source": None,
-                "evidence": [card],
-                "resolver_version": "atlas-license-v2",
-                "resolved_at": datetime(2026, 11, 26, tzinfo=UTC).isoformat(),
-                "bundled_third_party": True,
-                "model_generated_outputs": True,
-            },
-        )()
-
-    monkeypatch.setattr(native_source_conversion, "resolve_license", fake_resolution)
-    receipt = type(
-        "Receipt",
-        (),
-        {
-            "decisions": [
-                LicenseDecision(
-                    approved=True,
-                    who="user",
-                    when="2026-11-16T06:37:25-05:00",
-                    source_id="TaskTrove:example",
-                    dataset_id="open-athena/example",
-                    kind=LicenseDecisionKind.EXCEPTION,
-                    rationale="The user approved lifting the standing unverified-origin ban.",
-                    revision="e" * 40,
-                    scope=["train"],
-                    evidence_urls=["https://huggingface.co/datasets/SWE-Gym/SWE-Gym"],
-                    issue_url="https://github.com/marin-community/marin/issues/11497",
-                )
-            ]
-        },
-    )()
-    source = conversion_source(
-        {
-            "id": "TaskTrove:example",
-            "name": "example",
-            "dataset_id": "SWE-Gym/SWE-Gym",
-            "dataset_revision": "e" * 40,
-            "disposition_release": {
-                "repo": "open-athena/example",
-                "revision": "e" * 40,
-                "file_hashes": {"tasks.parquet": "a" * 64},
-            },
-        },
-        receipt,
+    card = b"---\nlicense: mit\nlicense_source:\n  dataset_id: SWE-Gym/SWE-Gym\n"
+    upstream_card = license_evidence(
+        "https://huggingface.co/datasets/SWE-Gym/SWE-Gym/resolve/" + "e" * 40 + "/README.md",
+        b"---\nlicense: mit\n---\n",
+        "dataset_card",
     )
-    bound = native_source_conversion.release_receipt(
-        source, "open-athena/example-taskspec-1", "f" * 40, b"---\nlicense_source:\n  dataset_id: SWE-Gym/SWE-Gym\n"
+    previous = LicenseReceipt(
+        resolver_version=LICENSE_RESOLVER_VERSION,
+        source_id="TaskTrove:example",
+        dataset_id="open-athena/example",
+        revision="e" * 40,
+        resolved_at="2026-11-26T00:00:00+00:00",
+        evidence=[upstream_card],
+        bundled_third_party=True,
+        model_generated_outputs=True,
+        decisions=[
+            LicenseDecision(
+                approved=True,
+                who="user",
+                when="2026-11-16T06:37:25-05:00",
+                source_id="TaskTrove:example",
+                dataset_id="open-athena/example",
+                kind=LicenseDecisionKind.EXCEPTION,
+                rationale="The user approved lifting the standing unverified-origin ban.",
+                revision="e" * 40,
+                scope=["train"],
+                evidence_urls=["https://huggingface.co/datasets/SWE-Gym/SWE-Gym"],
+                issue_url="https://github.com/marin-community/marin/issues/11497",
+            )
+        ],
+        resolved_source=LicenseSourcePin(
+            dataset_id="SWE-Gym/SWE-Gym",
+            revision="e" * 40,
+            url="https://huggingface.co/datasets/SWE-Gym/SWE-Gym/tree/" + "e" * 40,
+            declaration=upstream_card,
+        ),
     )
+    bound = repin_license_receipt(previous, "open-athena/example-taskspec-1", "f" * 40, card)
     assert [decision.kind for decision in bound.decisions] == [LicenseDecisionKind.EXCEPTION]
     assert bound.resolved_source.dataset_id == "SWE-Gym/SWE-Gym"
     assert bound.dataset_id == "open-athena/example-taskspec-1"
+    assert any(item.kind == "wrapper_source" for item in bound.evidence)
     lineage = native_source_conversion.exception_lineage(bound)
     assert "2026-11-16" in lineage and "train" in lineage and "mit" in lineage
-
-
-def test_release_receipt_fails_closed_without_a_receipt():
-    source = conversion_source(
-        {
-            "id": "TaskTrove:example",
-            "name": "example",
-            "dataset_id": "SWE-Gym/SWE-Gym",
-            "dataset_revision": "e" * 40,
-            "disposition_release": {
-                "repo": "open-athena/example",
-                "revision": "e" * 40,
-                "file_hashes": {"tasks.parquet": "a" * 64},
-            },
-        },
-        None,
-    )
-    with pytest.raises(CohortConversionRejected):
-        native_source_conversion.release_receipt(source, "open-athena/example-taskspec-1", "f" * 40, b"card")
 
 
 def test_resolve_base_digest_retries_429_honoring_retry_after(monkeypatch):
@@ -480,32 +442,3 @@ def test_a_missing_base_image_is_a_typed_per_task_exclusion(monkeypatch):
     assert counts["exclusions"][0]["reason"] == "base_image_missing"
     assert counts["exclusions"][0]["input_task_sha256"] == canonical_sha256(task.model_dump(mode="json"))
     assert counts["converted_rows"] + counts["excluded_rows"] == counts["input_rows"]
-
-
-def test_original_upstream_descends_through_the_task_trove_aggregate(monkeypatch):
-    """The aggregate's release card carries the whole catalog's multi-license list; the
-    intake's per-config provenance records the cohort's actual upstream (repackager
-    rule). The release receipt resolves that upstream, not the aggregate."""
-    provenance = {"repository": "SWE-Gym/SWE-Gym", "revision": "bb94ed9e39bbeb96a7fcbfb533b80f25a7fd59cb"}
-
-    def fake_download(repo_id, filename, repo_type=None, revision=None):
-        assert repo_id == "open-athena/task-trove"
-        assert filename == "provenance/SWE-Gym__SWE-Gym/source.json"
-        return provenance_path
-
-    with tempfile.TemporaryDirectory() as td:
-        provenance_path = Path(td) / "source.json"
-        provenance_path.write_text(json.dumps(provenance))
-        monkeypatch.setattr(native_source_conversion, "hf_hub_download", fake_download)
-        dataset, revision = native_source_conversion.original_upstream(
-            {
-                "id": "TaskTrove:SWE-Gym__SWE-Gym",
-                "name": "SWE-Gym__SWE-Gym",
-                "dataset_id": "open-athena/task-trove",
-                "dataset_revision": "e" * 40,
-            }
-        )
-    assert (dataset, revision) == ("SWE-Gym/SWE-Gym", "bb94ed9e39bbeb96a7fcbfb533b80f25a7fd59cb")
-    assert native_source_conversion.original_upstream(
-        {"id": "TaskTrove:x", "name": "x", "dataset_id": "open-thoughts/TaskTrove", "dataset_revision": "e" * 40}
-    ) == ("open-thoughts/TaskTrove", "e" * 40)

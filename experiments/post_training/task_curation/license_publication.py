@@ -8,6 +8,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, urlsplit
 
@@ -18,6 +19,7 @@ from finestore.rl.licenses import (
     LicenseDecisionKind,
     LicenseEvidence,
     LicenseReceipt,
+    LicenseSourcePin,
     LicenseVerdict,
     check_license,
     license_verdict,
@@ -28,6 +30,7 @@ from huggingface_hub.hf_api import RepoFile
 
 from experiments.post_training.task_curation.license_binding import (
     LICENSE_RECEIPT_INDEX,
+    adopt_license_receipt,
     read_license_receipts,
 )
 from experiments.post_training.task_curation.license_resolution import (
@@ -59,6 +62,7 @@ class PreparedPrivateDataset:
     folder: Path
     file_hashes: dict[str, str]
     lineage: dict | None = None
+    license_source: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +80,7 @@ def prepare_private_dataset(
     *,
     use: str,
     lineage: dict | None = None,
+    license_source: dict | None = None,
 ) -> PreparedPrivateDataset:
     """Validate the input grant and freeze upload bytes without repository writes."""
     require_publication_license(license_receipt, source_id, license_receipt.dataset_id, license_receipt.revision, use)
@@ -88,7 +93,7 @@ def prepare_private_dataset(
     for name in files:
         with (folder / name).open("rb") as stream:
             hashes[name] = hashlib.file_digest(stream, "sha256").hexdigest()
-    return PreparedPrivateDataset(source_id, repo, use, folder, hashes, lineage)
+    return PreparedPrivateDataset(source_id, repo, use, folder, hashes, lineage, license_source)
 
 
 def publish_private_dataset(prepared: PreparedPrivateDataset) -> PublishedPrivateDataset:
@@ -118,6 +123,21 @@ def publish_private_dataset(prepared: PreparedPrivateDataset) -> PublishedPrivat
         existing_private = api.repo_info(prepared.repo, repo_type="dataset")
         if not existing_private.private:
             raise ValueError("Private publication destination is not private") from error
+        if "README.md" in existing and prepared.license_source is not None:
+            # A different population must never overwrite this repo's card: the reused
+            # destination may only carry this publication's declared licence pin.
+            existing_card = Path(
+                hf_hub_download(prepared.repo, "README.md", repo_type="dataset", revision=existing_private.sha)
+            ).read_bytes()
+            declared = DatasetCard(existing_card.decode()).data.to_dict().get("license_source")
+            if declared is not None and (
+                declared.get("dataset_id"),
+                declared.get("revision"),
+            ) != (prepared.license_source["dataset_id"], prepared.license_source["revision"]):
+                raise ValueError(
+                    f"Private publication repo declares another licence source: {prepared.repo}; "
+                    f"use a new version name for this population"
+                ) from error
         logging.info("PUBLICATION_REPO_REUSED repo=%s files=%d", prepared.repo, len(existing))
     initial = api.repo_info(prepared.repo, repo_type="dataset")
     if not initial.private:
@@ -140,6 +160,190 @@ def publish_private_dataset(prepared: PreparedPrivateDataset) -> PublishedPrivat
             raise ValueError(f"Private publication readback changed: {name}")
     gate = check_publication(prepared.source_id, prepared.repo, commit.oid, prepared.use, lineage=prepared.lineage)
     return PublishedPrivateDataset(commit.oid, gate)
+
+
+@dataclass(frozen=True)
+class PublishedLicensedPopulation:
+    """A published population pin whose licence evidence carried forward mechanically."""
+
+    source_id: str
+    repo: str
+    revision: str
+    parent: tuple[str, str]
+    license_source: dict
+    receipt: LicenseReceipt
+    registry_commit: str
+    license_check: dict
+    file_hashes: dict[str, str]
+
+
+def _publish_namespace(source_id: str, revision: str) -> str:
+    """One receipt-shard namespace per published pin, so a re-seal replaces its row."""
+    slug = re.sub(r"[^a-z0-9]+", "-", source_id.lower()).strip("-")[:40].rstrip("-")
+    if not slug:
+        raise ValueError(f"Source id reduces to no registry namespace slug: {source_id}")
+    return f"publish-{slug}-{revision[:12]}"
+
+
+def _card_evidence(release: str, revision: str, card_bytes: bytes) -> LicenseEvidence:
+    """The release card's own wrapper declaration, quoting its license_source lines."""
+    quoted = [
+        line
+        for line in card_bytes.decode("utf-8").splitlines()
+        if line.startswith(("license_source:", "  dataset_id:", "  revision:", "  url:"))
+    ][:6]
+    if not quoted:
+        raise ValueError("The release card declares no license_source to bind")
+    return LicenseEvidence(
+        kind="wrapper_source",
+        url=f"https://huggingface.co/datasets/{release}/resolve/{revision}/README.md",
+        sha256=hashlib.sha256(card_bytes).hexdigest(),
+        license_ids=[],
+        quoted_lines=quoted,
+        restrictive_terms=False,
+        unidentified_third_party_terms=False,
+    )
+
+
+def repin_license_receipt(previous: LicenseReceipt, release: str, revision: str, card_bytes: bytes) -> LicenseReceipt:
+    """Re-pin a source's passing receipt onto a newly published release pin.
+
+    The release derives from the receipt's own dataset, so the checker-verified
+    resolution carries over byte-for-byte: the receipt is the immutable record, and
+    re-resolving an aggregate upstream through a different wrapper path would
+    manufacture a different pin than the recorded one. The new release's own card is
+    arbitrated separately by check_publication. Recorded decisions carry their
+    original lineage per the repackager rule.
+    """
+    carried = []
+    for decision in previous.decisions:
+        carried.append(
+            LicenseDecision(
+                kind=decision.kind,
+                approved=decision.approved,
+                who=decision.who,
+                when=datetime.now(UTC).isoformat(),
+                source_id=previous.source_id,
+                dataset_id=release,
+                revision=revision,
+                scope=list(decision.scope),
+                rationale=(
+                    f"{decision.rationale} Lineage: recorded at {decision.dataset_id}@{decision.revision} "
+                    f"({decision.when}); carried to this release pin by the repackager rule."
+                ),
+                evidence_urls=list(decision.evidence_urls),
+                issue_url=decision.issue_url,
+            )
+        )
+    return LicenseReceipt(
+        source_id=previous.source_id,
+        dataset_id=release,
+        revision=revision,
+        resolved_at=previous.resolved_at,
+        resolver_version=previous.resolver_version,
+        evidence=[*previous.evidence, _card_evidence(release, revision, card_bytes)],
+        bundled_third_party=previous.bundled_third_party,
+        model_generated_outputs=previous.model_generated_outputs,
+        decisions=carried,
+        resolved_source=previous.resolved_source,
+        wrapper_chain=previous.wrapper_chain,
+    )
+
+
+def _parent_declared_pin(parent: LicenseReceipt, license_source: dict) -> LicenseSourcePin:
+    """The pin the new card declares: the parent's resolved upstream, else the parent itself."""
+    if parent.resolved_source is not None:
+        return parent.resolved_source
+    dataset_id, revision = license_source["dataset_id"], license_source["revision"]
+    evidence_at_pin = [
+        item
+        for item in parent.evidence
+        if item.url == license_source["url"]
+        or item.url.startswith(f"https://huggingface.co/datasets/{dataset_id}/resolve/{revision}/")
+    ]
+    declaration = next((item for item in evidence_at_pin if item.kind == "dataset_card"), None)
+    if declaration is None:
+        declaration = next((item for item in evidence_at_pin if item.kind == "package_metadata"), None)
+    if declaration is None and evidence_at_pin:
+        declaration = evidence_at_pin[0]
+    if declaration is None:
+        raise ValueError(f"The parent receipt at {dataset_id}@{revision} carries no evidence at its declared pin")
+    return LicenseSourcePin(
+        dataset_id=dataset_id,
+        revision=revision,
+        url=license_source["url"],
+        declaration=declaration,
+    )
+
+
+def publish_licensed_population(
+    source_id: str,
+    parent_dataset_id: str,
+    parent_revision: str,
+    repo: str,
+    folder: Path,
+    files: tuple[str, ...],
+    *,
+    body: str,
+    pretty_name: str,
+    use: str,
+    lineage: dict | None = None,
+    index_path: Path = LICENSE_RECEIPT_INDEX,
+) -> PublishedLicensedPopulation:
+    """Publish a task population whose licence evidence moves forward mechanically.
+
+    The parent pin's receipt in the receipts registry must pass its exact-pin check —
+    without it nothing publishes (fail closed). The card is written from the parent's
+    checked grant, so its ``license_source`` declares the parent's resolved upstream
+    pin; the upload is byte-frozen, read back and private; the new pin then passes
+    ``check_publication`` itself; and the new pin's receipt, resolved to that same
+    upstream, replaces the parent's row in the registry before this returns. A re-seal
+    therefore never loses its licence, and a publish never returns unlicensed.
+    """
+    receipts = read_license_receipts(index_path)
+    parent = receipts.get(source_id)
+    if parent is None or (parent.dataset_id, parent.revision) != (parent_dataset_id, parent_revision):
+        raise ValueError(
+            f"{source_id}: no passing licence receipt at the parent pin "
+            f"{parent_dataset_id}@{parent_revision}; the population cannot publish until its "
+            "parent's exact-pin evidence is registered"
+        )
+    require_publication_license(parent, source_id, parent.dataset_id, parent.revision, use)
+    publication = prepare_license_publication(parent, folder, use=use, lineage=lineage)
+    license_source = publication.metadata["license_source"]
+    (folder / "README.md").write_text(licensed_dataset_card(body, publication, pretty_name=pretty_name))
+    upload_files = tuple(dict.fromkeys((*files, "README.md", *(notice.name for notice in publication.notice_files))))
+    prepared = prepare_private_dataset(
+        source_id,
+        repo,
+        folder,
+        upload_files,
+        parent,
+        use=use,
+        lineage=lineage,
+        license_source=license_source,
+    )
+    published = publish_private_dataset(prepared)
+    receipt = repin_license_receipt(parent, repo, published.revision, (folder / "README.md").read_bytes())
+    if receipt.resolved_source is None:
+        receipt = receipt.model_copy(update={"resolved_source": _parent_declared_pin(parent, license_source)})
+    registry_commit = adopt_license_receipt(
+        index_path,
+        receipt,
+        namespace=_publish_namespace(source_id, published.revision),
+        message=f"Bind {source_id}'s published release {repo} to its carried-forward upstream licence",
+    )
+    return PublishedLicensedPopulation(
+        source_id=source_id,
+        repo=repo,
+        revision=published.revision,
+        parent=(parent_dataset_id, parent_revision),
+        license_source=license_source,
+        receipt=receipt,
+        registry_commit=registry_commit,
+        license_check=published.license_check,
+        file_hashes=prepared.file_hashes,
+    )
 
 
 def _package_wheel_url(receipt: LicenseReceipt, evidence: LicenseEvidence) -> tuple[str, bytes]:

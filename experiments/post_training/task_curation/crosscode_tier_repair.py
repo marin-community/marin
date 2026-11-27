@@ -20,24 +20,13 @@ import logging
 from pathlib import Path
 
 import pyarrow.parquet as pq
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import hf_hub_download
 from taskcompendium.identity import task_spec_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
-from experiments.post_training.task_curation.excluded_population_conversion import repin_license_receipt
 from experiments.post_training.task_curation.harbor_cohort_release import release_repo as conversion_release_repo
-from experiments.post_training.task_curation.license_binding import (
-    LICENSE_RECEIPT_INDEX,
-    AppendWouldRewriteSharedShard,
-    append_license_receipt,
-    read_license_receipts,
-)
-from experiments.post_training.task_curation.license_publication import (
-    check_publication,
-    licensed_dataset_card,
-    prepare_license_publication,
-)
+from experiments.post_training.task_curation.license_publication import publish_licensed_population
 from experiments.post_training.task_curation.native_source_conversion import (
     write_native_conversion_artifacts,
 )
@@ -227,8 +216,8 @@ def publish(
     *,
     source_id: str,
     intended_use: str,
-    release_repo: str,
-    release_revision: str,
+    input_repo: str,
+    input_revision: str,
     output_root: Path,
     artifact_version: str,
     converted: list[dict],
@@ -243,56 +232,37 @@ def publish(
     manifest["repair"] = {
         "version": REPAIR_VERSION,
         "removed_tiers": list(REMOVED_TIERS),
-        "input_release": {"repo": release_repo, "revision": release_revision},
+        "input_release": {"repo": input_repo, "revision": input_revision},
     }
     (output_root / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
-    previous = read_license_receipts(LICENSE_RECEIPT_INDEX).get(source_id)
-    if previous is None:
-        raise ValueError(f"{source_id}: no license receipt to re-pin for the repaired release")
-    publication = prepare_license_publication(previous, output_root, use=intended_use)
     body = (
         "Private research artifact. The tier-repair of a base-pinned conversion release: the 4-tier "
         "forgiving verifier is replaced with the clean normalized exact-text contract (reward 1.0 on a "
         "match, 0 otherwise; no partial-credit tiers), and the instruction's scoring hints are removed. "
         "The removed tiers are recorded in the repair lineage and the per-task conversion receipts. "
-        f"Input release: {release_repo}@{release_revision}. Converted: {manifest['converted_rows']}; "
+        f"Input release: {input_repo}@{input_revision}. Converted: {manifest['converted_rows']}; "
         f"input: {manifest['input_rows']}.\n"
     )
-    (output_root / "README.md").write_text(
-        licensed_dataset_card(body, publication, pretty_name="Tier-repaired conversion release")
+    # The repair derives from the input release's receipt; the chokepoint carries that
+    # licence onto the repaired pin and registers the receipt before returning.
+    publication = publish_licensed_population(
+        source_id,
+        input_repo,
+        input_revision,
+        conversion_release_repo(source_id, artifact_version),
+        output_root,
+        ("tasks.parquet", "manifest.json", "conversion-receipts.jsonl"),
+        body=body,
+        pretty_name="Tier-repaired conversion release",
+        use=intended_use,
     )
-    api = HfApi()
-    repo = conversion_release_repo(source_id, artifact_version)
-    api.create_repo(repo, repo_type="dataset", private=True, exist_ok=True)
-    if not api.repo_info(repo, repo_type="dataset").private:
-        raise ValueError("Conversion destination must be private")
-    filenames = ["tasks.parquet", "manifest.json", "conversion-receipts.jsonl", "README.md"]
-    commit = api.upload_folder(
-        repo_id=repo,
-        repo_type="dataset",
-        folder_path=str(output_root),
-        allow_patterns=filenames,
-        commit_message="Publish the tier-repaired conversion release",
-    )
-    card_path = Path(api.hf_hub_download(repo, "README.md", repo_type="dataset", revision=commit.oid))
-    bound = repin_license_receipt(previous, repo, commit.oid, card_path.read_bytes())
-    try:
-        index_commit: str | None = append_license_receipt(
-            LICENSE_RECEIPT_INDEX,
-            bound,
-            message=f"Bind {source_id}'s tier-repaired release to its original upstream license",
-        )
-    except AppendWouldRewriteSharedShard as error:
-        LOGGER.warning("receipt append refused for %s: %s", source_id, error)
-        index_commit = None
-    license_check = check_publication(source_id, repo, commit.oid, intended_use)
     return {
         **manifest,
-        "release_repo": repo,
-        "release_revision": commit.oid,
-        "license_index_commit": index_commit,
-        "license_check_verdict": license_check["verdict"],
+        "release_repo": publication.repo,
+        "release_revision": publication.revision,
+        "license_index_commit": publication.registry_commit,
+        "license_check_verdict": publication.license_check["verdict"],
     }
 
 
@@ -325,8 +295,8 @@ def main() -> None:
     result = publish(
         source_id=args.source_id,
         intended_use=args.intended_use,
-        release_repo=args.release_repo,
-        release_revision=args.release_revision,
+        input_repo=args.release_repo,
+        input_revision=args.release_revision,
         output_root=args.output_root,
         artifact_version=args.artifact_version,
         converted=converted,

@@ -17,7 +17,7 @@ from finestore.rl.licenses import LicenseReceipt, require_license
 from finestore.rl.status_taxonomy import DataRestriction
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import hf_hub_download
 from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import copy
 from taskcompendium.evaluation.corpus import file_sha256
@@ -29,11 +29,7 @@ from zephyr.context import ZephyrContext
 
 from experiments.post_training.task_curation.datasets.native_harbor import VERSION, hub_rows, native_task, unpack_native
 from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
-from experiments.post_training.task_curation.license_publication import (
-    check_publication,
-    licensed_dataset_card,
-    prepare_license_publication,
-)
+from experiments.post_training.task_curation.license_publication import publish_licensed_population
 from experiments.post_training.task_curation.publication_gate import configured_restriction, require_public_data
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source_policy import CROSSCODE_EVAL_SOURCE_IDS
@@ -102,7 +98,6 @@ def publish_quick(
         raise ValueError("Published row count differs from QUICK conversion")
     if manifest["converted_rows"] == 0:
         return {"id": entry["id"], "status": "no_faithful_tasks", "manifest": manifest}
-    publication = prepare_license_publication(license_receipt, output, use=intended_use.value)
     body = (
         f"# {entry['display_name']}\n\n"
         "Private research artifact. QUICK conversion is unreviewed and is not training admission. "
@@ -116,36 +111,27 @@ def publish_quick(
         "coverage are pending the combined backend pass; SAMPLE/FULL must wait for its pinned receipt.\n\n"
         f"Preserved source warnings: {entry['notes'].split(' Admission blocked:')[0]}\n"
     )
-    (output / "README.md").write_text(
-        licensed_dataset_card(body, publication, pretty_name="Native Harbor QUICK inspection release")
+    # The QUICK release's licence carries forward from the upstream receipt through the
+    # publication chokepoint; the new pin's receipt registers before this returns.
+    publication = publish_licensed_population(
+        entry["id"],
+        entry["dataset_id"],
+        entry["dataset_revision"],
+        repo,
+        output,
+        ("tasks.parquet", "manifest.json"),
+        body=body,
+        pretty_name="Native Harbor QUICK inspection release",
+        use=intended_use.value,
     )
-    api = HfApi()
-    api.create_repo(repo, repo_type="dataset", private=True, exist_ok=False)
-    if not api.repo_info(repo, repo_type="dataset").private:
-        raise ValueError("Conversion destination must be private")
-    filenames = ["tasks.parquet", "manifest.json", "README.md", *(path.name for path in publication.notice_files)]
-    commit = api.upload_folder(
-        repo_id=repo,
-        repo_type="dataset",
-        folder_path=output,
-        allow_patterns=filenames,
-        commit_message="Publish native Harbor QUICK conversion",
-    )
-    hashes = {}
-    for filename in filenames:
-        uploaded = Path(hf_hub_download(repo, filename, repo_type="dataset", revision=commit.oid))
-        digest = file_sha256(StoragePath(str(output / filename)))
-        if file_sha256(StoragePath(str(uploaded))) != digest:
-            raise ValueError(f"Private upload readback differs: {filename}")
-        hashes[filename] = digest
     return {
         "id": entry["id"],
         "status": "quick_converted",
-        "repo": repo,
-        "revision": commit.oid,
+        "repo": publication.repo,
+        "revision": publication.revision,
         "manifest": manifest,
-        "file_hashes": hashes,
-        "license_check": check_publication(entry["id"], repo, commit.oid, intended_use.value),
+        "file_hashes": publication.file_hashes,
+        "license_check": publication.license_check,
     }
 
 

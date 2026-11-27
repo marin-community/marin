@@ -29,7 +29,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.curation import source_display_name
 from finestore.rl.licenses import require_license
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import hf_hub_download
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import task_spec_sha256
@@ -40,11 +40,7 @@ from experiments.post_training.task_curation.harbor_cohort_conversion import (
     CohortConversion,
     convert_cohort_task,
 )
-from experiments.post_training.task_curation.license_publication import (
-    check_publication,
-    licensed_dataset_card,
-    prepare_license_publication,
-)
+from experiments.post_training.task_curation.license_publication import publish_licensed_population
 from experiments.post_training.task_curation.publication_gate import require_public_data
 from experiments.post_training.task_curation.source import RlDataSource
 from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
@@ -78,6 +74,7 @@ class ConversionOutcome:
     receipts_path: str
     release_repo: str | None
     release_revision: str | None
+    license_check: dict | None = None
 
 
 def require_conversion_source(source: RlDataSource) -> None:
@@ -156,22 +153,11 @@ def write_conversion_artifacts(
     return manifest
 
 
-def publish_conversion(
-    source: RlDataSource,
-    *,
-    output_root: str,
-    version: str,
-    manifest: dict,
-) -> ConversionOutcome:
-    """Publish the written conversion artifacts as a private release and verify the readback."""
+def conversion_release_body(source, manifest: dict) -> str:
+    """The conversion release card's provenance body, shared by the cohort lanes."""
     dataset = source.dataset
     assert dataset is not None
-    output = Path(output_root)
-
-    repo = release_repo(source.info.id, version)
-    intended_use = source.intended_use
-    publication = prepare_license_publication(source.info.license_receipt, output, use=intended_use.value)
-    body = (
+    return (
         f"# {source_display_name(source.info.id)}\n\n"
         "Private research artifact. The TaskSpec-only conversion of a native Harbor cohort: every "
         "row keeps the original package's task.toml, instruction, environment and verifier files and "
@@ -184,27 +170,37 @@ def publish_conversion(
         "Mechanical exclusions: none (strict conversion).\n\n"
         f"Preserved source notes: {source.info.notes.split(' Admission blocked:')[0]}\n"
     )
-    (output / "README.md").write_text(
-        licensed_dataset_card(body, publication, pretty_name="Harbor cohort TaskSpec conversion release")
+
+
+def publish_conversion(
+    source: RlDataSource,
+    *,
+    output_root: str,
+    version: str,
+    manifest: dict,
+) -> ConversionOutcome:
+    """Publish the written conversion artifacts as a private release and verify the readback.
+
+    The release's licence carries forward from the cohort receipt through the
+    publication chokepoint: the card declares the cohort's resolved upstream, the
+    upload is read back, and the release pin's receipt lands in the registry before
+    the outcome returns.
+    """
+    dataset = source.dataset
+    assert dataset is not None
+    output = Path(output_root)
+
+    publication = publish_licensed_population(
+        source.info.id,
+        dataset.name,
+        dataset.revision,
+        release_repo(source.info.id, version),
+        output,
+        ("tasks.parquet", "manifest.json", RECEIPTS_FILENAME),
+        body=conversion_release_body(source, manifest),
+        pretty_name="Harbor cohort TaskSpec conversion release",
+        use=source.intended_use.value,
     )
-    api = HfApi()
-    # A preempted attempt may have created the repo already; the retry adopts it
-    # and the upload overwrites its files with this conversion's artifacts.
-    api.create_repo(repo, repo_type="dataset", private=True, exist_ok=True)
-    if not api.repo_info(repo, repo_type="dataset").private:
-        raise ValueError("Conversion destination must be private")
-    filenames = ["tasks.parquet", "manifest.json", RECEIPTS_FILENAME, "README.md"]
-    commit = api.upload_folder(
-        repo_id=repo,
-        repo_type="dataset",
-        folder_path=output,
-        allow_patterns=filenames,
-        commit_message="Publish Harbor cohort TaskSpec conversion",
-    )
-    for filename in filenames:
-        uploaded = Path(hf_hub_download(repo, filename, repo_type="dataset", revision=commit.oid))
-        if file_sha256(StoragePath(str(output / filename))) != file_sha256(StoragePath(str(uploaded))):
-            raise ValueError(f"Private upload readback differs: {filename}")
     return ConversionOutcome(
         source_id=source.info.id,
         cohort_repo=dataset.name,
@@ -213,8 +209,9 @@ def publish_conversion(
         converted_rows=manifest["converted_rows"],
         task_specs_sha256=manifest["task_specs_sha256"],
         receipts_path=str(output / RECEIPTS_FILENAME),
-        release_repo=repo,
-        release_revision=commit.oid,
+        release_repo=publication.repo,
+        release_revision=publication.revision,
+        license_check=publication.license_check,
     )
 
 
@@ -279,9 +276,7 @@ def main() -> None:
         "release_revision": outcome.release_revision,
         "task_specs_sha256": outcome.task_specs_sha256,
         "receipts_path": outcome.receipts_path,
-        "license_check": check_publication(
-            source.info.id, outcome.release_repo, outcome.release_revision, source.intended_use.value
-        ),
+        "license_check": outcome.license_check,
     }
     payload = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.report is not None:

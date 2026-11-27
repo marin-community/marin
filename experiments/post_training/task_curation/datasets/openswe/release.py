@@ -26,7 +26,6 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from huggingface_hub import HfApi
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.pipeline.inputs import ConversionContext
@@ -40,6 +39,7 @@ from experiments.post_training.task_curation.datasets.openswe.sources import (
     keep_release_rows,
 )
 from experiments.post_training.task_curation.harbor_cohort_conversion import CONVERSION_PROTOCOL
+from experiments.post_training.task_curation.license_publication import publish_licensed_population
 
 LOGGER = logging.getLogger(__name__)
 
@@ -224,17 +224,19 @@ def publish_conversion(
     manifest: dict,
     gate_root: str,
     converter_revision: str,
+    use: str,
 ) -> dict:
-    """Publish the written artifacts as a private release and verify the readback."""
+    """Publish the written artifacts as a private release and verify the readback.
+
+    The conversion's licence carries forward from the keep-only release's receipt
+    through the publication chokepoint; the new pin's receipt registers before the
+    manifest is returned.
+    """
     output = Path(output_root)
     digest = hashlib.sha256(b"TaskTrove:GAIR__OpenSWE__openswe_oss").hexdigest()[:8]
     repo = f"open-athena/gair__openswe__openswe_oss-{digest}-taskspec-{version}"
     gate_result = json.loads((StoragePath(gate_root) / GATE_RESULT_FILENAME).read_text())
-    card = f"""---
-pretty_name: OpenSWE oss TaskSpec conversion (ruling 48 keep-only)
----
-
-# OpenSWE oss TaskSpec conversion
+    body = f"""# OpenSWE oss TaskSpec conversion
 
 Private research artifact. The dedicated OpenSWE converter profile (coordinator
 ruling 2026-11-26 6:03 AM, option a): the upstream eval_script rides byte-verbatim
@@ -258,26 +260,24 @@ verbatim from the keep-only release.
   census, controls, lexical decontamination and SAMPLE QA run on this release before
   any admission.
 """
-    (output / "README.md").write_text(card)
-    api = HfApi()
-    api.create_repo(repo, repo_type="dataset", private=True, exist_ok=True)
-    if not api.repo_info(repo, repo_type="dataset").private:
-        raise ValueError("Conversion destination must be private")
-    filenames = ["tasks.parquet", "manifest.json", RECEIPTS_FILENAME, EXCLUSIONS_FILENAME, "README.md"]
-    commit = api.upload_folder(
-        repo_id=repo,
-        repo_type="dataset",
-        folder_path=output,
-        allow_patterns=filenames,
-        commit_message="Publish OpenSWE keep-only TaskSpec conversion",
+    publication = publish_licensed_population(
+        manifest["source_id"],
+        KEEP_RELEASE_REPO,
+        KEEP_RELEASE_REVISION,
+        repo,
+        output,
+        ("tasks.parquet", "manifest.json", RECEIPTS_FILENAME, EXCLUSIONS_FILENAME),
+        body=body,
+        pretty_name="OpenSWE oss TaskSpec conversion (ruling 48 keep-only)",
+        use=use,
     )
-    from huggingface_hub import hf_hub_download  # noqa: PLC0415
-
-    for filename in filenames:
-        uploaded = Path(hf_hub_download(repo, filename, repo_type="dataset", revision=commit.oid))
-        if file_sha256(StoragePath(str(output / filename))) != file_sha256(StoragePath(str(uploaded))):
-            raise ValueError(f"Private upload readback differs: {filename}")
-    return {"release_repo": repo, "release_revision": commit.oid, **manifest}
+    return {
+        **manifest,
+        "release_repo": publication.repo,
+        "release_revision": publication.revision,
+        "license_index_commit": publication.registry_commit,
+        "license_check_verdict": publication.license_check["verdict"],
+    }
 
 
 def main() -> None:
@@ -290,6 +290,7 @@ def main() -> None:
     parser.add_argument("--artifact-version", required=True, help="The release version suffix.")
     parser.add_argument("--converter-revision", help="The landed revision the conversion runs from.")
     parser.add_argument("--limit", type=int, help="Convert only the first N rows (local validation slices).")
+    parser.add_argument("--use", required=True, choices=["train", "eval"], help="The publication use.")
     parser.add_argument("--run", action="store_true", help="Publish the private release; omit to validate only.")
     parser.add_argument("--report", type=Path, help="Write the result JSON here.")
     args = parser.parse_args()
@@ -323,6 +324,7 @@ def main() -> None:
                 manifest=manifest,
                 gate_root=args.gate_root,
                 converter_revision=revision,
+                use=args.use,
             )
         )
     payload = json.dumps(result, indent=2, sort_keys=True) + "\n"
