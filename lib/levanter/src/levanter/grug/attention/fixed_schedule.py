@@ -166,6 +166,15 @@ def _local_fixed_attention(
     )
     safe_q = jnp.where(jnp.isfinite(q), q, 0).astype(jnp.float32)
 
+    # Packed BF16 K/V requires 1, 2, 4, 8 or a multiple of eight KV heads.
+    # Add complete GQA groups so the real heads keep the same pairing.
+    kv_heads = spec.num_kv_heads
+    padded_heads = 1 << (kv_heads - 1).bit_length() if kv_heads < 8 else ((kv_heads + 7) // 8) * 8
+    head_padding = padded_heads - kv_heads
+    if head_padding:
+        safe_kv_pages = jnp.pad(safe_kv_pages, ((0, 0), (0, 0), (0, 2 * head_padding), (0, 0)))
+        safe_q = jnp.pad(safe_q, ((0, 0), (0, head_padding * (spec.num_q_heads // kv_heads)), (0, 0)))
+
     # The installed kernel applies sm_scale after QK, consumes BF16 page
     # operands, uses DEFAULT dot precision, and requests FP32 preferred output
     # types for QK and AV. This context freezes the deliberate DEFAULT choice
@@ -189,7 +198,7 @@ def _local_fixed_attention(
             num_queries_per_block=spec.num_queries_per_block,
             vmem_limit_bytes=None,
         )
-    output = jnp.where(query_valid[:, None, None], output, 0.0)
+    output = jnp.where(query_valid[:, None, None], output[:, : spec.num_q_heads], 0.0)
     output = jnp.where(valid_metadata, output, jnp.nan)
     return output[None, ...]
 

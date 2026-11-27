@@ -221,6 +221,7 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path, prod
         if production_width:
             template = jax.eval_shape(lambda: SnowballLMHeadModel.init(vocab, base, key=key))
             fast = jax.tree.unflatten(jax.tree.structure(template), jax.tree.leaves(model))
+            fast = fast.with_expert_sharded_kv()
             generations, fast_rounds = _generate(fast, tokenizer, mesh, prompts, measured_rounds=3)
             fast_batch = _rollout_batch(model, prompts, generations)
             mask = np.asarray(fast_batch.response_mask.array)
@@ -242,6 +243,7 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path, prod
                         "vocabulary": cfg.vocab_size,
                         "strict_first_batch_seconds": strict_rounds[0],
                         "strict_output_tokens_per_second": _SLOTS * _NEW_TOKENS / np.median(strict_rounds[1:]),
+                        "fast_kv_layout": "expert_sharded",
                         "fast_first_batch_seconds": fast_rounds[0],
                         "fast_output_tokens_per_second": _SLOTS * _NEW_TOKENS / np.median(fast_rounds[1:]),
                         "fast_score_error": _score_error(actual, expected),
