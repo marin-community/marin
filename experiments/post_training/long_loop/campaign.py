@@ -44,6 +44,7 @@ from experiments.post_training.long_loop.round_runner import (
 REFERENCE = Path(__file__).with_name("campaign") / "mochi131.yaml"
 REFERENCE_SOURCE = "fe4695fbcd27e365284dccab649a40d6caa9fb2b"
 CAMPAIGN_PIPELINE_STAGES = 16
+LOCAL_DISK_ROOT = "/var/lib/shellbox-disk-pool"
 CAMPAIGN_SECRET_NAMES = (
     "CW_KEY_ID",
     "CW_KEY_SECRET",
@@ -79,6 +80,8 @@ def campaign_round(mix: CampaignMix, version: str, *, max_steps: int) -> Adopted
     recipe["trainer"]["rollout_buffer"].pop("consumed_route_quotas", None)
     # Stored TaskRolloutSpecs carry the catalog's per-task harness and machine sizing.
     recipe["environment"]["task_sessions"]["task_spec"]["harness_by_dataset"] = {}
+    # Retained lock-based verifiers declare LOCAL storage, which only the quota pool enforces.
+    recipe["environment"]["task_sessions"]["local"] = {"disk_root": LOCAL_DISK_ROOT}
     megatron = {**reference.rl.megatron, "pipeline_model_parallel_size": CAMPAIGN_PIPELINE_STAGES}
     trainer_gpus = (
         megatron["pipeline_model_parallel_size"]

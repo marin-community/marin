@@ -23,7 +23,7 @@ from skyrl_train.dataset.harbor_import import harbor_trial_task, restore_harbor_
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ExecutionRequirements
 
 from experiments.post_training.long_loop import campaign
-from experiments.post_training.long_loop.campaign import REFERENCE, campaign_round
+from experiments.post_training.long_loop.campaign import LOCAL_DISK_ROOT, REFERENCE, campaign_round
 from experiments.post_training.long_loop.campaign_data import (
     CampaignMix,
     load_mix,
@@ -191,6 +191,8 @@ def test_campaign_preserves_131_controls_and_disables_learning_clock():
     after["rl"]["recipe"]["environment"]["task_sessions"]["task_spec"]["harness_by_dataset"] = before["rl"]["recipe"][
         "environment"
     ]["task_sessions"]["task_spec"]["harness_by_dataset"]
+    assert after["rl"]["recipe"]["environment"]["task_sessions"].pop("local") == {"disk_root": LOCAL_DISK_ROOT}
+    before["rl"]["recipe"]["environment"]["task_sessions"].pop("local")
     assert after == before
     callbacks = campaign.rl.recipe["trainer"]["callbacks"]
     assert all(callback["type"] != "wall_time_budget" for callback in callbacks)
