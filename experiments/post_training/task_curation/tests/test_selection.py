@@ -539,6 +539,8 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path, monkeypatch):
     skip_list = task_file(
         tmp_path / "skip.parquet", [selection_module.with_agentic_tag(task) for task in (old_task, skipped)]
     )
+    skipped_admitted = source_task("skip-admitted-task")
+    admitted_skip = task_file(tmp_path / "admitted-skip.parquet", [skipped_admitted], task_json=schema_030_json)
     heldout = source_task("validation", dataset="structure-closure")
     one_turn = "fixture:first"
     settings = released_recipe(
@@ -550,10 +552,13 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path, monkeypatch):
         exclusions=(
             task_file(tmp_path / "evallite.parquet", [repeated]),
             skip_list.model_copy(update={"format": PanelFormat.TASK_DIGEST}),
+            admitted_skip.model_copy(update={"format": PanelFormat.TASK_DIGEST}),
         ),
         admitted_graders=LOCAL_GRADERS | {GraderKind.HARNESS},
     )
-    curated = {one_turn: admitted_source(tmp_path / "curated", [one_turn_task])}
+    curated = {
+        one_turn: admitted_source(tmp_path / "curated", [one_turn_task, skipped_admitted], task_json=schema_030_json)
+    }
     step = task_selection_step(curated, settings)
     changed = settings.model_copy(update={"released": (release.model_copy(update={"sha256": "0" * 64}),)})
     assert step.fingerprint() != task_selection_step(curated, changed).fingerprint()
@@ -573,6 +578,7 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path, monkeypatch):
     monkeypatch.setattr(StoragePath, "open", open_release)
     root = Path(run(step)[0].path)
     summary = json.loads((root / "summary.json").read_text())
+    assert summary["source_counts"][one_turn]["excluded"] == 1
     assert summary["harness_graded_datasets"] == ["long-loop-smartie-swesmith"]
     assert summary["grader_kind_counts"]["train"]["harness"] == 1
     assert summary["source_counts"][release.uri] == {
@@ -849,8 +855,10 @@ def chat(*turns: tuple[str, str]) -> ConversationInput:
     return ConversationInput(events=tuple(TextMessage(role=role, content=content) for role, content in turns))
 
 
-def task_file(path: Path, tasks: list[TaskSpec]) -> HeldoutSource:
-    pq.write_table(pa.Table.from_pylist([{"task_spec": task.model_dump_json()} for task in tasks]), path)
+def task_file(
+    path: Path, tasks: list[TaskSpec], task_json: Callable[[TaskSpec], str] = TaskSpec.model_dump_json
+) -> HeldoutSource:
+    pq.write_table(pa.Table.from_pylist([{"task_spec": task_json(task)} for task in tasks]), path)
     return HeldoutSource(uri=str(path), version="2026.11.04", rows=len(tasks), format="task_spec")
 
 

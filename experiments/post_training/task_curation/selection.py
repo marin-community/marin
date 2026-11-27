@@ -704,11 +704,13 @@ def prepare(config: SelectionConfig) -> None:
         excluded = []
         digests = set()
         for source in config.exclusions:
-            tasks = _panel_source_tasks(source, environments)
             if source.format == PanelFormat.TASK_DIGEST:
-                digests.update(canonical_sha256(task.model_dump(mode="json")) for task in tasks)
+                rows = list(_parquet_rows(StoragePath(source.uri), TASK_SPEC_COLUMN))
+                if len(rows) != source.rows:
+                    raise ValueError(f"Panel source row count changed: {source.uri}: expected {source.rows}")
+                digests.update(canonical_sha256(json.loads(row[TASK_SPEC_COLUMN])) for row in rows)
             else:
-                excluded.extend(tasks)
+                excluded.extend(_panel_source_tasks(source, environments))
         counts = write_training(
             config, selection.full, tuple(excluded), directory / TRAIN_FILENAME, excluded_digests=frozenset(digests)
         )
