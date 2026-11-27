@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Literal, TypeAlias, TypeVar
+from typing import Literal, TypeAlias, TypeVar, get_args
 
 import equinox as eqx
 import jax
@@ -446,6 +446,15 @@ def _length_bucket_weights(component: LengthSkewDatasetComponent, seq_len: int) 
     return {bucket: weight / total for bucket, weight in weights.items()}
 
 
+def _is_unpacked_text_stream(component: DatasetComponentBase | None) -> bool:
+    """Whether a component reads plain text as one flat token stream, so its sequences tile its tokens."""
+    return (
+        isinstance(component, DatasetComponent)
+        and isinstance(component.format, TextLmDatasetFormat)
+        and not _effective_pack(component)
+    )
+
+
 def _effective_pack(component: DatasetComponent) -> bool | int:
     if component.pack is not None:
         return component.pack
@@ -732,14 +741,25 @@ DEFAULT_LM_DATA_SHUFFLE = BlockShuffleConfig(
 """Default hierarchical block-shuffle policy for LM training data."""
 
 
+SimulatedEpochSlice: TypeAlias = Literal["sequences", "shuffle_windows"]
+"""The part of each shuffled source that simulated epoching keeps.
+
+``sequences`` keeps the first ``experiment_budget / target_budget`` of the shuffled sequences. ``shuffle_windows``
+keeps, from the first shuffle window, the whole windows nearest to that share of the source's tokens. For an unpacked
+text stream with token-sized shuffle blocks, these windows hold the same tokens at every sequence length, which a
+context switch needs; the order inside a window, and so the content of a partly kept window, changes with the
+sequence length."""
+
+
 @dataclass(frozen=True)
 class ContextPhaseConfig:
     """An earlier stretch of a run, trained at another sequence length, that the current config continues.
 
     The run trained with these settings until ``end_step``. When training resumes at a new sequence length,
     each source skips the unread rest of its current shuffle window and starts the next window, so it repeats
-    nothing it already served. This requires the same components, shuffle seed, and token-sized shuffle
-    blocks in every phase.
+    nothing it already served in its current epoch. This requires the same components, shuffle seed, and
+    token-sized shuffle blocks in every phase, and, with simulated epoching, the same budgets and whole-window
+    slices. A switch inside a source's last window starts its next epoch.
     """
 
     end_step: int
@@ -913,14 +933,19 @@ class LmDataConfig:
     ``end_step``. Batch-size changes within one context length belong in the trainer's ``BatchSchedule``, not here.
 
     The offsets assume what this config cannot check: every phase used the same trainer seed (which keys the shuffle
-    and the mixture) and listed its sources in the same order (which assigns each source's shuffle key and mixture
-    slots), and the current launch restores the checkpoint at the last ``end_step``. Restoring an earlier step
-    re-reads data."""
+    and the mixture), listed its sources in the same order (which assigns each source's shuffle key and mixture
+    slots), and set the same simulated-epoching budgets and slice, and the current launch restores the checkpoint
+    at the last ``end_step``. Restoring an earlier step re-reads data."""
     mixture_start_step: int | None = None
     """The training step that reads the mixture's first sequence, for a run that continues on a new data store.
     Each source then starts at the beginning of its shuffled order at this step, whatever the batch size, and a
     restore at a later step continues in place. A restore before this step raises. The steps of ``train_weights``
     stages count from this step. Requires the restart stop strategy, and excludes ``prior_context_phases``."""
+
+    simulated_epoch_slice: SimulatedEpochSlice = "sequences"
+    """What simulated epoching (``experiment_budget`` below ``target_budget``) keeps of each shuffled source; see
+    ``SimulatedEpochSlice``. ``prior_context_phases`` with simulated epoching need ``shuffle_windows``, which every
+    phase of the run sets, the first included."""
 
     def __post_init__(self):
         if self.components and self.train_weights is None:
@@ -956,6 +981,33 @@ class LmDataConfig:
                 self.experiment_budget is None and self.target_budget is None
             ), "max_train_batches/num_validation_sequences and simulated data budget cannot all be set"
 
+        if self.simulated_epoch_slice not in get_args(SimulatedEpochSlice):
+            raise ValueError(f"Unknown simulated_epoch_slice {self.simulated_epoch_slice!r}")
+        if self.simulated_epoch_slice == "shuffle_windows":
+            if not isinstance(self.shuffle, BlockShuffleConfig):
+                raise ValueError("simulated_epoch_slice=shuffle_windows needs a block shuffle")
+            if (
+                self.experiment_budget is None
+                or self.target_budget is None
+                or not 0 < self.experiment_budget < self.target_budget
+            ):
+                raise ValueError(
+                    "simulated_epoch_slice=shuffle_windows needs 0 < experiment_budget < target_budget, "
+                    f"got {self.experiment_budget} and {self.target_budget}"
+                )
+
+            # Checked here rather than at slicing, so the first launch fails and trainers that build their own
+            # mixtures, such as DPO's, cannot ignore the slice.
+            unsupported = sorted(
+                name
+                for name, component in self.components.items()
+                if self._has_nonzero_weight(name) and not _is_unpacked_text_stream(component)
+            )
+            if unsupported:
+                raise ValueError(
+                    f"simulated_epoch_slice=shuffle_windows needs unpacked text-stream components; {unsupported} are not"
+                )
+
         if self.prior_context_phases:
             if not isinstance(self.shuffle, BlockShuffleConfig):
                 raise ValueError("prior_context_phases require a block shuffle")
@@ -965,8 +1017,11 @@ class LmDataConfig:
                 raise ValueError(
                     "prior_context_phases cannot be combined with max_train_batches or num_validation_sequences"
                 )
-            if self.experiment_budget != self.target_budget:
-                raise ValueError("prior_context_phases cannot be combined with simulated epoching")
+            if self.experiment_budget != self.target_budget and self.simulated_epoch_slice != "shuffle_windows":
+                raise ValueError(
+                    "prior_context_phases with simulated epoching need simulated_epoch_slice=shuffle_windows, "
+                    "the only slice that keeps the same tokens at every sequence length"
+                )
             end_steps = [phase.end_step for phase in self.prior_context_phases]
             if end_steps != sorted(set(end_steps)) or end_steps[0] <= 0:
                 raise ValueError(f"prior_context_phases must end at increasing positive steps, got {end_steps}")
@@ -1163,9 +1218,13 @@ class LmDataConfig:
         mix_key: PRNGKeyArray,
     ) -> dict[str, int]:
         window_tokens = self._context_phase_window_tokens(datasets, seq_len)
-        token_counts = {
-            name: blocking_wait(doc_caches[name].async_flat_field_length("input_ids")) for name in datasets
-        }
+        if self.simulated_epoch_slice == "shuffle_windows":
+            # A source's epoch is its kept windows, whose token count is a multiple of every phase's length.
+            token_counts = {name: len(dataset.as_sync_dataset()) * seq_len for name, dataset in datasets.items()}
+        else:
+            token_counts = {
+                name: blocking_wait(doc_caches[name].async_flat_field_length("input_ids")) for name in datasets
+            }
         if weights is None:
             raise ValueError("prior_context_phases require train_weights")
         current_weights = [(0, weights)] if isinstance(weights, dict) else weights
@@ -1210,12 +1269,7 @@ class LmDataConfig:
             ):
                 raise ValueError(f"Context phase {phase} must shuffle the same token-sized blocks and windows")
         for name in datasets:
-            component = self.components[name]
-            if (
-                not isinstance(component, DatasetComponent)
-                or not isinstance(component.format, TextLmDatasetFormat)
-                or _effective_pack(component)
-            ):
+            if not _is_unpacked_text_stream(self.components[name]):
                 raise ValueError(f"prior_context_phases need unpacked text-stream components; {name} is not one")
         return block_tokens * shuffle.window_blocks
 
@@ -1288,7 +1342,12 @@ class LmDataConfig:
             sliced_datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
             for name, ds in datasets.items():
                 true_length_of_dataset = len(ds.as_sync_dataset())
-                simulated_length_of_dataset = int(true_length_of_dataset * simulated_data_ratio)
+                if self.simulated_epoch_slice == "shuffle_windows":
+                    simulated_length_of_dataset = self._kept_window_length(
+                        name, true_length_of_dataset, doc_caches, Pos.size
+                    )
+                else:
+                    simulated_length_of_dataset = int(true_length_of_dataset * simulated_data_ratio)
                 sliced_datasets[name] = ds.slice_dataset(end_index=simulated_length_of_dataset)
             datasets = sliced_datasets
 
@@ -1306,6 +1365,34 @@ class LmDataConfig:
                     datasets[name] = ds.slice_dataset(end_index=num_sequences)
 
         return datasets, doc_caches
+
+    def _kept_window_length(
+        self, name: str, length: int, doc_caches: Mapping[str, TreeCache[dict]], seq_len: int
+    ) -> int:
+        """Return the sequences in the whole shuffle windows nearest to the budget share of a source's tokens."""
+        shuffle = self.shuffle
+        assert isinstance(shuffle, BlockShuffleConfig)
+        assert self.experiment_budget is not None and self.target_budget is not None
+        # The cache's token count, the window's token count and the number of complete windows are the same at
+        # every sequence length, so every phase keeps the same windows.
+        tokens = blocking_wait(doc_caches[name].async_flat_field_length("input_ids"))
+        window_sequences = shuffle.io_block_size * shuffle.window_blocks
+        complete_windows = length // shuffle.io_block_size // shuffle.window_blocks
+        # Round tokens * experiment / (target * window tokens) half up, in integers so the comparison is exact.
+        numerator = tokens * self.experiment_budget
+        denominator = self.target_budget * window_sequences * seq_len
+        windows = min((2 * numerator + denominator) // (2 * denominator), complete_windows)
+        if windows == 0:
+            raise ValueError(f"Simulated epoching rounds {name} to zero whole shuffle windows; use smaller windows")
+        kept = windows * window_sequences
+        logger.info(
+            "Simulated epoching keeps %d shuffle windows of %s, %.6f of its sequences at budget ratio %.6f",
+            windows,
+            name,
+            kept / length,
+            self.experiment_budget / self.target_budget,
+        )
+        return kept
 
     def _validation_datasets_unwrapped(self, Pos: Axis) -> dict[str, AsyncDataset[GrugLmExample]]:
         doc_caches = self.build_caches("validation")
