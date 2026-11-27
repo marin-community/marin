@@ -5,6 +5,7 @@
 
 import json
 import re
+from itertools import permutations
 from pathlib import Path
 
 from polaris_answer_extract import BOXED, extract_boxed, last_line, strip_math_delimiters
@@ -38,6 +39,55 @@ FIND_VARIABLE = re.compile(r"\bfind\s+(?:\\\(\s*|\$\s*)([A-Za-z])\s*(?:\\\)|\$)"
 ASSIGNMENTS = re.compile(r"\s*[A-Za-z]\s*=\s*[^,;\n]+(?:[,;]\s*[A-Za-z]\s*=\s*[^,;\n]+)*\s*")
 CHOICE_LABEL = re.compile(r"\\textbf\{\s*\(([A-Z])\)\s*\}\s*")
 CHOICE_PADDING = re.compile(r"(?:\\qquad|\\quad|\$|\s)+$")
+DIGIT_PUZZLE = re.compile(
+    r"Let (?P<left>[A-Z]{2}), multiplied by (?P<factor>[A-Z]), equal (?P<product>[A-Z]{2})\. "
+    r"If (?P=product) is subtracted from (?P<minuend>[A-Z]{2}), the result is (?P<difference>[A-Z]{2})\. "
+    r"Each letter represents a distinct digit \(1, 2, 3, 4, 5, 6, 7, 8, or 9\)\. "
+    r"The digit 0 does not appear in the problem\."
+)
+DIGIT_WORDS = ("left", "factor", "product", "minuend", "difference")
+DIGIT_ASSIGNMENTS = re.compile(r"[A-Z]\s*=\s*\d(?:\s*[,;\n]\s*[A-Z]\s*=\s*\d)*")
+DIGIT_DIFFERENCE = re.compile(r"(\d{2})\s*-\s*(\d{2})\s*=\s*(\d{2})")
+
+
+def digit_assignment_reward(answer: str, problem: str) -> float | None:
+    """Check complete digit constraints; return None for other prompt grammars."""
+    plain_problem = problem.replace("$", "").replace(r"\(", "").replace(r"\)", "")
+    puzzle = DIGIT_PUZZLE.fullmatch(" ".join(plain_problem.split()))
+    if puzzle is None:
+        return None
+    letters = set("".join(puzzle[word] for word in DIGIT_WORDS))
+    if len(letters) != 9:
+        return None
+    final = strip_math_delimiters(final_answer_text(answer).strip().removesuffix(".")).replace("\N{MINUS SIGN}", "-")
+    if DIGIT_ASSIGNMENTS.fullmatch(final):
+        pairs = re.findall(r"([A-Z])\s*=\s*(\d)", final)
+        bindings = {letter: int(digit) for letter, digit in pairs}
+        if len(pairs) != 9 or len(bindings) != 9 or set(bindings) != letters:
+            return 0.0
+    elif equation := DIGIT_DIFFERENCE.fullmatch(final):
+        bindings = {
+            letter: int(digit)
+            for word, number in zip(("minuend", "product", "difference"), equation.groups(), strict=True)
+            for letter, digit in zip(puzzle[word], number, strict=True)
+        }
+    else:
+        return 0.0
+    if len(set(bindings.values())) != len(bindings) or not set(bindings.values()) <= set(range(1, 10)):
+        return 0.0
+    missing = sorted(letters - set(bindings))
+    remaining = sorted(set(range(1, 10)) - set(bindings.values()))
+    solutions = 0
+    # The subtraction form binds six digits, so at most six completions are checked.
+    for digits in permutations(remaining):
+        assignment = bindings | dict(zip(missing, digits, strict=True))
+        values = {word: int("".join(str(assignment[letter]) for letter in puzzle[word])) for word in DIGIT_WORDS}
+        if (
+            values["left"] * values["factor"] == values["product"]
+            and values["minuend"] - values["product"] == values["difference"]
+        ):
+            solutions += 1
+    return float(solutions == 1)
 
 
 def choice_values(problem: str) -> dict[str, str]:
@@ -125,6 +175,9 @@ def final_candidate(answer: str, problem: str) -> str | None:
 
 
 def score(answer: str, contract: dict[str, str]) -> float:
+    constraint_reward = digit_assignment_reward(answer, contract["problem"])
+    if constraint_reward is not None:
+        return constraint_reward
     choices = choice_values(contract["problem"])
     reference = contract["answer"]
     if BOXED in reference:

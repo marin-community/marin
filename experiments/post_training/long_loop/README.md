@@ -1794,6 +1794,10 @@ signed changes, and assignments to the variable requested by the question. It
 checks that a labelled reference agrees with the question's declared option before
 removing the label. An invalid reference remains unscored even for an empty response.
 These rules never select an explanatory number by matching the reference value.
-Multi-target questions with an unlabelled partial reference and answers expressed as
-constraint assignments still require a faithful target or constraint binding; their
-known regressions remain strict expected failures and prevent admission.
+The v4 candidate also recognizes the complete multiplication/subtraction digit-puzzle
+grammar and verifies both equations and distinct digits 1–9. A complete assignment or
+subtraction equation must determine exactly one valid full solution, independent of
+the answer key. This preserves the original subtraction reference without accepting
+unrelated equalities. Other prompt grammars use the scalar comparator. Multi-target
+questions with an unlabelled partial reference still require a faithful target
+binding; their known regressions remain strict expected failures and prevent admission.

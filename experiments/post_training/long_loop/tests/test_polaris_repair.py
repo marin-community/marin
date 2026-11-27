@@ -161,7 +161,7 @@ def test_opening_claim_does_not_select_a_matching_explanatory_number(answer, exp
             id=case["case_id"],
             marks=(
                 pytest.mark.xfail(strict=True, reason="#12386: semantic or partial-reference target unresolved")
-                if case["case_id"] in {"49484db9029d", "69eac79fc55d", "9627bad7da0c"}
+                if case["case_id"] in {"49484db9029d", "69eac79fc55d"}
                 else ()
             ),
         )
@@ -226,3 +226,43 @@ def test_empty_response_cannot_hide_a_malformed_reference(tmp_path, monkeypatch)
     repaired = staged_score(with_final_text_grader(retained_task(), BUILT), tmp_path / "grader", monkeypatch)
     with pytest.raises(InvalidTask):
         repaired("", {"problem": case["problem"], "answer": case["reference"]})
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        ("A=1, B=7, C=4, D=6, E=8, F=9, G=3, H=2, I=5.", 1.0),
+        ("I=5; H=2; G=3; F=9; E=8; D=6; C=4; B=7; A=1", 1.0),
+        ("A=7, B=1, C=4, D=6, E=8, F=9, G=3, H=2, I=5", 0.0),
+        ("A=1, B=7, C=4, D=8, E=6, F=9, G=3, H=2, I=5", 0.0),
+        ("A=1, B=7, C=4, D=6, E=8, F=3, G=9, H=2, I=5", 0.0),
+        ("A=1, B=7, C=4, D=6, E=8, F=9, G=3, H=2, I=2", 0.0),
+        ("A=1, B=7, C=4, D=6, E=8, F=9, G=3, H=2", 0.0),
+        ("A=1, A=1, B=7, C=4, D=6, E=8, F=9, G=3, H=2, I=5", 0.0),
+        ("A=0, B=7, C=4, D=6, E=8, F=9, G=3, H=2, I=5", 0.0),
+        ("A=1, B=7, C=4, D=6, E=8, F=9, G=3, H=2, I=10", 0.0),
+        ("Not A=1, B=7, C=4, D=6, E=8, F=9, G=3, H=2, I=5", 0.0),
+        ("93-68=25", 1.0),
+        ("65-38=27", 0.0),
+        ("93-68=24", 0.0),
+        ("A=1", 0.0),
+        ("", 0.0),
+        ("<|start_think|>A=1, B=7, C=4, D=6, E=8, F=9, G=3, H=2, I=5", 0.0),
+    ],
+)
+def test_digit_assignments_check_every_stated_constraint(answer, expected, tmp_path, monkeypatch):
+    case = next(case for case in REVIEW_CASES if case["case_id"] == "9627bad7da0c")
+    repaired = staged_score(with_final_text_grader(retained_task(), BUILT), tmp_path / "grader", monkeypatch)
+    assert repaired(answer, {"problem": case["problem"], "answer": case["reference"]}) == expected
+
+
+def test_digit_constraint_check_follows_renamed_letters_without_the_gold_value(tmp_path, monkeypatch):
+    case = next(case for case in REVIEW_CASES if case["case_id"] == "9627bad7da0c")
+    translation = str.maketrans("ABCDEFGHI", "IABCDEFGH")
+    problem = case["problem"].replace("Let $AB$", "Let $IA$")
+    for original, renamed in (("$C$", "$B$"), ("$DE$", "$CD$"), ("$FG$", "$EF$"), ("$HI$", "$GH$")):
+        problem = problem.replace(original, renamed)
+    answer = case["answer"].translate(translation)
+    repaired = staged_score(with_final_text_grader(retained_task(), BUILT), tmp_path / "grader", monkeypatch)
+    # A complete constraint check has no dependency on the scalar answer-key representation.
+    assert repaired(answer, {"problem": problem, "answer": "unused scalar representation"}) == 1.0
