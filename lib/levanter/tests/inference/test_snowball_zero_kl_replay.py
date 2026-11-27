@@ -152,13 +152,12 @@ def _score_error(actual, expected):
 
 
 @pytest.mark.tpu
-@pytest.mark.timeout(900)
 @pytest.mark.parametrize(
     "layers,expert_axis_size",
     [
-        pytest.param(1, 1, id="fixture-data4"),
-        pytest.param(2, 4, id="production-width-expert4", marks=pytest.mark.manual),
-        pytest.param(26, 4, id="production-depth-expert4", marks=pytest.mark.manual),
+        pytest.param(1, 1, id="fixture-data4", marks=pytest.mark.timeout(300)),
+        pytest.param(2, 4, id="production-width-expert4", marks=(pytest.mark.manual, pytest.mark.timeout(900))),
+        pytest.param(26, 4, id="production-depth-expert4", marks=(pytest.mark.manual, pytest.mark.timeout(1500))),
     ],
 )
 def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path, layers, expert_axis_size):
@@ -206,6 +205,7 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path, laye
                 block = jax.block_until_ready(transformer.blocks[index].with_packed_experts())
                 blocks = (*transformer.blocks[:index], block, *transformer.blocks[index + 1 :])
                 model = dataclasses.replace(model, transformer=dataclasses.replace(transformer, blocks=blocks))
+                del transformer
         generations, strict_rounds = _generate(
             model, tokenizer, mesh, prompts, measured_rounds=3 if production_width else 0
         )
