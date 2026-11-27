@@ -71,7 +71,6 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_MODEL_NAME = "levanter"
-_MAX_REQUEST_BYTES = 4 * 1024 * 1024
 _EVENT_STREAM = "text/event-stream"
 _CHAT_CHUNK = "chat.completion.chunk"
 MAX_POLICY_ID_LENGTH = 256
