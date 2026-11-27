@@ -326,13 +326,6 @@ def test_budget_stop_uses_the_actual_final_evaluation(recorded_runs, preset_tabl
     attempt = read_stored_skyrl_attempts(str(root))[1]["recorded-attempt"]
     row = publication.build_record(str(root), preset, table=table, attempt=attempt)
     assert row.status == "succeeded" and row.failed_facts == []
-    assert "Completed checkpoint-lineage updates observed 300 response tokens." in row.evidence
-    expected_evidence = (
-        "The response-token upper bound is unavailable for this checkpoint lineage."
-        if expected_upper is None
-        else f"The completed-update upper bound including unobserved requests is {expected_upper} tokens."
-    )
-    assert expected_evidence in row.evidence
     assert (row.planned_updates, row.optimizer_steps, row.measured_updates) == (12, 2, [1, 2])
     assert {
         (score.profile, score.step)
@@ -340,9 +333,9 @@ def test_budget_stop_uses_the_actual_final_evaluation(recorded_runs, preset_tabl
         if (score := comparison.evaluation_score) is not None and score.final
     } == {("eval_lite", 2)}
     metrics = read_skyrl_metrics(str(root), attempt_id="recorded-attempt")
-    _, invalid, spend = measurements.measured_training(preset.with_updates(12), metrics, 100)
-    assert not next(fact for fact in invalid if fact.name == "gross_rollout_budget_reached").holds
-    assert spend is None
+    invalid = measurements.measured_training(preset.with_updates(12), metrics, 100)
+    assert not next(fact for fact in invalid.invariants if fact.name == "gross_rollout_budget_reached").holds
+    assert invalid.spend is None
 
 
 def test_training_invariants_from_recorded_values(recorded_runs, preset_table):

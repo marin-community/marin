@@ -221,12 +221,7 @@ async def _model_turn(
                 # Rendering happens on the serving client. The pinned continuation is a
                 # lower bound on input length, so the output allowance is an upper bound.
                 known_prompt = list(request.continuation.served_token_ids) if request.continuation else []
-                row = (
-                    options
-                    if options.get("extra_body", {}).get("continue_final_message") is True
-                    else chat_row_options(options)
-                )
-                limit = generation_token_budget(model_input, known_prompt, row)
+                limit = generation_token_budget(model_input, known_prompt, chat_row_options(options).options)
                 assert limit is not None
             output = await _generate_with_usage(client, model_input, limit, usage)
     except GenerationBudgetExceededError as error:

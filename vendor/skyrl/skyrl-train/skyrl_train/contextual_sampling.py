@@ -363,7 +363,7 @@ class PromptThompsonOrder(PromptOrder):
         return 1 / (1 + np.exp(-np.clip(logits, -40, 40)))
 
     def prediction(self, uid: str) -> tuple[float, float]:
-        """Return fitted-model usefulness probability and exponentiated log cost for a training row."""
+        """Return the fitted useful probability and predicted generated token count for a group."""
         feature = self._features[self._rows[uid]]
         logit = feature @ np.linalg.solve(self._precision, self._info)
         log_relative_cost = feature @ np.linalg.solve(self._cost_precision, self._cost_info)

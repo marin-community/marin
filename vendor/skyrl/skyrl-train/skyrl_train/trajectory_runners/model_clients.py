@@ -102,15 +102,23 @@ class GenerationBudgetExceededError(ContextLengthExceededError):
         super().__init__(category="context_overflow", request_id=None, status_code=None)
 
 
-def chat_row_options(options: dict[str, Any]) -> dict[str, Any]:
-    """Flatten the OpenAI extra_body fields sent to tokenization and chat completion."""
+@dataclass(frozen=True)
+class ChatRowOptions:
+    options: dict[str, Any]
+    initial_assistant_prefix: bool
+
+
+def chat_row_options(options: dict[str, Any]) -> ChatRowOptions:
+    """Resolve the exact options used by generation and its token budget."""
     row_options = dict(options)
+    if row_options.get("extra_body", {}).get("continue_final_message") is True:
+        return ChatRowOptions(row_options, initial_assistant_prefix=True)
     extra = row_options.pop("extra_body", {})
     template = {**row_options.get("chat_template_kwargs", {}), **extra.get("chat_template_kwargs", {})}
     row_options.update(extra)
     if template:
         row_options["chat_template_kwargs"] = template
-    return row_options
+    return ChatRowOptions(row_options, initial_assistant_prefix=False)
 
 
 def generation_token_budget(
@@ -403,13 +411,14 @@ class DirectModelClient:
         requested_top_k = requested_top_k if isinstance(requested_top_k, int) and requested_top_k > 0 else None
 
         async def generate_one(messages, row_options, session_id, continuation):
-            if row_options.get("extra_body", {}).get("continue_final_message") is True:
+            resolved = chat_row_options(row_options)
+            row_options = resolved.options
+            if resolved.initial_assistant_prefix:
                 if continuation is not None:
                     raise ValueError("An initial assistant prefix cannot reuse a sampled chat continuation")
                 return await self._generate_assistant_prefix(request, messages, row_options, session_id)
             # Agent relays use the OpenAI client's extra_body convention. The direct client
             # sends raw vLLM requests and tokenizes that same flattened body.
-            row_options = chat_row_options(row_options)
             chat_options = self._chat_options(row_options)
             tokenize_options = {key: value for key, value in chat_options.items() if key in CHAT_TOKENIZE_FIELDS}
             render_request = {

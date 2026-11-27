@@ -80,6 +80,13 @@ class RolloutTokenSpend(NamedTuple):
     upper_bound: int | None
 
 
+@dataclass(frozen=True)
+class TrainingMeasurements:
+    preset: presets.Preset
+    invariants: tuple[Invariant, ...]
+    spend: RolloutTokenSpend | None = None
+
+
 def _native_window(attempt: AttemptRecord, launch: RecordedLaunch) -> NativeWindow | None:
     result = attempt.native.result
     if result.started_at is None or result.finished_at is None:
@@ -504,11 +511,11 @@ def evaluation_status(
 
 def measured_training(
     preset: presets.Preset, metrics: Mapping[int, Mapping[str, Any]], rollout_token_budget: int | None
-) -> tuple[presets.Preset, tuple[Invariant, ...], RolloutTokenSpend | None]:
+) -> TrainingMeasurements:
     """Return the measured horizon, observed budget crossing check and completed-update spend evidence."""
     workload = preset.recipe.layout.workload
     if rollout_token_budget is None:
-        return preset, workload.invariants(preset.updates, metrics), None
+        return TrainingMeasurements(preset, workload.invariants(preset.updates, metrics))
     spent = 0
     unobserved: int | None = 0
     completed = 0
@@ -556,7 +563,7 @@ def measured_training(
     spend = None
     if valid and completed:
         spend = RolloutTokenSpend(spent, spent + unobserved if unobserved is not None else None)
-    return preset, (*workload.invariants(preset.updates, metrics), fact), spend
+    return TrainingMeasurements(preset, (*workload.invariants(preset.updates, metrics), fact), spend)
 
 
 def read_measurements(
@@ -581,11 +588,12 @@ def read_measurements(
         raise InvalidComparison(f"run has no recorded source provenance: {path}")
     launch = read_recorded_launch(terminal)
     metrics = read_attempt_metrics(launch.export_root, terminal.attempt_id)
-    preset, training_facts, spend = measured_training(preset, metrics, launch.rollout_token_budget)
+    measured = measured_training(preset, metrics, launch.rollout_token_budget)
+    preset = measured.preset
     workload = preset.recipe.layout.workload
     planned = workload.planned_steps(preset.updates)
     training = [row for step, row in sorted(metrics.items()) if step in planned]
-    invariants = list(training_facts)
+    invariants = list(measured.invariants)
     profiles = _recorded_evaluations(preset, launch, inputs, gate_profiles=gate_profiles)
     tracking = attempt_tracking(terminal, launch)
     try:
@@ -710,7 +718,7 @@ def read_measurements(
         **_window_values(preset, metrics),
         **score_answers(final),
     }
-    if spend is not None:
+    if (spend := measured.spend) is not None:
         values["rollout/completed_update_observed_response_tokens"] = float(spend.observed)
         if spend.upper_bound is not None:
             values["rollout/completed_update_response_tokens_upper_bound"] = float(spend.upper_bound)
