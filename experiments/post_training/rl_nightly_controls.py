@@ -12,6 +12,7 @@ import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from html import escape
+from math import ceil
 from pathlib import Path
 
 from connectrpc.code import Code
@@ -20,6 +21,7 @@ from finestore.rl.rl_progress import completed_controls
 from iris.cli.connect import open_iris_client
 from iris.client.client import IrisClient
 from iris.cluster.client.job_info import resolve_job_user
+from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE, SCHEDULABLE_RACK_NODES
 from iris.cluster.types import JobName
 from iris.resources.state import JobState, TaskState, is_job_finished
 from marin.execution.remote import sanitize_job_name
@@ -41,6 +43,10 @@ _ACTIVE_STATES = (JobState.PENDING, JobState.BUILDING, JobState.RUNNING)
 def _attempt_cost(model: str, preset: Preset) -> int:
     # Snowball: 8 * 1,000 GPU + 32 * 5 CPU + 1,800 GiB per node, plus 36 for the coordinator.
     return 9_960 * preset.recipe.layout.workload.plan.num_nodes + 36 if model == SNOWBALL.model else 1
+
+
+def _active_jobs(client: IrisClient, prefix: str) -> list[JobName]:
+    return [job.job_id for state in _ACTIVE_STATES for job in client.list_jobs(state=state, prefix=prefix)]
 
 
 def select_presets(selection: str) -> list[tuple[str, Preset]]:
@@ -173,17 +179,17 @@ def _run_controls(batch: str, selected: Sequence[tuple[str, Preset]], state_dir:
         if capacity[MOCHI.model] > 0 and any(model == MOCHI.model for model, _ in selected):
             try:
                 jobs = (
-                    job.job_id
+                    job
                     for user in ("runner", "atqamar")
-                    for state in _ACTIVE_STATES
-                    for job in client.list_jobs(state=state, prefix=f"/{user}/")
-                    if job.job_id.root_job not in pending_jobs
+                    for job in _active_jobs(client, f"/{user}/")
+                    if job.root_job not in pending_jobs
                 )
                 for job in jobs:
                     detail = client.job_status(job)
                     device = detail.resources.device
                     if device and device.variant.upper() == "GB200":
-                        capacity[MOCHI.model] -= max(1, (detail.task_count + 17) // 18)
+                        nodes = detail.task_count
+                        capacity[MOCHI.model] -= 1 if nodes <= RACK_SIZE else ceil(nodes / SCHEDULABLE_RACK_NODES)
                         if job.user == owner:
                             budget_models.add(MOCHI.model)
                     elif job.is_root and f"checkpoints-{MOCHI.namespace}-" in job.name:
@@ -194,10 +200,10 @@ def _run_controls(batch: str, selected: Sequence[tuple[str, Preset]], state_dir:
                 capacity[MOCHI.model] = 0
         try:
             prefix = f"/{owner}/checkpoints-{SNOWBALL.namespace}-controls-"
-            if any(job.root_job not in pending_jobs for job in client.active_job_names_for_prefix(prefix)):
+            if any(job.root_job not in pending_jobs for job in _active_jobs(client, prefix)):
                 capacity[SNOWBALL.model] = 0
                 budget_models.add(SNOWBALL.model)
-            if client.active_job_names_for_prefix(f"/{owner}/checkpoints-{MOCHI.namespace}-"):
+            if _active_jobs(client, f"/{owner}/checkpoints-{MOCHI.namespace}-"):
                 budget_models.add(MOCHI.model)
         except Exception as error:
             print(f"Snowball coordinator scan failed: {error}", file=sys.stderr)
@@ -210,7 +216,7 @@ def _run_controls(batch: str, selected: Sequence[tuple[str, Preset]], state_dir:
                     print(f"Skipping {target}: pending record")
                     continue
                 prefix = sanitize_job_name(f"checkpoints/{_TABLES[model].namespace}/controls/{preset.name}") + "-"
-                if client.active_job_names_for_prefix(f"/{owner}/{prefix}"):
+                if _active_jobs(client, f"/{owner}/{prefix}"):
                     print(f"Skipping {target}: active coordinator")
                     continue
                 cost = _attempt_cost(model, preset)

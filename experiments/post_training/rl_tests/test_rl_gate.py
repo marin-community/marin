@@ -698,6 +698,7 @@ def test_python_run_saves_typed_inputs_for_comparison(
         fingerprint=built.runs[0].fingerprint(),
         inputs=built.inputs,
         receipt={"result.started_at": "2026-11-06T17:40:00+00:00"},
+        metrics_started_at="2026-11-06T18:40:00+00:00",
     )
     staged = source.with_name("native-staging")
     source.rename(staged)

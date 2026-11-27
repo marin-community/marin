@@ -370,9 +370,13 @@ def test_nightly_reserves_mochi_racks_and_skips_duplicate_launches(
     assert nightly_tick(monkeypatch, tmp_path, "fresh", "mochi") == 0
     assert sorted(launcher.requests.values()) == [1, 2]
     launcher.requests.clear()
+    gb200 = Device(DeviceKind.GPU, "GB200", 4)
+    multi = "/atqamar/custom-gpu-experiment"
+    iris.set_job(multi, JobState.PENDING, device=gb200, nodes=36)
+    assert nightly_tick(monkeypatch, tmp_path, "three-slices", "mochi") == 0 and not launcher.requests
+    iris.set_job(multi, JobState.SUCCEEDED)
     speed = "/runner/checkpoints-mochi-rl-controls-speed-medium-running-coordinator"
     iris.set_job(speed, JobState.RUNNING)
-    gb200 = Device(DeviceKind.GPU, "GB200", 4)
     iris.set_job(speed + "/training", JobState.RUNNING, device=gb200, nodes=15)
     pending = tmp_path / "mochi-speed-medium.json"
     pending.write_text(
@@ -385,7 +389,7 @@ def test_nightly_reserves_mochi_racks_and_skips_duplicate_launches(
     assert launcher.requests == {("learning-medium", "limited"): 1}
     assert "Skipping mochi/speed-medium: pending record" in capsys.readouterr().out
 
-    multi = iris.set_job("/atqamar/custom-gpu-experiment", JobState.PENDING, device=gb200, nodes=32)
+    iris.set_job(multi, JobState.PENDING, device=gb200, nodes=32)
     assert nightly_tick(monkeypatch, tmp_path, "external", "mochi") == 0
     assert "Skipping mochi/learning-medium: no free rack" in capsys.readouterr().out
     assert launcher.requests == {("learning-medium", "limited"): 1}
@@ -393,14 +397,17 @@ def test_nightly_reserves_mochi_racks_and_skips_duplicate_launches(
     pending.unlink()
     iris.set_job(speed, JobState.SUCCEEDED)
     iris.set_job(speed + "/training", JobState.SUCCEEDED)
-    iris.set_job(str(multi), JobState.BUILDING, device=gb200, nodes=32)
+    iris.set_job(multi, JobState.BUILDING, device=gb200, nodes=32)
     iris.set_job("/runner/another-experiment/worker", JobState.RUNNING, device=gb200, nodes=17)
     assert nightly_tick(monkeypatch, tmp_path, "both-owners", "mochi") == 0
     assert launcher.requests == {("learning-medium", "limited"): 1}
 
+    list_jobs = iris.list_jobs
+
     def unavailable(*, state, prefix):
-        assert prefix in {"/runner/", "/atqamar/"} and state in nightly._ACTIVE_STATES
-        raise ConnectError(Code.OUT_OF_RANGE, "deep offset")
+        if prefix in {"/runner/", "/atqamar/"}:
+            raise ConnectError(Code.OUT_OF_RANGE, "deep offset")
+        return list_jobs(state=state, prefix=prefix)
 
     monkeypatch.setattr(iris, "list_jobs", unavailable)
     iris.set_job(speed, JobState.RUNNING)

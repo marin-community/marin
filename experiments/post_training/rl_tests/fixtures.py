@@ -54,7 +54,7 @@ from fsspec.config import conf
 from iris.client.workload import ResourceRequest
 from iris.cluster.client.job_info import set_job_info
 from iris.cluster.types import JobName
-from iris.resources.state import JobState, is_job_finished
+from iris.resources.state import JobState
 from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import StepContext, materialized_config
@@ -262,11 +262,10 @@ class FakeIris:
         return self.tasks[job]
 
     def list_jobs(self, *, state, prefix):
-        return [job for job in self.jobs.values() if job.state == state and str(job.job_id).startswith(prefix)]
-
-    def active_job_names_for_prefix(self, prefix):
         return [
-            job for job, status in self.jobs.items() if str(job).startswith(prefix) and not is_job_finished(status.state)
+            SimpleNamespace(job_id=job, state=status.state)
+            for job, status in self.jobs.items()
+            if status.state == state and str(job).startswith(prefix)
         ]
 
 
@@ -643,6 +642,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         state="succeeded",
         coordinator=None,
         receipt=None,
+        metrics_started_at=None,
         retry_attempt=None,
     ):
         table = table or snowball_model.SNOWBALL
@@ -699,7 +699,15 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             source_revision="commit-one",
             dirty=False,
         )
-        write_attempt(str(root / "exports"), AttemptRecord(run_id=run_id, attempt_id=attempt, index=identity))
+        write_attempt(
+            str(root / "exports"),
+            AttemptRecord(
+                run_id=run_id,
+                attempt_id=attempt,
+                index=identity,
+                metrics_started_at=metrics_started_at or result["started_at"],
+            ),
+        )
         if retry_attempt:
             alternate = deepcopy(launch)
             alternate["run"]["attempt_id"] = retry_attempt
