@@ -111,8 +111,6 @@ jobs:
           workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
           service_account: github-iris@hai-gcp-models.iam.gserviceaccount.com
       - uses: google-github-actions/setup-gcloud@v3
-        with:
-          project_id: hai-gcp-models
       - name: Install Marin CPU launcher
         run: uv sync --frozen --package marin-core --extra cpu --no-default-groups
 
@@ -237,8 +235,6 @@ jobs:
           workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
           service_account: github-iris@hai-gcp-models.iam.gserviceaccount.com
       - uses: google-github-actions/setup-gcloud@v3
-        with:
-          project_id: hai-gcp-models
       - name: Authenticate Marina with the main-only deployment identity
         id: marina-auth
         uses: google-github-actions/auth@v3
