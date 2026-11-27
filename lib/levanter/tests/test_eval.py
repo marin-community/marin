@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import json
 import logging
 from types import SimpleNamespace
@@ -125,6 +126,74 @@ def test_tagged_evaluator_excludes_unscored_tags_from_macros_and_logs(compute_bp
         assert "eval/macro_bpb" not in log_dict
     assert "eval/paloma/first/loss" in log_dict
     assert not [key for key in log_dict if "empty" in key or "masked" in key or "eval/other" in key]
+
+
+def test_tagged_evaluator_bpb_is_total_bits_over_total_bytes():
+    EvalBatch = Axis("batch", len(jax.devices()))
+    # One token is one byte ("5") and the other two bytes ("10"); every position has a loss of one nat.
+    one_byte = ListAsyncDataset([jnp.array([5, 5], dtype=jnp.int32)] * EvalBatch.size)
+    two_bytes = ListAsyncDataset([jnp.array([10, 10], dtype=jnp.int32)] * EvalBatch.size)
+
+    def loss_fn(_model, batch) -> LossFnOutput:
+        return jnp.ones_like(batch, dtype=jnp.float32), jnp.ones_like(batch, dtype=jnp.float32), batch
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        evaluator = TaggedEvaluator(
+            EvalBatch=EvalBatch,
+            tagged_eval_sets=[(one_byte, ["paloma/one_byte"]), (two_bytes, ["paloma/two_bytes"])],
+            loss_fn=loss_fn,
+            tokenizer=PassthroughTokenizer(11),
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+        )
+        log_dict = construct_log_dict(evaluator, evaluator.evaluate(jnp.zeros(())), 0.0, prefix="eval")
+
+    # Both sets score the same number of tokens, so the whole corpus has 2 nats per 3 bytes. Averaging the
+    # batches' ratios by token count would give (1 + 1/2) / 2 nats per byte instead.
+    bits_per_nat = 1 / np.log(2)
+    assert log_dict["eval/bpb"] == pytest.approx(2 / 3 * bits_per_nat)
+    assert log_dict["eval/paloma/bpb"] == pytest.approx(2 / 3 * bits_per_nat)
+    assert log_dict["eval/paloma/one_byte/bpb"] == pytest.approx(bits_per_nat)
+    assert log_dict["eval/paloma/two_bytes/bpb"] == pytest.approx(bits_per_nat / 2)
+
+
+@dataclasses.dataclass(frozen=True)
+class _ZeroIsSpecialTokenizer(PassthroughTokenizer):
+    @property
+    def all_special_ids(self) -> list[int]:
+        return [0]
+
+
+def test_tagged_evaluator_bpb_counts_zero_byte_targets_in_their_own_batch():
+    EvalBatch = Axis("batch", len(jax.devices()))
+    # Token 5 is one byte; token 0 is special and has none. Each set fills whole batches, so the zero-byte
+    # targets are scored in batches of their own. Every position has a loss of one nat.
+    one_byte = ListAsyncDataset([jnp.array([5, 5], dtype=jnp.int32)] * EvalBatch.size)
+    zero_bytes = ListAsyncDataset([jnp.array([0, 0], dtype=jnp.int32)] * EvalBatch.size)
+
+    def loss_fn(_model, batch) -> LossFnOutput:
+        return jnp.ones_like(batch, dtype=jnp.float32), jnp.ones_like(batch, dtype=jnp.float32), batch
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        evaluator = TaggedEvaluator(
+            EvalBatch=EvalBatch,
+            tagged_eval_sets=[(one_byte, ["paloma/one_byte"]), (zero_bytes, ["paloma/zero_bytes"])],
+            loss_fn=loss_fn,
+            tokenizer=_ZeroIsSpecialTokenizer(6),
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+        )
+        log_dict = construct_log_dict(evaluator, evaluator.evaluate(jnp.zeros(())), 0.0, prefix="eval")
+
+    # All four nats per example pair fall on two bytes, as they would if both sets shared a batch.
+    bits_per_nat = 1 / np.log(2)
+    assert log_dict["eval/bpb"] == pytest.approx(2 * bits_per_nat)
+    assert log_dict["eval/paloma/bpb"] == pytest.approx(2 * bits_per_nat)
+    # The byte-less set has no bits per byte of its own, so it is not logged and stays out of the macros.
+    assert "eval/paloma/zero_bytes/bpb" not in log_dict
+    assert log_dict["eval/paloma/one_byte/bpb"] == pytest.approx(bits_per_nat)
+    assert log_dict["eval/macro_bpb"] == pytest.approx(bits_per_nat)
+    assert log_dict["eval/paloma/macro_bpb"] == pytest.approx(bits_per_nat)
 
 
 def test_tagged_evaluator_accepts_grug_lm_examples():

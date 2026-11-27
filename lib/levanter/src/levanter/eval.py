@@ -47,6 +47,7 @@ from levanter.utils.tree_utils import inference_mode
 
 logger = logging.getLogger(__name__)
 _TAGGED_EVAL_SHUFFLE_SEED = 0
+_BITS_PER_NAT = float(np.log2(np.e))
 
 
 T = TypeVar("T")
@@ -473,8 +474,9 @@ def construct_log_dict(evaluator, eval_result, total_time, prefix):
             log_dict[_join_prefix(prefix, tag) + "/micro_loss"] = loss
             logger.info(f"{tag} micro loss: {loss:.3f}")
     if tokenizer is not None:
-        log_dict[_join_prefix(prefix, "bpb")] = eval_result.micro_bpb
-        if has_tags:
+        if eval_result.micro_bpb is not None:
+            log_dict[_join_prefix(prefix, "bpb")] = eval_result.micro_bpb
+        if has_tags and eval_result.macro_bpb is not None:
             log_dict[_join_prefix(prefix, "macro_bpb")] = eval_result.macro_bpb
         for tag, bpb in eval_result.tag_micro_bpb.items():
             log_dict[_join_prefix(prefix, tag) + "/bpb"] = bpb
@@ -546,7 +548,6 @@ class TaggedEvaluator(Generic[Ex, M]):
 
     def _make_accum_for_batch(self) -> Callable[[M, "_EvalRunningMeans", Ex, BatchedTagArray], "_EvalRunningMeans"]:
         bytes_per_token = self.bytes_per_token
-        log2e = jnp.log2(jnp.e)
         per_tag_out_sharding = None if self.device_mesh is None else NamedSharding(self.device_mesh, P(None))
         per_pos_out_sharding = self.per_pos_out_sharding
 
@@ -581,14 +582,14 @@ class TaggedEvaluator(Generic[Ex, M]):
                     "bt,bt,bk->k", bytes_per_pos, weights, tags, out_sharding=per_tag_out_sharding
                 )
 
-                bpb = this_loss / jnp.maximum(this_bytes, 1.0) * log2e
-                bpb_per_tag = this_loss_per_tag / jnp.maximum(bytes_per_tag, 1.0) * log2e
-
-                bpb_mean = state.bpb.add(bpb, this_weights)
-                state = dataclasses.replace(state, bpb=bpb_mean)
+                # Track bytes per scored token like the loss, so their ratio is total loss over total bytes
+                # whichever batch a zero-byte target such as EOS lands in.
+                byte_mean = state.bytes_per_token.add(this_bytes / jnp.maximum(this_weights, 1.0), this_weights)
+                state = dataclasses.replace(state, bytes_per_token=byte_mean)
                 if len(self.dataset.tag_to_index) > 0:
-                    bpb_per_tag_mean = state.bpb_per_tag.add(bpb_per_tag, this_weights_per_tag)
-                    state = dataclasses.replace(state, bpb_per_tag=bpb_per_tag_mean)
+                    safe_bytes = jnp.where(this_weights_per_tag > 0, bytes_per_tag / this_weights_per_tag, 0.0)
+                    byte_mean_per_tag = state.bytes_per_token_per_tag.add(safe_bytes, this_weights_per_tag)
+                    state = dataclasses.replace(state, bytes_per_token_per_tag=byte_mean_per_tag)
 
             return state
 
@@ -608,7 +609,10 @@ class TaggedEvaluator(Generic[Ex, M]):
             state = self.accum_for_batch(model, state, batch, tags)
 
         micro_avg_loss = state.token_avg_loss.mean.item()
-        micro_bpb = state.bpb.mean.item() if self.bytes_per_token is not None else None
+        micro_bpb = None
+        if self.bytes_per_token is not None:
+            mean_bytes = state.bytes_per_token.mean.item()
+            micro_bpb = micro_avg_loss / mean_bytes * _BITS_PER_NAT if mean_bytes > 0 else None
 
         tag_macro_loss: dict[str, float] = {}
         tag_micro_loss: dict[str, float] = {}
@@ -617,15 +621,27 @@ class TaggedEvaluator(Generic[Ex, M]):
 
         mean_loss_per_tag_cpu = np.array(state.loss_per_tag.mean)
         total_tokens_per_tag_cpu = np.array(state.loss_per_tag.total)
-        mean_bits_per_tag_cpu = np.array(state.bpb_per_tag.mean)
-        total_bytes_per_tag_cpu = np.array(state.bpb_per_tag.total)
+        mean_bytes_per_tag_cpu = np.array(state.bytes_per_token_per_tag.mean)
+        total_loss_per_tag_cpu = mean_loss_per_tag_cpu * total_tokens_per_tag_cpu
+        total_bytes_per_tag_cpu = mean_bytes_per_tag_cpu * total_tokens_per_tag_cpu
 
         # A tag with no scored tokens has no loss. Keep it out of the macros and the logged series.
         scored_tags = total_tokens_per_tag_cpu > 0
+        # A tag whose scored targets have no bytes (only special tokens) has no bits per byte either.
+        byte_tags = scored_tags & (total_bytes_per_tag_cpu > 0)
+        bits_per_tag_cpu = (
+            np.divide(
+                total_loss_per_tag_cpu,
+                total_bytes_per_tag_cpu,
+                out=np.zeros_like(total_loss_per_tag_cpu),
+                where=byte_tags,
+            )
+            * _BITS_PER_NAT
+        )
         macro_avg_loss = float(np.mean(mean_loss_per_tag_cpu, where=scored_tags))
         macro_avg_bpb = None
-        if self.bytes_per_token is not None:
-            macro_avg_bpb = float(np.mean(mean_bits_per_tag_cpu, where=scored_tags))
+        if self.bytes_per_token is not None and byte_tags.any():
+            macro_avg_bpb = float(np.mean(bits_per_tag_cpu, where=byte_tags))
 
         for parent, children in self.hierarchy.items():
             mask = np.zeros(self.dataset.num_tags, dtype=bool)
@@ -638,16 +654,23 @@ class TaggedEvaluator(Generic[Ex, M]):
             tag_micro_loss[parent] = np.average(mean_loss_per_tag_cpu, weights=total_tokens_per_tag_cpu * mask)
 
             if self.bytes_per_token is not None:
-                tag_macro_bpb[parent] = np.mean(mean_bits_per_tag_cpu, where=mask)
-                tag_micro_bpb[parent] = np.average(mean_bits_per_tag_cpu, weights=total_bytes_per_tag_cpu * mask)
+                if (mask & byte_tags).any():
+                    tag_macro_bpb[parent] = np.mean(bits_per_tag_cpu, where=mask & byte_tags)
+                group_bytes = np.sum(total_bytes_per_tag_cpu, where=mask)
+                if group_bytes > 0:
+                    tag_micro_bpb[parent] = np.sum(total_loss_per_tag_cpu, where=mask) / group_bytes * _BITS_PER_NAT
 
         for tag, index in self.dataset.tag_to_index.items():
             if not scored_tags[index]:
                 logger.warning(f"Eval tag {tag} has no scored tokens; leaving it out of the macros and logs")
                 continue
             tag_micro_loss[tag] = float(mean_loss_per_tag_cpu[index])
-            if self.bytes_per_token is not None:
-                tag_micro_bpb[tag] = float(mean_bits_per_tag_cpu[index])
+            if self.bytes_per_token is None:
+                continue
+            if not byte_tags[index]:
+                logger.warning(f"Eval tag {tag} has no scored bytes; leaving it out of the bits-per-byte logs")
+                continue
+            tag_micro_bpb[tag] = float(bits_per_tag_cpu[index])
 
         return EvalResult(
             micro_avg_loss,
@@ -835,8 +858,8 @@ class LabeledEvaluator(Generic[Ex, M]):
 class _EvalRunningMeans(eqx.Module):
     token_avg_loss: RunningMean  # average loss averaged over all tokens
     loss_per_tag: RunningMean  # average loss per tag
-    bpb: RunningMean  # bits per byte averaged over all tokens
-    bpb_per_tag: RunningMean  # bits per byte per tag
+    bytes_per_token: RunningMean  # average bytes per scored token
+    bytes_per_token_per_tag: RunningMean  # average bytes per scored token, per tag
 
     @staticmethod
     def zeros_like(total: Float[Array, "..."], per_tag: Float[Array, "tag"]) -> "_EvalRunningMeans":
