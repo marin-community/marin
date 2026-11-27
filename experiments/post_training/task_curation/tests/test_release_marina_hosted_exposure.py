@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from finestore.rl.status_taxonomy import PendingStage
+from taskcompendium.backend_requirements import backend_schema_sha256
 
 from experiments.post_training.task_curation.release_stages import (
     exposure_probe,
@@ -29,7 +30,6 @@ from experiments.post_training.task_curation.release_stages import (
     strict_audit,
 )
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
-from taskcompendium.backend_requirements import backend_schema_sha256
 from experiments.post_training.task_curation.tests import release_audit_fixtures as audit_fixtures
 from infra.marina.apps.rl_data_catalog.server.content_access import LICENSE_CONTENT_MARKER, backend_metadata
 

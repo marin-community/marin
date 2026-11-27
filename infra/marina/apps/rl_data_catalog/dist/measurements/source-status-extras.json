@@ -1281,7 +1281,7 @@
       "upstream_dataset": "ibragim-bad/SWE-rebench-V2.1",
       "upstream_url": "https://huggingface.co/datasets/ibragim-bad/SWE-rebench-V2.1/tree/26c0145ded93168b0d5d095420155901ad2d5a2f",
       "notes": "Sealed sub-population of SWE-rebench:ibragim-bad/SWE-rebench-V2.1@repaired-20261119: the 7,484 rows the wave campaign validated (nop 0.0 + oracle 1.0), cut at the canonical filtration's 7,207 admitted (decision c, 2026-11-26). The tracked repaired source itself is unchanged; the cohort's own oracle/control evidence lives in the merged receipt.",
-      "stage": "Measurements pending",
+      "stage": "Intake queued",
       "dataset_id": null,
       "dataset_revision": null,
       "owner": "swe-repair \u00b7 opencode ses_de7955b8",
