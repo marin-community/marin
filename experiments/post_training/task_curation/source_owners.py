@@ -795,8 +795,8 @@ SOURCE_OWNERS: dict[str, SourceOwner] = {
         note="excluded",
     ),
     "pafitis:hardmath@rhs": SourceOwner(
-        owner="ingest A · ses_de826fccdffe (+ atlas-grader-reseal for the grader)",
-        note="P0 republish of the repaired variant; grader reseal in flight",
+        owner="ingest A · OpenCode ses_de6edbb89ffeqVOdgWg76ZcV3f (+ atlas-grader-reseal for the grader)",
+        note="admitted at recipe version 2; surfaces at the load",
     ),
     "project-numina:NuminaMath-LEAN": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
