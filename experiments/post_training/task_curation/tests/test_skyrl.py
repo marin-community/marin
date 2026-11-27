@@ -709,3 +709,18 @@ def test_convert_hardmath_rhs_excludes_unparseable_members():
     assert rejection.kind is ImportFailureKind.SOURCE_DEFECT
     assert rejection.reason == "invalid_reference"
     assert "parseable math target" in rejection.detail
+
+
+def test_hardmath_rhs_symbolic_nondimensionalization_states_domain_and_grades_regrouping():
+    row = {
+        **HARDMATH_NONDIM_ROW,
+        "question_type": "nondimensionalization_symbolic",
+        "source": "poly1_train",
+    }
+    task = converted_task(RECIPES["hardmath_rhs"], row)
+    regrouped = r"\frac{a_{1}a_{3}^{3}}{a_{2}^{3}a_{3}}"
+    wrong = r"\frac{a_{1}a_{3}^{4}}{a_{2}^{3}a_{3}}"
+
+    assert "Assume $a_1$, $a_2$, and $a_3$ are positive." in task.context.events[-1].content
+    assert grade_reply(task, regrouped).reward == 1.0
+    assert grade_reply(task, wrong).reward == 0.0
