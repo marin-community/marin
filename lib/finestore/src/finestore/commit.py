@@ -51,6 +51,7 @@ _MAX_COMMIT_ATTEMPTS = 100_000
 _CREATE_RETRY_BUDGET = 60.0
 _MAX_CREATE_ATTEMPTS = 1000
 _ROOT_COMMIT_ID = "root"
+HISTORICAL_VERSION = "historical"
 
 _COMMITS = telemetry.counter("finestore_commits", unit="{commit}")
 _COMMIT_CONFLICTS = telemetry.counter("finestore_commit_conflicts", unit="{conflict}")
@@ -74,7 +75,7 @@ class Attribution:
 
 @dataclass(frozen=True)
 class ArchiveSnapshot:
-    """A manifest and the storage version of the HEAD object that selected it."""
+    """A manifest and its commit token, if the archive has a commit."""
 
     manifest: Manifest
     token: CommitToken | None
@@ -209,17 +210,9 @@ def read_snapshot(layout: FineStoreLayout) -> ArchiveSnapshot:
     head = HeadMetadata.model_validate_json(versioned.data)
     if head.format_version != FORMAT_VERSION:
         raise FormatVersionError(layout.root, found=head.format_version)
-    manifest = Manifest.model_validate_json(StoragePath(head.manifest_path).read_bytes())
-    if manifest.format_version != FORMAT_VERSION:
-        raise ValueError(
-            f"manifest {head.manifest_path} is FineStore format v{manifest.format_version}; expected v{FORMAT_VERSION}"
-        )
+    manifest = _read_manifest(head.manifest_path)
     if (manifest.commit_id, manifest.sequence) != (head.commit_id, head.sequence):
         raise ValueError(f"HEAD at {layout.root} does not match manifest {head.manifest_path}")
-    unsupported = set(manifest.required_features) - SUPPORTED_MANIFEST_FEATURES
-    if unsupported:
-        names = ", ".join(sorted(unsupported))
-        raise ValueError(f"manifest {head.manifest_path} requires unsupported FineStore features: {names}")
     token = CommitToken(
         commit_id=head.commit_id,
         sequence=head.sequence,
@@ -227,6 +220,35 @@ def read_snapshot(layout: FineStoreLayout) -> ArchiveSnapshot:
         manifest_path=head.manifest_path,
     )
     return ArchiveSnapshot(manifest=manifest, token=token)
+
+
+def read_snapshot_at(layout: FineStoreLayout, commit_id: str) -> ArchiveSnapshot:
+    """Return the snapshot stored in the manifest named by ``commit_id``.
+
+    FineStore itself never deletes data files, so a published commit stays readable unless a
+    bucket lifecycle rule removes its objects. An unknown ``commit_id``, or a deleted manifest,
+    raises ``FileNotFoundError``.
+    """
+    manifest_path = layout.manifest_path(commit_id)
+    manifest = _read_manifest(manifest_path)
+    token = CommitToken(
+        commit_id=manifest.commit_id,
+        sequence=manifest.sequence,
+        version=HISTORICAL_VERSION,
+        manifest_path=manifest_path,
+    )
+    return ArchiveSnapshot(manifest=manifest, token=token)
+
+
+def _read_manifest(path: str) -> Manifest:
+    manifest = Manifest.model_validate_json(StoragePath(path).read_bytes())
+    if manifest.format_version != FORMAT_VERSION:
+        raise ValueError(f"manifest {path} is FineStore format v{manifest.format_version}; expected v{FORMAT_VERSION}")
+    unsupported = set(manifest.required_features) - SUPPORTED_MANIFEST_FEATURES
+    if unsupported:
+        names = ", ".join(sorted(unsupported))
+        raise ValueError(f"manifest {path} requires unsupported FineStore features: {names}")
+    return manifest
 
 
 def _commit_info(attribution: Attribution | None, sequence: int) -> CommitInfo | None:

@@ -130,6 +130,16 @@ token = view.token
 A view pins one manifest. Commits and compactions that happen afterward do not change
 its results. Create a new view to observe a newer token.
 
+`ReadView.at(root, commit_id)` reads the immutable manifest named by that commit ID:
+
+```python
+past = ReadView.at("gs://bucket/purchases", token.commit_id)
+```
+
+FineStore itself never deletes data files, so a published commit stays readable unless
+a bucket lifecycle rule, such as a `ttl=Nd` prefix, removes its objects. An unknown or
+deleted commit raises `FileNotFoundError`.
+
 Each view caches the immutable byte ranges requested by Parquet, including footers
 and selected row-group columns, across all shard handles. The cache shares a
 64 MiB budget across tables and evicts the least recently used ranges when full.
