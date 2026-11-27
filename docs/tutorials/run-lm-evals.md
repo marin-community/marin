@@ -338,3 +338,47 @@ with the identical output and run configuration to resume raw attempts.
 curated checkpoint menus. The reference training pipeline uses the same entrypoint.
 Historical Evalchemy archive readers remain available for saved results. Reproducing
 an old vendor-dependent campaign replay requires its recorded checkout.
+
+## Serve an interactive model on Iris
+
+`marin-serve iris` submits one TPU or GPU job and exposes a browser dashboard
+and OpenAI-compatible endpoint through the controller proxy. The job stops after
+`--timeout-hours`, releasing its allocation.
+
+```bash
+uv run marin-serve iris Qwen/Qwen3-0.6B --cluster marin --tpu v6e-8
+uv run marin-serve iris Qwen/Qwen3-0.6B --cluster marin --tpu v6e-8 --backend levanter
+uv run marin-serve iris gs://my-bucket/ckpt --tpu v5litepod-8 --chat-template delphi_v0.jinja2
+uv run marin-serve iris Qwen/Qwen3-0.6B --cluster marin --gpu H100x8 --target-cluster cw-rno2a
+```
+
+`--gpu` and `--tpu` are mutually exclusive; the default is TPU `v6e-8`.
+`--cluster` selects the controller; `--target-cluster` selects a federated peer.
+Tensor parallelism and clamped-RoPE sequence limits are inferred; override them
+with `--tensor-parallel-size` and `--max-model-len`. Once ready, the command
+prints an endpoint-scoped capability URL.
+
+The default `vllm` backend runs a subprocess. GPU launches provision an isolated
+uv environment using stock vLLM at `--vllm-version`, or Marin's fork with
+`--vllm-source marin-fork` for architectures such as `grug_moe`. TPU launches use
+Marin's fork in an isolated environment; the worker needs the `tpu` extra for
+JAX/libtpu. The `levanter` backend uses the worker's JAX directly. Both expose the
+same API and dashboard.
+
+For exported weights without tokenizer files, supply the tokenizer separately:
+
+```bash
+uv run marin-serve iris s3://my-bucket/export --gpu H100x8 \
+  --tokenizer org/tokenizer --tokenizer-revision "$TOKENIZER_COMMIT_SHA"
+```
+
+The tokenizer source supplies the chat template unless `--chat-template` overrides
+it. Pin its revision independently of the weights.
+
+Native vLLM launches with `--model-loader-extra-config '{"distributed":true}'`
+default the [RunAI streamer child environment](https://github.com/run-ai/runai-model-streamer/blob/0.16.1/docs/src/env-vars.md) to concurrency 4 and a 16 GiB
+buffer limit. This includes Iris serving, evaluation and RL launches that select
+distributed loading. Explicit loader JSON settings take precedence; existing
+`RUNAI_STREAMER_CONCURRENCY` and `RUNAI_STREAMER_MEMORY_LIMIT` environment values
+are preserved. Non-distributed loading is unchanged. Defaults leave launcher
+arguments intact, preserving the managed compilation-cache identity.

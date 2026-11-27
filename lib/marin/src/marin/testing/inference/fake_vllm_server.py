@@ -11,6 +11,7 @@ Modes:
   stuck-fault <counter> [error]  Log a streamer fault while the parent stays alive.
   exit                           Exit successfully without becoming ready.
   record-args <path>             Record argv, then answer /v1/models.
+  record-launch <path> <keys>    Record argv, selected env keys and chat template, then serve.
   record-engine-timeout <path>   Record the engine timeout env, then answer /v1/models.
 """
 
@@ -87,6 +88,20 @@ def main() -> None:
         _serve()
     elif mode == "record-args":
         Path(sys.argv[2]).write_text(json.dumps(sys.argv[3:]))
+        _serve()
+    elif mode == "record-launch":
+        parser = argparse.ArgumentParser(add_help=False)
+        parser.add_argument("--chat-template")
+        native, _ = parser.parse_known_args(sys.argv[4:])
+        Path(sys.argv[2]).write_text(
+            json.dumps(
+                {
+                    "argv": sys.argv[4:],
+                    "environment": {key: os.getenv(key) for key in json.loads(sys.argv[3])},
+                    "chat_template": Path(native.chat_template).read_text() if native.chat_template else None,
+                }
+            )
+        )
         _serve()
     elif mode == "record-engine-timeout":
         Path(sys.argv[2]).write_text(json.dumps({"engine_ready_timeout": os.environ["VLLM_ENGINE_READY_TIMEOUT_S"]}))

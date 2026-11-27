@@ -4,7 +4,6 @@
 """vLLM local inference backend."""
 
 import contextlib
-import json
 import os
 import tempfile
 from collections.abc import Iterator, Mapping, Sequence
@@ -64,47 +63,6 @@ def _with_subprocess_env(
     if subprocess_env:
         environment.update(subprocess_env)
     return VllmLauncherWithEnvironment(launcher, environment)
-
-
-RUNAI_STREAMER_LOADER_FLAG = "--model-loader-extra-config"
-DISTRIBUTED_STREAMER_BOUNDS = {"concurrency": 4, "memory_limit": 16 * (1 << 30)}
-
-
-def _fill_streamer_bounds(value: str) -> str:
-    """Return the loader-config JSON with missing streamer bounds filled in."""
-    try:
-        config = json.loads(value)
-    except ValueError as error:
-        raise ValueError(f"{RUNAI_STREAMER_LOADER_FLAG} is not valid JSON: {value!r}") from error
-    if not isinstance(config, dict) or config.get("distributed") is not True:
-        return value
-    missing = {key: value for key, value in DISTRIBUTED_STREAMER_BOUNDS.items() if key not in config}
-    if not missing:
-        return value
-    return json.dumps(dict(config, **missing))
-
-
-def bound_distributed_streamer_buffers(extra_args: Sequence[str]) -> tuple[str, ...]:
-    """Fill the runai streamer's host RAM buffer bounds into any distributed loader config.
-
-    The streamer holds streamed checkpoint shards in host RAM before they reach device memory,
-    all charged to the serve child's cgroup; a distributed config without bounds buffers
-    unbounded and OOMKills the container mid-load. Both accepted forms are rewritten in place:
-    the flag and its JSON as separate tokens, or the glued ``--model-loader-extra-config=<json>``
-    form. Keys the caller set explicitly pass through untouched, and a config that does not
-    select distributed loading is returned unchanged. Raises ``ValueError`` for a config that
-    is not valid JSON.
-    """
-    args = list(extra_args)
-    for position, token in enumerate(args):
-        flag, separator, inline_value = token.partition("=")
-        if flag != RUNAI_STREAMER_LOADER_FLAG:
-            continue
-        if separator:
-            args[position] = f"{flag}={_fill_streamer_bounds(inline_value)}"
-        elif position + 1 < len(args):
-            args[position + 1] = _fill_streamer_bounds(args[position + 1])
-    return tuple(args)
 
 
 @contextlib.contextmanager
@@ -206,10 +164,9 @@ class VllmBackend:
         if (
             self.config.launcher is not VllmLauncherType.TPU
             and _is_object_store_path(spec.weights)
-            and not any(arg.partition("=")[0] in {"--load-format", RUNAI_STREAMER_LOADER_FLAG} for arg in loader_args)
+            and not any(arg.partition("=")[0] in {"--load-format", "--model-loader-extra-config"} for arg in loader_args)
         ):
-            loader_args = (RUNAI_STREAMER_LOADER_FLAG, '{"distributed":true}', *loader_args)
-        loader_args = bound_distributed_streamer_buffers(loader_args)
+            loader_args = ("--model-loader-extra-config", '{"distributed":true}', *loader_args)
         return [
             *(
                 ("--tensor-parallel-size", str(spec.tensor_parallel_size))
