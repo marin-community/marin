@@ -6,8 +6,8 @@ from skyrl_train.utils.progress import tqdm
 from typing import Dict, List, Protocol
 from loguru import logger
 from collections import defaultdict
-from dataclasses import dataclass, replace
 from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from math import fsum
 import numpy as np
 
@@ -23,6 +23,7 @@ from skyrl_train.task_inputs import TrajectoryMetadata
 from skyrl_train.trajectory_runners.types import TaskRequestBatch
 
 from skyrl_train.evaluation_pool import EvaluationPool
+from skyrl_train.evaluation_profiles import evaluation_metric_prefix
 from skyrl_train.grader_reporting import GraderStats, write_grader_report
 from skyrl_train.metric_names import EVAL_OUTCOME_METRIC_PREFIX, GENERATE_OUTCOME_METRIC_PREFIX
 
@@ -416,7 +417,7 @@ def _persist_evaluation(
 ) -> None:
     attempt_id = str(cfg.runtime.attempt_id)
     step = global_step if global_step is not None else -1
-    evaluation = "eval/" if val_set_name is None else f"eval/{val_set_name}/"
+    evaluation = evaluation_metric_prefix(val_set_name)
     rows = _evaluation_task_rows(
         final_rollouts if final_rollouts is not None else rollouts,
         attempt_id=attempt_id,
@@ -438,18 +439,24 @@ def _persist_evaluation(
             redact_fields=retention.get("redact_fields", ()),
         )
     write_evaluations(records_export_root or str(cfg.trainer.export_path), rows, traces=traces)
-    if cfg.trainer.get("dump_grader_report", False):
-        stats = GraderStats()
-        stats.add(rollouts.batch, rollouts.metadata)
-        summary = stats.summary()
-        key = "eval_only" if global_step is None else str(global_step)
-        if val_set_name is not None:
-            key = f"{val_set_name}/{key}"
-        write_grader_report(
-            str(cfg.trainer.grader_report_dir),
-            key,
-            {"evaluation": summary["subsets"], "evaluation_tasks": summary["tasks"]},
-        )
+
+
+def _write_eval_grader_report(
+    cfg: DictConfig, global_step: int | None, rollouts: _EvaluationRollouts, val_set_name: str | None
+) -> None:
+    if not cfg.trainer.get("dump_grader_report", False):
+        return
+    stats = GraderStats()
+    stats.add(rollouts.batch, rollouts.metadata)
+    summary = stats.summary()
+    key = "eval_only" if global_step is None else str(global_step)
+    if val_set_name is not None:
+        key = f"{val_set_name}/{key}"
+    write_grader_report(
+        str(cfg.trainer.grader_report_dir),
+        key,
+        {"evaluation": summary["subsets"], "evaluation_tasks": summary["tasks"]},
+    )
 
 
 @torch.no_grad()
@@ -512,6 +519,7 @@ async def evaluate(
         _persist_evaluation(
             cfg, global_step, tokenizer, rollouts, val_set_name=val_set_name, records_export_root=records_export_root
         )
+        _write_eval_grader_report(cfg, global_step, rollouts, val_set_name)
 
         return eval_metrics
     finally:
@@ -594,5 +602,6 @@ async def evaluate_step_wise(
         records_export_root=records_export_root,
         final_rollouts=final_rollouts,
     )
+    _write_eval_grader_report(cfg, global_step, rollouts, val_set_name)
 
     return eval_metrics
