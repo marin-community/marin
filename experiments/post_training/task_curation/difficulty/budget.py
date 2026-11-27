@@ -73,11 +73,19 @@ def record_pool_cost(
         receipt_uri = str(StoragePath(registry) / f"{solver.value}.json")
         receipt = json.loads(StoragePath(receipt_uri).read_text())
         source = f"engine-pool:{solver.value}"
-        start = max(
-            (row.recorded_at for row in rows if row.run_id == registry and row.source_id == source),
-            default=receipt["ready_at"],
+        ready_at = datetime.fromisoformat(receipt["ready_at"])
+        accounted_until = max(
+            (
+                datetime.fromisoformat(row.recorded_at)
+                for row in rows
+                if row.run_id == registry and row.source_id == source and row.outcome == Outcome.COST
+            ),
+            default=ready_at,
         )
-        elapsed = (now - datetime.fromisoformat(start)).total_seconds()
+        # A replacement must not inherit downtime before its own readiness.
+        started_at = max(ready_at, accounted_until)
+        start = started_at.isoformat()
+        elapsed = (now - started_at).total_seconds()
         if elapsed <= 0:
             continue
         evidence_uri = receipt_uri
