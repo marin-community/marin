@@ -207,3 +207,27 @@ def test_grug_tpu_fused_append_updates_only_addressed_tokens(window, width, quer
     args = _PagedCase(q, expected_pages, lengths, indices, offsets, num_seqs)
     expected = _dense_reference(args, window, None, scale)
     np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), rtol=0.008, atol=2e-4)
+
+
+@pytest.mark.tpu
+@pytest.mark.skipif(jax.default_backend() != "tpu", reason="TPU Pallas kernel")
+def test_grug_tpu_paged_attention_compacts_distinct_packed_windows():
+    rng = np.random.default_rng(21)
+    args = _PagedCase(
+        q=jnp.asarray(rng.normal(size=(8, 5, 4, 128)), jnp.float32),
+        kv_pages=jnp.asarray(rng.normal(size=(32, 128, 10, 128)), jnp.float32),
+        kv_lens=jnp.array([643, 1191, -1], jnp.int32),
+        page_indices=jnp.array([rng.choice(32, 12, replace=False) for _ in range(2)] + [[-1] * 12], jnp.int32),
+        cu_q_lens=jnp.array([0, 3, 4, -1], jnp.int32),
+        num_seqs=jnp.array(2, jnp.int32),
+    )
+    attention = jax.jit(partial(ragged_paged_attention, sm_scale=128**-0.5, sliding_window=128, implementation="tpu"))
+    actual = attention(*args)
+    # One extra empty row makes a compact cache larger than the original.
+    # Keep the active queries, physical pages and tile size identical.
+    untrimmed = args._replace(
+        kv_lens=jnp.pad(args.kv_lens, (0, 1), constant_values=-1),
+        page_indices=jnp.pad(args.page_indices, ((0, 1), (0, 0)), constant_values=-1),
+        cu_q_lens=jnp.pad(args.cu_q_lens, (0, 1), constant_values=-1),
+    )
+    np.testing.assert_array_equal(actual, attention(*untrimmed))
