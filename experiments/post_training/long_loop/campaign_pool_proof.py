@@ -31,7 +31,8 @@ def prove_pool(mix_id: str, version: str, source_commit: str, output: str) -> di
     agentic = [label for label, pin in mix.sources.items() if pin["route"] == "agentic"]
     assert agentic, "The proof must contain an agentic source"
     spec = campaign_round(mix, version, max_steps=50)
-    if not output.startswith(spec.storage.output_prefix.rstrip("/") + "/"):
+    destination = StoragePath(output)
+    if not destination.is_relative_to(StoragePath(spec.storage.output_prefix)):
         raise ValueError("The proof receipt must use the campaign's regional output prefix")
     os.environ.update(MARIN_PREFIX=spec.storage.output_prefix, MARIN_TEMP_PREFIX=spec.storage.temporary_prefix)
     graph = campaign_graph(mix, spec)
@@ -73,7 +74,6 @@ def prove_pool(mix_id: str, version: str, source_commit: str, output: str) -> di
         "grading_e2e": asyncio.run(run_proof()),
         "gpu_jobs_submitted": 0,
     }
-    destination = StoragePath(output)
     destination.parent.mkdirs()
     destination.write_text(json.dumps(receipt, indent=2) + "\n")
     return receipt

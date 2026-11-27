@@ -18,7 +18,7 @@ XML_PARSER = TerminusXMLPlainParser()
 _WAIT_COMMANDS = ("sleep", "ps", "wait", "jobs")
 """Shell commands that observe or wait without changing anything."""
 _SHELL_OPERATORS = {"&&", "||", ";", "|", "&", ">", "<", ">>"}
-"""A command containing one of these does more than wait, whatever its first word."""
+"""Standalone shell tokens that disqualify an otherwise wait-only command."""
 
 
 @dataclass(frozen=True)
@@ -192,8 +192,8 @@ def detect_stall(pairs: Sequence[ActionPair], batches: int) -> bool:
     """Whether the last ``batches`` pairs are identical non-wait repeats of one action.
 
     Wait-only pairs never match: polling a long job or sleeping is legitimate, not a
-    stall. The comparison needs at least ``batches`` completed pairs, so a short
-    attempt never fires.
+    stall. The comparison requires ``batches >= 2`` and at least ``batches``
+    completed pairs, so a short attempt never fires.
     """
     if batches < 2 or len(pairs) < batches:
         return False
