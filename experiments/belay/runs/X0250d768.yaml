@@ -1,0 +1,25 @@
+experiment: X0250d768
+track: competitive-d768
+runs:
+  seed0:
+    seed: 0
+    variant: X0250, matrix decay scaled to hold lambda*lr_max*N
+    flags:
+    - --opt-set
+    - muonc_anneal_decay=0.2
+    - --opt-set
+    - muonc_anneal_adamc=12.5
+    - --opt-set
+    - adamc_adam_decay=0.3
+    - --opt-set
+    - muonc_anneal_decay_lr_steps=145.16257629560624
+  control:
+    seed: 0
+    variant: competitive-d768 control
+    control: true
+    shared: s7n-d768
+launched:
+  seed0: uv run python -m experiments.grug.fast_track.belay_s7 --ladder s7n --size d768 --opt-set muonc_anneal_decay=0.2 --opt-set
+    muonc_anneal_adamc=12.5 --opt-set adamc_adam_decay=0.3 --opt-set muonc_anneal_decay_lr_steps=145.16257629560624 --seed
+    0 --run-id belay-X0250d768-seed0 --output-path tmp/ttl=30d/belay/runs/belay-X0250d768-seed0 --submit --target-cluster
+    cw-us-east-02a --priority batch
