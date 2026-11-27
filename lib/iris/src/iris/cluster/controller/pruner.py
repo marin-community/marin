@@ -29,6 +29,10 @@ from iris.cluster.types import TERMINAL_JOB_STATES, WorkerId, WorkerUsability
 
 logger = logging.getLogger(__name__)
 
+# Default for ControllerConfig.job_retention: how long terminal jobs (and, through
+# the cascade, their tasks and attempts) are kept after they finish.
+JOB_RETENTION = Duration.from_seconds(7 * 86400)
+
 
 @dataclass(frozen=True)
 class PruneResult:

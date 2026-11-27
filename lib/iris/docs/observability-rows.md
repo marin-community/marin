@@ -176,13 +176,70 @@ SELECT * FROM (
 Rows can be lost without blocking the controller: a failed snapshot (logged
 as `observability rows: snapshot failed`), a failed enqueue (logged as
 `observability rows: write failed`, for that table only) or a failed Finelog
-flush drops those rows. To find gaps, compare daily row counts with the
-controller DB.
+flush drops those rows. To find gaps, see [Finding lost rows](#finding-lost-rows).
 
 History is kept in the archive (remote retention is `retain_forever`). The
 storage policies (5 years; 8 GiB each for `tasks` and `task_attempts`, 4 GiB
 each for `jobs` and `job_config`) bound only the hub's local copy; older segments are read back from
 the archive.
+
+## Finding lost rows
+
+`scripts/ops/observability_rows_check.py` finds rows lost on the way to
+Finelog. Run it when a gap is suspected or after a rollout; nothing runs it on a
+schedule. For one cluster it compares each recent full UTC day (5 by default; at
+most 6, inside the 7-day job retention) with the controller DB, read through the
+admin, SELECT-only `iris query` RPC:
+
+```bash
+uv run python scripts/ops/observability_rows_check.py \
+  --cluster cw-rno2a --finelog marin --start-date 2026-11-21
+```
+
+`--finelog` is the Finelog that holds the cluster's rows: `marin` (the hub) for
+`marin` and the CoreWeave clusters. `marin-dev`'s Finelog has no `client_url`,
+so `--finelog marin-dev` opens a `gcloud compute ssh` tunnel and needs an
+operator with SSH access to the VM. A CoreWeave `--cluster` reaches its
+controller through a Kubernetes port-forward and needs the CoreWeave kubeconfig.
+`--start-date` is the first full UTC day after the cluster's controller started
+writing these rows.
+
+Each line covers one day and one of `iris.controller_db__jobs`, `__job_config`,
+`__tasks` and `__task_attempts`. It counts the keys of the jobs this controller
+runs that were submitted that day (and of their tasks), or of the attempts
+created that day, in the controller DB and in Finelog:
+
+- `missing`: in the controller DB but not in Finelog: a batch was dropped.
+- `no finish row`: finished more than an hour before the run, but Finelog has no
+  terminal-state row for it. The finish batch was dropped; the key is there from
+  its submit or start row.
+- `extra`: in Finelog but no longer in the controller DB. This is not a failure.
+  Usually a finished job was removed before the pruner reached it, because a new
+  job took its id (`job_removed` in the controller log), or a federation
+  hand-off replaced it.
+
+Each day checked costs eight queries: four on the controller DB and four on the
+Finelog hub, one at a time. Run it for one cluster at a time. On 2026-11-25 a
+one-day check of `marin` (about 11,000 jobs, tasks and attempts) took 16.5 s.
+A query that hits the hub's 30 s deadline, or returns more than a million rows,
+stops the run with an error; the script never reports a partial result.
+
+Forwarding that lags by more than an hour also shows as `missing` or
+`no finish row`; a rerun after it catches up clears it. The script exits 1 on
+any `missing` or `no finish row` key and lists up to 20 of them per line
+(`--max-keys`).
+
+To find what dropped them, look around the key's submit or creation time in two
+places:
+
+- the controller log in Finelog, for `observability rows: snapshot failed` and
+  `observability rows: write failed`;
+- the controller process's own stdout, for the Finelog client's warnings, which
+  are not forwarded to Finelog: `buffer overflow: dropped`, `send failure (`
+  (with `retryable=False`, the batch was dropped), `failed to encode batch`
+  (names the table and column whose value could not be encoded), and
+  `dropped a row of`. A batch the client drops takes every row of that table
+  queued in the same flush, about one second, with it.
 
 ## Cost to the controller, and turning the copy off
 
