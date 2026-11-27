@@ -275,3 +275,40 @@ def _moe_mlp_ep_ring_local(
             out_local = out_local.astype(x_local.dtype)
         dropped_total = jax.lax.psum(dropped_local, token_sharding_axes)
     return out_local, CapacityDrops(sender_dropped=jnp.zeros_like(dropped_total), receiver_dropped=dropped_total)
+
+
+def _moe_mlp_ep_small_local(
+    x: jax.Array,
+    selected: jax.Array,
+    weights: jax.Array,
+    token_valid: jax.Array,
+    w_gate: jax.Array,
+    w_up: jax.Array,
+    w_down: jax.Array,
+    *,
+    activation: Callable[[jax.Array], jax.Array],
+) -> jax.Array:
+    """Evaluate active routes in a small decode batch with capacity for every assignment."""
+    x = jax.lax.all_gather(x, "expert", tiled=True)
+    selected = jax.lax.all_gather(selected, "expert", tiled=True)
+    weights = jax.lax.all_gather(weights, "expert", tiled=True)
+    token_valid = jax.lax.all_gather(token_valid, "expert", tiled=True)
+    tokens, top_k = selected.shape
+    shard_start = jax.lax.axis_index("expert") * w_gate.shape[0]
+    local_experts = selected - shard_start
+    local_mask = token_valid[:, None] & (local_experts >= 0) & (local_experts < w_gate.shape[0])
+    assignments = jnp.nonzero(local_mask.reshape(-1), size=tokens * top_k)[0]
+    assignment_count = jnp.sum(local_mask, dtype=jnp.int32)
+
+    def apply(i, outputs):
+        assignment = assignments[i]
+        token, route = assignment // top_k, assignment % top_k
+        expert = local_experts[token, route]
+        gate = jnp.dot(x[token], w_gate[expert], preferred_element_type=x.dtype)
+        up = jnp.dot(x[token], w_up[expert], preferred_element_type=x.dtype)
+        down = jnp.dot(activation(gate) * up, w_down[expert], preferred_element_type=x.dtype)
+        previous = jax.lax.dynamic_index_in_dim(outputs, token, keepdims=False)
+        return jax.lax.dynamic_update_index_in_dim(outputs, previous + down * weights[token, route], token, axis=0)
+
+    local_output = jax.lax.fori_loop(0, assignment_count, apply, jnp.zeros_like(x))
+    return jax.lax.psum_scatter(local_output, "expert", scatter_dimension=0, tiled=True)
