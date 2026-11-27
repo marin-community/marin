@@ -46,6 +46,7 @@ class _WireFrame(BaseModel):
 
 class _ReadyFrame(_WireFrame):
     type: Literal["ready"]
+    port: int = Field(ge=1, le=65535)
 
 
 class _RequestFrame(_WireFrame):
@@ -160,8 +161,9 @@ async def serve_http(
     authority. Caller headers and streaming are unsupported. Close this context
     before closing the machine or its container group and leaving task_group.
     The caller's group owns pump failures, including after startup has returned.
+    Port zero requests an OS-assigned port, returned in the listener URL.
     """
-    if not 1 <= port <= 65535:
+    if not 0 <= port <= 65535:
         raise ValueError("HTTP service port is out of range")
     if not isinstance(machine, ProcessMachine):
         raise UnsupportedMachineSpec("HTTP services require persistent process sessions")
@@ -173,9 +175,9 @@ async def serve_http(
     try:
         frames = _Frames(session)
         async with asyncio.timeout(TRANSPORT_TIMEOUT):
-            _ReadyFrame.model_validate_json(await frames.receive())
+            ready = _ReadyFrame.model_validate_json(await frames.receive())
         pump = task_group.create_task(_pump(frames, handler))
-        yield f"http://127.0.0.1:{port}"
+        yield f"http://127.0.0.1:{ready.port}"
     except BaseException as error:
         primary = error
         raise

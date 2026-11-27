@@ -26,6 +26,7 @@ from shellbox.backends.daytona.machine import DaytonaDeclarativeMachineFactory
 from shellbox.backends.daytona.provider import ProviderWaitPolicy
 from shellbox.backends.local.machine import SYSTEM_DIRECTORIES
 from shellbox.image import DockerfileSource, RegistryImage
+from shellbox.http_service import serve_http
 from shellbox.machine import (
     ExitReason,
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
@@ -820,16 +821,6 @@ class TaskSpecTrial(Trial):
         )
         image = HostImage(read_only=roots, bin_dirs=(Path(sys.executable).parent,))
         framework_env = {"PYTHONPATH": os.pathsep.join(path for path in sys.path if path)}
-        env = (
-            framework_env
-            if connection is None
-            else {
-                **framework_env,
-                BASE_URL_ENV: connection.base_url,
-                API_KEY_ENV: connection.api_key,
-                MODEL_ENV: connection.default_model,
-            }
-        )
         spec = MachineSpec(
             image,
             cpus=self.verifier_runtime.cpus,
@@ -837,13 +828,13 @@ class TaskSpecTrial(Trial):
             storage_mb=self.verifier_runtime.storage_mb,
             network=self.verifier_runtime.network,
             startup_timeout=self._environment_build_timeout_sec,
-            env=env,
+            env=framework_env,
         )
         async with AsyncExitStack() as stack:
             factory = await stack.enter_async_context(
                 grading_machine_factory(
                     _TrialMachineFactory(
-                        _NetworkFactory(self.factory, self, "verifier_machine"), self, relay, stack, observation_role=None,
+                        _NetworkFactory(self.factory, self, "verifier_machine"), self, None, stack, observation_role=None,
                         usage_path=self.paths.verifier_dir / "resource-usage.json",
                     ),
                     self.verifier_runtime,
@@ -852,6 +843,22 @@ class TaskSpecTrial(Trial):
             )
             machine = await factory.create(spec)
             stack.push_async_callback(machine.close)
+            env = {}
+            if relay is not None:
+                assert connection is not None and self._service_tasks is not None
+                # ALLOW graders share host loopback. Allocate while binding instead
+                # of racing concurrent graders for the fixed actor relay port.
+                try:
+                    endpoint = await stack.enter_async_context(
+                        serve_http(machine, relay.handle, port=0, task_group=self._service_tasks)
+                    )
+                except Exception as error:
+                    raise RuntimeServiceError("Model relay failed to start") from error
+                env = {
+                    BASE_URL_ENV: endpoint + "/v1",
+                    API_KEY_ENV: connection.api_key,
+                    MODEL_ENV: connection.default_model,
+                }
             with TemporaryDirectory(prefix="task-spec-grader-") as directory:
                 local = Path(directory)
                 payload = local / "task.json"
@@ -873,7 +880,7 @@ class TaskSpecTrial(Trial):
                 ]
                 if self.attempt.stop_reason is not None:
                     command.extend(("--stop-reason", self.attempt.stop_reason))
-                result = await machine.run(Command(tuple(command), timeout=self.shape.verifier_timeout_sec))
+                result = await machine.run(Command(tuple(command), env=env, timeout=self.shape.verifier_timeout_sec))
                 if result.reason == ExitReason.TIMED_OUT:
                     raise VerifierTimeoutError("Trusted TaskSpec grader deadline expired")
                 if result.exit_code != 0:
