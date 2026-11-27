@@ -27,26 +27,79 @@ from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import JobName
+from iris.resources.state import JobState
 from iris.rpc import controller_pb2
 from iris.testing.controller import MockController, make_controller_state
 from rigging.secrets import resolve_secret_spec
 from rigging.server_auth import VerifiedIdentity, identity_scope
 
 from experiments.post_training.task_curation.difficulty import controller, iris_backend, runtime
+from experiments.post_training.task_curation.difficulty.executor import EscalationLog, action_rows, collect_finished
 from experiments.post_training.task_curation.difficulty.iris_backend import IrisBackend
+from experiments.post_training.task_curation.difficulty.ledger import append_rows, digest, read_rows
 from experiments.post_training.task_curation.difficulty.planner import (
     RebuildEnvironmentArtifact,
     action_id,
     action_payload,
 )
-from experiments.post_training.task_curation.difficulty.state import CatalogSource
+from experiments.post_training.task_curation.difficulty.state import CatalogSource, Outcome
 from experiments.post_training.task_curation.difficulty_protocol import PINS
+from experiments.post_training.task_curation.tests.test_difficulty_reconciler import SOURCE
 
 
 @pytest.fixture(autouse=True)
 def controller_credentials(monkeypatch):
     for name in controller.CONTROLLER_SECRET_NAMES:
         monkeypatch.setenv(name, "fixture-" + name)
+
+
+def test_reconcile_collects_and_recovers_submissions_beyond_iris_history_limit(tmp_path):
+    ledger = str(tmp_path / "ledger")
+    parent = JobName.root("fixture", controller.CONTROLLER_JOB_PREFIX + "old")
+    actions = [
+        RebuildEnvironmentArtifact(f"s3://fixture/{i}", ((SOURCE.source_id, Solver.SMALL),), ()) for i in range(3)
+    ]
+    statuses = [
+        SimpleNamespace(job_id=JobName.root("fixture", f"atlas-difficulty-old-{i}"), state=JobState.SUCCEEDED)
+        for i in range(5501)
+    ]
+    children = []
+    for i, action in enumerate(actions):
+        key = action_id(action)
+        name = iris_backend.JOB_COMPONENT + digest(ledger)[:16] + "-" + key[:24]
+        child = parent.child(name)
+        children.append(str(child))
+        statuses.append(SimpleNamespace(job_id=child, state=JobState.SUCCEEDED if i == 0 else JobState.RUNNING))
+        manifest = tmp_path / "ledger/v1/actions" / (key + ".json")
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(json.dumps(action_payload(action)))
+        if i < 2:
+            append_rows(ledger, action_rows(action, [SOURCE], Outcome.SUBMITTED, str(child), "2026-11-26T00:00:00Z"))
+
+    class Scheduler:
+        def list_jobs(self, *, prefix, state=None, name=None):
+            selected = [
+                job
+                for job in statuses
+                if str(job.job_id).startswith(prefix)
+                and (state is None or job.state == state)
+                and (name is None or name in job.job_id.name)
+            ]
+            if len(selected) > 5500:
+                raise ConnectError(Code.INVALID_ARGUMENT, "query.offset=5500 exceeds MAX_LIST_JOBS_OFFSET=5000")
+            return selected
+
+        def submit(self, **kwargs):
+            pytest.fail("A lost submission reply must recover the existing job")
+
+    backend = IrisBackend(Scheduler(), parent, ledger)
+    jobs = backend.jobs()
+    assert {job.job_id for job in jobs} == set(children)
+    collect_finished(read_rows(ledger), jobs, ledger, EscalationLog(ledger))
+    assert [row.job_id for row in read_rows(ledger) if row.outcome == Outcome.FINISHED] == [children[0]]
+    restarted = IrisBackend(Scheduler(), JobName.root("fixture", controller.CONTROLLER_JOB_PREFIX + "new"), ledger)
+    assert restarted.submit(actions[2], "unused") == children[2]
+    assert {job.job_id for job in restarted.jobs()} == set(children[1:])
 
 
 @pytest.mark.parametrize("serving_pool", [None, "registry"])
