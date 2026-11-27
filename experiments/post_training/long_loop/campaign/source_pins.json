@@ -466,21 +466,21 @@
       "status": "Pending",
       "intended_use": "train",
       "pipeline": {
-        "name": "nemo-structured-native-train-retained",
+        "name": "nemo-structured-native-train-retained-grader-image-pinned",
         "files": [
           "tasks.parquet"
         ],
-        "source": "open-athena/nemotron-nemotron-rl-instruction-following-structured-o-6abcd1f2-retained-20261124-b-final-nemo",
+        "source": "open-athena/nemotron-rl-if-structured-outputs-grader-image-pinned-20261127-v1",
         "version": "2026.11.13.1",
-        "revision": "be4cd53e7d59041e5a401b03a0fe4018ca401c29"
+        "revision": "640766c67323237054e2727b4c612cc6a2d88dc4"
       },
       "current_release": {
-        "url": "https://huggingface.co/datasets/open-athena/nemotron-nemotron-rl-instruction-following-structured-o-6abcd1f2-retained-20261124-b-final-nemo/tree/be4cd53e7d59041e5a401b03a0fe4018ca401c29",
-        "repo": "open-athena/nemotron-nemotron-rl-instruction-following-structured-o-6abcd1f2-retained-20261124-b-final-nemo",
-        "revision": "be4cd53e7d59041e5a401b03a0fe4018ca401c29"
+        "url": "https://huggingface.co/datasets/open-athena/nemotron-rl-if-structured-outputs-grader-image-pinned-20261127-v1/tree/640766c67323237054e2727b4c612cc6a2d88dc4",
+        "repo": "open-athena/nemotron-rl-if-structured-outputs-grader-image-pinned-20261127-v1",
+        "revision": "640766c67323237054e2727b4c612cc6a2d88dc4"
       },
-      "dataset_id": "open-athena/nemotron-nemotron-rl-instruction-following-structured-o-6abcd1f2-retained-20261124-b-final-nemo",
-      "dataset_revision": "be4cd53e7d59041e5a401b03a0fe4018ca401c29",
+      "dataset_id": "open-athena/nemotron-rl-if-structured-outputs-grader-image-pinned-20261127-v1",
+      "dataset_revision": "640766c67323237054e2727b4c612cc6a2d88dc4",
       "actor_census_input": {
         "dataset_id": "open-athena/nemotron-nemotron-rl-instruction-following-structured-o-6abcd1f2-retained-20261124-b-final-nemo",
         "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/nemo-gym-remaining/2026.11.24.1/structured-release-sample-v1/census/actor/.artifact.json",
@@ -497,6 +497,14 @@
         "counts": {
           "role_absent": 9213
         }
+      },
+      "repin": {
+        "parent": {
+          "repo": "open-athena/nemotron-nemotron-rl-instruction-following-structured-o-6abcd1f2-retained-20261124-b-final-nemo",
+          "revision": "be4cd53e7d59041e5a401b03a0fe4018ca401c29"
+        },
+        "change": "grader environment docker_build (one context, sha256 017f3070...) replaced by its built image ghcr.io/marin-community/rl-data-nemotron-if-structured-grader@sha256:4b1a8d2f...; no other field changed",
+        "evidence": "image-lineage.json and identity-inventory.jsonl in the release; Kaniko job /benfeuer/mochi-campaign-if-structured-image-claude-20261127a"
       }
     },
     "Nemotron:Nemotron-RL-knowledge-mcqa": {
