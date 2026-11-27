@@ -191,8 +191,15 @@ def test_campaign_preserves_131_controls_and_disables_learning_clock():
     after["rl"]["recipe"]["environment"]["task_sessions"]["task_spec"]["harness_by_dataset"] = before["rl"]["recipe"][
         "environment"
     ]["task_sessions"]["task_spec"]["harness_by_dataset"]
-    assert after["rl"]["recipe"]["environment"]["task_sessions"].pop("local") == {"disk_root": LOCAL_DISK_ROOT}
-    before["rl"]["recipe"]["environment"]["task_sessions"].pop("local")
+    sessions, reference_sessions = (
+        after["rl"]["recipe"]["environment"]["task_sessions"],
+        before["rl"]["recipe"]["environment"]["task_sessions"],
+    )
+    assert sessions.pop("local") == {"disk_root": LOCAL_DISK_ROOT}
+    reference_sessions.pop("local")
+    judge, reference_judge = sessions.pop("remote_judge"), reference_sessions.pop("remote_judge")
+    assert {key: judge[key] for key in reference_judge} == reference_judge
+    assert judge["substitute_models"]["glm-5.3"] == judge["model"]
     assert after == before
     callbacks = campaign.rl.recipe["trainer"]["callbacks"]
     assert all(callback["type"] != "wall_time_budget" for callback in callbacks)

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import click
 import draccus
+import yaml
 from fray.types import ResourceConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config
@@ -42,6 +43,7 @@ from experiments.post_training.long_loop.round_runner import (
 )
 
 REFERENCE = Path(__file__).with_name("campaign") / "mochi131.yaml"
+DEPLOYED_RL_SPEC = Path(__file__).with_name("specs") / "rl.yaml"
 REFERENCE_SOURCE = "fe4695fbcd27e365284dccab649a40d6caa9fb2b"
 CAMPAIGN_PIPELINE_STAGES = 16
 LOCAL_DISK_ROOT = "/var/lib/shellbox-disk-pool"
@@ -63,6 +65,14 @@ class CampaignGraph:
     plan: dict
 
 
+def deployed_judge_binding(reference: dict) -> dict:
+    """The deployed long-loop judge binding, with its #12374 model substitutions, on .131's endpoint."""
+    binding = yaml.safe_load(DEPLOYED_RL_SPEC.read_text())["config"]["environment"]["task_sessions"]["remote_judge"]
+    if {key: binding[key] for key in reference} != reference:
+        raise ValueError("The deployed judge binding no longer uses the .131 judge endpoint")
+    return binding
+
+
 def campaign_round(mix: CampaignMix, version: str, *, max_steps: int) -> AdoptedRlRound:
     """Apply only the campaign's mix, step stop, identities and storage policy to .131."""
     if max_steps != 50:
@@ -82,6 +92,9 @@ def campaign_round(mix: CampaignMix, version: str, *, max_steps: int) -> Adopted
     recipe["environment"]["task_sessions"]["task_spec"]["harness_by_dataset"] = {}
     # Retained lock-based verifiers declare LOCAL storage, which only the quota pool enforces.
     recipe["environment"]["task_sessions"]["local"] = {"disk_root": LOCAL_DISK_ROOT}
+    recipe["environment"]["task_sessions"]["remote_judge"] = deployed_judge_binding(
+        recipe["environment"]["task_sessions"]["remote_judge"]
+    )
     megatron = {**reference.rl.megatron, "pipeline_model_parallel_size": CAMPAIGN_PIPELINE_STAGES}
     trainer_gpus = (
         megatron["pipeline_model_parallel_size"]
