@@ -67,7 +67,7 @@ from levanter.grug.sharding import (
     unshard,
 )
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
-from levanter.kernels.logsumexp import batch_invariant_logsumexp
+from levanter.kernels.logsumexp import batch_invariant_logsumexp, batch_invariant_selected_logprobs
 from levanter.kernels.pallas.fixed_schedule_linear import _BLOCK_SIZE as _FIXED_PROJECTION_TILE
 from levanter.kernels.pallas.fixed_schedule_linear import fixed_schedule_linear
 
@@ -1609,13 +1609,12 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     def fixed_policy_logprobs(self, activations: NamedArray, targets: NamedArray) -> NamedArray:
         """Score target IDs with the fixed projection and policy normalization."""
         logits = self.project_logits(activations).astype(jnp.float32)
-        selected, normalizers = self._fixed_target_logits(logits, targets)
-        return selected - normalizers
+        return self._fixed_target_logprobs(logits, targets)
 
-    def _fixed_target_logits(self, logits: NamedArray, targets: NamedArray) -> tuple[NamedArray, NamedArray]:
-        selected = hax.sum(hax.where(hax.nn.one_hot(targets, self.Vocab, dtype=bool), logits, 0), self.Vocab)
-        normalizers = hax.named(batch_invariant_logsumexp(logits.array), logits.axes[:-1])
-        return selected, normalizers
+    def _fixed_target_logprobs(self, logits: NamedArray, targets: NamedArray) -> NamedArray:
+        row_axes = logits.axes[:-1]
+        selected = batch_invariant_selected_logprobs(logits.array, targets.rearrange(row_axes).array)
+        return hax.named(selected, row_axes)
 
     def _loss_from_activations(
         self,
@@ -1646,9 +1645,9 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         if logit_soft_cap is not None:
             logits = hax.tanh(logits / logit_soft_cap) * logit_soft_cap
         targets = next_token_ids(self.Pos.name, example.tokens)
-        selected, normalizers = self._fixed_target_logits(logits, targets)
-        loss = normalizers - selected
+        loss = -self._fixed_target_logprobs(logits, targets)
         if logsumexp_weight:
+            normalizers = hax.named(batch_invariant_logsumexp(logits.array), logits.axes[:-1])
             loss = loss + logsumexp_weight * hax.square(normalizers)
         weights = next_token_loss_weight(logits.resolve_axis(self.Pos.name), example.loss_weight)
         return hax.nn.loss.reduce_loss(loss, reduction, reduction_axis, weight=weights) + aux_loss
