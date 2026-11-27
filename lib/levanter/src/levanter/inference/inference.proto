@@ -17,6 +17,7 @@ message GenerateRequest {
   optional uint32 seed = 5;
   repeated TokenSequence stop_sequences = 6;
   optional uint32 num_choices = 7;
+  optional string expected_policy_id = 8;
 
   // Levanter extension. Use a high tag away from vLLM's core fields.
   bool capture_router_replay = 50001;
@@ -34,6 +35,8 @@ message GenerateResponse {
 message Choice {
   repeated uint32 token_ids = 1;
   repeated float behavior_logprobs = 2;
+  optional string policy_id = 4;
+  uint64 model_version = 5;
 
   // Levanter extension. Present only when router replay was requested.
   RouterReplay router_replay = 50001;

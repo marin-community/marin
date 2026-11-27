@@ -79,6 +79,10 @@ uvx --from grpcio-tools==1.76.0 python -m grpc_tools.protoc \
   --grpc_python_out=lib/levanter/src lib/levanter/src/levanter/inference/inference.proto
 ```
 
+Set `expected_policy_id` to require the installed policy to match when the
+request enters generation. A mismatch returns `FAILED_PRECONDITION`. Each
+choice reports the actual `policy_id` and `model_version` used to generate it.
+
 To capture Snowball router replay, set `capture_router_replay`. Each choice then
 includes `router_replay`. Both fields use tag 50001 in their respective messages.
 The replay positions index the concatenated prompt and generated tokens. A

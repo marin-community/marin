@@ -673,6 +673,47 @@ def test_grpc_generation_returns_exact_token_ids_and_scores(test_client):
         assert unsupported.value.code() == grpc.StatusCode.FAILED_PRECONDITION
 
 
+def test_grpc_generation_fences_rollouts_by_installed_policy(inference_server_config, generated_model_and_tokenizer):
+    model, tokenizer = generated_model_and_tokenizer
+    server = InferenceServer.create(inference_server_config, model, tokenizer)
+    try:
+        with (
+            TestClient(server.app),
+            grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel,
+        ):
+            _assert_grpc_policy_fence(inference_pb2_grpc.InferenceStub(channel), server)
+    finally:
+        server.shutdown()
+
+
+def _assert_grpc_policy_fence(stub, server):
+    def generate(policy):
+        request = inference_pb2.GenerateRequest(
+            prompt_token_ids=[18, 7, 3], max_new_tokens=2, temperature=0, expected_policy_id=policy
+        )
+        return stub.Generate(request, timeout=30).choices[0]
+
+    assert server.reload(lambda model: model, expected_version=0, policy_id="policy-a") == 1
+    first = generate("policy-a")
+    assert (first.policy_id, first.model_version) == ("policy-a", 1)
+
+    def fail_load(model):
+        raise RuntimeError("invalid replacement")
+
+    with pytest.raises(RuntimeError):
+        server.reload(fail_load, expected_version=1, policy_id="policy-b")
+    assert generate("policy-a") == first
+
+    assert server.reload(lambda model: model, expected_version=1, policy_id="policy-b") == 2
+    with pytest.raises(ValueError):
+        server.reload(lambda model: model, expected_version=1, policy_id="policy-c")
+    with pytest.raises(grpc.RpcError) as stale:
+        generate("policy-a")
+    assert stale.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+    second = generate("policy-b")
+    assert (second.policy_id, second.model_version) == ("policy-b", 2)
+
+
 def test_grpc_snowball_generation_replays_exact_expert_routes(local_gpt2_tokenizer):
     cfg = SnowballConfig(
         vocab_size=48,

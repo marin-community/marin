@@ -68,6 +68,7 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_MODEL_NAME = "levanter"
+MAX_POLICY_ID_LENGTH = 256
 RESERVED_CHAT_TEMPLATE_KWARGS = frozenset({"add_generation_prompt", "chat_template", "return_dict", "tokenize"})
 
 
@@ -83,6 +84,8 @@ class InferenceServerConfig:
 
     model_name: str = DEFAULT_MODEL_NAME
     """Model id this server advertises from ``/v1/models``."""
+    initial_policy_id: str | None = None
+    """Immutable weight identity supplied by the publisher."""
 
     # Default generation parameters for API
     temperature: float = 0.7
@@ -111,6 +114,7 @@ class InferenceRequest:
     n_generations: int = 1
     echo_logprobs_top_k: int | None = None
     return_route_captures: bool = False
+    expected_policy_id: str | None = None
 
 
 @dataclass
@@ -126,6 +130,12 @@ class InferenceResponse:
     echo_token_ids: List[int] | None = None
     echo_logprobs: TokenSequenceLogprobs | None = None
     expert_routes: GeneratedExpertRoutes | None = None
+    model_version: int = 0
+    policy_id: str | None = None
+
+
+class PolicyMismatchError(ValueError):
+    """A generate request was queued for a different immutable policy."""
 
 
 class InferenceBatch(list):
@@ -183,6 +193,8 @@ class InferenceContext:
         self.batch_queue: queue.Queue[InferenceBatch] = queue.Queue()
         self.shutdown_event = threading.Event()
         self.model_lock = threading.Lock()
+        self._model_version = 0
+        self._policy_id = config.initial_policy_id
         self.inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
         self.batch_thread = threading.Thread(target=self._batch_processing_loop, daemon=True)
         self._next_request_id = 0
@@ -209,32 +221,33 @@ class InferenceContext:
             self.engine = None  # type: ignore[assignment]
         logger.info("Inference model unloaded.")
 
-    def reload(self, weight_callback: WeightSource):
-        """Reload the inference model using the given weight callback.
-
-        If new weights are found, new requests are paused, existing requests are
-        allowed to complete, and the new weights are loaded.
-        """
-        logger.info("New weights available, waiting for model lock...")
-        lock_start_time = time.time()
+    def reload(
+        self, weight_callback: WeightSource, *, expected_version: int | None = None, policy_id: str | None = None
+    ) -> int:
+        """Install new weights and return the serving version after resetting the cache."""
         with self.model_lock:
-            lock_wait_time = time.time() - lock_start_time
-            logger.info(f"Acquired model lock after {lock_wait_time}, reloading weights...")
+            if expected_version is not None and expected_version != self._model_version:
+                raise ValueError(f"Expected model version {expected_version}, serving {self._model_version}")
+            if policy_id is not None and (
+                not 0 < len(policy_id) <= MAX_POLICY_ID_LENGTH or policy_id == self._policy_id
+            ):
+                raise ValueError("A weight update requires a new, nonempty policy ID")
 
-            start = time.time()
             with (
                 hax.partitioning.set_mesh(self.mesh),
                 hax.axis_mapping(self.config.trainer.compute_axis_mapping),
             ):
-                self.model = weight_callback(self.model)
-                self.engine = InferenceEngine.from_model_with_config(
-                    model=self.model,
+                model = weight_callback(self.model)
+                engine = InferenceEngine.from_model_with_config(
+                    model=model,
                     tokenizer=self.tokenizer,
                     config=self.config.service,
                     axis_resources=self.config.trainer.compute_axis_mapping,
                 )
-                elapsed = time.time() - start
-            logger.info(f"Model reloaded in {elapsed:.2f}s")
+            self.model, self.engine = model, engine
+            self._model_version += 1
+            self._policy_id = policy_id
+            return self._model_version
 
     def submit_request(
         self,
@@ -249,6 +262,7 @@ class InferenceContext:
         echo_logprobs_top_k: int | None = None,
         *,
         return_route_captures: bool = False,
+        expected_policy_id: str | None = None,
     ) -> str:
         """Submit a request to the inference queue"""
         assert self.shutdown_event.is_set() is False, "InferenceContext is shut down"
@@ -267,6 +281,7 @@ class InferenceContext:
             n_generations=n_generations,
             echo_logprobs_top_k=echo_logprobs_top_k,
             return_route_captures=return_route_captures,
+            expected_policy_id=expected_policy_id,
         )
 
         logger.info("Enqueuing request %s", request)
@@ -335,7 +350,9 @@ class InferenceContext:
                     hax.partitioning.set_mesh(self.mesh),
                     hax.axis_mapping(self.config.trainer.compute_axis_mapping),
                 ):
-                    self._execute_batch(batch)
+                    batch = self._filter_policy_requests(batch)
+                    if batch:
+                        self._execute_batch(batch)
             except queue.Empty:
                 continue
             except Exception as e:
@@ -348,6 +365,16 @@ class InferenceContext:
                         pass
 
         logger.info("Batch processing thread shutting down")
+
+    def _filter_policy_requests(self, requests: InferenceBatch) -> InferenceBatch:
+        admitted = InferenceBatch()
+        for req in requests:
+            if req.expected_policy_id is not None and req.expected_policy_id != self._policy_id:
+                error = PolicyMismatchError("The requested policy is no longer active")
+                req.future.get_loop().call_soon_threadsafe(req.future.set_exception, error)
+            else:
+                admitted.append(req)
+        return admitted
 
     def _execute_batch(self, requests: InferenceBatch):
         """Execute a batch of inference requests"""
@@ -418,6 +445,8 @@ class InferenceContext:
                                 prompt_tokens=len(req.prompt_tokens),
                                 completion_tokens=len(generated_tokens),
                                 request_id=req.request_id,
+                                model_version=self._model_version,
+                                policy_id=self._policy_id,
                                 echo_token_ids=echo_token_ids,
                                 echo_logprobs=echo_logprobs,
                                 expert_routes=(
@@ -438,6 +467,8 @@ class InferenceContext:
                                 prompt_tokens=0,
                                 completion_tokens=0,
                                 request_id=req.request_id,
+                                model_version=self._model_version,
+                                policy_id=self._policy_id,
                             )
                         )
 
@@ -863,6 +894,10 @@ class _GrpcInference:
         num_choices = request.num_choices if request.HasField("num_choices") else 1
         stops = [list(sequence.token_ids) for sequence in request.stop_sequences]
 
+        policy_id = request.expected_policy_id if request.HasField("expected_policy_id") else None
+        if policy_id is not None and not 0 < len(policy_id) <= MAX_POLICY_ID_LENGTH:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid expected policy ID")
+
         capture_routes = request.capture_router_replay
         if capture_routes and not ctx.engine.supports_route_capture:
             await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "Router replay requires a Snowball model")
@@ -897,10 +932,13 @@ class _GrpcInference:
             future,
             n_generations=num_choices,
             return_route_captures=capture_routes,
+            expected_policy_id=policy_id,
         )
         try:
             # The inference thread completes the queue's future even when the caller disconnects.
             outputs = await asyncio.shield(future)
+        except PolicyMismatchError as exc:
+            await context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
         except ValueError as exc:
             await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
 
@@ -914,7 +952,12 @@ class _GrpcInference:
 def _grpc_generate_response(prompt: list[int], outputs: list[InferenceResponse]) -> inference_pb2.GenerateResponse:
     response = inference_pb2.GenerateResponse(prompt_token_ids=prompt)
     for output in outputs:
-        choice = response.choices.add(token_ids=output.tokens, behavior_logprobs=output.logprobs)
+        choice = response.choices.add(
+            token_ids=output.tokens,
+            behavior_logprobs=output.logprobs,
+            model_version=output.model_version,
+            policy_id=output.policy_id,
+        )
         if output.expert_routes is not None:
             write_router_replay(choice.router_replay, output.expert_routes.expert_ids, output.expert_routes.valid)
     return response
@@ -1035,13 +1078,11 @@ class InferenceServer:
         """Unload the inference model to free up resources."""
         self.inference_context.unload()
 
-    def reload(self, weight_callback: WeightSource):
-        """Reload the model weights using the provided callback.
-
-        Args:
-            weight_callback: Function that takes the current model and returns new model
-        """
-        self.inference_context.reload(weight_callback)
+    def reload(
+        self, weight_callback: WeightSource, *, expected_version: int | None = None, policy_id: str | None = None
+    ) -> int:
+        """Install weights and set or clear the immutable policy ID in one serving version."""
+        return self.inference_context.reload(weight_callback, expected_version=expected_version, policy_id=policy_id)
 
     def address(self):
         """Get the full address the server is running on."""
