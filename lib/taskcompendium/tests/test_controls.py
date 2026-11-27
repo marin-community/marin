@@ -279,7 +279,7 @@ def test_oracle_fails_up_from_a_tier_that_cannot_serve_it(machines, refusal_stat
 
 
 @dataclass(eq=False)
-class ScriptedAnswerMachine:
+class ScriptedAnswerMachine(FailingOracleMachine):
     """Canned command results with a fixed payload for ``cat``."""
 
     answer: bytes
@@ -288,15 +288,6 @@ class ScriptedAnswerMachine:
         if command.argv[:1] == ("cat",):
             return Result(0, self.answer, b"", False, False, ExitReason.EXITED)
         return Result(0, b"", b"", False, False, ExitReason.EXITED)
-
-    async def upload(self, source, target) -> None:
-        return
-
-    async def download(self, source, target) -> None:
-        raise RuntimeError("No files exist on this machine")
-
-    async def close(self) -> None:
-        return
 
 
 @dataclass(eq=False)

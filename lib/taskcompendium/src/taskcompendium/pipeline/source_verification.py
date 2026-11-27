@@ -29,6 +29,7 @@ from zephyr.writers import write_parquet_file
 
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
+from taskcompendium.pipeline.check_rows import record_checks
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry, execute_phase
 from taskcompendium.pipeline.fingerprints import callable_identity
 from taskcompendium.pipeline.machine_routes import attach_machine_route
@@ -47,7 +48,6 @@ from taskcompendium.pipeline.stages import (
     write_filtered_shard,
 )
 from taskcompendium.pipeline.transforms import is_accepted
-from taskcompendium.pipeline.verification import grader_readiness
 from taskcompendium.pipeline.verification_trials import (
     HistoricalTrial,
     SampleResult,
@@ -442,15 +442,7 @@ def gate_source_row(
     routes_by_task: Mapping[str, tuple[Backend, ...]] | None = None,
 ) -> dict[str, Any]:
     if row["task_id"] in results:
-        checks = results[row["task_id"]]
-        row = {
-            **row,
-            "checks": [check.model_dump(mode="json") for check in checks],
-            "grader_readiness": grader_readiness(checks).value,
-        }
-        failed = [f"check:{check.check}" for check in checks if check.status in REJECTING_CHECK_STATUSES]
-        if failed:
-            row = {**row, "filter_status": "reject", "filter_reasons": [*row["filter_reasons"], *sorted(set(failed))]}
+        row = record_checks(row, results[row["task_id"]])
     route = () if routes_by_task is None else routes_by_task.get(row["task_id"], ())
     if is_accepted(row):
         row = attach_machine_route(row, route)

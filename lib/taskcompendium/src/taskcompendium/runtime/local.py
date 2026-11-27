@@ -276,7 +276,8 @@ class LocalGraderMachines:
     def routes(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineRoute, ...]:
         """Return the local route for declared packages, a lock, or a pinned image.
 
-        ``memory_mb`` is advisory; an unpinned image has no local route.
+        TaskCompendium removes the local memory request before preparation;
+        an unpinned image has no local route.
         """
         require_resolved_environment(environment)
         if environment.docker_image is not None:

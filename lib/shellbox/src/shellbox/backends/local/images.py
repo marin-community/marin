@@ -8,7 +8,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from shellbox.image import OCI_TAG, PreparedImage, UnsupportedImage, prepared_image_config
+from shellbox.image import OCI_TAG, PreparedImage, prepared_image_config, validate_image_platform
 
 
 @dataclass(frozen=True)
@@ -33,8 +33,7 @@ def prepare_local_image(image: PreparedImage, directory: Path, *, umoci: Path) -
     if directory.exists() or directory.is_symlink():
         raise FileExistsError(directory)
     config = prepared_image_config(image)
-    if config["os"] != "linux" or config["architecture"] != "amd64":
-        raise UnsupportedImage("Only Linux amd64 images are supported")
+    validate_image_platform(config)
     process = config.get("config") or {}
     environment = {}
     for entry in process.get("Env") or ():

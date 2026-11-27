@@ -68,7 +68,7 @@ class GradingMachines(Protocol):
         ...
 
     def routes(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineRoute, ...]:
-        """The tier candidates for ``environment``, cheapest first; empty when no tier satisfies it."""
+        """Candidates in the provider's priority order; empty when none satisfies the environment."""
         ...
 
 
@@ -414,10 +414,7 @@ async def _empty_sandbox_control(
     sandbox: _Sandbox,
     judge_connection: JudgeConnection | None,
 ) -> _ControlOutcome:
-    """Run the grader on an empty answer across the verifier ladder; it must run cleanly on one tier.
-
-    A zero reward or a rejected submission passes; a positive reward marks the task defective.
-    """
+    """Require an empty answer to earn no reward on an admitted verifier."""
     result, verdicts = await _verifier_ladder(
         "empty", 0.0, sandbox.environment, sandbox.grader_routes, _empty_submission_grader(task, judge_connection)
     )

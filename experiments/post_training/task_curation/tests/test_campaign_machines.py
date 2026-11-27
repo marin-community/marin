@@ -13,7 +13,7 @@ from experiments.post_training.task_curation.campaign_machines import CampaignMa
 
 
 class NoLocalMachines(LocalGraderMachines):
-    def routes(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineRoute, ...]:
+    def routes(self, _environment: EnvironmentRequirements, _memory_mb: int) -> tuple[MachineRoute, ...]:
         return ()
 
 

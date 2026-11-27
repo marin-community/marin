@@ -7,6 +7,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from marinskyrl.agent_harnesses import PI_HARNESS
+from marinskyrl.task_machine_factories import ConfiguredTaskMachines
 from marinskyrl.task_sources import PreparedTaskCacheSource
 from omegaconf import OmegaConf
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS
@@ -65,13 +66,14 @@ def _load(tmp_path: Path, tasks, *, machine_factories=None, **task_spec_override
     pq.write_table(pa.Table.from_pylist([{"task_spec": task.model_dump_json()} for task in tasks]), path)
     configs = OmegaConf.to_container(get_default_config().environment.task_sessions, resolve=True)
     configs["task_spec"].update(task_spec_overrides)
+    factories = FACTORIES if machine_factories is None else machine_factories
     dataset = SourceTaskDataset(
         [str(path)],
         tokenizer(),
         128,
         num_workers=1,
         environment_configs=configs,
-        machine_factories=FACTORIES if machine_factories is None else machine_factories,
+        factory_provider=lambda: factories,
     )
     return [row["input"] for row in dataset.collate_fn(list(dataset))]
 
@@ -95,7 +97,10 @@ def test_tier_routing_obeys_the_configured_factory_network_policy(tmp_path):
         tmp_path,
         (task,),
         machine_factories=factories,
-        task_machine_by_tier={backend: machine_runtime(backend).model_dump() for backend in factories},
+        task_machine_by_tier={
+            backend: machine_runtime(backend).model_copy(update={"network": NetworkPolicy.ALLOW}).model_dump()
+            for backend in factories
+        },
     )
     assert loaded[0].spec.task_machine.backend == "docker"
     validate_spec(loaded[0].spec, factories)
@@ -108,8 +113,9 @@ def test_offline_tier_admission_does_not_require_provider_credentials(monkeypatc
         NATIVE_ENVIRONMENT,
         {"daytona": runtime},
         (),
-        {"daytona": {"api_key_env": "SHELLBOX_OFFLINE_TEST_API_KEY", "ttl_minutes": 60}},
-        None,
+        ConfiguredTaskMachines(
+            json.dumps({"daytona": {"api_key_env": "SHELLBOX_OFFLINE_TEST_API_KEY", "ttl_minutes": 60}})
+        ),
     )
     assert selected == runtime
 
@@ -187,8 +193,8 @@ def test_tier_routing_fails_up_to_the_next_registered_tier(tmp_path: Path):
         }
     )
     shellsim, daytona, local = (machine_runtime(backend) for backend in ("shellsim", "daytona", "local"))
-    # The simulator's ladder skips ShellSim (it serves no ALLOW network) and binds local with the
-    # network its declared capability needs.
+    local = local.model_copy(update={"network": NetworkPolicy.ALLOW})
+    # ShellSim cannot serve a networked task; the local template explicitly allows networking.
     simulated_load = _load(
         tmp_path,
         (networked_simulator,),
@@ -197,8 +203,7 @@ def test_tier_routing_fails_up_to_the_next_registered_tier(tmp_path: Path):
             Backend.LOCAL.value: local.model_dump(),
         },
     )
-    # The native image task's ladder starts at local, which this deployment does not register,
-    # so Daytona serves.
+    # ShellSim cannot serve the native image task, so the next configured candidate serves.
     native_load = _load(
         tmp_path,
         (native,),
@@ -207,15 +212,14 @@ def test_tier_routing_fails_up_to_the_next_registered_tier(tmp_path: Path):
             Backend.DAYTONA.value: daytona.model_dump(),
         },
     )
-    networked_local = local.model_copy(update={"network": NetworkPolicy.ALLOW})
-    assert [spec.spec.task_machine for spec in simulated_load] == [networked_local]
+    assert [spec.spec.task_machine for spec in simulated_load] == [local]
     assert [spec.spec.task_machine for spec in native_load] == [daytona]
     for spec in (*simulated_load, *native_load):
         validate_spec(spec.spec, {"shellsim": ShellSimMachineFactory(), **FACTORIES})
 
 
-def test_tier_routing_keeps_the_template_network_unless_the_task_declares_network(tmp_path: Path):
-    """A tier template keeps its own network policy; a declared network capability binds ALLOW."""
+def test_tier_routing_preserves_template_network_policy_for_networked_tasks(tmp_path: Path):
+    """A network requirement cannot override a denied template; an allowed candidate can serve it."""
     plain = text_task("plain", source="mixed").model_copy(
         update={
             "environment_requirements": NATIVE_ENVIRONMENT.model_copy(update={"capabilities": ("shell", "filesystem")})
@@ -229,12 +233,21 @@ def test_tier_routing_keeps_the_template_network_unless_the_task_declares_networ
         }
     )
     local = machine_runtime("local")
-    loaded = _load(
+    denied = _load(
         tmp_path,
         (plain, networked),
         task_machine_by_tier={Backend.LOCAL.value: local.model_dump()},
     )
-    assert [spec.spec.task_machine.network for spec in loaded] == [NetworkPolicy.DENY, NetworkPolicy.ALLOW]
+    assert [spec.spec.task_machine for spec in denied] == [local, None]
+    daytona = machine_runtime("daytona").model_copy(update={"network": NetworkPolicy.ALLOW})
+    fallback = _load(
+        tmp_path,
+        (plain, networked),
+        task_machine_by_tier={Backend.LOCAL.value: local.model_dump(), Backend.DAYTONA.value: daytona.model_dump()},
+    )
+    assert [spec.spec.task_machine for spec in fallback] == [local, daytona]
+    for item in fallback:
+        validate_spec(item.spec, FACTORIES)
 
 
 def test_tier_routing_binds_no_machine_when_no_registered_tier_satisfies(tmp_path: Path):

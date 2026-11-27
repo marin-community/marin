@@ -85,7 +85,7 @@ async def _install_resources(machine: Machine, resources: tuple[TaskResource, ..
 
 
 @contextmanager
-def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec) -> Iterator[MachineSpec]:
+def machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec) -> Iterator[MachineSpec]:
     """The machine spec for ``requirements`` on the selected runtime.
 
     A Docker build context becomes a ``DockerfileSource`` in a temporary directory that exists until the
@@ -200,7 +200,7 @@ async def _prepare_machine(
         return None
     async with asyncio.timeout(runtime.startup_timeout):
         # A Docker build context exists only while the machine is created; the built machine no longer reads it.
-        with _machine_spec(requirements, runtime) as spec:
+        with machine_spec(requirements, runtime) as spec:
             prepared = await asyncio.to_thread(
                 prepare_machine_spec, requirements, factories[runtime.backend], spec, dict(os.environ)
             )

@@ -21,7 +21,7 @@ from taskcompendium.models import (
 from taskcompendium.runtime.environment import validate_machine_spec
 
 from rolloutengine.grading import judge_connection
-from rolloutengine.machines import _machine_spec
+from rolloutengine.machines import machine_spec
 from rolloutengine.models import TaskRolloutSpec
 
 WORKSPACE_ANSWERS = frozenset({AnswerType.FILE, AnswerType.STATE, AnswerType.WORKSPACE_STATE})
@@ -82,8 +82,8 @@ def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, Machine
             continue
         if selection.backend not in machine_factories:
             raise ValueError(f"Unknown Shellbox factory: {selection.backend!r}")
-        with _machine_spec(requirements, selection) as machine_spec:
-            validate_machine_spec(requirements, machine_factories[selection.backend], machine_spec)
+        with machine_spec(requirements, selection) as bound_spec:
+            validate_machine_spec(requirements, machine_factories[selection.backend], bound_spec)
         if requirements.command_semantics == CommandSemantics.SHELL_SIMULATOR and any(
             resource.mtime_ns is not None for resource in resources
         ):

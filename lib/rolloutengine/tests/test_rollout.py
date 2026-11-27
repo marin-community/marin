@@ -81,7 +81,7 @@ from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.external import AgentHarness, LengthStopPolicy
 from rolloutengine.harness.shell import WORKSPACE_INSTRUCTION, ShellHarness, ToolCallResult, ToolContext
 from rolloutengine.harness.step import StepHarness
-from rolloutengine.machines import MachineSetupError, _machine_spec, task_machine
+from rolloutengine.machines import MachineSetupError, machine_spec, task_machine
 from rolloutengine.models import (
     LENGTH_STOP_REASON,
     AttemptEnded,
@@ -945,7 +945,7 @@ BUILD_ENVIRONMENT = EnvironmentRequirements(
 
 
 def test_build_context_is_a_dockerfile_source_while_the_spec_is_open():
-    with _machine_spec(BUILD_ENVIRONMENT, machine_runtime()) as spec:
+    with machine_spec(BUILD_ENVIRONMENT, machine_runtime()) as spec:
         assert isinstance(spec.source, DockerfileSource)
         context = spec.source.context
         assert spec.source.dockerfile == context / "Dockerfile"

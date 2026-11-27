@@ -59,11 +59,11 @@ class MachineRoute:
 class ShellboxContext:
     """Select factories statically or acquire the first supported machine."""
 
-    machine_pools: tuple[MachineRoute, ...]
+    candidates: tuple[MachineRoute, ...]
 
     def routes(self, requirements: TaskRequirements) -> tuple[MachineRoute, ...]:
         selected = []
-        for route in self.machine_pools:
+        for route in self.candidates:
             try:
                 route.factory.check_environment(requirements, route.spec)
             except UnsupportedMachineSpec:
