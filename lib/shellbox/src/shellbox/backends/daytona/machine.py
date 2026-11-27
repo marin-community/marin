@@ -123,7 +123,8 @@ async def _create_sandbox(
     """Retry throttling and exhausted quota, using a caller-owned name to recover an accepted creation.
 
     Daytona checks and reserves quota inside the create request, so a rejected
-    creation left no sandbox behind. The caller's timeout bounds the retries.
+    creation left no sandbox behind. ``timeout`` bounds each attempt; the caller's
+    deadline bounds the retries.
 
     Raises:
         MachineUnavailable: Daytona removed the sandbox before it started.

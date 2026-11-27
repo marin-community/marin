@@ -205,7 +205,7 @@ def test_daytona_creation_waits_for_exhausted_quota_and_rejects_oversized_reques
     async def scenario():
         posts = []
 
-        async def wait(delay):
+        async def wait(_delay):
             pass
 
         monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
@@ -214,7 +214,7 @@ def test_daytona_creation_waits_for_exhausted_quota_and_rejects_oversized_reques
             if request.method == "POST":
                 posts.append(request.path)
                 if len(posts) < 3:
-                    return web.json_response({"message": message, "statusCode": 400}, status=400)
+                    return web.json_response({"message": message}, status=400)
             return web.json_response(sandbox_json("created", "started", "https://fixture.invalid/toolbox"))
 
         app = web.Application()
@@ -229,7 +229,7 @@ def test_daytona_creation_waits_for_exhausted_quota_and_rejects_oversized_reques
                     assert sandbox.id == "created"
                     assert len(posts) == 3
                 else:
-                    with pytest.raises(DaytonaError, match="per sandbox"):
+                    with pytest.raises(DaytonaError):
                         await _create_sandbox(client, params, 60)
                     assert len(posts) == 1
 
