@@ -11,6 +11,7 @@ dependencies = [
     "pydantic>=2",
     "marin-taskcompendium",
     "marin-shellbox",
+    "marin-rigging",
     "openai>=1.59.9",
     "jinja2>=3.1",
     "pyyaml>=6",

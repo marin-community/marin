@@ -19,12 +19,14 @@ import json
 import time
 import uuid
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import openai
 from openai.types.chat.completion_create_params import CompletionCreateParamsBase
+from rigging.inference_clock import InferenceClock, current_inference_clock
+from shellbox import http_service_guest
 from shellbox.http_service import MAX_BODY, HttpRequest, HttpResponse, serve_http
 from shellbox.machine import Machine
 
@@ -165,6 +167,7 @@ class ModelRelay:
 
     complete: AgentCompletion
     tokenize: PromptTokenizer
+    clock: InferenceClock | None = field(default_factory=current_inference_clock)
     upstream_failure: Exception | None = field(default=None, init=False)
 
     async def handle(self, request: HttpRequest) -> HttpResponse:
@@ -183,7 +186,8 @@ class ModelRelay:
         if payload.get("n", 1) != 1:
             return HttpResponse(400, b'{"error":"one completion per request is required"}')
         try:
-            turn = await self.complete(chat_prompt(payload))
+            with self.clock.scope() if self.clock is not None else nullcontext():
+                turn = await self.complete(chat_prompt(payload))
         except ContextWindowExceeded:
             return CONTEXT_LENGTH_RESPONSE
         except RolloutEnded:
@@ -219,7 +223,9 @@ class ModelRelay:
 
 
 @asynccontextmanager
-async def serve_model_relay(machine: Machine, relay: ModelRelay, *, port: int) -> AsyncIterator[str]:
+async def serve_model_relay(
+    machine: Machine, relay: ModelRelay, *, port: int, request_timeout: float | None = None
+) -> AsyncIterator[str]:
     """Serve ``relay`` at ``http://127.0.0.1:{port}`` inside ``machine`` until the context exits.
 
     The machine must support persistent process sessions and run ``python3``. A failure of the relay's transport
@@ -230,7 +236,8 @@ async def serve_model_relay(machine: Machine, relay: ModelRelay, *, port: int) -
     """
     try:
         async with asyncio.TaskGroup() as services:
-            async with serve_http(machine, relay.handle, port=port, task_group=services) as url:
+            timeout = http_service_guest.REQUEST_TIMEOUT if request_timeout is None else request_timeout
+            async with serve_http(machine, relay.handle, port=port, task_group=services, request_timeout=timeout) as url:
                 yield url
     except BaseExceptionGroup as group:
         # The task group wraps the one failure of the body or of the relay's transport; raise it as it is.

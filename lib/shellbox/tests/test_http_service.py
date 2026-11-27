@@ -122,6 +122,31 @@ def test_http_capability_serves_concurrent_requests_and_hides_provider_errors(ca
     asyncio.run(check())
 
 
+def test_http_capability_uses_the_configured_request_timeout():
+    async def check():
+        started, cancelled = asyncio.Event(), asyncio.Event()
+
+        async def handler(_request: HttpRequest) -> HttpResponse:
+            started.set()
+            try:
+                await asyncio.Future()
+            finally:
+                cancelled.set()
+
+        machine = ProcessMachine()
+        async with (
+            asyncio.TaskGroup() as service_tasks,
+            serve_http(machine, handler, task_group=service_tasks, port=available_port(), request_timeout=0.2) as url,
+            httpx.AsyncClient(trust_env=False) as client,
+        ):
+            response = await client.post(url + "/wait", timeout=5)
+            assert started.is_set()
+            assert response.status_code in (502, 504)
+            await asyncio.wait_for(cancelled.wait(), 5)
+
+    asyncio.run(check())
+
+
 @pytest.mark.parametrize("body", ["!!!", False])
 def test_http_capability_rejects_malformed_guest_body_before_host_dispatch(body):
     frame = json.dumps({"type": "request", "id": "a" * 32, "method": "POST", "path": "/score", "body": body})

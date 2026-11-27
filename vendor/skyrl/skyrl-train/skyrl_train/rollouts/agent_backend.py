@@ -3,9 +3,11 @@
 import json
 import time
 from collections.abc import Awaitable, Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from typing import Any, Protocol
 from uuid import uuid4
+
+from rigging.inference_clock import current_inference_clock
 
 from rolloutengine.models import LENGTH_STOP_REASON, ContextWindowExceeded, ModelTurn, Prompt
 
@@ -52,7 +54,14 @@ class AgentInferenceBackend:
     def session(self, trial_id: str, complete: Callable[[Prompt], Awaitable[ModelTurn]]) -> Iterator[None]:
         if trial_id in self.sessions:
             raise ValueError(f"Agent session already registered: {trial_id}")
-        self.sessions[trial_id] = complete
+        clock = current_inference_clock()
+
+        async def scoped_completion(prompt: Prompt) -> ModelTurn:
+            # Uvicorn request tasks do not inherit the registering trial task context.
+            with clock.scope() if clock is not None else nullcontext():
+                return await complete(prompt)
+
+        self.sessions[trial_id] = scoped_completion
         try:
             yield
         finally:

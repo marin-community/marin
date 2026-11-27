@@ -167,6 +167,9 @@ finally:
 The required `task_group` owns the listener pump and reports late helper failures to
 its owner, even when startup ran in a completed phase task. Close the service
 context before leaving that group.
+`request_timeout` sets the same bounded wait for the host handler and the guest
+listener. The default is 600 seconds; long model calls can pass their trial's
+execution and admission watchdog explicitly.
 The host handler receives bounded requests on that process's stdout and performs only the
 operations it authorizes. Model URLs and authentication stay with the host
 handler; a runtime service uses the group-local listener URL and a dummy API key.

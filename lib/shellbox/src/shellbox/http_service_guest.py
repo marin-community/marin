@@ -26,8 +26,9 @@ class Pending:
 class Server(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, port):
+    def __init__(self, port, request_timeout):
         self.pending = {}
+        self.request_timeout = request_timeout
         self.lock = threading.Lock()
         self.output_lock = threading.Lock()
         self.slots = threading.BoundedSemaphore(MAX_PENDING)
@@ -63,7 +64,7 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def setup(self):
-        self.request.settimeout(REQUEST_TIMEOUT)
+        self.request.settimeout(self.server.request_timeout)
         super().setup()
 
     def send_body(self, status, body, content_type="application/json"):
@@ -113,7 +114,7 @@ class Handler(BaseHTTPRequestHandler):
                     "body": base64.urlsafe_b64encode(body).decode(),
                 }
             )
-            if not pending.ready.wait(REQUEST_TIMEOUT):
+            if not pending.ready.wait(self.server.request_timeout):
                 self.send_body(504, b'{"error":"service timed out"}')
                 return
             response = pending.response
@@ -151,12 +152,12 @@ def receive_responses(server):
         server.shutdown()
 
 
-def serve(port):
-    with Server(port) as server:
+def serve(port, request_timeout=REQUEST_TIMEOUT):
+    with Server(port, request_timeout) as server:
         server.emit({"type": "ready"})
         threading.Thread(target=receive_responses, args=(server,), daemon=True).start()
         server.serve_forever(poll_interval=0.05)
 
 
 if __name__ == "__main__":
-    serve(int(sys.argv[1]))
+    serve(int(sys.argv[1]), float(sys.argv[2]) if len(sys.argv) > 2 else REQUEST_TIMEOUT)

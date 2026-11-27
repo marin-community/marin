@@ -5,6 +5,7 @@ import asyncio
 import numpy as np
 import pytest
 from omegaconf import OmegaConf
+from rigging.inference_clock import current_inference_clock
 from rolloutengine.engine import RolloutEngine
 from marinskyrl.agent_harnesses import AgentHarnessSettings, TaskAgentHarnesses
 from rolloutengine.harness.external import AgentHarness
@@ -155,6 +156,7 @@ async def test_native_worker_recovers_without_spending_a_turn(agent_harnesses, w
         {},
         agents=agent_harnesses(agent),
         shutdown_timeout=5,
+        inference_queue_timeout=60,
     )
     try:
         (result,) = await worker.generate(request)
@@ -173,6 +175,9 @@ async def test_native_worker_recovers_without_spending_a_turn(agent_harnesses, w
 async def test_native_worker_keeps_a_workspace_verdict_without_sampled_tokens(agent_harnesses, worker_config):
     class WaitingClient:
         async def generate(self, _request):
+            clock = current_inference_clock()
+            assert clock is not None
+            clock.scheduled()
             await asyncio.Future()
 
     async def agent(context, complete):
@@ -203,6 +208,7 @@ async def test_native_worker_keeps_a_workspace_verdict_without_sampled_tokens(ag
         {"shellsim": ShellSimMachineFactory()},
         agents=agent_harnesses(agent),
         shutdown_timeout=5,
+        inference_queue_timeout=60,
     )
     try:
         (result,) = await worker.generate(request)
@@ -253,6 +259,7 @@ async def test_training_machine_limit_leaves_inline_work_unblocked(agent_harness
         agents=agent_harnesses(agent),
         concurrent_training_machine_tasks=1,
         shutdown_timeout=5,
+        inference_queue_timeout=60,
     )
     try:
         async with asyncio.timeout(5), asyncio.TaskGroup() as group:
@@ -287,6 +294,7 @@ async def test_agent_setup_retries_signal_exit(agent_harnesses, worker_config, e
         retry_wait=skip_backoff,
         agents=agent_harnesses(agent),
         shutdown_timeout=5,
+        inference_queue_timeout=60,
     )
     try:
         (result,) = await worker.generate(request)
