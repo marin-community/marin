@@ -281,7 +281,7 @@ def _resolved_model(
     tensor_parallel_size = geometry.tensor_parallel_size if geometry is not None else model.tensor_parallel_size
     if tensor_parallel_size is None and isinstance(iris.worker_resources.device, TpuConfig):
         if iris.worker_resources.device.vm_count() > 1:
-            tensor_parallel_size = num_chips
+            tensor_parallel_size = tp_limit
     revision = model.revision if weights == model.weights else None
     tokenizer = model.tokenizer or model.weights
     tokenizer_revision = model.effective_tokenizer_revision

@@ -59,7 +59,7 @@ def select_tensor_parallel_size(
 
 
 def levanter_tensor_parallel_limit(num_chips: int, expert_parallel_size: int) -> int:
-    """Reserve Levanter's expert axis before selecting a power-of-two tensor axis."""
+    """Return the largest power of two that divides the chips per expert shard."""
     chips_per_expert_shard, remainder = divmod(num_chips, expert_parallel_size)
     if remainder or not chips_per_expert_shard:
         raise ValueError(f"expert_parallel_size={expert_parallel_size} does not divide the {num_chips}-chip slice.")
