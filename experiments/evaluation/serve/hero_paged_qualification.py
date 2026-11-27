@@ -19,12 +19,13 @@ from haliax import Axis
 from iris.jax.init import initialize_jax
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.models.hero import HeroConfig
 from levanter.models.hero_model import HeroLMHeadModel
+from levanter.models.snowball import GrugMoeHfConfig
 
 _PAGE_SIZE = 128
 _EXPERT_AXIS_SIZE = 4
@@ -114,6 +115,8 @@ def _run(engine, model, mesh, requests):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weights", required=True)
+    parser.add_argument("--tokenizer", required=True)
+    parser.add_argument("--tokenizer-revision", required=True)
     parser.add_argument("--context", type=int, choices=(65536, 262144), required=True)
     parser.add_argument("--max-logprob-delta", type=float, required=True)
     args = parser.parse_args()
@@ -122,10 +125,13 @@ def main() -> None:
     devices = jax.devices()
     if len(devices) != _EXPERT_AXIS_SIZE * _MODEL_AXIS_SIZE or any("GB200" not in d.device_kind for d in devices):
         raise ValueError(f"Expected 16 GB200 devices, got {devices}")
-    checkpoint = HFCheckpointConverter.from_hf(args.weights)
+    tokenizer = load_tokenizer(args.tokenizer, revision=args.tokenizer_revision, trust_remote_code=False)
+    checkpoint = HFCheckpointConverter(
+        HeroConfig, reference_checkpoint=args.weights, HfConfigClass=GrugMoeHfConfig, tokenizer=tokenizer
+    )
     config = checkpoint.default_config
-    if not isinstance(config, HeroConfig) or config.max_seq_len < args.context:
-        raise ValueError("Checkpoint is not a Hero export supporting the requested context")
+    if config.max_seq_len != args.context:
+        raise ValueError(f"Expected checkpoint context {args.context}, got {config.max_seq_len}")
     if args.context == 262144 and config.global_query_log_scaling is None:
         raise ValueError("262K qualification requires a checkpoint with global query log scaling")
     config = dataclasses.replace(
@@ -181,6 +187,7 @@ def main() -> None:
     report = {
         "context": args.context,
         "mesh": dict(mesh.shape),
+        "tokenizer_revision": args.tokenizer_revision,
         "checkpoint_load_seconds": load_time,
         "kv_cache_bytes_per_rank": kv_cache_bytes,
         "max_logprob_delta": args.max_logprob_delta,
