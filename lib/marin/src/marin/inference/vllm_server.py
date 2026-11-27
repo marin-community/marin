@@ -810,6 +810,18 @@ class VllmEnvironment:
         self.vllm_server: VllmServerHandle | None = None
         self.model_id: str | None = None
         self._command: list[str] | None = None
+        self._compilation_cache: VllmCompilationCache | None = None
+
+    def prepare_compilation_cache(self) -> dict[str, str]:
+        """Restore this host's cache before starting distributed worker processes."""
+        if self._compilation_cache is None:
+            self._compilation_cache, _ = _prepare_vllm_compilation_cache(
+                model_name_or_path=self.model_name_or_path,
+                extra_cli_args=self.extra_cli_args,
+                launcher=self.launcher,
+                mode=self.compilation_cache_mode,
+            )
+        return self._compilation_cache.environment()
 
     def __enter__(self) -> "VllmEnvironment":
         if self.vllm_server is None:
@@ -837,6 +849,9 @@ class VllmEnvironment:
         if self.vllm_server is not None:
             self.vllm_server.stop()
             self.vllm_server = None
+        elif self._compilation_cache is not None:
+            self._compilation_cache.close()
+        self._compilation_cache = None
         self.model_id = None
         self._command = None
 
@@ -889,6 +904,7 @@ class VllmEnvironment:
             extra_cli_args=self.extra_cli_args,
             launcher=self.launcher,
             compilation_cache_mode=self.compilation_cache_mode,
+            compilation_cache=self._compilation_cache,
             log_prefix="vllm_server_",
         )
 
@@ -1174,6 +1190,7 @@ def _start_vllm_native_process(
     extra_cli_args: list[str] | None = None,
     launcher: VllmLauncher,
     compilation_cache_mode: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED,
+    compilation_cache: VllmCompilationCache | None = None,
     log_prefix: str,
 ) -> tuple[VllmServerHandle, list[str]]:
     """Start ``vllm serve`` without imposing an HTTP readiness policy."""
@@ -1186,12 +1203,17 @@ def _start_vllm_native_process(
         extra_cli_args=extra_cli_args,
     )
     log_dir = tempfile.mkdtemp(prefix=log_prefix)
-    cache, native_env = _prepare_vllm_compilation_cache(
-        model_name_or_path=model_name_or_path,
-        extra_cli_args=extra_cli_args,
-        launcher=launcher,
-        mode=compilation_cache_mode,
-    )
+    if compilation_cache is None:
+        cache, native_env = _prepare_vllm_compilation_cache(
+            model_name_or_path=model_name_or_path,
+            extra_cli_args=extra_cli_args,
+            launcher=launcher,
+            mode=compilation_cache_mode,
+        )
+    else:
+        cache = compilation_cache
+        native_env = cache.environment()
+        native_env.update(launcher.env())
     try:
         return (
             _launch_vllm_process(

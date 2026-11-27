@@ -422,6 +422,26 @@ def _wait_until_ready(environment: VllmEnvironment) -> None:
     environment.wait_until_ready(poll_interval_seconds=0.05)
 
 
+def test_prepared_cache_survives_server_start_and_is_released_on_close(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "remote"))
+    environment = VllmEnvironment(
+        vllm_server.InferenceModelConfig(name="fake-model", path=None, engine_kwargs={}),
+        port=_free_port(),
+        timeout_seconds=30,
+        launcher=FakeVllmLauncher("serve"),
+        wait_for_ready=False,
+    )
+    cache_path = Path(environment.prepare_compilation_cache()["JAX_COMPILATION_CACHE_DIR"])
+    cache_path.mkdir(parents=True)
+    executable = cache_path / "compiled-executable"
+    executable.write_bytes(b"restored-before-ray")
+    with environment:
+        _wait_until_ready(environment)
+        assert executable.read_bytes() == b"restored-before-ray"
+        assert environment.model_id == "fake-model"
+    assert not cache_path.exists()
+
+
 @pytest.mark.parametrize(
     "args",
     [

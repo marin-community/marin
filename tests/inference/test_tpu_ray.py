@@ -15,14 +15,17 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from fray.types import ResourceConfig, create_environment
 from marin.inference import iris as serving
-from marin.inference import iris_tpu_vllm, iris_vllm, tpu_ray_runtime
+from marin.inference import iris_tpu_vllm, iris_vllm, tpu_ray_runtime, vllm_cache
 from marin.inference.config import (
+    InferenceModelConfig,
     IrisConfig,
     RemoteInferenceConfig,
     ServedModelConfig,
     VllmEngineConfig,
     VllmLauncherType,
 )
+from marin.inference.vllm_backend import vllm_launcher
+from marin.inference.vllm_server import VllmEnvironment
 
 
 def _config(cpu: float = 8):
@@ -47,8 +50,45 @@ def test_failed_ray_supervisor_reports_its_log(tmp_path):
 
 
 @pytest.mark.parametrize("transient", [False, True])
-def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch, transient):
+def test_iris_follower_restores_cache_before_ray_and_does_not_publish_endpoint(monkeypatch, tmp_path, transient):
     config = _config(cpu=6.5)
+    config = replace(config, model=replace(config.model, chat_template_content=""))
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "remote"))
+    monkeypatch.setattr(vllm_cache, "_LOCAL_CACHE_ROOT", tmp_path / "cache")
+    # Publish a real managed-cache generation from a previous server. The Ray
+    # follower must see these executable bytes before it can accept actors.
+    seed_environment = VllmEnvironment(
+        model=InferenceModelConfig(
+            name=config.model.weights, path=config.model.weights, engine_kwargs={"dtype": config.model.dtype}
+        ),
+        launcher=vllm_launcher(config.engine),
+        extra_args=[
+            "--tensor-parallel-size",
+            "16",
+            "--served-model-name",
+            config.model.model_id,
+            "--tokenizer",
+            config.model.weights,
+            "--chat-template",
+            str(tmp_path / "template.jinja"),
+            "--distributed-executor-backend",
+            "ray",
+        ],
+    )
+    (tmp_path / "template.jinja").write_text("")
+    seed = vllm_cache.VllmCompilationCache.prepare(
+        launcher_identity=seed_environment.launcher.cache_identity(),
+        compile_identity=vllm_cache.VllmCompileIdentity.from_vllm_args(
+            model_name_or_path=seed_environment.model_name_or_path,
+            extra_cli_args=tuple(seed_environment.extra_cli_args),
+        ),
+        environment={},
+    )
+    cache_directory = Path(seed.environment()["JAX_COMPILATION_CACHE_DIR"])
+    cache_directory.mkdir(parents=True)
+    (cache_directory / "compiled-executable").write_bytes(b"previous-generation")
+    seed.publish()
+    seed.close()
     service = serving.IrisServiceConfig(
         model=config.model, engine=config.engine, iris=config.iris, endpoint_name="/serve/test"
     )
@@ -79,6 +119,8 @@ def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch
         # The vLLM backend imports GitPython lazily, which probes the git executable.
         if Path(command[0]).name == "git":
             return real_popen(command, **kwargs)
+        restored = Path(kwargs["env"]["JAX_COMPILATION_CACHE_DIR"])
+        assert (restored / "compiled-executable").read_bytes() == b"previous-generation"
         # Exercise the actual constructed script invocation through argparse.
         # Without safe-path mode, sibling types.py shadows stdlib types before
         # the supervisor can start. Stop at --help so no Ray/model runs locally.
@@ -115,6 +157,7 @@ def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch
     assert coordinator.follower_stopped.call_count == (2 if transient else 1)
     coordinator.follower_stopped.assert_called_with(1)
     process.terminate.assert_called()
+    assert not cache_directory.exists()
 
 
 def test_ray_head_failure_interrupts_blocked_initialization(monkeypatch, tmp_path):

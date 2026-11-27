@@ -135,6 +135,33 @@ class VllmBackend:
         subprocess_env: Mapping[str, str] | None = None,
     ) -> Iterator[VllmEnvironment]:
         """Start vLLM without imposing HTTP readiness on the caller."""
+        with self._environment(spec, extra_args=extra_args, subprocess_env=subprocess_env) as environment:
+            with environment as running_environment:
+                yield running_environment
+
+    @contextlib.contextmanager
+    def prepare(
+        self,
+        spec: ModelSpec,
+        *,
+        extra_args: Sequence[str] = (),
+        subprocess_env: Mapping[str, str] | None = None,
+    ) -> Iterator[VllmEnvironment]:
+        """Own a configured environment without starting its server process."""
+        with self._environment(spec, extra_args=extra_args, subprocess_env=subprocess_env) as environment:
+            try:
+                yield environment
+            finally:
+                environment.close()
+
+    @contextlib.contextmanager
+    def _environment(
+        self,
+        spec: ModelSpec,
+        *,
+        extra_args: Sequence[str],
+        subprocess_env: Mapping[str, str] | None,
+    ) -> Iterator[VllmEnvironment]:
         chat_template_content = _resolved_chat_template(spec)
         resolved_port = _reserve_localhost_port(self.host) if self.port is None else self.port
         model = self._model_config(spec)
@@ -144,7 +171,7 @@ class VllmBackend:
             self.config.startup_timeout_seconds,
         )
         with _chat_template_argument(chat_template_content) as chat_template_args:
-            with VllmEnvironment(
+            yield VllmEnvironment(
                 model=model,
                 host=self.host,
                 port=resolved_port,
@@ -154,8 +181,7 @@ class VllmBackend:
                 compilation_cache_mode=self.config.compilation_cache,
                 extra_metric_families=self.config.extra_metric_families,
                 wait_for_ready=False,
-            ) as environment:
-                yield environment
+            )
 
     def _serve_args(
         self,

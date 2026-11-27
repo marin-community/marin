@@ -625,27 +625,32 @@ def _ready_vllm_dashboard(service, model, environment, *, tensor_parallel_size, 
 
 def _run_tpu_service(service: IrisServiceConfig) -> None:
     from marin.inference.vllm_backend import VllmBackend, vllm_launcher  # noqa: PLC0415
+    from marin.inference.vllm_server import VllmLauncherWithEnvironment  # noqa: PLC0415
 
     assert isinstance(service.engine, VllmEngineConfig)
     device = service.iris.worker_resources.device
     assert isinstance(device, TpuConfig)
-    launcher = vllm_launcher(service.engine)
-    with tpu_ray_gang(
-        launcher,
-        # Ray's --num-cpus is an integer: round the Iris request down, minimum 1.
-        cpus_per_host=max(1, math.floor(service.iris.worker_resources.cpu)),
-        chips_per_host=device.chip_count(),
-        timeout_seconds=service.engine.startup_timeout_seconds,
-    ) as gang:
-        if gang.leader:
-            with iris_vllm_followers(gang.identity):
-                model, num_chips = _resolved_model(service.model, service.iris)
-                backend = VllmBackend(cast(VllmEngineConfig, _resolved_engine(service.engine, service.iris)))
-                with _staged_model(model) as model:
-                    spec = _vllm_model_spec(model, num_chips, model.tensor_parallel_size)
-                    with backend.start(
-                        spec, extra_args=("--distributed-executor-backend", "ray"), subprocess_env=gang.subprocess_env
-                    ) as environment:
+    model, num_chips = _resolved_model(service.model, service.iris)
+    backend = VllmBackend(cast(VllmEngineConfig, _resolved_engine(service.engine, service.iris)))
+    # Multi-host TPU configs require shared stream-loaded weights, so the cache
+    # identity and local cache paths are identical on every host.
+    spec = _vllm_model_spec(model, num_chips, model.tensor_parallel_size)
+    with backend.prepare(spec, extra_args=("--distributed-executor-backend", "ray")) as environment:
+        cache_environment = environment.prepare_compilation_cache()
+        launcher = VllmLauncherWithEnvironment(vllm_launcher(service.engine), cache_environment)
+        with tpu_ray_gang(
+            launcher,
+            # Ray's --num-cpus is an integer: round the Iris request down, minimum 1.
+            cpus_per_host=max(1, math.floor(service.iris.worker_resources.cpu)),
+            chips_per_host=device.chip_count(),
+            timeout_seconds=service.engine.startup_timeout_seconds,
+        ) as gang:
+            if gang.leader:
+                with iris_vllm_followers(gang.identity):
+                    environment.launcher = VllmLauncherWithEnvironment(
+                        environment.launcher, {**cache_environment, **gang.subprocess_env}
+                    )
+                    with environment:
                         with _ready_vllm_dashboard(
                             service,
                             model,
@@ -660,8 +665,8 @@ def _run_tpu_service(service: IrisServiceConfig) -> None:
 
                             _block_until_timeout(check_alive, service.timeout_hours)
 
-        else:
-            wait_for_iris_vllm_shutdown(gang.identity, gang.check_alive, maximum_poll_seconds=1.0)
+            else:
+                wait_for_iris_vllm_shutdown(gang.identity, gang.check_alive, maximum_poll_seconds=1.0)
     if not gang.leader:
         notify_iris_vllm_stopped(gang.identity)
 
