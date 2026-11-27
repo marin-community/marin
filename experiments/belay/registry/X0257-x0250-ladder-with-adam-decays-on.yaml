@@ -56,6 +56,13 @@ trials:
   commit: 868482f299
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+  loss:
+  - 2.5979
+  delta:
+  - -0.0142
+  steps: 30389
+  baseline: s7n-d768 2.6121 (same commit, seed 0)
+  step_time_change: 0%
 - id: t003
   variant: X0250 ladder + Adam decays held at adam_lr*N of d512
   rung: competitive-d1024
