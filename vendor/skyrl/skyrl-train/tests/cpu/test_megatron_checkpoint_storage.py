@@ -22,6 +22,7 @@ from skyrl_train.io.torch_distributed_checkpoint import StreamingFsspecWriter
 
 
 MODEL_KEY = "decoder.layers.mlp.experts.weight"
+CHECKPOINT_TEST_TIMEOUT = 10
 
 
 def save_checkpoint(path: Path, state: dict, writer_class: type[StreamingFsspecWriter]) -> None:
@@ -52,7 +53,7 @@ def test_streaming_checkpoint_releases_training_after_cpu_snapshot(tmp_path: Pat
             def pause_after_first_record_is_staged():
                 first = next(items)
                 write_started.set()
-                if not allow_write.wait(timeout=10):
+                if not allow_write.wait(timeout=CHECKPOINT_TEST_TIMEOUT):
                     raise TimeoutError("Test did not release the checkpoint writer")
                 yield first
                 yield from items
@@ -68,16 +69,16 @@ def test_streaming_checkpoint_releases_training_after_cpu_snapshot(tmp_path: Pat
     with ThreadPoolExecutor() as executor:
         save = executor.submit(checkpoint.save, state, storage_writer=writer, no_dist=True)
         try:
-            assert write_started.wait(timeout=10)
+            assert write_started.wait(timeout=CHECKPOINT_TEST_TIMEOUT)
             if not fits_in_buffer:
                 assert not writer.staged.is_set()
                 allow_write.set()
-            assert writer.staged.wait(timeout=10)
+            assert writer.staged.wait(timeout=CHECKPOINT_TEST_TIMEOUT)
             for value in state.values():
                 value.zero_()
         finally:
             allow_write.set()
-        save.result(timeout=10)
+        save.result(timeout=CHECKPOINT_TEST_TIMEOUT)
 
     restored = {key: torch.empty_like(value) for key, value in state.items()}
     load_checkpoint(tmp_path, restored)
@@ -174,7 +175,7 @@ def save_distributed_checkpoint(rank: int, path: str, rendezvous: str) -> None:
 
         class PausedWriter(StagedMasterWeightsWriter):
             def _write_items(self, plan, items):
-                if not allow_write.wait(timeout=10):
+                if not allow_write.wait(timeout=CHECKPOINT_TEST_TIMEOUT):
                     raise TimeoutError("Training collective did not finish while the save was pending")
                 return super()._write_items(plan, items)
 
@@ -193,14 +194,14 @@ def save_distributed_checkpoint(rank: int, path: str, rendezvous: str) -> None:
                 process_group=checkpoint_group,
             )
             try:
-                assert writer.staged.wait(timeout=10)
+                assert writer.staged.wait(timeout=CHECKPOINT_TEST_TIMEOUT)
                 progress = torch.tensor(rank)
                 dist.all_reduce(progress)
                 assert progress.item() == 1
                 shard.tensor.zero_()
             finally:
                 allow_write.set()
-            save.result(timeout=10)
+            save.result(timeout=CHECKPOINT_TEST_TIMEOUT)
     finally:
         dist.destroy_process_group()
 

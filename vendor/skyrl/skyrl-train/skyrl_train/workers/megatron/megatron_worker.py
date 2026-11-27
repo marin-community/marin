@@ -491,6 +491,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             megatron_config=self.cfg.trainer.policy.megatron_config,
             optimizer_config=self.cfg.trainer.policy.optimizer_config,
             seed=self.cfg.trainer.seed,
+            checkpoint_max_staged_host_bytes=self.cfg.trainer.checkpoint_max_staged_host_bytes,
         )
         self.strategy.setup_distributed(
             timeout=timedelta(seconds=self.cfg.trainer.distributed.worker_collective_timeout_seconds)
@@ -1110,6 +1111,7 @@ class MegatronRefWorkerBase(MegatronWorker, RefWorkerBase):
             megatron_config=self.cfg.trainer.ref.megatron_config,
             optimizer_config=None,
             seed=self.cfg.trainer.seed,
+            checkpoint_max_staged_host_bytes=self.cfg.trainer.checkpoint_max_staged_host_bytes,
         )
         self.strategy.setup_distributed(
             timeout=timedelta(seconds=self.cfg.trainer.distributed.worker_collective_timeout_seconds)

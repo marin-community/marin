@@ -26,7 +26,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from skyrlrecipe import RecipePatch, sections
-from skyrlrecipe.declared import DatabaseRegistrationCallback, EvaluationCallback, HFModelSaveCallback
+from skyrlrecipe.declared import DatabaseRegistrationCallback, EvaluationCallback
 
 from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.pipeline import EvaluationResult
@@ -90,15 +90,15 @@ def build_smoke(version: str) -> Smoke:
             export=True,
         )
         config = with_role_plan(config, plan)
-        callbacks = []
-        for callback in config.trainer.callbacks:
-            if isinstance(callback, DatabaseRegistrationCallback):
-                continue
-            if isinstance(callback, EvaluationCallback):
-                callback = callback.replace(additional_evaluations={}, metric_groups={})
-            if isinstance(callback, HFModelSaveCallback):
-                callback = callback.replace(save_steps=-1)
-            callbacks.append(callback)
+        callbacks = tuple(
+            (
+                callback.replace(additional_evaluations={}, metric_groups={})
+                if isinstance(callback, EvaluationCallback)
+                else callback
+            )
+            for callback in config.trainer.callbacks
+            if not isinstance(callback, DatabaseRegistrationCallback)
+        )
         config = config.merge(
             RecipePatch(
                 generator=sections.Generator(gpu_memory_utilization=0.4),
@@ -107,11 +107,7 @@ def build_smoke(version: str) -> Smoke:
                     rollout_workers=sections.RolloutWorkers(num_workers=2, cpus_per_worker=2),
                 ),
                 trainer=sections.Trainer(
-                    max_steps=max_steps,
-                    logger="console",
-                    update_epochs_per_batch=1,
-                    hf_save_interval=-1,
-                    callbacks=tuple(callbacks),
+                    max_steps=max_steps, logger="console", update_epochs_per_batch=1, callbacks=callbacks
                 ),
             )
         )

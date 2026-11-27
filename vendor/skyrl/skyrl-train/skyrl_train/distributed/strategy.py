@@ -43,8 +43,8 @@ class DistributedStrategy(ABC):
         pass
 
     @abstractmethod
-    def save_checkpoint(self, model, ckpt_dir, node_local_rank, optimizer, scheduler, tokenizer):
-        """Save checkpoint"""
+    def save_checkpoint(self, model, ckpt_dir, node_local_rank, optimizer, scheduler, tokenizer) -> bool:
+        """Capture the checkpoint and return whether a write is pending."""
         pass
 
     @abstractmethod

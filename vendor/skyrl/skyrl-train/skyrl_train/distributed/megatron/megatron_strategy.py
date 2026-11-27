@@ -1,7 +1,7 @@
 import os
 import math
 import random
-from concurrent.futures import Future, wait
+from concurrent.futures import Future
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import timedelta
@@ -164,8 +164,15 @@ def _restore_muonh_adamh_step(optimizer, step: int) -> None:
         state["step"] = torch.tensor(step, dtype=torch.int64, device=device)
 
 
+def _join_discarded_write(write: Future[Metadata]) -> None:
+    try:
+        write.result()
+    except (CheckpointException, Exception) as error:
+        logger.warning("Discarded checkpoint also failed during shard write: {}", error)
+
+
 @dataclass
-class PendingCheckpoint:
+class _PendingCheckpoint:
     write: Future[Metadata]
     controls: ExitStack
     work_dir: str
@@ -184,7 +191,7 @@ class PendingCheckpoint:
 
     def discard(self) -> None:
         with self.controls:
-            wait([self.write])
+            _join_discarded_write(self.write)
 
 
 class MegatronStrategy(DistributedStrategy):
@@ -197,14 +204,17 @@ class MegatronStrategy(DistributedStrategy):
         megatron_config,
         optimizer_config=None,
         seed: int = 42,
+        *,
+        checkpoint_max_staged_host_bytes: int,
     ) -> None:
         super().__init__()
         self.megatron_config = megatron_config
         self.optimizer_config = optimizer_config
         self.seed = seed
         self.hf_config = None  # Set by the megatron worker once configs are initialized.
+        self._checkpoint_max_staged_host_bytes = checkpoint_max_staged_host_bytes
         self._checkpoint_group: dist.ProcessGroup | None = None
-        self._pending_checkpoint: PendingCheckpoint | None = None
+        self._pending_checkpoint: _PendingCheckpoint | None = None
         if optimizer_config is not None:
             _optimizer_checkpoint_metadata(megatron_config.optimizer_checkpoint_sharding_type)
 
@@ -344,6 +354,25 @@ class MegatronStrategy(DistributedStrategy):
     ) -> Union[List[ModelOrModelOptimPair], ModelOrModelOptimPair]:
         raise NotImplementedError()
 
+    def _prepare_s3_checkpoint(self, ckpt_dir: str) -> DirectS3TorchDistSaveShardedStrategy:
+        if self.is_rank_0():
+            try:
+                abort_multipart_uploads(ckpt_dir)
+            except ValueError:
+                raise
+            except Exception:
+                logger.opt(exception=True).warning(
+                    "Could not remove stale multipart uploads below {}; relying on bucket lifecycle cleanup",
+                    ckpt_dir,
+                )
+        dist.barrier()
+        if self._checkpoint_group is None:
+            # DCP's background collectives must not interleave with training collectives.
+            self._checkpoint_group = dist.new_group(backend="gloo", timeout=timedelta(minutes=30))
+        return DirectS3TorchDistSaveShardedStrategy(
+            ckpt_dir, staging_bytes=self._checkpoint_max_staged_host_bytes, checkpoint_group=self._checkpoint_group
+        )
+
     def save_checkpoint(
         self,
         model: MegatronModelWrapper,
@@ -354,9 +383,8 @@ class MegatronStrategy(DistributedStrategy):
         client_state: dict = {},
         tag=None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
-        *,
-        staging_bytes: int | None = None,
-    ):
+    ) -> bool:
+        """Capture the checkpoint and return whether a write is pending."""
         if self._pending_checkpoint is not None:
             raise RuntimeError("The previous checkpoint has not finished")
         # Extract base model.
@@ -401,32 +429,10 @@ class MegatronStrategy(DistributedStrategy):
 
         # Save the checkpoint across ranks in parallel. Each S3 rank shard is one
         # multipart object; the local work directory contains only small control files.
-        direct_save = None
-        if ckpt_dir.startswith("s3://"):
-            if staging_bytes is None:
-                raise ValueError("S3 checkpointing requires a host staging budget")
-            if self.is_rank_0():
-                try:
-                    abort_multipart_uploads(ckpt_dir)
-                except ValueError:
-                    raise
-                except Exception:
-                    logger.opt(exception=True).warning(
-                        "Could not remove stale multipart uploads below {}; relying on bucket lifecycle cleanup",
-                        ckpt_dir,
-                    )
-            dist.barrier()
-            if self._checkpoint_group is None:
-                # DCP's background collectives must not interleave with training collectives.
-                self._checkpoint_group = dist.new_group(backend="gloo", timeout=timedelta(minutes=30))
-            direct_save = DirectS3TorchDistSaveShardedStrategy(
-                ckpt_dir, staging_bytes=staging_bytes, checkpoint_group=self._checkpoint_group
-            )
-            save_strategy = direct_save
-        else:
-            save_strategy = get_default_save_sharded_strategy("torch_dist")
+        direct_save = self._prepare_s3_checkpoint(ckpt_dir) if ckpt_dir.startswith("s3://") else None
         save_strategy = FullyParallelSaveStrategyWrapper(
-            save_strategy, mpu.get_data_parallel_group(with_context_parallel=True)
+            direct_save if direct_save is not None else get_default_save_sharded_strategy("torch_dist"),
+            mpu.get_data_parallel_group(with_context_parallel=True),
         )
 
         with ExitStack() as controls:
@@ -452,21 +458,24 @@ class MegatronStrategy(DistributedStrategy):
                         torch.save({"client_state": client_state, "tag": tag}, f)
             except BaseException:
                 if direct_save is not None and direct_save.pending_write is not None:
-                    wait([direct_save.pending_write])
+                    _join_discarded_write(direct_save.pending_write)
                 raise
 
-            if direct_save is not None and direct_save.pending_write is not None:
-                self._pending_checkpoint = PendingCheckpoint(
+            if direct_save is not None:
+                assert direct_save.pending_write is not None, "S3 checkpoint did not start a shard write"
+                self._pending_checkpoint = _PendingCheckpoint(
                     direct_save.pending_write, controls.pop_all(), work_dir, ckpt_dir
                 )
-                return
+                return True
 
         dist.barrier()
         ckpt_base.async_calls.close()
         ckpt_base.async_calls = AsyncCallsQueue(persistent=True)
         self.log(f"Checkpoint successfully saved to {ckpt_dir}")
+        return False
 
-    def checkpoint_write_ready(self) -> bool:
+    def checkpoint_write_done(self) -> bool:
+        """Return whether the rank is idle or its write has settled, even on failure."""
         return self._pending_checkpoint is None or self._pending_checkpoint.write.done()
 
     def finish_checkpoint(self) -> None:

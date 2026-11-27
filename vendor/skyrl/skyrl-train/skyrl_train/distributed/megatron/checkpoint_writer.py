@@ -95,7 +95,7 @@ class MasterWeightsWriter(StreamingFsspecWriter):
 
 
 class StagedMasterWeightsWriter(MasterWeightsWriter):
-    """Copy the rank's final write plan to host memory before streaming it."""
+    """Stream a rank's assigned records while copying the remaining records to host memory."""
 
     def __init__(self, path: str, *, filesystem: AbstractFileSystem, max_staged_bytes: int) -> None:
         super().__init__(path, filesystem=filesystem, tensor_copy_ahead_bytes=max_staged_bytes)

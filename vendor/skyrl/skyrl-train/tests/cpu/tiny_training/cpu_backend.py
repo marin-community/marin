@@ -116,7 +116,7 @@ class CPUStrategy(DistributedStrategy):
 
     def save_checkpoint(
         self, model, ckpt_dir, node_local_rank, optimizer, scheduler, client_state=None, tokenizer=None
-    ):
+    ) -> bool:
         io.makedirs(ckpt_dir, exist_ok=True)
         states = {
             "model": model.state_dict(),
@@ -127,6 +127,7 @@ class CPUStrategy(DistributedStrategy):
         }
         torch.save(states, os.path.join(ckpt_dir, CHECKPOINT_FILE_TEMPLATE.format(rank=dist.get_rank())))
         dist.barrier()
+        return False
 
     def load_checkpoint(
         self, model, ckpt_dir, optimizer=None, scheduler=None, load_module_strict=True, load_training_state=True

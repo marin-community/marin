@@ -691,9 +691,7 @@ class RayPPOTrainer:
                 with Timer("save_checkpoints", self.all_timings):
                     rollout_state = await self._rollout_state()
                     snapshot = await asyncio.to_thread(self._snapshot_checkpoint, rollout_state)
-                if not snapshot.has_pending_policy_write:
-                    await self.callback_handler.call_event_async("on_save", final_state, self._control, trainer=self)
-                self._start_checkpoint_upload(snapshot, final_state)
+                await self._start_checkpoint_upload(snapshot, final_state)
                 if await self._drain_checkpoint_upload():
                     logger.info("Saved final checkpoint.")
             if self._control.should_save_hf_model:
@@ -734,11 +732,9 @@ class RayPPOTrainer:
             self._record_checkpoint_save_failure(state)
             return
 
-        if not snapshot.has_pending_policy_write:
-            await self.callback_handler.call_event_async("on_save", state, self._control, trainer=self)
-        self._start_checkpoint_upload(snapshot, state)
+        await self._start_checkpoint_upload(snapshot, state)
 
-    def _start_checkpoint_upload(self, snapshot: CheckpointSnapshot, state: TrainerState) -> None:
+    async def _start_checkpoint_upload(self, snapshot: CheckpointSnapshot, state: TrainerState) -> None:
         assert getattr(self, "_pending_checkpoint_upload", None) is None
         if snapshot.has_pending_policy_write:
             control = replace(self._control)
@@ -750,18 +746,22 @@ class RayPPOTrainer:
 
             task = asyncio.create_task(publish())
         else:
+            await self.callback_handler.call_event_async("on_save", state, self._control, trainer=self)
             task = asyncio.create_task(self._finish_checkpoint_upload(snapshot))
         self._pending_checkpoint_upload = (task, state)
 
+    def _finish_policy_checkpoint(self) -> None:
+        # An actor can be running an optimizer update. Poll without waiting
+        # inside an actor method so shard writes never block its training RPCs.
+        while not all(ray.get(self.policy_model.async_run_ray_method("pass_through", "checkpoint_write_done"))):
+            time.sleep(1)
+        refs = self.policy_model.async_run_ray_method("pass_through", "finish_checkpoint")
+        ray.wait(refs, num_returns=len(refs), fetch_local=False)
+        ray.get(refs)
+
     def _finish_checkpoint_upload_blocking(self, snapshot: CheckpointSnapshot) -> tuple[float, float]:
         if snapshot.has_pending_policy_write:
-            # An actor can be running an optimizer update. Poll without waiting
-            # inside an actor method so shard writes never block its training RPCs.
-            while not all(ray.get(self.policy_model.async_run_ray_method("pass_through", "checkpoint_write_ready"))):
-                time.sleep(1)
-            refs = self.policy_model.async_run_ray_method("pass_through", "finish_checkpoint")
-            ray.wait(refs, num_returns=len(refs), fetch_local=False)
-            ray.get(refs)
+            self._finish_policy_checkpoint()
         io.write_bytes_atomic(snapshot.trainer_state_path, snapshot.trainer_state_payload)
         io.write_bytes_atomic(snapshot.rollout_state_path, snapshot.rollout_state_payload)
         io.write_bytes_atomic(snapshot.marker_path, str(snapshot.step).encode())
@@ -2855,17 +2855,18 @@ class RayPPOTrainer:
         trainer_state_buffer = stdlib_io.BytesIO()
         torch.save(trainer_state, trainer_state_buffer)
 
-        is_s3 = policy_save_dir.startswith("s3://")
-        save_options = {"staging_bytes": self.cfg.trainer.checkpoint_max_staged_host_bytes} if is_s3 else {}
         refs = self.policy_model.async_run_ray_method(
-            "pass_through", "save_checkpoint", ckpt_dir=policy_save_dir, tokenizer=self.tokenizer, **save_options
+            "pass_through", "save_checkpoint", ckpt_dir=policy_save_dir, tokenizer=self.tokenizer
         )
         try:
-            ray.get(refs)
-        except ray.exceptions.RayTaskError:
-            if is_s3:
+            has_pending_policy_write = any(ray.get(refs))
+        except ray.exceptions.RayTaskError as error:
+            if policy_save_dir.startswith("s3://"):
                 # A rank can fail writing its control files after other ranks hand off staging.
-                ray.get(self.policy_model.async_run_ray_method("pass_through", "discard_checkpoint"))
+                try:
+                    ray.get(self.policy_model.async_run_ray_method("pass_through", "discard_checkpoint"))
+                except ray.exceptions.RayError as cleanup_error:
+                    error.add_note(f"Could not discard pending policy writes: {cleanup_error}")
             raise
         latest_checkpoint_file = os.path.join(self.cfg.trainer.ckpt_path, LATEST_CHECKPOINT_FILE)
         return CheckpointSnapshot(
@@ -2876,7 +2877,7 @@ class RayPPOTrainer:
             trainer_state_path=trainer_state_path,
             trainer_state_payload=trainer_state_buffer.getvalue(),
             marker_path=latest_checkpoint_file,
-            has_pending_policy_write=is_s3,
+            has_pending_policy_write=has_pending_policy_write,
         )
 
     def _cleanup_old_checkpoints(self, step: int):
