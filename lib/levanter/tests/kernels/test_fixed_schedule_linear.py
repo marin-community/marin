@@ -2,18 +2,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+"""Run the four-device cases on TPUv4.
+
+uv run --package marin-levanter --extra tpu --group test pytest -n 0 -m manual \
+    lib/levanter/tests/kernels/test_fixed_schedule_linear.py -k four_device
+"""
+
 import hashlib
 
 import jax
 import jax.numpy as jnp
-from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 import numpy as np
 import pytest
 
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.kernels.pallas.fixed_schedule_linear import fixed_schedule_linear
 
-pytestmark = pytest.mark.tpu
+pytestmark = pytest.mark.manual
 
 
 @pytest.fixture(autouse=True)
@@ -217,6 +223,22 @@ def test_fixed_schedule_four_device_custom_vjp_matches_independent_reference(d, 
     assert dx.sharding == row_sharding
     assert dw.sharding == replicated_sharding
     assert bool(jnp.isfinite(primal).all()) and bool(jnp.isfinite(dx).all()) and bool(jnp.isfinite(dw).all())
+
+
+def test_fixed_schedule_four_device_accepts_a_differently_named_row_axis():
+    _four_device_shardings()
+    mesh = Mesh(np.asarray(jax.devices()), ("rows",), axis_types=(AxisType.Explicit,))
+    rows = NamedSharding(mesh, P("rows", None))
+    replicated = NamedSharding(mesh, P(None, None))
+    x, w = _inputs(128, 128, jnp.float32, jnp.bfloat16)
+
+    with jax.set_mesh(mesh):
+        project = jax.jit(fixed_schedule_linear)
+        w = jax.device_put(w, replicated)
+        row_output = project(jax.device_put(x, rows), w)
+        replicated_output = project(jax.device_put(x, replicated), w)
+    np.testing.assert_array_equal(_raw_bits(row_output), _raw_bits(replicated_output))
+    assert row_output.sharding == rows
 
 
 def test_fixed_schedule_four_device_lowered_forward_backward_have_shard_map_without_all_gather():

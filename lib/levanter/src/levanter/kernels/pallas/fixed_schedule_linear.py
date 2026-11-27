@@ -122,10 +122,9 @@ def _validate_four_device_mesh(mesh: jax.sharding.Mesh | jax.sharding.AbstractMe
     devices = jax.devices()
     if any("tpu v4" not in device.device_kind.lower() for device in devices):
         raise FixedScheduleLinearUnsupportedError("the four-device fixed-schedule mesh requires TPUv4 devices")
-    expected_shape = {"replica_dcn": 1, "data": 4, "expert": 1, "context": 1, "model": 1}
-    if dict(mesh.shape) != expected_shape:
+    if tuple(size for size in mesh.shape.values() if size > 1) != (4,):
         raise FixedScheduleLinearUnsupportedError(
-            "the four-device fixed-schedule mesh must be Explicit replica_dcn=1, data=4, context=1, expert=1, model=1"
+            "the four-device fixed-schedule mesh must have a single axis spanning all four devices"
         )
     axis_types = tuple(mesh.axis_types)
     if axis_types and any(str(axis_type).lower().endswith("explicit") is False for axis_type in axis_types):
