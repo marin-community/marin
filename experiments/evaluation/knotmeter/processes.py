@@ -61,7 +61,11 @@ def stop_group(process: subprocess.Popen) -> None:
     try:
         process.wait(timeout=45)
     except subprocess.TimeoutExpired:
-        os.killpg(process.pid, signal.SIGKILL)
+        pass
+    finally:
+        # The wrapper can exit before a worker that ignored SIGTERM.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
         process.wait(timeout=15)
 
 
