@@ -24,6 +24,7 @@ from finestore.rl.run_records import (
     write_evaluations,
 )
 from fsspec.core import url_to_fs
+from iris.cluster.backends.k8s.tasks import POD_DELETED_TERMINAL_REASON
 from iris.resources.state import JobState, TaskState
 from marin.execution.artifact import RECORD_FILENAME
 from marin.rl.skyrl_records import read_stored_skyrl_attempts, recorded_launch
@@ -277,7 +278,6 @@ def test_nightly_retries_publication_and_refills_deficit(
             "--run",
         ]
         assert not pending.exists()
-        assert publication.CONTROL_SUBMISSION_ENV not in request["environment"].env_vars
 
     iris = FakeIris(monkeypatch, on_submit=observe_submit)
 
@@ -302,32 +302,34 @@ def test_nightly_retries_publication_and_refills_deficit(
     iris.set_job(root, JobState.FAILED)
     write(accepted, "accepted", "succeeded")
     write(lost, "preempted", "failed", **{"result.iris_job_state": "worker_failed"})
-    iris.set_job(root + "/training", JobState.WORKER_FAILED, reason="Evicted")
     marina.fail_once.add("accepted")
     assert tick("publication-error") == 1
     assert publication.ControlSubmission.model_validate_json(pending.read_text()) == handoff
     assert marina.by_attempt("preempted").status == "failed" and len(launcher.requests) == 1
+    assert tick("iris-error") == 1
+    assert publication.ControlSubmission.model_validate_json(pending.read_text()) == handoff
+    iris.set_job(root + "/training", JobState.WORKER_FAILED, preemptions=1)
     assert tick("refill") == 0
     assert marina.by_attempt("accepted").status == "succeeded"
     assert launcher.requests == {(preset.name, "first"): 3, (preset.name, "refill"): 2}
     assert publication.ControlSubmission.model_validate_json(pending.read_text()).job != root
+    pending.unlink()
+    assert tick("lost-reply") == 0
+    assert len(launcher.requests) == 2
 
 
 def test_nightly_distinguishes_interruptions_and_failures(
     recorded_runs, monkeypatch, tmp_path, subtests, cache_native_compositions
 ):
     scenarios = (
-        ("evicted", JobState.WORKER_FAILED, {}, "Evicted to make room for higher-priority work", 0),
-        ("killed-after-preparing", JobState.KILLED, {}, "", 0),
-        ("native-failed", JobState.FAILED, {}, "training failed", 1),
-        ("worker-with-failed-task", JobState.WORKER_FAILED, {TaskState.FAILED: 1}, "worker failed", 1),
-        ("oom", JobState.WORKER_FAILED, {}, "OOMKilled", 1),
-        ("host-loss", JobState.WORKER_FAILED, {}, "host crash", 1),
-        ("exhausted-memory", JobState.WORKER_FAILED, {}, "out of memory", 1),
-        ("failed-reconcile", JobState.WORKER_FAILED, {}, "worker reconcile failure threshold exceeded", 1),
-        ("unhealthy-worker", JobState.WORKER_FAILED, {}, "unhealthy worker failed", 1),
-        ("failed-before-preparing", JobState.FAILED, None, "", 1),
-        ("lost-before-preparing", None, None, "", 0),
+        ("preempted-task", JobState.WORKER_FAILED, {TaskState.PREEMPTED: 1}, "", 0),
+        ("deleted-pod", JobState.WORKER_FAILED, {}, POD_DELETED_TERMINAL_REASON, 0),
+        ("unknown-worker-failure", JobState.WORKER_FAILED, {}, "", 1),
+        ("worker-crash", JobState.FAILED, {TaskState.FAILED: 1}, "", 1),
+        ("killed-after-preparing", JobState.KILLED, {}, "", 1),
+        ("unschedulable", JobState.UNSCHEDULABLE, None, "", 1),
+        ("succeeded-without-receipt", JobState.SUCCEEDED, None, "", 1),
+        ("lost-before-preparing", None, None, "", 1),
     )
     for scenario, state, tasks, reason, expected in scenarios:
         with subtests.test(scenario=scenario), monkeypatch.context() as patch:
@@ -346,26 +348,14 @@ def test_nightly_distinguishes_interruptions_and_failures(
                     coordinator=root,
                     receipt={"result.iris_job_state": None if state == JobState.KILLED else state},
                 )
-                message = {"message": reason} if scenario == "host-loss" else {"reason": reason}
-                iris.set_job(root + "/training", state, tasks=tasks, **message)
+                iris.set_job(root + "/training", state, tasks=tasks, terminal_reason=reason)
             if state is not None:
-                iris.set_job(root, JobState.KILLED if state == JobState.KILLED else JobState.FAILED)
+                iris.set_job(root, state if tasks is None or state == JobState.KILLED else JobState.FAILED)
             pending = directory / "snowball-speed-medium.json"
             pending.write_text(publication.ControlSubmission(job=root, outputs=(str(output),)).model_dump_json())
             assert nightly_tick(patch, directory, "reconcile", "snowball/learning-medium") == expected
             assert not pending.exists()
             assert len(marina.rows) == int(tasks is not None)
-
-
-def test_nightly_skips_duplicate_coordinator_without_handoff(
-    recorded_runs, monkeypatch, tmp_path, cache_native_compositions
-):
-    FakeMarina(monkeypatch)
-    iris, launcher = FakeIris(monkeypatch), FakeLauncher(monkeypatch)
-    duplicate = "/runner/checkpoints-snowball-rl-controls-speed-medium-lost-reply-coordinator"
-    iris.set_job(duplicate, JobState.BUILDING)
-    assert nightly_tick(monkeypatch, tmp_path, "lost-reply", "snowball/speed-medium") == 0
-    assert not launcher.requests
 
 
 @pytest.mark.parametrize(

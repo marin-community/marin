@@ -6,7 +6,6 @@
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -18,6 +17,7 @@ from connectrpc.errors import ConnectError
 from finestore.rl.rl_progress import completed_controls
 from iris.cli.connect import open_iris_client
 from iris.client.client import IrisClient
+from iris.cluster.backends.k8s.tasks import POD_DELETED_TERMINAL_REASON
 from iris.cluster.client.job_info import resolve_job_user
 from iris.cluster.types import JobName
 from iris.resources.state import JobState, TaskState, is_job_finished
@@ -26,13 +26,14 @@ from marin.rl.skyrl import IRIS_HUB_CLUSTER_CONFIG
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training import rl_compose, rl_gate, rl_index, rl_publication
+from experiments.post_training import rl, rl_compose, rl_gate, rl_index, rl_publication
 from experiments.post_training.mochi_rl import MOCHI
 from experiments.post_training.rl_presets import Preset
 from experiments.post_training.snowball_rl import SNOWBALL
 
 _TABLES = {table.model: table for table in (SNOWBALL, MOCHI)}
 _ACTIVE_STATES = (JobState.PENDING, JobState.BUILDING, JobState.RUNNING)
+_DEFAULT_STATE_DIR = "s3://marin-us-east-08a/marin/ci/rl-controls/pending"
 
 
 def _active_jobs(client: IrisClient, prefix: str) -> set[JobName]:
@@ -91,18 +92,19 @@ def dispatch_comment(event_path: Path) -> None:
     subprocess.check_output([*api, f"{repository}/issues/{number}/comments", "-f", f"body={reply}"])
 
 
-def _failed_job(client: IrisClient, state: str | None, job_id: str | None) -> bool:
-    if state != JobState.WORKER_FAILED or job_id is None:
-        return state != JobState.KILLED
+def _was_interrupted(client: IrisClient, state: str | None, job_id: str | None) -> bool:
+    if state not in (JobState.WORKER_FAILED, JobState.KILLED) or job_id is None:
+        return False
     name = JobName.from_wire(job_id)
     job = client.job_status(name)
     if job.task_state_counts.get(TaskState.FAILED):
-        return True
-    reasons = " ".join([job.error_message, *(task.error_message for task in client.list_tasks(name))]).lower()
-    pattern = (
-        r"\boom\s*killed\b|out of memory|host crash|worker reconcile failure threshold exceeded|unhealthy worker failed"
+        return False
+    return bool(job.preemption_count or job.task_state_counts.get(TaskState.PREEMPTED)) or any(
+        attempt.terminal_reason == POD_DELETED_TERMINAL_REASON
+        for task in client.list_tasks(name)
+        for attempt in task.attempts
+        if attempt.attempt_number == task.current_attempt_number
     )
-    return re.search(pattern, reasons) is not None
 
 
 def _run_controls(batch: str, selected: Sequence[tuple[str, Preset]], state_dir: StoragePath) -> int:
@@ -143,15 +145,15 @@ def _run_controls(batch: str, selected: Sequence[tuple[str, Preset]], state_dir:
                 print(result.model_dump_json(), flush=True)
                 if result.unserved_records:
                     raise RuntimeError(f"Publication remains pending for {submission.job}")
-                path.rm()
                 check_coordinator = not result.attempts
                 for attempt in result.ineligible_controls:
                     native = attempt.native.result
                     if native.state.is_terminal:
-                        failed |= _failed_job(client, native.iris_job_state, native.iris_job_id)
+                        failed |= not _was_interrupted(client, native.iris_job_state, native.iris_job_id)
                     else:
                         check_coordinator = True
-                failed |= check_coordinator and state is not None and _failed_job(client, state, submission.job)
+                failed |= check_coordinator and not _was_interrupted(client, state, submission.job)
+                path.rm()
             except Exception as error:
                 print(f"{model}/{preset.name}: {error}", file=sys.stderr)
                 blocked.add(target)
@@ -163,7 +165,7 @@ def _run_controls(batch: str, selected: Sequence[tuple[str, Preset]], state_dir:
                 if (model, preset.name) in blocked:
                     print(f"Skipping {target}: pending record")
                     continue
-                prefix = sanitize_job_name(f"checkpoints/{_TABLES[model].namespace}/controls/{preset.name}") + "-"
+                prefix = sanitize_job_name(rl.control_name_prefix(preset, _TABLES[model])) + "-"
                 if _active_jobs(client, f"/{owner}/{prefix}"):
                     print(f"Skipping {target}: active coordinator")
                     continue
@@ -173,9 +175,9 @@ def _run_controls(batch: str, selected: Sequence[tuple[str, Preset]], state_dir:
                 path = state_dir / f"{model}-{preset.name}.json"
                 module = [sys.executable, "-m", f"experiments.post_training.{model}_rl"]
                 options = ["--preset", preset.name, "--control", batch, "--replicates", str(count)]
+                options += ["--control-handoff", str(path)]
                 result = subprocess.run(
                     [*module, *options, "--version", rl_compose.RUN_ARTIFACT_VERSION, "--run"],
-                    env={**os.environ, rl_publication.CONTROL_SUBMISSION_ENV: str(path)},
                     check=False,
                 )
                 failed |= result.returncode != 0
@@ -194,7 +196,7 @@ def main() -> int:
     parser.add_argument("--presets", default="", help="Space-separated models or model/preset selectors.")
     parser.add_argument(
         "--state-dir",
-        default="s3://marin-us-east-08a/marin/ci/rl-controls/pending",
+        default=_DEFAULT_STATE_DIR,
         help="Shared directory for pending control batches.",
     )
     args = parser.parse_args()

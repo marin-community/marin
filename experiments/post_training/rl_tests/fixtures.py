@@ -225,15 +225,16 @@ class FakeIris:
         monkeypatch.setattr(runner, "open_iris_client", lambda **_: nullcontext(self))
         monkeypatch.setattr(rl_nightly_controls, "open_iris_client", lambda **_: nullcontext(self))
 
-    def set_job(self, name, state, *, tasks=None, reason="", message=""):
+    def set_job(self, name, state, *, tasks=None, preemptions=0, terminal_reason=""):
         job = JobName.from_wire(name)
         self.jobs[job] = SimpleNamespace(
             job_id=job,
             state=state,
             task_state_counts=tasks or {},
-            error_message=message,
+            preemption_count=preemptions,
         )
-        self.tasks[job] = [SimpleNamespace(error_message=reason)] if reason else []
+        attempts = (SimpleNamespace(attempt_number=0, terminal_reason=terminal_reason),) if terminal_reason else ()
+        self.tasks[job] = [SimpleNamespace(current_attempt_number=0, attempts=attempts)]
         return job
 
     def submit(self, **request):
@@ -287,22 +288,18 @@ class FakeMarina:
 
 class FakeLauncher:
     def __init__(self, monkeypatch, *, table=None):
-        self.monkeypatch = monkeypatch
         self.table = table
         self.requests = {}
         monkeypatch.setattr(rl_nightly_controls, "subprocess", SimpleNamespace(run=self.run))
 
-    def run(self, argv, *, env, check):
+    def run(self, argv, *, check):
         module, args = argv[2], argv[3:]
         preset = args[args.index("--preset") + 1]
         batch = args[args.index("--control") + 1]
         self.requests[preset, batch] = int(args[args.index("--replicates") + 1])
         code = 0
         if self.table is not None:
-            with self.monkeypatch.context() as environment:
-                path = rl_publication.CONTROL_SUBMISSION_ENV
-                environment.setenv(path, env[path])
-                code = runner.main(self.table, argv=args, entry_module=module)
+            code = runner.main(self.table, argv=args, entry_module=module)
         return SimpleNamespace(returncode=code)
 
 

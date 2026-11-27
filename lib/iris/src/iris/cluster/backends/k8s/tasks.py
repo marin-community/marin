@@ -237,7 +237,7 @@ _TERMINAL_REASON_MAX_CHARS = 500
 
 # Terminal reason for a vanished pod whose disruption was never observed — the
 # pod was deleted between two polls, so no condition survived to name the cause.
-_POD_DELETED_TERMINAL_REASON = "PodDeleted: pod was deleted while the attempt was active"
+POD_DELETED_TERMINAL_REASON = "PodDeleted: pod was deleted while the attempt was active"
 _POD_UNKNOWN_TERMINAL_REASON = "PodUnknown: pod remained in an unknown phase while the attempt was active"
 
 _RESOLVED_POD_PHASES = frozenset({"Pending", "Running", "Succeeded", "Failed"})
@@ -3482,7 +3482,7 @@ class K8sTaskProvider:
                     # leaving no terminal status), WORKER_FAILED when the cause was
                     # never observed.
                     disruption_reason = self._disruption_reasons.get(entry)
-                    terminal_reason = disruption_reason or _POD_DELETED_TERMINAL_REASON
+                    terminal_reason = disruption_reason or POD_DELETED_TERMINAL_REASON
                     new_state = (
                         job_pb2.TASK_STATE_PREEMPTED
                         if disruption_reason is not None

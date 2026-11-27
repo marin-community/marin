@@ -354,6 +354,11 @@ under the preset's output root.
 3. The SkyRL nightly workflow on main runs each gated preset with its default inputs. A version
    with fewer than five completed controls requests enough runs to reach five. Otherwise the workflow
    requests one run per preset. Later workflow runs publish pending results before refilling.
+   Gated Snowball presets use Reno H100s. Each gated Mochi attempt uses one GB200 rack.
+
+   Handoffs are stored under `s3://marin-us-east-08a/marin/ci/rl-controls/pending/`.
+   Iris-confirmed preemption or pod deletion counts as interruption. Other ineligible attempts fail the workflow.
+   Inspect a handoff with `uv run fsutil cat s3://marin-us-east-08a/marin/ci/rl-controls/pending/snowball-learning-medium.json`.
 
    To refresh selected controls, dispatch the workflow on `main` with `controls=true` and a space-separated
    `presets` list. With repository write access, comment `/rl-controls snowball/learning-medium mochi`

@@ -161,6 +161,10 @@ def _run_rl(
     return run_skyrl(config, forward_env=forward_env)
 
 
+def control_name_prefix(preset: presets.Preset, table: presets.ModelPresets) -> str:
+    return f"checkpoints/{table.namespace}/controls/{preset.name}"
+
+
 def _run_name(
     preset: presets.Preset,
     provenance: Provenance,
@@ -174,7 +178,7 @@ def _run_name(
     if control:
         if replicate is None:
             raise ValueError("a control output requires a replicate")
-        return f"checkpoints/{table.namespace}/controls/{preset.name}-{provenance.tree_hash}-{control}-r{replicate}"
+        return f"{control_name_prefix(preset, table)}-{provenance.tree_hash}-{control}-r{replicate}"
     name = f"checkpoints/{table.namespace}/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
     if resume_step is not None:
         name += f"-resume-step-{resume_step}"
@@ -827,8 +831,17 @@ def _submit_from_launcher(
         environment["GIT_COMMIT"] = revision
     if preset.output_ttl_days is not None:
         environment["MARIN_PREFIX"] = recipe.run_prefix(preset)
+    submission_path = context.params["control_handoff"]
+    if submission_path:
+        remaining = iter(argv)
+        forwarded = []
+        for arg in remaining:
+            if arg == "--control-handoff":
+                next(remaining)
+            elif not arg.startswith("--control-handoff="):
+                forwarded.append(arg)
+        argv = tuple(forwarded)
     job = submit_or_run(module, handles, max_concurrent, environment, argv=argv)
-    submission_path = os.environ.get(rl_publication.CONTROL_SUBMISSION_ENV)
     if submission_path:
         submission = rl_publication.ControlSubmission(job=str(job), outputs=tuple(native_ids))
         StoragePath(submission_path).write_text(submission.model_dump_json())
@@ -1008,6 +1021,7 @@ def command(
         metavar="BATCH",
         help="Run a gated preset's defaults as named controls from a clean checkout.",
     )
+    @click.option("--control-handoff", metavar="PATH", help="Write the accepted control batch for later publication.")
     def run_command(
         preset_name: str,
         settings: tuple[str, ...],
@@ -1016,6 +1030,7 @@ def command(
         resume_name: str | None,
         replicates: int,
         control: str | None,
+        control_handoff: str | None,
         requirements: tuple[str, ...],
         issue: int | None,
         plan: bool,
@@ -1029,6 +1044,8 @@ def command(
         do_run = context.params["do_run"]
         if plan and do_run:
             raise click.UsageError("Choose either --plan or --run")
+        if control_handoff is not None and not (control and do_run):
+            raise click.UsageError("--control-handoff requires --control --run")
         if control is not None and not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,47}", control):
             raise click.BadParameter("use a 1-48 character control batch identifier", param_hint="--control")
         if control and any(value is not None for value in (checkpoints, checkpoint_every, export)):

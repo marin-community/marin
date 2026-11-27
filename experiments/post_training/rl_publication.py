@@ -62,8 +62,6 @@ from experiments.post_training.rl_measurements import (
 
 logger = logging.getLogger(__name__)
 
-CONTROL_SUBMISSION_ENV = "MARIN_RL_CONTROL_SUBMISSION"
-
 
 class ControlSubmission(BaseModel, frozen=True):
     job: str
