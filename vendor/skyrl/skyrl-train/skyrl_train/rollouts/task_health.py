@@ -1,20 +1,21 @@
-"""Store compact diagnostics for native agentic training attempts."""
+"""Store compact diagnostics for native task rollout attempts."""
 
 import hashlib
 import json
 from collections.abc import Sequence
 from typing import Any
 
-from finestore.rl.task_health import ATTEMPT_RECEIPTS_DIRECTORY, AttemptReceipt, Phase
+from finestore.rl.task_health import ATTEMPT_RECEIPTS_DIRECTORY, EVALUATION_RECEIPTS_DIRECTORY, AttemptReceipt, Phase
 from rigging.filesystem.storage_path import StoragePath
 from rigging.redaction import redact_string
-from rolloutengine.models import SETUP_COMPLETED_METRIC, RolloutOperation, TaskRolloutSpec
+from rolloutengine.models import SETUP_COMPLETED_METRIC, RolloutFailure, RolloutOperation, TaskRolloutSpec
 from shellbox.machine import ExitReason
-from taskcompendium.grading_result import Outcome
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.identity import task_key
 from taskcompendium.runtime.environment import environment_identity
 
 from skyrl_train.rollouts.training_record import TrainingRollout
+from skyrl_train.trajectory_runners.types import TrainingPhase
 
 _ERROR_CHARS = 1024
 _OUTPUT_TAIL_CHARS = 4096
@@ -25,20 +26,29 @@ def _diagnostic_tail(value: Any, limit: int) -> str | None:
 
 
 def attempt_receipt(
-    attempt_id: str, spec: TaskRolloutSpec, result: TrainingRollout, *, task_digest: str | None = None
-) -> AttemptReceipt | None:
+    attempt_id: str,
+    spec: TaskRolloutSpec,
+    result: TrainingRollout | BaseException,
+    *,
+    rollout_id: str,
+    task_digest: str,
+    source_id: str | None = None,
+) -> AttemptReceipt:
     """Project the result's setup and verifier evidence without retaining the trajectory."""
     task = spec.task
-    if "agentic" not in task.tags:
-        return None
     image, setup = environment_identity(task.environment_requirements)
-    grade, failure = result.grade, result.failure
+    if isinstance(result, BaseException):
+        grade = GradeResult(Outcome.INFRA_ERROR, None, str(result))
+        failure = RolloutFailure(type(result).__name__, {})
+        completed = None
+    else:
+        grade, failure = result.grade, result.failure
+        completed = result.metrics.get(SETUP_COMPLETED_METRIC)
     diagnostics = failure.diagnostics if failure is not None else {}
     operation = diagnostics.get("operation")
     evidence = grade.diagnostics
     setup_exit = diagnostics.get("setup_exit_code") if diagnostics.get("setup_reason") == ExitReason.EXITED else None
     setup_failed = "setup_reason" in diagnostics
-    completed = result.metrics.get(SETUP_COMPLETED_METRIC)
     setup_completed = bool(completed) if setup is not None and completed is not None else None
     if setup_failed:
         phase = Phase.TASK_SETUP
@@ -52,8 +62,10 @@ def attempt_receipt(
     graded = grade.status == Outcome.GRADED
     return AttemptReceipt(
         attempt_id=attempt_id,
+        rollout_id=rollout_id,
         task_id=task.id,
-        task_digest=task_digest if task_digest is not None else canonical_sha256(task.model_dump(mode="json")),
+        task_digest=task_digest,
+        task_key=task_key(source_id, task),
         outcome=Outcome.INFRA_ERROR if setup_failed else grade.status,
         grading_failure=grade.failure,
         exception_type=failure.exception_type if failure is not None else None,
@@ -70,14 +82,16 @@ def attempt_receipt(
     )
 
 
-def write_attempt_receipts(export_path: str, receipts: Sequence[AttemptReceipt]) -> None:
+def write_attempt_receipts(export_path: str, receipts: Sequence[AttemptReceipt], *, phase: TrainingPhase) -> None:
     """Write one deterministic object per generated batch with health receipts."""
     if not receipts:
         return
     payload = "".join(
         json.dumps(row.model_dump(mode="json"), sort_keys=True) + "\n"
-        for row in sorted(receipts, key=lambda row: row.attempt_id)
+        for row in sorted(receipts, key=lambda row: row.rollout_id or row.attempt_id)
     )
     directory = StoragePath(export_path) / ATTEMPT_RECEIPTS_DIRECTORY
+    if phase == "eval":
+        directory = directory / EVALUATION_RECEIPTS_DIRECTORY
     directory.mkdirs()
     (directory / (hashlib.sha256(payload.encode()).hexdigest() + ".jsonl")).write_text(payload)

@@ -9,6 +9,7 @@ from rolloutengine.models import RolloutFailure
 from rolloutengine.test_support import arithmetic_task, rollout_spec
 from shellbox.machine import ExitReason
 from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import EnvironmentRequirements
 
 from skyrl_train.rollouts.task_health import attempt_receipt, write_attempt_receipts
@@ -38,9 +39,9 @@ def test_health_receipt_preserves_setup_exit_evidence(tmp_path, reason, exit_cod
             {"setup_reason": reason.value, "setup_exit_code": exit_code, "setup_stderr": "setup output"},
         ),
     )
-    receipt = attempt_receipt("attempt-1", rollout_spec(task), result)
-    assert receipt is not None
-    write_attempt_receipts(str(tmp_path), [receipt])
+    digest = canonical_sha256(task.model_dump(mode="json"))
+    receipt = attempt_receipt("attempt-1", rollout_spec(task), result, rollout_id="rollout-1", task_digest=digest)
+    write_attempt_receipts(str(tmp_path), [receipt], phase="train")
 
     (stored_receipts,) = (tmp_path / ATTEMPT_RECEIPTS_DIRECTORY).glob("*.jsonl")
     stored = json.loads(stored_receipts.read_text())

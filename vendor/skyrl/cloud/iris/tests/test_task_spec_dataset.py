@@ -46,9 +46,11 @@ class LocalAdmissionFactory:
         raise AssertionError(f"Admission must not acquire a machine: {spec}")
 
 
-def _load(tmp_path: Path, tasks, **task_spec_overrides) -> list[TaskInput]:
+def _load(tmp_path: Path, tasks, *, source_id: str | None = None, **task_spec_overrides) -> list[TaskInput]:
     path = tmp_path / "tasks.parquet"
-    pq.write_table(pa.Table.from_pylist([{"task_spec": task.model_dump_json()} for task in tasks]), path)
+    pq.write_table(
+        pa.Table.from_pylist([{"task_spec": task.model_dump_json(), "source": source_id} for task in tasks]), path
+    )
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=Tokenizer(models.WordLevel({"[UNK]": 0}, unk_token="[UNK]")),
         unk_token="[UNK]",
@@ -148,7 +150,8 @@ def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_pa
             ),
         }
     )
-    inputs = _load(tmp_path, (image, prefix))
+    inputs = _load(tmp_path, (image, prefix), source_id="curated-code")
+    assert {item.metadata.evaluation_identity.strata.source for item in inputs} == {"curated-code"}
     assert [(item.metadata.task_id, item.metadata.subset_id) for item in inputs] == [
         ("image-task", "competitive-coding"),
         ("prefix-task", "structure-closure"),

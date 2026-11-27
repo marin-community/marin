@@ -57,10 +57,13 @@ TASK_SCHEMA = pa.schema([pa.field(TASK_ROLLOUT_COLUMN, pa.string(), nullable=Fal
 PARQUET_BATCH_SIZE = 1024
 
 
-def task_evaluation_identity(task: dict, selection: SelectionManifest | None) -> TaskEvaluationIdentity:
+def task_evaluation_identity(
+    task: dict, selection: SelectionManifest | None, source_id: str | None
+) -> TaskEvaluationIdentity:
     digest = canonical_sha256(task)
     if selection is None:
-        return TaskEvaluationIdentity(task_digest=digest, strata=TaskStrata(agentic="agentic" in task.get("tags", ())))
+        strata = TaskStrata.model_validate({"source": source_id, "agentic": "agentic" in task.get("tags", ())})
+        return TaskEvaluationIdentity(task_digest=digest, strata=strata)
     identity = selection.identity(task["id"])
     if identity.task_digest != digest:
         raise ValueError(f"evaluation task content differs from selection manifest: {task['id']}")
@@ -106,7 +109,8 @@ class TaskDataset(PromptDataset):
     def collate_fn(self, rows) -> list[dict]:
         inputs = []
         for _, environment, extras, uid in rows:
-            lowered = TaskRolloutSpec.model_validate_json(extras[TASK_ROLLOUT_COLUMN])
+            stored_rollout = extras[TASK_ROLLOUT_COLUMN]
+            lowered = TaskRolloutSpec.model_validate_json(stored_rollout)
             if isinstance(lowered.task.grader, NoGrader) and {"extras", "config"} <= lowered.task.grader.contract.keys():
                 extras = {**session_parameters(lowered.task).extras, **extras}
             extra_info = extras.get("extra_info") or {}
@@ -117,12 +121,12 @@ class TaskDataset(PromptDataset):
                 else ()
             )
             stored_identity = extras.get(TASK_EVALUATION_IDENTITY)
-            identity = TaskEvaluationIdentity.model_validate_json(stored_identity) if stored_identity else None
-            subset = (
-                identity.strata.source
-                if identity is not None and identity.panel_name is not None
-                else task_subset(lowered.task)
+            identity = (
+                TaskEvaluationIdentity.model_validate_json(stored_identity)
+                if stored_identity
+                else task_evaluation_identity(json.loads(stored_rollout)["task"], None, None)
             )
+            subset = identity.strata.source if identity.panel_name is not None else task_subset(lowered.task)
             inputs.append(
                 {
                     "uid": uid,
@@ -157,7 +161,10 @@ def _stored_prompt(lowered: TaskRolloutSpec) -> dict:
 
 
 def _stored_task_prompt(row: dict) -> dict:
-    return _stored_prompt(TaskRolloutSpec.model_validate_json(row[TASK_ROLLOUT_COLUMN]))
+    stored_rollout = row[TASK_ROLLOUT_COLUMN]
+    prompt = _stored_prompt(TaskRolloutSpec.model_validate_json(stored_rollout))
+    prompt[TASK_ROLLOUT_COLUMN] = stored_rollout
+    return prompt
 
 
 def _restore_task_prompts(batch: dict) -> dict:
@@ -319,7 +326,7 @@ class SourceTaskDataset(TaskDataset):
                 document = json.loads(row[column])
                 task = document if column == TASK_SPEC_COLUMN else document["task"]
                 task_id = task["id"]
-                identity = task_evaluation_identity(task, selection)
+                identity = task_evaluation_identity(task, selection, row.get("source"))
                 if selection is not None and TASK_SPEC_COLUMN in row:
                     carried = {key: row[key] for key in TaskStrata.model_fields if row.get(key) is not None}
                     if carried != identity.strata.model_dump(include=set(carried)):

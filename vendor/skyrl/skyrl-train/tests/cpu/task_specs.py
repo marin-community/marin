@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.strata import MembershipState, SelectionDefinition, SelectionTaskRow
+from finestore.rl.strata import MembershipState, SelectionDefinition, SelectionTaskRow, TaskEvaluationIdentity
 from finestore.schema import arrow_schema
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
 from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec
@@ -79,6 +79,9 @@ def task_input(
             data_source=lowered.task.source.dataset if data_source is None else data_source,
             teacher_route=teacher_route,
             metric_tags=metric_tags,
+            evaluation_identity=TaskEvaluationIdentity(
+                task_digest=canonical_sha256(lowered.task.model_dump(mode="json"))
+            ),
         ),
         group_grader=group_grader,
     )

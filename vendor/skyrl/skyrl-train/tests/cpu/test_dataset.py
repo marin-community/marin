@@ -10,6 +10,7 @@ import pyarrow.parquet as pq
 import pytest
 from marinskyrl.task_sources import PreparedTaskCacheSource
 from omegaconf import OmegaConf
+from rolloutengine.models import TASK_ROLLOUT_COLUMN
 from skyrl_train import task_inputs
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY
 from skyrl_train.config.utils import get_default_config
@@ -17,7 +18,8 @@ from skyrl_train.dataset.prepared_tasks import PROMPT_LENGTH_COLUMN
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, SourceTaskDataset, TaskDataset, source_row_task, write_tasks
 from skyrl_train.rollouts.context import TrainingContext
 from skyrl_train.task_inputs import task_messages
-from taskcompendium.models import ExitCodeReward, GraderMachine, ScriptGrader
+from taskcompendium.identity import canonical_sha256
+from taskcompendium.models import UPGRADABLE_SCHEMA_VERSION, ExitCodeReward, GraderMachine, ScriptGrader
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace, WhitespaceSplit
@@ -49,23 +51,32 @@ def test_task_preprocessing_preserves_filtered_rows_and_forks_only_large_inputs(
     ]
     configs = OmegaConf.to_container(get_default_config().environment.task_sessions, resolve=True)
     path = tmp_path / ("tasks.parquet" if native else "source.jsonl")
+    indices = [i for i in range(row_count) if i % 3 != 1]
     if native:
-        tasks = [
-            source_row_task(row, i, source_name="fixture", environment_configs=configs) for i, row in enumerate(rows)
+        stored = [
+            source_row_task(row, i, source_name="fixture", environment_configs=configs).model_dump(mode="json")
+            for i, row in enumerate(rows)
         ]
-        write_tasks(path, tasks)
+        for document in stored:
+            document["task"]["schema_version"] = UPGRADABLE_SCHEMA_VERSION
+        pq.write_table(pa.table({TASK_ROLLOUT_COLUMN: [json.dumps(document) for document in stored]}), path)
         dataset = TaskDataset([str(path)], _StubTokenizer(), 100, num_workers=2)
+        expected_digests = [canonical_sha256(stored[i]["task"]) for i in indices]
     else:
         path.write_text("\n".join(json.dumps(row) for row in rows))
         cache = PreparedTaskCacheSource(str(path), "legacy@1", str(tmp_path / "prepared"))
         dataset = SourceTaskDataset(
             [str(path)], _StubTokenizer(), 100, environment_configs=configs, num_workers=2, prepared_cache=cache
         )
-    indices = [i for i in range(row_count) if i % 3 != 1]
+        expected_digests = [
+            canonical_sha256(json.loads(raw)["task"])
+            for raw in dataset.dataframe.with_format(None)[TASK_ROLLOUT_COLUMN]
+        ]
     prepared = dataset.collate_fn([dataset[i] for i in range(len(dataset))])
     assert [task_messages(row["input"].spec) for row in prepared] == [rows[i]["prompt"] for i in indices]
     assert [row["input"].spec.task.source.row for row in prepared] == [str(i) for i in indices]
     assert [row["input"].metadata.data_source for row in prepared] == ["fixture"] * len(indices)
+    assert [row["input"].metadata.evaluation_identity.task_digest for row in prepared] == expected_digests
     assert all(row["input"].metadata.teacher_route == "math" for row in prepared)
     assert bool(tuple(fork_records.iterdir())) == (row_count == 8)
 

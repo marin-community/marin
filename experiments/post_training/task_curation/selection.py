@@ -455,9 +455,13 @@ def _release_admission_attempts(source: ReleasedSource) -> list[dict[str, Any]]:
     contents = StoragePath(admission.uri).read_bytes()
     if hashlib.sha256(contents).hexdigest() != admission.sha256:
         raise ValueError(f"Admission record SHA-256 mismatch: {admission.uri}")
-    attempts = pq.read_table(
-        io.BytesIO(contents), columns=["selection", "task_id", "task_digest", "outcome"]
-    ).to_pylist()
+    parquet = pq.ParquetFile(io.BytesIO(contents))
+    columns = ["selection", "task_id", "task_digest", "outcome"]
+    if "training_phase" in parquet.schema_arrow.names:
+        columns.append("training_phase")
+    attempts = [
+        attempt for attempt in parquet.read(columns=columns).to_pylist() if attempt.get("training_phase") != "eval"
+    ]
     selections = {attempt["selection"] for attempt in attempts}
     if len(selections) != 1 or None in selections:
         raise ValueError("Admission attempts must name one versioned selection")
