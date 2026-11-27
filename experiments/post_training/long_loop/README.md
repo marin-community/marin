@@ -1726,3 +1726,34 @@ measurement window. Natural EOS is preserved; early completion invalidates the
 cell. Report tokens per verification round, per-request decode speed ratios and
 TPOT p50/p95 from valid matched cells. These windows exclude initial prefill and
 measure serving in isolation. A training-pair comparison needs separate approval.
+
+## Campaign stall stop
+
+The user-directed campaign cutover enables `repeat_stall_batches: 3` in
+`campaign/mochi131.yaml` for every newly prepared rollout. This intentionally changes
+the campaign controls. Earlier running roots retain their submitted configurations.
+An unset limit preserves the previous runtime behavior. Three identical completed
+action/observation batches stop further generation; wait-only actions are exempt.
+The ordinary final-state verifier still grades the episode, including an incomplete
+solution that earns zero. Stopping never supplies a reward.
+
+The existing consumed-rollout metrics emit `generate/repeat_stall_fired_count`,
+`generate/repeat_stall_fired_fraction`, and
+`generate/repeat_stall_stop_reason_coverage` each step with stop metadata. Fractions
+count terminal trajectories once, rather than weighting multi-turn episodes by
+turn count. The trainer's existing tracker and training telemetry mirror these
+scalars to W&B and Grafana. A non-firing step reports zero.
+
+Run the local campaign-config grading proof with:
+
+```bash
+uv run python -m experiments.post_training.long_loop.campaign_stall_e2e --output /tmp/campaign-stall-e2e.json
+```
+
+`campaign_pool_proof` is a CPU proof worker over the existing `campaign_graph` pool
+dependency. It submits no training or GPU stage. In-region, it prepares one queued
+mix with an agentic source, verifies every prepared rollout has the stall limit and
+unchanged task/grader, and repeats the grading proof. Use a fresh pool version after
+the cutover: rollout limits are baked into prepared pools, so an earlier pool proof
+does not establish the enabled limit. Campaign RL continues through its existing
+launch path. The campaign coordinator inbox records the landing commit and cutover.

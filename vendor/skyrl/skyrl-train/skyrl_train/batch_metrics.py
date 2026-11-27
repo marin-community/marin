@@ -28,6 +28,7 @@ from skyrl_train.trajectory_runners.types import BatchFields
 from skyrl_train.utils.advantage_estimators import GRPO_FLAT_REWARD_STD_TOLERANCE
 from skyrl_train.utils.importance_ratio_diagnostics import mismatch_ratio_metrics
 from skyrl_train.metric_reduction import MetricReduction, LocalReduction
+from rolloutengine.models import REPEAT_STALL_STOP_REASON
 
 
 def rollout_metrics(facts: Sequence[RowFacts]) -> dict[str, float]:
@@ -55,7 +56,27 @@ def rollout_metrics(facts: Sequence[RowFacts]) -> dict[str, float]:
     metrics = rollout_length_metrics(lengths, successes, env_metrics, env_classes)
     metrics.update(rollout_counter_metrics([group.group_metrics for group in facts]))
     metrics.update(_facts_shaping_metrics(facts))
+    metrics.update(_repeat_stall_metrics(facts))
     return metrics
+
+
+def _repeat_stall_metrics(facts: Sequence[RowFacts]) -> dict[str, float]:
+    fields = BatchFields.from_groups([group.fields for group in facts])
+    if "stop_reasons" not in fields.first_group_list_fields:
+        return {}
+    reasons = [reason for group in facts for reason in group.stop_reasons]
+    last = [value for group in facts for value in group.is_last_step]
+    groups = shaping_groups(last, len(reasons))
+    terminal_reasons = [reasons[group[-1]] for group in groups]
+    if not terminal_reasons:
+        return {}
+    fired = sum(reason == REPEAT_STALL_STOP_REASON for reason in terminal_reasons)
+    return {
+        "generate/repeat_stall_fired_count": float(fired),
+        "generate/repeat_stall_fired_fraction": fired / len(terminal_reasons),
+        "generate/repeat_stall_stop_reason_coverage": sum(reason is not None and reason != "" for reason in terminal_reasons)
+        / len(terminal_reasons),
+    }
 
 
 def _facts_shaping_metrics(facts: Sequence[RowFacts]) -> dict[str, float]:

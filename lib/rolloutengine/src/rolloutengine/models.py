@@ -31,6 +31,7 @@ LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"
 TOTAL_TURN_TIMEOUT_STOP_REASON = "total_turn_timeout"
 BUDGET_STOP_REASON = "budget_reached"
+REPEAT_STALL_STOP_REASON = "repeat_stall"
 
 
 @dataclass(frozen=True)
@@ -501,6 +502,8 @@ class RolloutLimits(BaseModel):
 
     max_turns: int | None = Field(gt=0)
     max_total_tokens: int | None = Field(gt=0)
+    repeat_stall_batches: int | None = Field(default=None, gt=0)
+    """Stop identical completed action/observation batches; None disables it. Grading still runs."""
     model_turn_timeout: float | None = Field(gt=0)
     tool_turn_timeout: float | None = Field(gt=0)
     total_turn_timeout: float | None = Field(gt=0)

@@ -161,7 +161,9 @@ class HarborTrialHarness:
                 if stopped is not None:
                     raise AgentGenerationStopped(stopped)
                 try:
-                    turn = await complete_agent_prompt(session, prompt, last)
+                    turn = await complete_agent_prompt(
+                        session, prompt, last, repeat_stall_batches=context.limits.repeat_stall_batches
+                    )
                 except LimitReached as error:
                     stopped = error.stop_reason
                     raise AgentGenerationStopped(stopped) from error

@@ -260,6 +260,7 @@ rl:
           harness_by_dataset:
             long-loop-smartie-swesmith: harbor_trial
           session:
+            repeat_stall_batches: 3
             max_turns: 128
             attempt_timeout: 2280
             total_turn_timeout: 1800

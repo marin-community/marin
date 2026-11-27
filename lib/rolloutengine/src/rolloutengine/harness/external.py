@@ -54,8 +54,18 @@ def _normalized_tool_call(call: dict[str, Any]) -> dict[str, Any]:
     return {**call, "function": {**function, "arguments": arguments}}
 
 
+def _without_empty_annotations(messages: tuple[dict[str, Any], ...]) -> tuple[dict[str, Any], ...]:
+    return tuple(
+        {key: value for key, value in message.items() if key != "annotations" or value != []} for message in messages
+    )
+
+
 async def complete_agent_prompt(
-    session: ModelSession, prompt: Prompt, last: tuple[Prompt, ModelTurn] | None
+    session: ModelSession,
+    prompt: Prompt,
+    last: tuple[Prompt, ModelTurn] | None,
+    *,
+    repeat_stall_batches: int | None = None,
 ) -> ModelTurn:
     """Serve an external agent's prompt as a repeat, reply, or new conversation."""
     if last is not None:
@@ -64,17 +74,22 @@ async def complete_agent_prompt(
             return turn
         history = (*previous.messages, turn.message)
         prefix = prompt.messages[: len(history)]
+        stall_match = repeat_stall_batches is not None and _messages_equal(
+            _without_empty_annotations(prefix), _without_empty_annotations(history)
+        )
         exact_reply = prefix == history and prompt.options == previous.options
         text_reply = (
             prompt.token_ids is None
             and turn.stop_reason != LENGTH_STOP_REASON
             and reply_options_match(previous.options, prompt.options)
-            and _messages_equal(prefix, history)
+            and (_messages_equal(prefix, history) or stall_match)
         )
         if exact_reply or text_reply:
             return await session.reply(
                 prompt.messages[len(history) :], token_ids=prompt.token_ids, options=prompt.options
             )
+        if len(prompt.messages) > len(history) and stall_match:
+            session.record(observations=prompt.messages[len(history) :])
     return await session.start(prompt)
 
 
@@ -99,7 +114,7 @@ class AgentHarness:
             raise NotImplementedError(f"The agent harness does not give these task tools to the agent: {tools}")
 
     async def run(self, context: HarnessContext, session: ModelSession) -> None:
-        completions = _Completions(session)
+        completions = _Completions(session, context.limits.repeat_stall_batches)
         agent = asyncio.create_task(self.agent(context, completions.complete))
         context.cleanup.push("agent_stop", lambda: completions.stop(agent))
         try:
@@ -119,8 +134,9 @@ class AgentHarness:
 class _Completions:
     """Answer the agent's completion calls with the model session, each call in its caller's task."""
 
-    def __init__(self, session: ModelSession):
+    def __init__(self, session: ModelSession, repeat_stall_batches: int | None):
         self.session = session
+        self.repeat_stall_batches = repeat_stall_batches
         self.last: tuple[Prompt, ModelTurn] | None = None
         self.ended: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self.released = asyncio.Event()
@@ -135,7 +151,9 @@ class _Completions:
         await asyncio.sleep(0)
         if not self.ended.done():
             try:
-                turn = await complete_agent_prompt(self.session, prompt, self.last)
+                turn = await complete_agent_prompt(
+                    self.session, prompt, self.last, repeat_stall_batches=self.repeat_stall_batches
+                )
             except RolloutEnded:
                 self.end()
             else:
