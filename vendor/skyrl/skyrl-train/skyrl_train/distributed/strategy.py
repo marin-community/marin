@@ -43,9 +43,19 @@ class DistributedStrategy(ABC):
         pass
 
     @abstractmethod
-    def save_checkpoint(self, model, ckpt_dir, node_local_rank, optimizer, scheduler, tokenizer):
-        """Save checkpoint"""
+    def save_checkpoint(self, model, ckpt_dir, node_local_rank, optimizer, scheduler, tokenizer) -> None:
+        """Capture checkpoint data before the next model update."""
         pass
+
+    def checkpoint_write_done(self) -> bool:
+        """Return whether the rank is idle or its checkpoint write has settled, including failure."""
+        return True
+
+    def finish_checkpoint(self) -> None:
+        """Join the write and publish the rank's checkpoint control files."""
+
+    def discard_checkpoint_control_files(self) -> None:
+        """Join the write and release uncommitted checkpoint control files."""
 
     @abstractmethod
     def load_checkpoint(

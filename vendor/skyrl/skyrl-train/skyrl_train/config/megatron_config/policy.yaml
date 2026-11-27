@@ -41,6 +41,8 @@ logprob_chunk_size: 1024
 # dp_reshardable avoids a CPU optimizer gather when the checkpoint keeps the same
 # tensor/pipeline/context/expert geometry. Loading reads the format from the checkpoint.
 optimizer_checkpoint_sharding_type: fully_reshardable
+# Each policy rank waits for buffer space if its S3 checkpoint share exceeds this budget.
+checkpoint_max_staged_host_bytes: 17179869184
 
 # Re-run the eval-mode and train-mode forwards inside ppo_train and log how far each is
 # from the old log-probs, separating eval repeatability from train/eval drift.

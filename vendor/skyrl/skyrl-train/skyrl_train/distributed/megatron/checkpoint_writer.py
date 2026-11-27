@@ -1,16 +1,28 @@
 """Megatron checkpoint storage shared by BF16 parameters and FP32 masters."""
 
+from collections import deque
+from collections.abc import Iterable, Iterator
+from concurrent.futures import Future as ThreadFuture, ThreadPoolExecutor
 from dataclasses import replace
+from io import BytesIO
 import re
+from threading import Condition
+from typing import Any
 
 from fsspec import AbstractFileSystem
 from loguru import logger
 import torch
-from torch.distributed.checkpoint import SavePlan
+from torch.distributed import ProcessGroup, is_initialized
+from torch.distributed.checkpoint import DefaultSavePlanner, FileSystemWriter, SavePlan, SavePlanner
+from torch.distributed.checkpoint.filesystem import DEFAULT_SUFFIX, _write_item
 from torch.distributed.checkpoint.metadata import Metadata, TensorStorageMetadata
+from torch.distributed.checkpoint.planner import WriteItem
+from torch.distributed.checkpoint.state_dict_saver import _save_state_dict
 from torch.distributed.checkpoint.storage import WriteResult
+from torch.futures import Future
 
-from skyrl_train.io.torch_distributed_checkpoint import StreamingFsspecWriter
+from marinskyrl.remote_io import S3_MULTIPART_CONCURRENCY, S3_MULTIPART_PART_BYTES
+from skyrl_train.io.torch_distributed_checkpoint import AbortableFsspecFileSystem
 
 
 _MASTER_WEIGHT_KEY = re.compile(r"(?:chained_\d+\.)?optimizer\.state\.(?:param|fp32_param)\.(.+)")
@@ -39,17 +51,79 @@ def _master_weight_aliases(plans: list[SavePlan]) -> dict[str, str]:
     return aliases
 
 
-class MasterWeightsWriter(StreamingFsspecWriter):
-    """Share Megatron BF16 model records with their synchronized FP32 masters.
+class StagedMasterWeightsWriter(FileSystemWriter):
+    """Stream staged Megatron records and share BF16 weights with their FP32 masters.
 
     DCP readers cast the FP32 record into each destination's dtype. Keeping the
     BF16 logical entries also supports model-only loads without an optimizer.
     Model-only loads read the full FP32 source record before casting to BF16.
     """
 
-    def __init__(self, path: str, *, filesystem: AbstractFileSystem) -> None:
-        super().__init__(path, filesystem=filesystem)
+    def __init__(
+        self,
+        path: str,
+        *,
+        filesystem: AbstractFileSystem,
+        max_staged_bytes: int,
+    ) -> None:
+        if max_staged_bytes <= 0:
+            raise ValueError("max_staged_bytes must be positive")
+        super().__init__(
+            path,
+            single_file_per_rank=True,
+            sync_files=False,
+            thread_count=1,
+        )
+        self.fs = AbortableFsspecFileSystem(filesystem)
+        self.path = self.fs.init_path(path)
+        self.max_staged_bytes = max_staged_bytes
         self._model_aliases: dict[str, str] = {}
+        self.staged: ThreadFuture[None] = ThreadFuture()
+        self._source_state: dict[str, Any] = {}
+
+    def prepare_local_plan(self, plan: SavePlan) -> SavePlan:
+        plan = super().prepare_local_plan(plan)
+        logger.info(
+            "DCP direct-write plan rank={} items={} host_staging_budget_bytes={} multipart_part_bytes={} "
+            "multipart_concurrency={}",
+            self.rank,
+            len(plan.items),
+            self.max_staged_bytes,
+            S3_MULTIPART_PART_BYTES,
+            S3_MULTIPART_CONCURRENCY,
+        )
+        return plan
+
+    def _write_items(
+        self, plan: SavePlan, items: Iterable[tuple[WriteItem, torch.Tensor | BytesIO]]
+    ) -> Future[list[WriteResult]]:
+        storage_plan = plan.storage_data
+        if storage_plan is None:
+            raise AssertionError("DCP storage plan is missing its rank prefix")
+        file_name = f"{storage_plan.prefix}0{DEFAULT_SUFFIX}"
+        path = self.fs.concat_path(self.path, file_name)
+        results: list[WriteResult] = []
+        with self.fs.create_stream(path, "wb") as stream:
+            # Emit each record immediately. Retaining the records until close
+            # would make the host buffer grow to the full rank shard.
+            for item, data in items:
+                if isinstance(data, torch.Tensor) and not data.is_cpu:
+                    raise AssertionError("DCP tensor must be on CPU before serialization")
+                results.append(
+                    _write_item(
+                        self.transforms,
+                        stream,
+                        data,
+                        item,
+                        file_name,
+                        self.serialization_format,
+                    )
+                )
+                del data
+
+        future: Future[list[WriteResult]] = Future()
+        future.set_result(results)
+        return future
 
     def prepare_global_plan(self, plans: list[SavePlan]) -> list[SavePlan]:
         # Fully parallel saving can assign a model tensor and its master to
@@ -79,3 +153,88 @@ class MasterWeightsWriter(StreamingFsspecWriter):
             if result.index.fqn in master_aliases
         ]
         super().finish(metadata, [*results, alias_results])
+
+    def save(
+        self,
+        state: dict[str, Any],
+        *,
+        planner: DefaultSavePlanner,
+        process_group: ProcessGroup | None = None,
+    ) -> Metadata:
+        """Take ownership of the rank's checkpoint state and write its records."""
+        if planner.flatten_state_dict or planner.flatten_sharded_tensors:
+            raise ValueError("Checkpoint staging requires a planner that keeps the original state dictionary")
+        # DCP's public save() makes a shallow copy before it calls the planner.
+        # Use its storage path directly so staging owns the only state dictionary.
+        self._source_state = state
+        try:
+            self.reset()
+            return _save_state_dict(
+                state, storage_writer=self, planner=planner, process_group=process_group, no_dist=not is_initialized()
+            )
+        finally:
+            state.clear()
+
+    def write_data(self, plan: SavePlan, planner: SavePlanner) -> Future[list[WriteResult]]:
+        # The global plan has already removed replicas and aliased BF16 records.
+        ready: deque[tuple[WriteItem, torch.Tensor | BytesIO, int]] = deque()
+        condition = Condition()
+        in_flight = 0
+        stopped = False
+
+        def stage() -> None:
+            nonlocal in_flight
+            peak = total = 0
+            for item in plan.items:
+                data = planner.resolve_data(item)
+                size = data.nbytes if isinstance(data, torch.Tensor) else data.getbuffer().nbytes
+                with condition:
+                    # A DCP record is indivisible. An oversized record takes the buffer alone.
+                    condition.wait_for(lambda: stopped or not in_flight or in_flight + size <= self.max_staged_bytes)
+                    if stopped:
+                        return
+                    in_flight += size
+                    peak = max(peak, in_flight)
+                if isinstance(data, torch.Tensor):
+                    data = data.detach().to(device="cpu", copy=True, memory_format=torch.contiguous_format)
+                else:
+                    data = BytesIO(data.getvalue())
+                with condition:
+                    ready.append((item, data, size))
+                    del data
+                    condition.notify_all()
+                total += size
+            # The writer only needs CPU copies from here. Release the checkpoint's
+            # original tensors before training offloads or mutates its state.
+            self._source_state.clear()
+            self.staged.set_result(None)
+            logger.info("Checkpoint staged {} bytes on rank {}, peak {} bytes", total, self.rank, peak)
+
+        def items(staging: ThreadFuture[None]) -> Iterator[tuple[WriteItem, torch.Tensor | BytesIO]]:
+            nonlocal in_flight
+            for _ in plan.items:
+                with condition:
+                    condition.wait_for(lambda: ready or staging.done())
+                    if not ready:
+                        staging.result()
+                        raise RuntimeError("Checkpoint staging ended before the write plan was buffered")
+                    item, data, size = ready.popleft()
+                yield item, data
+                del data
+                with condition:
+                    in_flight -= size
+                    condition.notify_all()
+
+        def wake_writer(_future: ThreadFuture[None]) -> None:
+            with condition:
+                condition.notify_all()
+
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="checkpoint-stage") as executor:
+            staging = executor.submit(stage)
+            staging.add_done_callback(wake_writer)
+            try:
+                return self._write_items(plan, items(staging))
+            finally:
+                with condition:
+                    stopped = True
+                    condition.notify_all()

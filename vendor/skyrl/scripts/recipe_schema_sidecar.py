@@ -60,6 +60,7 @@ TYPES = MappingProxyType(
         "trainer.logger": "LoggingBackend | tuple[LoggingBackend, ...]",
         "trainer.policy.optimizer_config.scheduler": 'Literal["constant_with_warmup", "cosine"]',
         "trainer.policy.megatron_config.optimizer_checkpoint_sharding_type": OPTIMIZER_CHECKPOINT_SHARDING,
+        "trainer.policy.megatron_config.checkpoint_max_staged_host_bytes": "PositiveInt",
         "trainer.ref.megatron_config.optimizer_checkpoint_sharding_type": OPTIMIZER_CHECKPOINT_SHARDING,
         "trainer.rollout_buffer.max_staleness_steps": "NonNegativeInt",
         "trainer.rollout_buffer.batch_policy": _literal(BatchPolicy),

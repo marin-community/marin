@@ -1,3 +1,4 @@
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -14,12 +15,37 @@ from megatron.core.dist_checkpointing.strategies.torch import (
     _unwrap_pyt_sharded_tensor,
     mcore_to_pyt_state_dict,
 )
-from torch.distributed import checkpoint
+import torch
+from torch import distributed as dist
+from torch.distributed import ProcessGroup, checkpoint
 from torch.distributed.checkpoint._fsspec_filesystem import FileSystem as FsspecFileSystem
+from torch.distributed.checkpoint import CheckpointException
+from torch.distributed.checkpoint.metadata import Metadata
 
 from marinskyrl.remote_io import create_s3_filesystem
-from skyrl_train.distributed.megatron.checkpoint_writer import MasterWeightsWriter
+from skyrl_train.distributed.megatron.checkpoint_writer import StagedMasterWeightsWriter
 from skyrl_train.io.checkpoint_reader import RecordCheckpointReader
+
+
+def finish_checkpoint_write(write: Future[Metadata]) -> None:
+    """Report rank failures as ordinary exceptions that can cross the Ray boundary."""
+    try:
+        write.result()
+    except CheckpointException as error:
+        if all(isinstance(failure, OSError) for failure, _ in error.failures.values()):
+            raise OSError(str(error)) from error
+        raise RuntimeError(str(error)) from error
+
+
+def _wait_for_staging(staging: Future[None], write: Future[Metadata]) -> None:
+    wait((staging, write), return_when=FIRST_COMPLETED)
+
+    # MCore can enter its metadata barrier only after every rank hands off its data.
+    device = torch.cuda.current_device() if torch.cuda.is_available() else "cpu"
+    staged = torch.tensor(int(staging.done()), device=device)
+    dist.all_reduce(staged, op=dist.ReduceOp.MIN)
+    if not staged.item():
+        finish_checkpoint_write(write)
 
 
 # MCore 0.18 does not expose a storage-writer hook. Keep the adapter narrow: it
@@ -27,9 +53,14 @@ from skyrl_train.io.checkpoint_reader import RecordCheckpointReader
 class DirectS3TorchDistSaveShardedStrategy(TorchDistSaveShardedStrategy):
     """Save MCore torch-dist shards directly to S3 through PyTorch DCP."""
 
-    def __init__(self, checkpoint_dir: str) -> None:
+    def __init__(
+        self, checkpoint_dir: str, *, staging_bytes: int, checkpoint_group: ProcessGroup
+    ) -> None:
         super().__init__()
         self.checkpoint_dir = checkpoint_dir
+        self.staging_bytes = staging_bytes
+        self.checkpoint_group = checkpoint_group
+        self.pending_write: Future[Metadata] | None = None
 
     def save(self, sharded_state_dict: ShardedStateDict, _checkpoint_dir: Path) -> None:
         sharded_state_dict, _, _ = _replace_state_dict_keys_with_sharded_keys(
@@ -37,16 +68,27 @@ class DirectS3TorchDistSaveShardedStrategy(TorchDistSaveShardedStrategy):
         )
         pytorch_state_dict = mcore_to_pyt_state_dict(sharded_state_dict, False)
         filesystem = create_s3_filesystem()
-        writer = MasterWeightsWriter(self.checkpoint_dir, filesystem=filesystem)
-        checkpoint.save(
-            pytorch_state_dict,
-            storage_writer=writer,
-            planner=MCoreSavePlanner(
-                dedup_replicated_tensors=not self.keep_only_main_replica,
-                flatten_state_dict=False,
-                flatten_sharded_tensors=False,
-            ),
+        planner = MCoreSavePlanner(
+            dedup_replicated_tensors=not self.keep_only_main_replica,
+            flatten_state_dict=False,
+            flatten_sharded_tensors=False,
         )
+        # The copy runs on another thread and must see this step's optimizer writes.
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        staged_writer = StagedMasterWeightsWriter(
+            self.checkpoint_dir, filesystem=filesystem, max_staged_bytes=self.staging_bytes
+        )
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="checkpoint")
+        self.pending_write = executor.submit(
+            staged_writer.save,
+            pytorch_state_dict,
+            planner=planner,
+            process_group=self.checkpoint_group,
+        )
+
+        self.pending_write.add_done_callback(lambda _: executor.shutdown(wait=False))
+        _wait_for_staging(staged_writer.staged, self.pending_write)
 
 
 class DirectS3TorchDistLoadShardedStrategy(TorchDistLoadShardedStrategy):

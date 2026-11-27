@@ -1342,7 +1342,8 @@ class PolicyWorkerBase(Worker):
         _phase_diagnostics.log_phase(_phase_diagnostics.CollectivePhase.TRAINING_STEP_EXIT)
         return status
 
-    def save_checkpoint(self, ckpt_dir: Path, tokenizer=None):
+    def save_checkpoint(self, ckpt_dir: Path, tokenizer=None) -> None:
+        """Capture checkpoint data before the next model update."""
         self.strategy.save_checkpoint(
             model=self.model,
             optimizer=self.optimizer,
@@ -1352,6 +1353,16 @@ class PolicyWorkerBase(Worker):
             tokenizer=tokenizer,
             client_state={},
         )
+
+    def checkpoint_write_done(self) -> bool:
+        """Return whether the rank is idle or its checkpoint write has settled, including failure."""
+        return self.strategy.checkpoint_write_done()
+
+    def finish_checkpoint(self) -> None:
+        self.strategy.finish_checkpoint()
+
+    def discard_checkpoint_control_files(self) -> None:
+        self.strategy.discard_checkpoint_control_files()
 
     def load_checkpoint(
         self,

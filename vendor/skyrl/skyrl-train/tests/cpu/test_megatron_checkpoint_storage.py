@@ -1,6 +1,9 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
 import pickle
+from threading import Event
+from weakref import ref
 import time
 
 from fsspec.implementations.local import LocalFileSystem
@@ -8,26 +11,26 @@ import pytest
 import torch
 import torch.distributed as dist
 from torch.distributed import checkpoint
-from torch.distributed.checkpoint import DefaultLoadPlanner, DefaultSavePlanner, FileSystemReader
+from torch.distributed.checkpoint import DefaultLoadPlanner, DefaultSavePlanner, FileSystemReader, FileSystemWriter
 from torch.distributed.checkpoint.metadata import MetadataIndex
 from torch.distributed._shard.sharded_tensor import Shard, init_from_local_shards
 import torch.multiprocessing as mp
 
 from skyrl_train.io.checkpoint_reader import RecordCheckpointReader
 from skyrl_train.distributed.megatron.checkpoint_metadata import remote_checkpoint_metadata
-from skyrl_train.distributed.megatron.checkpoint_writer import MasterWeightsWriter
-from skyrl_train.io.torch_distributed_checkpoint import StreamingFsspecWriter
+from skyrl_train.distributed.megatron.checkpoint_writer import StagedMasterWeightsWriter
 
 
 MODEL_KEY = "decoder.layers.mlp.experts.weight"
+CHECKPOINT_TEST_TIMEOUT = 10
+COLLECTIVE_TIMEOUT = timedelta(seconds=30)
 
 
-def save_checkpoint(path: Path, state: dict, writer_class: type[StreamingFsspecWriter]) -> None:
-    checkpoint.save(
-        state,
-        storage_writer=writer_class(str(path), filesystem=LocalFileSystem()),
+def save_checkpoint(path: Path, state: dict) -> None:
+    writer = StagedMasterWeightsWriter(str(path), filesystem=LocalFileSystem(), max_staged_bytes=2**20)
+    writer.save(
+        dict(state),
         planner=DefaultSavePlanner(flatten_state_dict=False, flatten_sharded_tensors=False),
-        no_dist=True,
     )
 
 
@@ -38,6 +41,69 @@ def load_checkpoint(path: Path, state: dict) -> None:
         planner=DefaultLoadPlanner(flatten_state_dict=False, flatten_sharded_tensors=False),
         no_dist=True,
     )
+
+
+@pytest.mark.parametrize("fits_in_buffer", [False, True])
+def test_streaming_checkpoint_releases_training_after_cpu_snapshot(tmp_path: Path, fits_in_buffer: bool):
+    write_started = Event()
+    allow_write = Event()
+
+    class PausedWriter(StagedMasterWeightsWriter):
+        def _write_items(self, plan, items):
+            def pause_after_first_record_is_staged():
+                first = next(items)
+                write_started.set()
+                if not allow_write.wait(timeout=CHECKPOINT_TEST_TIMEOUT):
+                    raise TimeoutError("Test did not release the checkpoint writer")
+                yield first
+                yield from items
+
+            return super()._write_items(plan, pause_after_first_record_is_staged())
+
+    state = {"policy": torch.arange(64), "optimizer": torch.arange(64) * 2}
+    original = {key: value.clone() for key, value in state.items()}
+    sources = tuple(ref(value) for value in state.values())
+    tensor_bytes = state["policy"].nbytes
+    writer = PausedWriter(
+        str(tmp_path), filesystem=LocalFileSystem(), max_staged_bytes=tensor_bytes * (2 if fits_in_buffer else 1)
+    )
+    with ThreadPoolExecutor() as executor:
+        save = executor.submit(
+            writer.save, dict(state), planner=DefaultSavePlanner(flatten_state_dict=False, flatten_sharded_tensors=False)
+        )
+        try:
+            assert write_started.wait(timeout=CHECKPOINT_TEST_TIMEOUT)
+            if not fits_in_buffer:
+                assert not writer.staged.done()
+                allow_write.set()
+            writer.staged.result(timeout=CHECKPOINT_TEST_TIMEOUT)
+            while state:
+                state.popitem()[1].zero_()
+            if fits_in_buffer:
+                assert not save.done()
+                assert all(source() is None for source in sources)
+        finally:
+            allow_write.set()
+        save.result(timeout=CHECKPOINT_TEST_TIMEOUT)
+
+    restored = {key: torch.empty_like(value) for key, value in original.items()}
+    load_checkpoint(tmp_path, restored)
+    for key, expected in original.items():
+        torch.testing.assert_close(restored[key], expected, rtol=0, atol=0)
+
+
+def test_streaming_checkpoint_write_failure_releases_staging(tmp_path: Path):
+    class FailingWriter(StagedMasterWeightsWriter):
+        def _write_items(self, plan, items):
+            next(items)
+            raise OSError("Destination unavailable")
+
+    state = {"policy": torch.ones(64), "optimizer": torch.zeros(64)}
+    writer = FailingWriter(str(tmp_path), filesystem=LocalFileSystem(), max_staged_bytes=state["policy"].nbytes)
+    with pytest.raises(checkpoint.CheckpointException) as failed:
+        writer.save(state, planner=DefaultSavePlanner(flatten_state_dict=False, flatten_sharded_tensors=False))
+    assert isinstance(failed.value.failures[0][0], OSError)
+    assert not (tmp_path / ".metadata").exists()
 
 
 @pytest.mark.parametrize(
@@ -63,8 +129,13 @@ def test_checkpoint_shares_master_records_and_restores_training_and_model_only(t
     }
     compact_path = tmp_path / "compact"
     original_path = tmp_path / "original"
-    save_checkpoint(compact_path, state, MasterWeightsWriter)
-    save_checkpoint(original_path, state, StreamingFsspecWriter)
+    save_checkpoint(compact_path, state)
+    checkpoint.save(
+        state,
+        storage_writer=FileSystemWriter(original_path),
+        planner=DefaultSavePlanner(flatten_state_dict=False, flatten_sharded_tensors=False),
+        no_dist=True,
+    )
 
     metadata = FileSystemReader(compact_path).read_metadata()
     assert (
@@ -99,7 +170,7 @@ def test_checkpoint_preserves_weights_without_a_matching_fp32_master(tmp_path: P
         "bf16_master.weight": torch.ones(8, dtype=torch.bfloat16),
         "optimizer.state.param.bf16_master.weight": torch.zeros(8, dtype=torch.bfloat16),
     }
-    save_checkpoint(tmp_path, state, MasterWeightsWriter)
+    save_checkpoint(tmp_path, state)
     restored = {key: torch.empty_like(value) for key, value in state.items()}
     load_checkpoint(tmp_path, restored)
     for key, expected in state.items():
@@ -108,19 +179,40 @@ def test_checkpoint_preserves_weights_without_a_matching_fp32_master(tmp_path: P
 
 def save_distributed_checkpoint(rank: int, path: str, rendezvous: str) -> None:
     dist.init_process_group(
-        "gloo", init_method=f"file://{rendezvous}", rank=rank, world_size=2, timeout=timedelta(seconds=30)
+        "gloo", init_method=f"file://{rendezvous}", rank=rank, world_size=2, timeout=COLLECTIVE_TIMEOUT
     )
     try:
+        checkpoint_group = dist.new_group(backend="gloo", timeout=COLLECTIVE_TIMEOUT)
+        allow_write = Event()
+
+        class PausedWriter(StagedMasterWeightsWriter):
+            def _write_items(self, plan, items):
+                if not allow_write.wait(timeout=CHECKPOINT_TEST_TIMEOUT):
+                    raise TimeoutError("Training collective did not finish while the save was pending")
+                return super()._write_items(plan, items)
+
         master = torch.linspace(-0.9, 0.9, 64).reshape(2, 4, 8)
         shard = Shard.from_tensor_and_offsets(master[rank : rank + 1].clone(), [rank, 0, 0], rank)
         state = {"chained_1.optimizer.state.param." + MODEL_KEY: init_from_local_shards([shard], *master.shape)}
         if rank == 0:
             state[MODEL_KEY] = master.bfloat16()
-        checkpoint.save(
-            state,
-            storage_writer=MasterWeightsWriter(path, filesystem=LocalFileSystem()),
-            planner=DefaultSavePlanner(flatten_state_dict=False, flatten_sharded_tensors=False),
-        )
+        writer = PausedWriter(path, filesystem=LocalFileSystem(), max_staged_bytes=4096)
+        with ThreadPoolExecutor() as executor:
+            save = executor.submit(
+                writer.save,
+                state,
+                planner=DefaultSavePlanner(flatten_state_dict=False, flatten_sharded_tensors=False),
+                process_group=checkpoint_group,
+            )
+            try:
+                writer.staged.result(timeout=CHECKPOINT_TEST_TIMEOUT)
+                progress = torch.tensor(rank)
+                dist.all_reduce(progress)
+                assert progress.item() == 1
+                shard.tensor.zero_()
+            finally:
+                allow_write.set()
+            save.result(timeout=CHECKPOINT_TEST_TIMEOUT)
     finally:
         dist.destroy_process_group()
 

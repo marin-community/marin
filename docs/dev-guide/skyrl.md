@@ -193,6 +193,40 @@ The driver builds batches by default. Recipes that support policy-worker slicing
 
 Outcome estimators and SFT/uniform support scalar and per-turn token rewards. Unexpected loop, teacher or route metadata reports its group uid. Worker mismatch metrics omit p95/p99/p999, ESS, KL/chi-square and collapse-tail statistics, plus rollout/train probability-difference standard deviation. Two-phase payload sharing precedes rank reads and assembly (`timing/load_worker_batch`). Resume rebuilds per-row summaries with bounded parallel reads for either builder. Checkpoints work in either mode.
 
+## S3 checkpoint staging
+
+SkyRL assigns checkpoint records to policy ranks before copying them into CPU
+memory. Each rank streams its assigned records to S3 and releases buffer space
+as it serializes them. Training can resume after all ranks have copied their
+records and Megatron has written its small local control files. The resume
+marker is published after all shards and trainer state have committed.
+
+`trainer.policy.megatron_config.checkpoint_max_staged_host_bytes` sets the per-policy-rank budget. The default is 16 GiB.
+When the largest rank's share fits in its buffer, the remaining upload
+can overlap the next update. If a share exceeds the buffer, staging waits as
+records drain. A single record larger than the budget runs alone. Leave room on
+each node for the buffers of all its ranks and their separate multipart upload
+buffers. Each rank logs its assigned bytes and peak staged bytes.
+
+With `fully_reshardable` optimizer checkpoints, Megatron gathers optimizer
+state on DP rank zero for each model slice before staging. That rank can
+dominate the save, and its gathered state consumes host memory in addition to
+the staging budget. Mochi uses `dp_reshardable`, which leaves optimizer shards
+on their owning ranks and supports changing DP geometry on restore. Changing
+TP, PP, CP, or EP geometry while preserving optimizer state requires a checkpoint
+saved in a compatible format.
+
+If a native resume fails after a layout change, restore the saved layout to
+recover training state. To use a new layout with a fresh optimizer, start a new
+run from the checkpoint's Hugging Face policy export with
+`trainer.resume_mode=none`. Mochi's MuonH loader uses the configured optimizer
+format to interpret the saved state. Changing that setting during resume does
+not convert a saved checkpoint.
+
+`timing/save_checkpoints` includes rollout-state collection, snapshot
+preparation, and the staging wait. `timing/checkpoint_upload_blocking`
+measures the later wait when a complete checkpoint is required.
+
 ## CI checks
 
 The `skyrl-wheel` unit lane checks the independent lock and runs the packaging,

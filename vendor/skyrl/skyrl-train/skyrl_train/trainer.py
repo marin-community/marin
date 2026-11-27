@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Mapping
-from contextlib import asynccontextmanager, nullcontext
+from contextlib import AsyncExitStack, asynccontextmanager, nullcontext
 from dataclasses import replace
 import io as stdlib_io
 import json
@@ -325,7 +325,7 @@ class RayPPOTrainer:
         self._last_saved_step: int | None = None
         self._last_evaluated_step: int | None = None
         self._inference_policy_step: int | None = None
-        self._pending_checkpoint_upload: tuple[asyncio.Task[tuple[float, float]], TrainerState] | None = None
+        self._pending_checkpoint_upload: asyncio.Task[tuple[float, float] | None] | None = None
         raw_speculative_decoding = cfg.generator.get("speculative_decoding")
         if raw_speculative_decoding is not None:
             raw_speculative_decoding = OmegaConf.to_container(raw_speculative_decoding, resolve=True)
@@ -688,23 +688,22 @@ class RayPPOTrainer:
                 with Timer("save_checkpoints", self.all_timings):
                     rollout_state = await self._rollout_state()
                     snapshot = await asyncio.to_thread(self._snapshot_checkpoint, rollout_state)
-                await self.callback_handler.call_event_async("on_save", final_state, self._control, trainer=self)
                 self._start_checkpoint_upload(snapshot, final_state)
                 if await self._drain_checkpoint_upload():
                     logger.info("Saved final checkpoint.")
             if self._control.should_save_hf_model:
                 await asyncio.to_thread(self.handle_hf_export)
 
-    async def _save_checkpoints_with_residency(self) -> CheckpointSnapshot:
-        """Save a checkpoint, swapping colocated training and inference residency when needed."""
-        rollout_state = await self._rollout_state()
+    @asynccontextmanager
+    async def _checkpoint_policy_residency(self):
         if not self.colocate_all:
-            return await asyncio.to_thread(self._snapshot_checkpoint, rollout_state)
+            yield
+            return
 
         await self.inference_engine_client.sleep()
         try:
             self.policy_model.backload_to_gpu(backload_optimizer=True, backload_model=True)
-            return await asyncio.to_thread(self._snapshot_checkpoint, rollout_state)
+            yield
         finally:
             await self._sync_policy_for_rollouts(reason="checkpoint_restore")
 
@@ -718,27 +717,48 @@ class RayPPOTrainer:
     async def _save_intermediate_checkpoint(self, state: TrainerState) -> None:
         """Save one requested step checkpoint without terminating training on storage failure."""
         await self._drain_checkpoint_upload()
-        try:
-            with Timer("save_checkpoints", self.all_timings):
-                snapshot = await self._save_checkpoints_with_residency()
-        except OSError:
-            self._record_checkpoint_save_failure(state)
-            return
-        except ray.exceptions.RayTaskError as error:
-            if not isinstance(error.as_instanceof_cause(), OSError):
-                raise
-            self._record_checkpoint_save_failure(state)
-            return
-
-        await self.callback_handler.call_event_async("on_save", state, self._control, trainer=self)
-        self._start_checkpoint_upload(snapshot, state)
+        with Timer("save_checkpoints", self.all_timings):
+            # Keep residency restoration outside the checkpoint I/O error handler.
+            async with AsyncExitStack() as residency:
+                try:
+                    rollout_state = await self._rollout_state()
+                    await residency.enter_async_context(self._checkpoint_policy_residency())
+                    snapshot = await asyncio.to_thread(self._snapshot_checkpoint, rollout_state)
+                except (OSError, ray.exceptions.RayTaskError) as error:
+                    if isinstance(error, ray.exceptions.RayTaskError) and not isinstance(error.as_instanceof_cause(), OSError):
+                        raise
+                    self._record_checkpoint_save_failure(state)
+                else:
+                    self._start_checkpoint_upload(snapshot, state)
 
     def _start_checkpoint_upload(self, snapshot: CheckpointSnapshot, state: TrainerState) -> None:
         assert getattr(self, "_pending_checkpoint_upload", None) is None
-        task = asyncio.create_task(self._finish_checkpoint_upload(snapshot))
-        self._pending_checkpoint_upload = (task, state)
+        control = replace(self._control)
+
+        async def publish() -> tuple[float, float] | None:
+            try:
+                result = await self._finish_checkpoint_upload(snapshot)
+            except (OSError, ray.exceptions.RayTaskError) as error:
+                if isinstance(error, ray.exceptions.RayTaskError) and not isinstance(error.as_instanceof_cause(), OSError):
+                    raise
+                self._record_checkpoint_save_failure(state)
+                return None
+            await self.callback_handler.call_event_async("on_save", state, control, trainer=self)
+            return result
+
+        self._pending_checkpoint_upload = asyncio.create_task(publish())
+
+    def _finish_policy_checkpoint(self) -> None:
+        # An actor can be running an optimizer update. Poll without waiting
+        # inside an actor method so shard writes never block its training RPCs.
+        while not all(ray.get(self.policy_model.async_run_ray_method("pass_through", "checkpoint_write_done"))):
+            time.sleep(1)
+        refs = self.policy_model.async_run_ray_method("pass_through", "finish_checkpoint")
+        ray.wait(refs, num_returns=len(refs), fetch_local=False)
+        ray.get(refs)
 
     def _finish_checkpoint_upload_blocking(self, snapshot: CheckpointSnapshot) -> tuple[float, float]:
+        self._finish_policy_checkpoint()
         io.write_bytes_atomic(snapshot.trainer_state_path, snapshot.trainer_state_payload)
         io.write_bytes_atomic(snapshot.rollout_state_path, snapshot.rollout_state_payload)
         io.write_bytes_atomic(snapshot.marker_path, str(snapshot.step).encode())
@@ -755,19 +775,12 @@ class RayPPOTrainer:
         pending = getattr(self, "_pending_checkpoint_upload", None)
         if pending is None:
             return True
-        task, state = pending
         self._pending_checkpoint_upload = None
-        try:
-            with Timer("checkpoint_upload_blocking", self.all_timings, log_events=False):
-                duration, cleanup_duration = await task
-        except OSError:
-            self._record_checkpoint_save_failure(state)
+        with Timer("checkpoint_upload_blocking", self.all_timings, log_events=False):
+            timings = await pending
+        if timings is None:
             return False
-        except ray.exceptions.RayTaskError as error:
-            if not isinstance(error.as_instanceof_cause(), OSError):
-                raise
-            self._record_checkpoint_save_failure(state)
-            return False
+        duration, cleanup_duration = timings
         self.all_timings["checkpoint_upload"] = self.all_timings.get("checkpoint_upload", 0.0) + duration
         self.all_timings["cleanup_old_checkpoints"] = (
             self.all_timings.get("cleanup_old_checkpoints", 0.0) + cleanup_duration
@@ -2815,16 +2828,6 @@ class RayPPOTrainer:
 
         io.makedirs(global_step_folder, exist_ok=True)
 
-        # Save policy checkpoint
-        ray.get(
-            self.policy_model.async_run_ray_method(
-                "pass_through",
-                "save_checkpoint",
-                ckpt_dir=policy_save_dir,
-                tokenizer=self.tokenizer,
-            )
-        )
-
         # Serialize rollout data state for publication with the trainer state.
         rollout_state_path = os.path.join(global_step_folder, ROLLOUT_STATE_FILENAME)
         rollout_state_buffer = stdlib_io.BytesIO()
@@ -2841,6 +2844,8 @@ class RayPPOTrainer:
         trainer_state_path = os.path.join(global_step_folder, TRAINER_STATE_FILENAME)
         trainer_state_buffer = stdlib_io.BytesIO()
         torch.save(trainer_state, trainer_state_buffer)
+
+        self._stage_policy_checkpoint(policy_save_dir)
         latest_checkpoint_file = os.path.join(self.cfg.trainer.ckpt_path, LATEST_CHECKPOINT_FILE)
         return CheckpointSnapshot(
             step=step,
@@ -2851,6 +2856,20 @@ class RayPPOTrainer:
             trainer_state_payload=trainer_state_buffer.getvalue(),
             marker_path=latest_checkpoint_file,
         )
+
+    def _stage_policy_checkpoint(self, policy_save_dir: str) -> None:
+        refs = self.policy_model.async_run_ray_method(
+            "pass_through", "save_checkpoint", ckpt_dir=policy_save_dir, tokenizer=self.tokenizer
+        )
+        try:
+            ray.get(refs)
+        except ray.exceptions.RayTaskError as error:
+            # A rank can fail writing its control files after other ranks hand off staging.
+            try:
+                ray.get(self.policy_model.async_run_ray_method("pass_through", "discard_checkpoint_control_files"))
+            except ray.exceptions.RayError as cleanup_error:
+                error.add_note(f"Could not discard pending policy writes: {cleanup_error}")
+            raise
 
     def _cleanup_old_checkpoints(self, step: int):
         max_ckpts = self.cfg.trainer.max_ckpts_to_keep

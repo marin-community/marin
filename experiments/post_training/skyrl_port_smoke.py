@@ -152,6 +152,7 @@ def build_smoke(version: str) -> Smoke:
         )
 
     resume = replace(resume, build_config=resume_config, deps=(*resume.deps, train))
+    resume = replace(resume, expected_fingerprint=resume.fingerprint())
     evaluate = evaluate_model(
         SkyRLPolicyModel(resume),
         ModelConfig(
