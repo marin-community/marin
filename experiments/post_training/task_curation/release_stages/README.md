@@ -376,6 +376,10 @@ expected rows and fields against the sealed staged panel before dispatching
 chunks and task links, which reference those batches through SQL foreign keys.
 Segments run in parallel within each phase. The SQL pointer selecting the served
 review panel updates only after both phases succeed.
+The partial-QC resume check compares extra assessment headers with the
+corresponding digest-verified staged QC panels. Every stored header field must
+match, and the retained prior-header count must equal the staging receipt. An
+unknown panel or changed header stops the resume.
 
 To refresh an already staged index after a declaration changes, supply its
 digest-bound `prior_index` reference to `fresh_qc_index` and put replacement

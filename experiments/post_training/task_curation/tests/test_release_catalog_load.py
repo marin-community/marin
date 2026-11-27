@@ -718,6 +718,45 @@ def test_catalog_replay_commits_parent_batches_before_child_links(tmp_path, monk
     assert {row["source_id"] for row in query.tables["atlas_review_current"]} == {"slow", "fast"}
 
 
+@pytest.mark.parametrize("stored_change", ["unchanged", "scope", "unknown_source"])
+def test_assessment_resume_accepts_only_the_sealed_partial_qc_headers(tmp_path, stored_change):
+    panels = []
+    headers = {}
+    for source_id in ("first", "second"):
+        staged = _staged_panel_document(source_id, records=3)
+        raw = gzip.compress(json.dumps(staged).encode())
+        path = tmp_path / f"{source_id}.json.gz"
+        path.write_bytes(raw)
+        panels.append(
+            {
+                "source_id": source_id,
+                "status": "complete",
+                "records": 3,
+                "reference": {"uri": str(path), "sha256": hashlib.sha256(raw).hexdigest()},
+            }
+        )
+        names = [column.strip().split()[0] for column in cl.load_module.TABLE_COLUMNS["assessments"].split(",")]
+        headers[staged["assessment"]["pipeline_key"]] = {name: staged["assessment"].get(name) for name in names}
+    changed = next(iter(headers.values()))
+    if stored_change == "scope":
+        changed["scope"] = "full"
+    if stored_change == "unknown_source":
+        changed["source_id"] = "unplanned"
+
+    def query(sql, parameters):
+        if "COUNT(*) AS n" in sql:
+            return {"rows": [{"n": 5}]}
+        if "NOT EXISTS" in sql:
+            return {"rows": [{"pipeline_key": key, "source_id": value["source_id"]} for key, value in headers.items()]}
+        return {"rows": [headers[parameters["key"]]]}
+
+    if stored_change == "unchanged":
+        assert set(cl.verify_assessment_resume(_inputs(tmp_path), 3, panels, query)) == set(headers)
+    else:
+        with pytest.raises(ValueError, match=r"sealed QC panel|unexpected assessment"):
+            cl.verify_assessment_resume(_inputs(tmp_path), 3, panels, query)
+
+
 @pytest.mark.parametrize("changed_pointer", [False, True])
 def test_catalog_reviews_reuse_copied_payload_and_replay_new_panel(tmp_path, monkeypatch, changed_pointer):
     copied = _staged_panel_document("retained", records=2)

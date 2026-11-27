@@ -217,6 +217,42 @@ def verify_history_receipt(inputs: CatalogLoadInputs) -> dict:
     return history
 
 
+def verify_assessment_resume(inputs: CatalogLoadInputs, headers: int, panels: list[dict], query: Query) -> list[str]:
+    """Allow partial QC headers only when every stored field matches its sealed panel."""
+    count = query("SELECT COUNT(*) AS n FROM atlas_assessments WHERE load_id=:load", {"load": inputs.target_load_id})[
+        "rows"
+    ][0]["n"]
+    if headers <= count <= headers + 1:
+        return []
+    if not headers <= count <= headers + len(panels):
+        raise ValueError(f"target load holds {count} assessments, outside staged history and QC")
+    extra = query(
+        "SELECT current.pipeline_key,current.source_id FROM atlas_assessments current"
+        " WHERE current.load_id=:target AND NOT EXISTS (SELECT 1 FROM atlas_assessments prior"
+        " WHERE prior.load_id=:prior AND prior.pipeline_key=current.pipeline_key)"
+        " ORDER BY current.pipeline_key LIMIT :limit",
+        {"target": inputs.target_load_id, "prior": inputs.prior_load_id, "limit": len(panels) + 1},
+    )["rows"]
+    if count - len(extra) != headers:
+        raise ValueError("target assessment history differs from its staged receipt")
+    by_source = {panel["source_id"]: panel for panel in panels}
+    names = [column.strip().split()[0] for column in load_module.TABLE_COLUMNS["assessments"].split(",")]
+    for row in extra:
+        panel = by_source.get(row["source_id"])
+        if panel is None:
+            raise ValueError(f"unexpected assessment on QC resume: {row['source_id']}")
+        assessment = _validate_staged_panel(inputs, panel)["assessment"]
+        if assessment["pipeline_key"] != row["pipeline_key"]:
+            raise ValueError(f"resumed assessment selects another panel: {row['source_id']}")
+        stored = query(
+            f"SELECT {','.join(names)} FROM atlas_assessments WHERE load_id=:load AND pipeline_key=:key",
+            {"load": inputs.target_load_id, "key": row["pipeline_key"]},
+        )["rows"]
+        if stored != [{name: assessment.get(name) for name in names}]:
+            raise ValueError(f"resumed assessment differs from its sealed QC panel: {row['source_id']}")
+    return [row["pipeline_key"] for row in extra]
+
+
 def run_catalog_load(
     inputs: CatalogLoadInputs,
     *,
@@ -306,12 +342,12 @@ def _run_write(
     result_contracts = contracts_loader(contracts, query)
 
     history = verify_history_receipt(inputs)
-    counts = query("SELECT COUNT(*) AS n FROM atlas_assessments WHERE load_id=:load", {"load": inputs.target_load_id})[
-        "rows"
-    ][0]["n"]
-    headers = int(history["prior_assessment_headers"])
-    if not headers <= counts <= headers + 1:
-        raise ValueError(f"target load holds {counts} assessments, outside the staged history range")
+    fresh_qc = read_ref(inputs.staging["fresh_qc_index"])
+    if fresh_qc["load_id"] != inputs.target_load_id or fresh_qc["snapshot_id"] != inputs.snapshot_id:
+        raise ValueError("fresh QC index names different loads than this release")
+    resumed_assessments = verify_assessment_resume(
+        inputs, int(history["prior_assessment_headers"]), fresh_qc["receipts"], query
+    )
 
     # Route load_catalog's internal history copy through the paced client; an explicit
     # retain parameter on load_catalog would remove this patch (see module docstring).
@@ -340,9 +376,6 @@ def _run_write(
     if selected != [{"load_id": inputs.target_load_id}]:
         raise ValueError(f"serving pointer is {selected!r}, expected the target load")
 
-    fresh_qc = read_ref(inputs.staging["fresh_qc_index"])
-    if fresh_qc["load_id"] != inputs.target_load_id or fresh_qc["snapshot_id"] != inputs.snapshot_id:
-        raise ValueError("fresh QC index names different loads than this release")
     qc_results: list[dict] = []
     if reviews_loader is not None:
         # An injected loader keeps the serial per-panel contract exactly (tests).
@@ -388,6 +421,7 @@ def _run_write(
         "snapshot_id": inputs.snapshot_id,
         "contracts": result_contracts,
         "fresh_qc_results": qc_results,
+        "resumed_qc_assessments": resumed_assessments,
         "stale_pin_panels": sorted(row["source_id"] for row in qc_results if not row["current_pin"]),
         "selected_review_panels": selected_panels,
         # The plan's hand-counted expectation is recorded, not enforced: it predates the
