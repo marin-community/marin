@@ -647,7 +647,7 @@ def _to_dropless_local(
     mesh: the local backend raises when the mesh expert axis is larger than one.
     """
     expert_mlp = model.stacked_blocks.stacked.mlp.expert_mlp
-    dropless = dataclasses.replace(expert_mlp, implementation=implementation, expert_chunks=1)
+    dropless = dataclasses.replace(expert_mlp, implementation=implementation, expert_chunks=1, shadow_experts=None)
     return eqx.tree_at(lambda m: m.stacked_blocks.stacked.mlp.expert_mlp, model, dropless)
 
 

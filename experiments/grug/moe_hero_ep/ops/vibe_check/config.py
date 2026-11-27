@@ -56,7 +56,10 @@ def sampling_model() -> dict:
     """
     # The local dropless backend matches held-out evaluation and cannot drop another prompt's tokens.
     model = dataclasses.replace(
-        hero_recipe.HERO_MODEL_CONFIG, moe_implementation=DEFAULT_DROPLESS_MOE_IMPLEMENTATION, expert_chunks=1
+        hero_recipe.HERO_MODEL_CONFIG,
+        moe_implementation=DEFAULT_DROPLESS_MOE_IMPLEMENTATION,
+        expert_chunks=1,
+        shadow_experts=None,
     )
     return draccus.encode(model)
 

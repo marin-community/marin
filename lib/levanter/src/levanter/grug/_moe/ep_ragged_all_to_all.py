@@ -17,6 +17,8 @@ Axis names used in the shape annotations:
     C       rows in one chunk's receiver buffer, the per-chunk capacity
     S       shards on the expert axis
     U       expert-granular transfers on the expert axis
+    R       shadowed experts, ShadowExperts.count
+    B       rows in this shard's shadow buffer
 """
 
 import dataclasses
@@ -49,6 +51,7 @@ from levanter.grug._moe.ep_common import (
     ExpertA2aParams,
     _clip_receiver_group_sizes,
     _expert_granular_a2a_params,
+    _prefix_cap_counts,
     _sort_activations,
 )
 
@@ -66,6 +69,33 @@ def capacity_block_experts(local_experts: int) -> int:
     """Experts that share one receiver capacity: a contiguous run of global expert ids within one shard."""
     chunks = _EXPERT_CHUNKS if local_experts % _EXPERT_CHUNKS == 0 and _EXPERT_CHUNKS > 1 else 1
     return local_experts // chunks
+
+
+@dataclasses.dataclass(frozen=True)
+class ShadowExperts:
+    """Compute each expert-parallel group's most-loaded experts on every shard of the group.
+
+    On every step and layer, the ``count`` experts with the most assignments in the group are taken from the
+    group-wide counts the transport already gathers. Every shard computes them for its own tokens, with their
+    weights broadcast over the expert axis. Their assignments skip the all-to-all and the receivers' capacity,
+    which leaves that capacity to the other experts.
+
+    Each shard computes at most ``ceil(rows_per_token * tokens_per_shard)`` shadowed rows, filled from the
+    most-loaded expert down; the rest of a shadowed expert's assignments go through the transport and its
+    clipping. ``rows_per_token >= min(count, K)`` never spills, because a token picks an expert at most once.
+
+    Shadowing changes which assignments are dropped. On the kept ones it computes the same function, up to
+    rounding.
+    """
+
+    count: int
+    rows_per_token: float
+
+    def __post_init__(self):
+        if self.count < 1:
+            raise ValueError(f"ShadowExperts.count must be positive, got {self.count!r}")
+        if self.rows_per_token <= 0:
+            raise ValueError(f"ShadowExperts.rows_per_token must be positive, got {self.rows_per_token!r}")
 
 
 # Selects the device-initiated ragged all-to-all kernel. The second entry is scoped to that op, so
@@ -729,6 +759,197 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
 _routed_experts.defvjp(_routed_experts_fwd, _routed_experts_bwd, optimize_remat=True)
 
 
+class _ShadowRouting(NamedTuple):
+    """The shadowed experts of this shard's EP group and the assignments this shard computes for them.
+
+    Slot ``j`` of the shadow buffer holds assignment ``assignments[j]``, a flat ``token * K + slot`` index,
+    expert-major in ``experts`` order (most loaded first). An inactive slot ``j`` holds ``Tlocal * K + j``, out
+    of range and distinct from every other slot. ``positions`` is the inverse map, ``[Tlocal, K]``, with ``B``
+    for assignments the shadow path does not compute.
+    """
+
+    experts: Int[Array, "R"]
+    group_sizes: Int[Array, "R"]
+    assignments: Int[Array, "B"]
+    positions: Int[Array, "Tlocal K"]
+
+
+def _shadow_routing(
+    all_group_sizes: Int[Array, "S E"],
+    sorted_indices: Int[Array, "TK"],
+    shard_id: Int[Array, ""],
+    *,
+    count: int,
+    rows: int,
+    topk: int,
+) -> tuple[_ShadowRouting, Int[Array, "S E"]]:
+    """Pick the EP group's ``count`` most-loaded experts and the assignments each shard computes for them.
+
+    Every shard derives the same choice from the same all-gathered counts. Each shard takes up to
+    ``rows`` of its own shadowed assignments, expert by expert from the most loaded, from the end of
+    each expert's group in its sorted buffer; the transport carries the rest of the group from its
+    start. Returns this shard's shadow routing and every shard's shadowed counts, ``[S, E]``.
+    """
+    num_shards, num_experts = all_group_sizes.shape
+    assignments_per_shard = sorted_indices.shape[0]
+    # Most loaded first: when a shard's shadowed rows exceed its buffer, the lightest shadowed experts
+    # spill back to the transport rather than the most-loaded ones.
+    _, experts = jax.lax.top_k(jnp.sum(all_group_sizes, axis=0), count)  # [R]
+    shadowed_by_rank = _prefix_cap_counts(all_group_sizes[:, experts], capacity=rows)  # [S, R]
+    shadowed_by_expert = jnp.zeros((num_shards, num_experts), jnp.int32).at[:, experts].set(shadowed_by_rank)  # [S, E]
+
+    group_sizes = all_group_sizes[shard_id]  # [E]
+    shadowed = shadowed_by_rank[shard_id]  # [R]
+    group_ends = jnp.cumsum(group_sizes)[experts]  # [R]
+    buffer_ends = jnp.cumsum(shadowed)  # [R]
+    slot = jnp.arange(rows, dtype=jnp.int32)  # [B]
+    expert_of_slot = jnp.minimum(jnp.searchsorted(buffer_ends, slot, side="right"), count - 1)  # [B]
+    # Slot j of expert i's segment reads the sorted row `group_end - shadowed + (j - segment start)`,
+    # which is `group_end - (buffer_end - j)`.
+    sorted_rows = group_ends[expert_of_slot] - (buffer_ends[expert_of_slot] - slot)
+    active = slot < buffer_ends[-1]
+    assignments = jnp.where(active, sorted_indices[jnp.where(active, sorted_rows, 0)], assignments_per_shard + slot)
+    positions = (
+        jnp.full((assignments_per_shard,), rows, jnp.int32).at[assignments].set(slot, mode="drop", unique_indices=True)
+    )
+    routing = _ShadowRouting(
+        experts=experts,
+        group_sizes=shadowed,
+        assignments=assignments,
+        positions=positions.reshape(-1, topk),
+    )
+    return routing, shadowed_by_expert
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
+def _shadow_weights(
+    local_experts: int,
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    experts: Int[Array, "R"],
+    shard_id: Int[Array, ""],
+) -> tuple[Float[Array, "R H I2"], Float[Array, "R I H"]]:
+    """Broadcast the shadowed experts' weights from their owners to every shard of the EP group.
+
+    The forward ``psum`` is exact, since only the owner contributes. The backward sums every shard's
+    gradient in float32 and rounds it once onto the owner's slot. It expects each shard's own cotangent,
+    as ``shard_map(check_vma=False)`` delivers; with replication checking the cotangent arrives summed,
+    so the forward rejects that mode.
+    """
+    weights, _ = _shadow_weights_fwd(local_experts, moe_w13_local, moe_w2_local, experts, shard_id)
+    return weights
+
+
+def _shadow_weights_fwd(local_experts, moe_w13_local, moe_w2_local, experts, shard_id):
+    if "expert" in jax.typeof(moe_w13_local).manual_axis_type.varying:
+        raise ValueError("shadow experts need shard_map(check_vma=False); the backward would sum gradients twice")
+    owned = (experts // local_experts == shard_id)[:, None, None]
+    local = experts % local_experts
+    w13 = jax.lax.psum(jnp.where(owned, moe_w13_local[local], 0), "expert")
+    w2 = jax.lax.psum(jnp.where(owned, moe_w2_local[local], 0), "expert")
+    # Save only the indices: the backward needs the bank's shape, not its values.
+    return (w13, w2), (owned, local)
+
+
+def _shadow_weights_bwd(local_experts, residuals, cotangents):
+    owned, local = residuals
+
+    def to_owner(cotangent):
+        total = jax.lax.psum(cotangent.astype(jnp.float32), "expert")
+        # The shadowed experts are distinct, so each owned slot receives one value and the scatter adds it
+        # to zero exactly; non-owned slots add zero.
+        gradient = jnp.where(owned, total, 0).astype(cotangent.dtype)
+        return jnp.zeros((local_experts, *cotangent.shape[1:]), cotangent.dtype).at[local].add(gradient)
+
+    w13_cotangent, w2_cotangent = cotangents
+    return to_owner(w13_cotangent), to_owner(w2_cotangent), None, None
+
+
+_shadow_weights.defvjp(_shadow_weights_fwd, _shadow_weights_bwd)
+
+
+def _shadow_combine(
+    rows_out: Float[Array, "B H"], positions: Int[Array, "Tlocal K"], weights: Float[Array, "Tlocal K"]
+) -> Float[Array, "Tlocal H"]:
+    """Each token's weighted sum of its shadow rows; positions at ``B`` contribute nothing."""
+    keep = positions < rows_out.shape[0]
+    safe_positions = jnp.where(keep, positions, 0)
+    safe_weights = jnp.where(keep, weights, 0)
+    if sonic_gather_sum_available():
+        return sonic_gather_sum(rows_out, safe_positions, safe_weights)
+    gathered = jnp.where(keep[..., None], rows_out[safe_positions], 0)
+    return jnp.einsum(
+        "tkd,tk->td", gathered, safe_weights.astype(gathered.dtype), preferred_element_type=jnp.float32
+    ).astype(rows_out.dtype)
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(5,))
+def _shadow_experts(
+    x_local: Float[Array, "Tlocal H"],
+    weights: Float[Array, "Tlocal K"],
+    w13: Float[Array, "R H I2"],
+    w2: Float[Array, "R I H"],
+    shadow: _ShadowRouting,
+    expert_mlp: _ExpertMlp,
+) -> Float[Array, "Tlocal H"]:
+    """The shadowed experts' weighted output for this shard's tokens, from its own rows only.
+
+    ``weights`` must be zero except at shadowed assignments.
+    """
+    out, _ = _shadow_experts_fwd(x_local, weights, w13, w2, shadow, expert_mlp)
+    return out
+
+
+def _shadow_experts_fwd(x_local, weights, w13, w2, shadow, expert_mlp):
+    rows = shadow.assignments.shape[0]
+    tokens = jnp.minimum(shadow.assignments // weights.shape[1], x_local.shape[0] - 1)
+    x_rows = jnp.take(x_local, tokens, axis=0)  # [B, H]
+    # The grouped MLP covers every buffer row: the inactive tail joins the last group, whose
+    # `group_sizes` entry still counts only its active rows.
+    physical = shadow.group_sizes.at[-1].add(rows - jnp.sum(shadow.group_sizes, dtype=jnp.int32))
+    out_rows, residuals = expert_mlp.forward(x_rows, w13, w2, physical, shadow.group_sizes)  # [B, H]
+    out = _shadow_combine(out_rows, shadow.positions, weights).astype(x_local.dtype)
+    kept_rows = None if expert_mlp.routing_weight_gradient == _RoutingWeightGradient.EXPERT_SIDE else out_rows
+    return out, (weights, shadow, residuals, kept_rows)
+
+
+def _shadow_experts_bwd(expert_mlp, residuals, out_cotangent):
+    weights, shadow, mlp_residuals, kept_rows = residuals
+    rows = shadow.assignments.shape[0]
+    tokens_per_shard, topk = weights.shape
+    active = shadow.assignments < tokens_per_shard * topk
+    assignment = jnp.where(active, shadow.assignments, 0)
+    row_weights = jnp.where(active, weights.reshape(-1)[assignment], 0).astype(jnp.float32)  # [B]
+    row_tokens = assignment // topk
+    out_rows_cotangent = (out_cotangent[row_tokens].astype(jnp.float32) * row_weights[:, None]).astype(
+        out_cotangent.dtype
+    )  # [B, H]
+    x_rows_cotangent, w13_cotangent, w2_cotangent, row_output_dot = expert_mlp.backward(
+        mlp_residuals, out_rows_cotangent
+    )
+    keep = (shadow.positions < rows).astype(jnp.float32)
+    x_cotangent = _shadow_combine(x_rows_cotangent, shadow.positions, keep)
+    if expert_mlp.routing_weight_gradient == _RoutingWeightGradient.EXPERT_SIDE:
+        # <dout, y> = <dy, y> / w, as in the transport path.
+        divisible = active & (row_weights != 0)
+        row_weight_cotangent = jnp.where(divisible, row_output_dot / jnp.where(divisible, row_weights, 1), 0)
+    else:
+        row_weight_cotangent = jnp.sum(
+            out_cotangent[row_tokens].astype(jnp.float32) * kept_rows.astype(jnp.float32), axis=-1
+        )
+    weights_cotangent = (
+        jnp.zeros((tokens_per_shard * topk,), jnp.float32)
+        .at[shadow.assignments]
+        .set(jnp.where(active, row_weight_cotangent, 0), mode="drop", unique_indices=True)
+        .reshape(weights.shape)
+        .astype(weights.dtype)
+    )
+    return x_cotangent, weights_cotangent, w13_cotangent, w2_cotangent, None
+
+
+_shadow_experts.defvjp(_shadow_experts_fwd, _shadow_experts_bwd)
+
+
 def _moe_mlp_ep_ragged_a2a_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -741,6 +962,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     num_experts: int,
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
+    shadow_experts: ShadowExperts | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -783,10 +1005,24 @@ def _moe_mlp_ep_ragged_a2a_local(
             (logical_capacity + chunks - 1) // chunks,
             chunk_experts,
         )
+        shadow = None
+        transport_group_sizes = all_group_sizes  # [S, E]
+        if shadow_experts is not None:
+            # A token picks an expert at most once, so more than `min(count, K)` rows per token never fill.
+            rows_per_token = min(shadow_experts.rows_per_token, min(shadow_experts.count, topk))
+            shadow, shadowed_by_expert = _shadow_routing(
+                all_group_sizes,
+                sorted_indices,
+                shard_id,
+                count=shadow_experts.count,
+                rows=math.ceil(rows_per_token * tokens_per_shard),
+                topk=topk,
+            )
+            transport_group_sizes = all_group_sizes - shadowed_by_expert
         chunk_of_expert = (jnp.arange(num_experts, dtype=jnp.int32) % local_experts) // chunk_experts  # [E]
         chunk_clipped_group_sizes = tuple(  # [S, E] each
             _clip_receiver_group_sizes(
-                jnp.where(chunk_of_expert[None, :] == chunk_index, all_group_sizes, 0),
+                jnp.where(chunk_of_expert[None, :] == chunk_index, transport_group_sizes, 0),
                 local_expert_size=local_experts,
                 receiver_capacity=logical_chunk_capacity,
             )
@@ -820,8 +1056,25 @@ def _moe_mlp_ep_ragged_a2a_local(
     # row, and the `where` discards any gradient for it.
     weights = jnp.where(accepted, combine_weights_local, 0)
     out_local = _routed_experts(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout)
+    kept_local = jnp.sum(accepted_group_sizes, dtype=jnp.int32)
+    if shadow is not None:
+        with jax.named_scope("moe_shadow"):
+            shadowed = shadow.positions < shadow.assignments.shape[0]
+            w13_shadow, w2_shadow = _shadow_weights(
+                moe_w13_local.shape[0], moe_w13_local, moe_w2_local, shadow.experts, shard_id
+            )
+            shadow_out = _shadow_experts(
+                x_local,
+                jnp.where(shadowed, combine_weights_local, 0),
+                w13_shadow,
+                w2_shadow,
+                shadow,
+                layout.expert_mlp,
+            )
+            out_local = out_local + shadow_out
+            kept_local = kept_local + jnp.sum(shadow.group_sizes, dtype=jnp.int32)
 
     with jax.named_scope("combine"):
-        dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - jnp.sum(accepted_group_sizes, dtype=jnp.int32)
+        dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - kept_local
         dropped_total = jax.lax.psum(dropped_local, token_sharding_axes)
     return out_local, CapacityDrops(sender_dropped=dropped_total, receiver_dropped=jnp.zeros_like(dropped_total))

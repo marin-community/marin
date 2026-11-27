@@ -27,12 +27,22 @@ EXECUTION_CONFIG_KEYS = frozenset(
         "replica_axis_size",
     }
 )
+# Model fields added after exports were pinned that do not change the exported weights or HF config. Export
+# identity omits them, so exports pinned before a field existed stay valid. Older fields that only affect
+# training, such as `capacity_factor`, stay in the identity.
+POST_PIN_MODEL_KEYS = frozenset({"shadow_experts"})
 EXPERT_BANK = re.compile(r"^(.*\.mlp\.experts)\.(gate_proj|up_proj|down_proj)\.weight$")
+
+
+def export_identity(config: dict) -> dict:
+    """An encoded export configuration without the model fields added after exports were pinned."""
+    model = {key: value for key, value in config["model"].items() if key not in POST_PIN_MODEL_KEYS}
+    return {**config, "model": model}
 
 
 def artifact_config(config: dict) -> dict:
     """Keep output-defining inputs in an encoded export configuration."""
-    return {key: value for key, value in config.items() if key not in EXECUTION_CONFIG_KEYS}
+    return {key: value for key, value in export_identity(config).items() if key not in EXECUTION_CONFIG_KEYS}
 
 
 def execution_config(config: dict) -> dict:
