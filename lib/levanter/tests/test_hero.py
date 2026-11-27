@@ -16,7 +16,7 @@ from transformers import PreTrainedTokenizerFast
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.models.hero import HeroConfig
+from levanter.models.hero import GlobalQueryLogScaling, HeroConfig
 from levanter.models.hero_model import HeroLMHeadModel
 from levanter.models.snowball import SnowballConfig
 
@@ -38,21 +38,15 @@ def test_hero_and_snowball_reject_each_others_checkpoint_recipe():
         SnowballConfig.from_hf_config(hero)
 
 
-def test_hero_rejects_checkpoint_with_global_query_log_scaling(tmp_path):
-    hf_config = HeroConfig().to_hf_config(
-        128,
-        {
-            "grugmoe_artifact_schema_version": 3,
-            "log_scaling_n_floor": 65536,
-            "log_scaling_alpha": 0.1,
-            "log_scaling_power": 2.0,
-        },
-    )
-    hf_config.save_pretrained(tmp_path)
+def test_hero_discovers_and_round_trips_global_query_log_scaling(tmp_path):
+    config = HeroConfig(max_seq_len=262144, global_query_log_scaling=GlobalQueryLogScaling(65536, 0.1, 2.0))
+    config.to_hf_config(4).save_pretrained(tmp_path)
     _save_tiny_tokenizer(tmp_path)
     converter = HFCheckpointConverter.from_hf(str(tmp_path))
-    with pytest.raises(ValueError):
-        _ = converter.default_config
+
+    restored = converter.default_config
+    assert restored == dataclasses.replace(config, vocab_size=4)
+    assert restored.to_hf_config(4).grugmoe_artifact_schema_version == 3
 
 
 @pytest.mark.parametrize(

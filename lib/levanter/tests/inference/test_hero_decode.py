@@ -14,7 +14,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
-from levanter.models.hero import HeroConfig
+from levanter.models.hero import GlobalQueryLogScaling, HeroConfig
 from levanter.models.hero_model import HeroLMHeadModel
 from levanter.testing.devices import use_test_devices
 
@@ -95,6 +95,7 @@ def test_hero_paged_decode_matches_full_forward(sliding_window, rope_fused):
         sliding_window=sliding_window,
         global_every=2,
         qk_mult_long_scale=1.2,
+        global_query_log_scaling=GlobalQueryLogScaling(2, 0.4, 2.0),
         sconv_kernel=3,
         rope_fused=rope_fused,
         initializer_std=0.2,

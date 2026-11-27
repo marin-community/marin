@@ -21,10 +21,10 @@ from levanter.models.hero_model import HeroLMHeadModel
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 
 
-@pytest.mark.parametrize("rope_fused", [False, True])
+@pytest.mark.parametrize("rope_fused, log_scaling_floor", [(False, None), (True, None), (True, 2)])
 @pytest.mark.parametrize("expert_layout", ["bank", "individual"])
 @pytest.mark.parametrize("segmented", [False, True])
-def test_hero_export_load_matches_experiment_logits(rope_fused, expert_layout, segmented):
+def test_hero_export_load_matches_experiment_logits(rope_fused, log_scaling_floor, expert_layout, segmented):
     exp_cfg = GrugModelConfig(
         vocab_size=32,
         hidden_dim=16,
@@ -46,6 +46,9 @@ def test_hero_export_load_matches_experiment_logits(rope_fused, expert_layout, s
         initializer_std=0.15,
         qk_mult=1.37,
         qk_mult_long_scale=1.2,
+        log_scaling_n_floor=log_scaling_floor,
+        log_scaling_alpha=None if log_scaling_floor is None else 0.4,
+        log_scaling_power=None if log_scaling_floor is None else 2.0,
         sconv=True,
         sconv_kernel=3,
         sconv_sites=("k", "attn", "mlp"),

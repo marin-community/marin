@@ -24,8 +24,20 @@ from levanter.models.snowball import (
 
 _HERO_SCHEMA_VERSION = 2
 _HERO_LOG_SCALING_SCHEMA_VERSION = 3
-_HERO_LOG_SCALING_FIELDS = ("log_scaling_n_floor", "log_scaling_alpha", "log_scaling_power")
 _HERO_HIDDEN_DIM = 6144
+
+
+@dataclass(frozen=True)
+class GlobalQueryLogScaling:
+    """Position-dependent query scaling for Hero's global attention layers."""
+
+    n_floor: int
+    alpha: float
+    power: float
+
+    def __post_init__(self):
+        if self.n_floor <= 0 or any(not math.isfinite(x) or x <= 0 for x in (self.alpha, self.power)):
+            raise ValueError("Global query log scaling requires a positive floor, alpha, and power")
 
 
 @LmConfig.register_subclass("hero")
@@ -54,6 +66,7 @@ class HeroConfig(HFCompatConfig):
     initializer_std: float = 0.5 / math.sqrt(_HERO_HIDDEN_DIM)
     qk_mult: float = 1.3
     qk_mult_long_scale: float = 1.0
+    global_query_log_scaling: GlobalQueryLogScaling | None = None
     sconv: bool = True
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
@@ -130,8 +143,16 @@ class HeroConfig(HFCompatConfig):
     def from_hf_config(cls, hf_config: PretrainedConfig) -> "HeroConfig":
         if not cls.matches_hf_config(hf_config):
             raise ValueError("Hero requires a grug_moe schema-v2 or schema-v3 checkpoint")
-        if any(getattr(hf_config, field, None) is not None for field in _HERO_LOG_SCALING_FIELDS):
-            raise ValueError("Native Hero serving does not support global query log scaling")
+        n_floor = getattr(hf_config, "log_scaling_n_floor", None)
+        alpha = getattr(hf_config, "log_scaling_alpha", None)
+        power = getattr(hf_config, "log_scaling_power", None)
+        scaling = None
+        if (n_floor, alpha, power) != (None, None, None):
+            if getattr(hf_config, GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY) != _HERO_LOG_SCALING_SCHEMA_VERSION:
+                raise ValueError("Global query log scaling requires Hero artifact schema v3")
+            if n_floor is None or alpha is None or power is None:
+                raise ValueError("Hero requires all three global query log scaling fields")
+            scaling = GlobalQueryLogScaling(n_floor, alpha, power)
         if getattr(hf_config, "grugmoe_attention_mode", None) != GRUG_MOE_ATTENTION_MODE:
             raise ValueError("Hero requires production attention")
         for flag in ("disable_pko", "disable_long_rope"):
@@ -162,6 +183,7 @@ class HeroConfig(HFCompatConfig):
             initializer_std=hf_config.initializer_range,
             qk_mult=hf_config.qk_mult,
             qk_mult_long_scale=getattr(hf_config, "qk_mult_long_scale", 1.0),
+            global_query_log_scaling=scaling,
             rope=RotaryConfig(theta=hf_config.rope_theta),
             rope_fused=hf_config.rope_fused,
             sconv=hf_config.sconv,
@@ -201,7 +223,15 @@ class HeroConfig(HFCompatConfig):
             sconv_sites=list(self.sconv_sites),
             grugmoe_attention_mode=GRUG_MOE_ATTENTION_MODE,
         )
-        values[GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] = _HERO_SCHEMA_VERSION
+        scaling = self.global_query_log_scaling
+        values[GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] = (
+            _HERO_SCHEMA_VERSION if scaling is None else _HERO_LOG_SCALING_SCHEMA_VERSION
+        )
+        values.update(
+            log_scaling_n_floor=None if scaling is None else scaling.n_floor,
+            log_scaling_alpha=None if scaling is None else scaling.alpha,
+            log_scaling_power=None if scaling is None else scaling.power,
+        )
         if config_overrides is not None:
             values.update(config_overrides)
         return GrugMoeHfConfig(**values)

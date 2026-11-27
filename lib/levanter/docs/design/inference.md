@@ -108,10 +108,11 @@ position, or recomputing it.
 ### Native Hero serving
 
 Levanter loads Hero `grug_moe` schema-v2 and schema-v3 checkpoints with banked
-or individually stored expert weights. Schema-v3 exports must have global
-query log scaling disabled. The inference engine uses absolute token
-positions, paged KV caches, and request-slot convolution history for prefill
-and decode. Serving requires an explicit Grug mesh with context parallelism
+or individually stored expert weights. Schema v3 can scale global-layer
+queries by the number of visible keys in the current document. Packed
+full forward counts from each document's start. Paged inference counts
+from each request's first token. The inference engine uses paged KV caches
+and request-slot convolution history for prefill and decode. Serving requires an explicit Grug mesh with context parallelism
 set to one.
 
 The CPU parity tests cover packed documents, both rotary layouts, and

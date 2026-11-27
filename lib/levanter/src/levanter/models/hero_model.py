@@ -37,7 +37,7 @@ from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.layers.kv_cache import PageCache, KvPageCache, ListCache
 from levanter.layers.paged_short_conv import ShortConvSequenceCache, paged_short_conv
 from levanter.layers.stacked import ArrayStacked
-from levanter.models.hero import HeroConfig
+from levanter.models.hero import GlobalQueryLogScaling, HeroConfig
 from levanter.models.lm_model import LmHeadModel
 from levanter.models.snowball import DenseMLP, GatedNorm, RMSNorm, _reshard_sequence, rms_norm
 from levanter.sharding import partition_spec_of
@@ -222,7 +222,9 @@ class HeroAttention(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        *,
         is_global: bool = False,
+        query_log_scale: jax.Array | None = None,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -295,8 +297,10 @@ class HeroAttention(eqx.Module):
         elif not is_global:
             q, k = _apply_split_half_rope(q, k, self.cfg.rope)
         q = q * self.cfg.qk_mult
-        if self.cfg.qk_mult_long_scale != 1.0:
-            q = q * jnp.where(is_global, self.cfg.qk_mult_long_scale, 1.0)
+        if is_global and self.cfg.qk_mult_long_scale != 1.0:
+            q = q * self.cfg.qk_mult_long_scale
+        if query_log_scale is not None:
+            q = q * query_log_scale[..., None, None].astype(q.dtype)
         # Context parallelism: shard Q's sequence over "context" and all-gather K/V, so each
         # shard attends its own queries against the whole key sequence. The backends reject a
         # sharded K/V sequence, and the output returns to the residual stream's layout, which
@@ -312,6 +316,11 @@ class HeroAttention(eqx.Module):
         if seq_axis is not None:
             attn_out = _reshard_sequence(attn_out, residual_seq_axis)
         return _attention_output(self, x, attn_out, v_local)
+
+
+def _query_log_multiplier(visible_keys: jax.Array, scaling: GlobalQueryLogScaling) -> jax.Array:
+    factor = 1.0 + scaling.alpha * jnp.log(jnp.maximum(visible_keys.astype(jnp.float32) / scaling.n_floor, 1.0))
+    return factor if scaling.power == 1.0 else factor**scaling.power
 
 
 def _long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
@@ -470,14 +479,16 @@ class HeroBlock(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        *,
         is_global: bool = False,
+        query_log_scale: jax.Array | None = None,
     ) -> Float[Array, "B S D"]:
         # segment_ids (packed-document boundaries) for the branch-output SConvs; None when unpacked.
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         sconv_segment_ids = segment_ids[0] if segment_ids is not None else None
 
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        attn_out = self.attn(attn_in, mask, is_global=is_global)
+        attn_out = self.attn(attn_in, mask, is_global=is_global, query_log_scale=query_log_scale)
         if self.sconv_attn is not None:
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
@@ -567,12 +578,19 @@ class HeroTransformer(eqx.Module):
         )
         bounds_spec = P(_BATCH_AXES, _seq_axis(get_abstract_mesh()))
         long_lower, short_lower, valid = (reshard(x, bounds_spec) for x in (long_lower, short_lower, valid))
+        query_log_scale = None
+        if cfg.global_query_log_scaling is not None:
+            positions = reshard(jnp.arange(seq_len, dtype=jnp.int32)[None, :], P(None, _seq_axis(get_abstract_mesh())))
+            visible_keys = jnp.where(valid, positions - long_lower + 1, 1)
+            query_log_scale = _query_log_multiplier(visible_keys, cfg.global_query_log_scaling)
 
         def layer_step(hidden, inputs):
             block, use_long = inputs
             output = jax.lax.cond(
                 use_long,
-                lambda x: block(x, long_mask.with_fa4_bounds(long_lower, valid), is_global=True),
+                lambda x: block(
+                    x, long_mask.with_fa4_bounds(long_lower, valid), is_global=True, query_log_scale=query_log_scale
+                ),
                 lambda x: block(x, short_mask.with_fa4_bounds(short_lower, valid)),
                 hidden,
             )
@@ -821,6 +839,9 @@ def _decode_attention(
     q = q * cfg.qk_mult
     if use_long and cfg.qk_mult_long_scale != 1.0:
         q = q * cfg.qk_mult_long_scale
+    if use_long and cfg.global_query_log_scaling is not None:
+        scale = _query_log_multiplier(positions.array[:, None] + 1, cfg.global_query_log_scaling)
+        q = q * scale[..., None, None].astype(q.dtype)
     query = q.reshape(x.shape[0], cfg.stored_kv_heads, cfg.num_heads // cfg.stored_kv_heads, width)
     query = reshard(query, P(None, "model", None, None))
     output = ragged_paged_attention(
