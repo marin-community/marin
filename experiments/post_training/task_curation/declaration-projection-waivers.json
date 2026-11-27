@@ -37,6 +37,7 @@
     "Reasoning Gym:reasoning_gym",
     "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@sealed-20261124",
     "ScienceOne:S1-DeepResearch-15k",
+    "SynthLabs:Big-Math-RL-Verified",
     "TaskTrove:DCAgent__exp_rle_adversarial-v6",
     "TaskTrove:DCAgent__exp_rpt_nemotron-cpp",
     "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2",
@@ -49,6 +50,7 @@
     "TaskTrove:laion__codeelo-v2",
     "TaskTrove:laion__exp_rpt_crosscodeeval-csharp-v4",
     "TaskTrove:laion__exp_rpt_crosscodeeval-java-v3",
+    "TaskTrove:laion__exp_rpt_crosscodeeval-typescript-v2",
     "TaskTrove:laion__exp_rpt_ghactions-v3",
     "TaskTrove:laion__exp_rpt_scaffold-v3",
     "TaskTrove:laion__exp_rpt_stack-cpp-v4",
@@ -73,7 +75,6 @@
     "TerminalWorld:TerminalWorld",
     "Yatin:Edge-Agent-Reasoning-WebSearch-260K",
     "di-zhang-fdu:aime_1983_2024",
-    "marin-community:mcp-atlas-easy",
-    "SynthLabs:Big-Math-RL-Verified"
+    "marin-community:mcp-atlas-easy"
   ]
 }
