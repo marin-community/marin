@@ -134,7 +134,9 @@ IDs and the validity mask can exceed gRPC's default 4 MiB receive limit.
 Call `SnowballConfig.with_zero_kl_replay()` with the same model configuration
 and weight snapshot on both sides. Use FP32 weights and activations, BF16
 serving KV, and full slot capacity with 128-token pages. Fixed attention uses
-one logical slot per device on an explicit data or expert mesh axis. Expert
+one logical slot per device on an explicit data or expert mesh axis. It
+processes up to four KV heads per call, with a separate one-head tile for
+Snowball's fifth KV head. Expert
 parallelism sums contributions in route order within each shard and then in
 mesh order across shards. Packed
 learner batches restore the independent slots before applying causal attention

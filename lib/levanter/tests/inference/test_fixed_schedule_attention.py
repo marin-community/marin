@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import os
 from pathlib import Path
 import subprocess
@@ -27,7 +28,7 @@ def _require_four_tpu_devices() -> None:
 
 
 def _fixture(spec: FixedScheduleSpec) -> tuple[jax.Array, jax.Array, jax.Array]:
-    shape = (spec.max_num_seqs, spec.max_kv_len, 1, spec.head_dim)
+    shape = (spec.max_num_seqs, spec.max_kv_len, spec.num_kv_heads, spec.head_dim)
     keys = jax.random.normal(jax.random.PRNGKey(17), shape, dtype=jnp.float32) * 0.125
     values = jax.random.normal(jax.random.PRNGKey(19), shape, dtype=jnp.float32) * 0.25
     page_indices = jnp.asarray(
@@ -115,6 +116,27 @@ def test_fixed_schedule_public_forward_matches_oracle_and_decode(position: int, 
             spec=spec,
         )
     assert jnp.array_equal(full, permuted)
+
+
+def test_fixed_schedule_production_gqa_tail_matches_padded_heads() -> None:
+    _require_four_tpu_devices()
+    spec = FixedScheduleSpec(num_q_heads=20, num_kv_heads=5)
+    padded_spec = dataclasses.replace(spec, num_q_heads=32, num_kv_heads=8)
+    keys, values, page_indices = _fixture(spec)
+    pages = materialize_contiguous_kv(keys, values, page_indices, spec=spec)
+    padded_pages = jnp.pad(pages, ((0, 0), (0, 0), (0, 6), (0, 0)))
+    q = jax.random.normal(jax.random.key(43), (4, 256, 20, 128), dtype=jnp.float32) * 0.125
+    padded_q = jnp.pad(q, ((0, 0), (0, 0), (0, 12), (0, 0)))
+    lengths = jnp.full((4,), 256, dtype=jnp.int32)
+    positions = jnp.broadcast_to(jnp.arange(256, dtype=jnp.int32), (4, 256))
+    active = positions == jnp.asarray([0, 127, 128, 255])[:, None]
+    with jax.set_mesh(Mesh(jax.devices()[:4], ("data",), axis_types=(AxisType.Explicit,))):
+        actual = fixed_schedule_attention(q, pages, lengths, page_indices, lengths, positions, active, spec=spec)
+        expected = fixed_schedule_attention(
+            padded_q, padded_pages, lengths, page_indices, lengths, positions, active, spec=padded_spec
+        )[:, :, :20]
+
+    np.testing.assert_array_equal(np.asarray(actual).view(np.uint32), np.asarray(expected).view(np.uint32))
 
 
 def test_fixed_schedule_public_forward_isolates_data_sharded_neighbor_changes() -> None:
