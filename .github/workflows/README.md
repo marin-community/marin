@@ -46,6 +46,11 @@ the `marin-prose-cleanup` marker skips the launch entirely.
 
 ## Agentic lint
 
+Loom can launch agentic lint, PR review, and holistic review directly from
+the GitHub App webhook. The three Actions jobs skip runner allocation when
+`LOOM_WEBHOOK_REVIEWS` is `true`. See the
+[Loom rollout procedure](../../infra/loom/README.md#pull-request-webhook-rules).
+
 `agentic-lint.yaml` runs a best-effort Loom lint review on a pull request that
 lacks the `agentic-lint` label. The label records that the PR has had a lint
 pass: the `manage-pr` skill applies it at PR creation after the author's local
@@ -83,8 +88,9 @@ uploads screenshots for inspection through the `Marin - Unit` run.
 `ops-loom-holistic-review.yaml` launches a whole-change review session for a
 non-draft pull request from this repository whose author has write access or
 is `marin-ops-agent[bot]` or `loom-oa-dev[bot]`. Each distinct head gets a run in the PR's Loom
-channel. The session reads the `review-pr` skill from the workflow revision
-so an older branch receives the current rubric. The reviewer maintains
+channel. The session reads the `review-pr` skill from a trusted revision.
+Webhook launches use the current default branch and Actions launches use
+the workflow revision. The reviewer maintains
 one compact overview ending in
 `<!-- marin-holistic-review:<sha> -->`. Re-reviews replace the original
 overview by comment ID, preserving finding numbers and updating their status.

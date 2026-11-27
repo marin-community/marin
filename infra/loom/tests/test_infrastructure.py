@@ -280,6 +280,24 @@ def test_deployment_manifest_preserves_unicode_profile_instructions() -> None:
     assert json.loads(manifest)["profiles"][0]["profile"]["instructions"] == "Prefix comments with 🤖"
 
 
+def test_rollout_syncs_pull_request_rules_from_the_stack(monkeypatch: pytest.MonkeyPatch) -> None:
+    stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())
+    monkeypatch.setenv(
+        "PULUMI_CONFIG",
+        json.dumps(
+            {key: value if isinstance(value, str) else json.dumps(value) for key, value in stack["config"].items()}
+        ),
+    )
+    pulumi.runtime.set_mocks(RecordingMocks(), project="marin-loom", stack="test")
+    config = DeploymentConfig.from_pulumi()
+    manifest = json.loads(_deployment_manifest(config, _deployment_profiles(config.profiles), []))
+
+    assert (
+        json.loads(manifest["settings"]["github.pull_request_rules"])
+        == stack["config"]["marin-loom:githubPullRequestRules"]
+    )
+
+
 def test_profile_instructions_reject_ambiguous_or_external_sources() -> None:
     with pytest.raises(ValueError, match="only one"):
         ProfileConfig.parse(

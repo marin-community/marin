@@ -298,6 +298,31 @@ account already exists in the production Grafana stack. In a new environment,
 deploy Grafana once with `marin-grafana:loom_alerts` set to `false`, deploy Loom
 to bind the new service account, then enable Loom alerts and redeploy Grafana.
 
+## Pull request webhook rules
+
+`githubPullRequestRules` in [Pulumi.marin-loom.yaml](Pulumi.marin-loom.yaml)
+declares which GitHub pull request events start Loom runs. A rollout reconciles
+these rules with the launch profiles and federations. Each rule lists its
+repository ID, actions, optional label filters, bot allowlist, and launch
+templates. A new rule can target a Loom profile directly. Loom checks that
+the current PR is open, ready for review, and from the same repository.
+Human authors need write access. The three review rules target federations
+to share run keys and the holistic channel with the Actions launchers.
+
+1. Roll out this stack using a Loom build with pull request rule support.
+2. In the `loom-oa-dev` GitHub App settings, subscribe to **Pull request** events.
+   Confirm a delivery for an eligible PR receives HTTP 202 and that Loom records
+   the expected runs. During overlap, verify both transports resolve to the same
+   run for a shared key.
+3. Disable runner launches for the three workflows at the job condition:
+
+   ```sh
+   gh variable set LOOM_WEBHOOK_REVIEWS --repo marin-community/marin --body true
+   ```
+
+   Delete the variable to restore Actions launches. To disable webhook launches
+   as well, roll out an empty `githubPullRequestRules` list.
+
 ## VM permissions
 
 The Loom VM service account runs interactive agent sessions. Its project, secret, and KMS
