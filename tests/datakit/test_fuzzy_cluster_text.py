@@ -194,14 +194,29 @@ def test_load_oversized_rejects_a_planner_threshold_above_the_cap(tmp_path: Path
 
 def test_cluster_sort_preserves_production_document_id_order() -> None:
     records = [
-        {"cluster_key": "2", "id": "b", "text": "short"},
-        {"cluster_key": "1", "id": "b", "text": "the longest text"},
-        {"cluster_key": "1", "id": "a", "text": "short"},
+        {"cluster_key": "2", "id": "b", "text": "short", "file_idx": 0},
+        {"cluster_key": "1", "id": "b", "text": "the longest text", "file_idx": 0},
+        {"cluster_key": "1", "id": "a", "text": "short", "file_idx": 0},
     ]
 
     ordered = sorted(records, key=cluster_sort_key)
 
     assert [(record["cluster_key"], record["id"]) for record in ordered] == [("1", "a"), ("1", "b"), ("2", "b")]
+
+
+def test_cluster_sort_orders_cross_source_copies_independent_of_arrival() -> None:
+    # Normalize derives the id from the text, so one text in two sources gives two rows that tie on
+    # (cluster_key, id). The solver keeps the first copy, so arrival order must not pick the source.
+    copies = [
+        {"cluster_key": "7", "id": "same", "text": "shared text", "file_idx": 3},
+        {"cluster_key": "7", "id": "same", "text": "shared text", "file_idx": 1},
+    ]
+
+    forward = sorted(copies, key=cluster_sort_key)
+    reverse = sorted(reversed(copies), key=cluster_sort_key)
+
+    assert [record["file_idx"] for record in forward] == [1, 3]
+    assert [record["file_idx"] for record in reverse] == [1, 3]
 
 
 def test_cluster_text_manifest_round_trip_preserves_layout(tmp_path: Path) -> None:
