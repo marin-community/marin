@@ -39,7 +39,7 @@ from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
 )
 from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
+from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeBackend, ServeConfig
 from marin.evaluation.runner import (
     EndpointRoute,
     Evaluation,
@@ -65,6 +65,7 @@ from marin.inference.iris import (
     PreparedInference,
     RemoteInferenceSession,
     RemoteInferenceStartupError,
+    _effective_serving,
 )
 from marin.inference.types import InferenceBackendState, OpenAIEndpoint, RunningModel
 from prometheus_client.parser import text_string_to_metric_families
@@ -660,6 +661,37 @@ def test_evaluation_steps_record_failures_without_blocking_other_steps(tmp_path,
         ("run-success", "succeeded"),
     }
     assert all(row.storage_format == "finestore" for row in catalog_rows)
+
+
+@pytest.mark.parametrize(("expert_parallel_size", "data_parallel_size"), [(1, 4), (2, 2)])
+def test_evaluation_records_effective_levanter_mesh(tmp_path, monkeypatch, expert_parallel_size, data_parallel_size):
+    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
+    batch = _hosted_judge_batch(tmp_path, (_evaluation(tmp_path, "mesh", _successful_evaluation),))
+    model = replace(
+        batch.model,
+        serve=ServeConfig(
+            backend=ServeBackend.LEVANTER,
+            tensor_parallel_size=2,
+            levanter_expert_parallel_size=expert_parallel_size,
+            auto_overrides=False,
+        ),
+    )
+    accelerator = replace(batch.accelerator, gpu_count=8)
+    batch = replace(batch, model=model, accelerator=accelerator, judge=None)
+    inference = inference_config_for_model(model, accelerator, env_vars={}, priority=0)
+    session = replace(
+        _remote_session(),
+        tensor_parallel_size=2,
+        backend_name="levanter",
+        effective_serving=_effective_serving(inference.model, inference.engine, inference.iris, 2),
+    )
+
+    (path,) = _evaluate_with_session(batch, session, orchestrator_job_id="/orchestrator")
+    serving = read_record(path).serving
+    assert serving is not None and serving.effective
+    assert serving.tensor_parallel_size == 2
+    assert serving.expert_parallel_size == expert_parallel_size
+    assert serving.data_parallel_size == data_parallel_size
 
 
 @pytest.mark.parametrize("n_scored, expected_status", [(9, RunStatus.SUCCEEDED), (8, RunStatus.INFRA_FAILED)])

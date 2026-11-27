@@ -12,7 +12,11 @@ from fray.types import tpu_family, tpu_hbm_capacity_bytes
 from iris.cluster.tpu_topology import get_tpu_topology
 
 from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig
-from marin.inference.config import DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE, ServingGeometry
+from marin.inference.config import (
+    DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE,
+    ServingGeometry,
+    levanter_data_parallel_size,
+)
 
 _BYTES_PER_GIB = 1024**3
 _GPU_OVERRIDE = re.compile(r"^(?P<type>[A-Za-z0-9]+)x(?P<count>\d+)$")
@@ -184,10 +188,9 @@ def serving_geometry(serve: ServeConfig, choice: AcceleratorChoice) -> ServingGe
     if serve.backend is ServeBackend.LEVANTER:
         expert = serve.levanter_expert_parallel_size or DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE
         tensor = serve.tensor_parallel_size or 1
-        mesh_width = tensor * expert
-        data, remainder = divmod(choice.gpu_count, mesh_width)
+        data = levanter_data_parallel_size(choice.gpu_count, tensor, expert)
         requested_data = serve.data_parallel_size if serve.tensor_parallel_size is not None else None
-        if remainder or (requested_data is not None and requested_data != data):
+        if requested_data is not None and requested_data != data:
             raise ValueError(
                 f"Levanter tensor_parallel_size={tensor}, expert_parallel_size={expert} and "
                 f"data_parallel_size={requested_data} do not fit {choice.label}"

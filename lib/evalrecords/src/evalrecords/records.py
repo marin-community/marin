@@ -628,6 +628,7 @@ class ServingParams(BaseModel):
 
     tensor_parallel_size: int | None = None
     data_parallel_size: int | None = None
+    expert_parallel_size: int | None = Field(default=None, exclude_if=lambda value: value is None)
     pipeline_parallel_size: int = 1
     task_count: int = 1
     effective: bool = False

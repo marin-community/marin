@@ -22,7 +22,11 @@ from levanter.utils.mesh import MeshConfig
 from transformers import PreTrainedTokenizerBase
 
 from marin.inference.backend import ModelSpec
-from marin.inference.config import DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE, LevanterEngineConfig
+from marin.inference.config import (
+    DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE,
+    LevanterEngineConfig,
+    levanter_data_parallel_size,
+)
 from marin.inference.dashboard_server import BackgroundServer, bind_serving_socket, serve_app_background
 from marin.inference.model_preparation import (
     levanter_tensor_parallel_limit,
@@ -244,13 +248,7 @@ def inference_mesh(
     num_chips: int, tensor_parallel_size: int, expert_parallel_size: int = DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE
 ) -> MeshConfig:
     """Assign the serving slice to tensor, expert, and data axes."""
-    if min(num_chips, tensor_parallel_size, expert_parallel_size) < 1:
-        raise ValueError("Serving mesh dimensions must be positive")
-    data, remainder = divmod(num_chips, tensor_parallel_size * expert_parallel_size)
-    if remainder:
-        raise ValueError(
-            f"The serving mesh {tensor_parallel_size} x {expert_parallel_size} does not divide {num_chips} chips."
-        )
+    data = levanter_data_parallel_size(num_chips, tensor_parallel_size, expert_parallel_size)
     if data > 1:
         logger.warning("The serving mesh uses %d model replicas across %d chips.", data, num_chips)
     return MeshConfig(
