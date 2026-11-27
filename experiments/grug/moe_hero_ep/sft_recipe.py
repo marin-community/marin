@@ -14,6 +14,7 @@ from typing import Literal
 
 from fray.types import ResourceConfig
 from levanter.checkpoint import discover_checkpoint_candidates
+from levanter.grug.grug_moe import ShadowExperts
 from levanter.infra.cli_helpers import get_git_commit
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply
 from marin.execution.remote import remote
@@ -58,6 +59,7 @@ class MochiSFT:
     dp_racks: int
     router_bias_mode: RouterBiasMode
     capacity_factor: float
+    shadow_experts: ShadowExperts | None
     version: str
     source_revision: str
     export_resources: ResourceConfig
@@ -124,6 +126,7 @@ class MochiSFT:
             dp_racks=self.dp_racks,
             router_bias_mode=self.router_bias_mode,
             capacity_factor=self.capacity_factor,
+            shadow_experts=self.shadow_experts,
             stop_after_steps=self.stop_after_steps,
             eval_every=self.eval_every,
             expert_placement=self.expert_placement,
@@ -157,7 +160,7 @@ class MochiSFT:
             # A final-only checkpoint can store a whole expert bank in one native chunk.
             gib = 1024**3
             reservation_increment = 64 * gib
-            cache_bytes = full_expert_bank_read_bytes(sft_model_config(self.capacity_factor))
+            cache_bytes = full_expert_bank_read_bytes(sft_model_config(self.capacity_factor, self.shadow_experts))
             read_budget = (cache_bytes + reservation_increment - 1) // reservation_increment * reservation_increment
             host_bytes = read_budget + DEFAULT_EXPORT_HOST_BUDGET_BYTES + 32 * gib
             export_resources = replace(export_resources, cpu=32, ram=f"{host_bytes // gib}GiB")
@@ -206,7 +209,8 @@ def _export_final_sft(
         raise ValueError(f"Mochi SFT has no permanent checkpoint in {directory}")
     if final.step != expected_step:
         raise ValueError(f"Mochi SFT expected final step {expected_step}, found newest permanent step {final.step}")
-    model = sft_model_config(capacity_factor)
+    # Export identity omits the training-only shadow option.
+    model = sft_model_config(capacity_factor, None)
     destination = StoragePath(output) / relative_path
     config = CpuExportConfig(
         final.path, digest(final.metadata), model, str(destination), source_revision, read_host_budget_bytes

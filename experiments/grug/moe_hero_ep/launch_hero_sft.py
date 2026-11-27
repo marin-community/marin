@@ -27,6 +27,7 @@ from levanter.data.text.datasets import (
     LmDataConfig,
 )
 from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.grug.grug_moe import ShadowExperts
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -99,9 +100,11 @@ REPLAY_COMPONENT_PREFIX = "replay/"
 SFT_DECAY_FRACTION = 0.1
 SFT_MIN_LR_RATIO = 0.1
 SPECIAL_TOKEN_LR_MULTIPLIER = math.sqrt(32)
-# The highest routed capacity factor that fits at CP4 x EP16 with the default remat slop. At 1.6875 the
-# first all-to-all runs out of HBM, and at 1.75 and 2.0 the rematerialization check fails during compile.
-SFT_CAPACITY_FACTOR = 1.625
+# Each EP group computes its six most-loaded experts outside the all-to-all, and the transport gives up
+# capacity for the shadow buffer. Restored from the v2 run's step-399500, this cut drops from 0.88% (CF 1.625,
+# unshadowed, the most that fits in HBM) to 0.053% for 4.3% step time and no extra peak memory.
+SFT_SHADOW_EXPERTS = ShadowExperts(count=6, rows_per_token=1.5)
+SFT_CAPACITY_FACTOR = 1.5
 # Chat special tokens of the 09.18 tokenizer and the single ordinary token each LM-head column copies.
 SPECIAL_TOKEN_ANCHORS = (
     (128006, " role"),
@@ -325,8 +328,9 @@ def sft_resources(dp_racks: int) -> ResourceConfig:
     )
 
 
-def sft_model_config(capacity_factor: float) -> GrugModelConfig:
-    return with_transport_remat_mode(dataclasses.replace(HERO_MODEL_CONFIG, capacity_factor=capacity_factor))
+def sft_model_config(capacity_factor: float, shadow_experts: ShadowExperts | None) -> GrugModelConfig:
+    model = dataclasses.replace(HERO_MODEL_CONFIG, capacity_factor=capacity_factor, shadow_experts=shadow_experts)
+    return with_transport_remat_mode(model)
 
 
 def build_sft_run(
@@ -341,6 +345,7 @@ def build_sft_run(
     dp_racks: int,
     router_bias_mode: RouterBiasMode,
     capacity_factor: float,
+    shadow_experts: ShadowExperts | None,
     stop_after_steps: int | None = None,
     eval_every: int = 0,
     checkpoint_root: str | None = None,
@@ -356,7 +361,8 @@ def build_sft_run(
     ``checkpoints`` selects periodic saves, a single final save, or training without checkpoint writes.
     ``eval_every`` counts absolute steps, so the first eval lands on the first multiple after ``start_step``;
     the trainer's first-step eval never fires on a restored run. ``capacity_factor`` replaces the hero's routed
-    expert capacity; with a frozen bias, SFT data overflows the hero's 1.5. ``expert_placement`` renumbers the
+    expert capacity; with a frozen bias, SFT data overflows the hero's 1.5. ``shadow_experts`` takes each EP
+    group's most-loaded experts out of that capacity. ``expert_placement`` renumbers the
     routed experts of ``initialize_from`` so each capacity block carries a similar load.
     """
     allocation = sft_resources(dp_racks)
@@ -366,7 +372,7 @@ def build_sft_run(
         raise ValueError(f"the expert placement permutes {expert_placement.source_checkpoint}, not {initialize_from}")
     if capacity_factor <= 0:
         raise ValueError(f"capacity_factor must be positive, got {capacity_factor}")
-    model = sft_model_config(capacity_factor)
+    model = sft_model_config(capacity_factor, shadow_experts)
     context_axis_size = HERO_CONTEXT_AXIS_SIZE
     expert_axis_size = hero_expert_axis_size(context_axis_size)
     if expert_placement is not None:
@@ -609,7 +615,15 @@ def _grad_norm(value: str) -> float | None:
     default=SFT_CAPACITY_FACTOR,
     show_default=True,
     help=f"Routed expert capacity per shard as a multiple of the even share; the hero trained at "
-    f"{HERO_MODEL_CONFIG.capacity_factor:g}. The default is the highest that fits in HBM.",
+    f"{HERO_MODEL_CONFIG.capacity_factor:g}. The default leaves HBM for the shadow buffer.",
+)
+@click.option(
+    "--shadow-count",
+    type=click.IntRange(min=0),
+    default=SFT_SHADOW_EXPERTS.count,
+    show_default=True,
+    help=f"Most-loaded experts per EP group computed outside the all-to-all, with "
+    f"{SFT_SHADOW_EXPERTS.rows_per_token:g} rows per token; 0 sends every assignment through the transport.",
 )
 @click.option(
     "--eval-every",
@@ -642,6 +656,7 @@ def main(
     stop_after_steps: int | None,
     router_bias: str,
     capacity_factor: float,
+    shadow_count: int,
     eval_every: int,
     checkpoint_root: str | None,
     expert_placement_path: Path | None,
@@ -657,6 +672,7 @@ def main(
         dp_racks=dp_racks,
         router_bias_mode=RouterBiasMode(router_bias),
         capacity_factor=capacity_factor,
+        shadow_experts=(dataclasses.replace(SFT_SHADOW_EXPERTS, count=shadow_count) if shadow_count > 0 else None),
         stop_after_steps=stop_after_steps,
         eval_every=eval_every,
         checkpoint_root=checkpoint_root,

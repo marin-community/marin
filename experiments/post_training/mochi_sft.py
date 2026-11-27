@@ -19,6 +19,9 @@ from experiments.grug.moe_hero_ep.train import RouterBiasMode
 from experiments.post_training.mochi_assets import MOCHI_TOKENIZER_REVISION, MOCHI_TOKENIZER_URI
 from experiments.sft.launcher import SFTPreset
 
+# The v2 run's transport: the most capacity that fit in HBM, without shadowing.
+V2_CAPACITY_FACTOR = 1.625
+
 # This reproduces the eleven-rack `hero-sft-fullab-step393k-v2` run through step 400407.
 MOCHI_SFT = MochiSFT(
     run_id="hero-sft-fullab-step393k-v2",
@@ -31,7 +34,8 @@ MOCHI_SFT = MochiSFT(
     replay_fraction=0.2035,
     dp_racks=11,
     router_bias_mode=RouterBiasMode.FROZEN,
-    capacity_factor=launch_hero_sft.SFT_CAPACITY_FACTOR,
+    capacity_factor=V2_CAPACITY_FACTOR,
+    shadow_experts=None,
     eval_every=500,
     checkpoints="periodic",
     expert_placement=ExpertPlacement.from_json(
@@ -58,7 +62,15 @@ def _preset(recipe: MochiSFT) -> SFTPreset[MochiSFT]:
 
 def _short_preset(racks: int) -> SFTPreset[MochiSFT]:
     return _preset(
-        replace(MOCHI_SFT, run_id=f"mochi-sft-{racks}-rack", dp_racks=racks, stop_after_steps=3, checkpoints="none")
+        replace(
+            MOCHI_SFT,
+            run_id=f"mochi-sft-{racks}-rack",
+            dp_racks=racks,
+            capacity_factor=launch_hero_sft.SFT_CAPACITY_FACTOR,
+            shadow_experts=launch_hero_sft.SFT_SHADOW_EXPERTS,
+            stop_after_steps=3,
+            checkpoints="none",
+        )
     )
 
 
