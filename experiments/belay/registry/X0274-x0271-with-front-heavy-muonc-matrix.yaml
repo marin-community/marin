@@ -4,7 +4,7 @@ name: X0271 with front-heavy MuonC matrix LR
 category: Optimizers
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7229587642
@@ -30,3 +30,10 @@ trials:
     muonc_anneal_front_heavy: 'True'
   commit: ea82bd9d5b
   priority: interactive
+  loss:
+  - 3.0243
+  delta:
+  - -0.0203
+  steps: 3030
+  baseline: belay-X0274-control 3.0446 (same commit, seed 0)
+  step_time_change: -1%
