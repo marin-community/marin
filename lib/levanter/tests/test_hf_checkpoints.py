@@ -36,7 +36,10 @@ from jax.sharding import NamedSharding, PartitionSpec as P
 from levanter.testing.helpers import skip_if_no_torch
 from rigging.filesystem.storage_path import StoragePath
 from rigging.tunnel import terminate_process_group
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
 from transformers import GPT2Config as HfGpt2Config
+from transformers import PreTrainedTokenizerFast
 
 import levanter.compat.hf_export as hf_export
 import levanter.compat.hf_checkpoints as hf_checkpoints
@@ -49,6 +52,7 @@ from levanter.compat.hf_checkpoints import (
     _convert_to_jnp,
 )
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
+from levanter.models.qwen import Qwen3Config
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.helpers import use_test_mesh
 from levanter.testing.tokenizer import llama3_style_chat_tokenizer
@@ -187,13 +191,17 @@ def test_export_preserves_reference_generation_config(
         reference = StoragePath("memory://generation-reference") / uuid.uuid4().hex
     if reference_kind != "missing":
         (reference / "generation_config.json").write_bytes(json.dumps(original).encode())
+        # The reference ships the exported tokenizer, so its token ids name the same tokens.
+        for filename in ("tokenizer.json", "tokenizer_config.json"):
+            (reference / filename).write_bytes((Path(local_gpt2_tokenizer_path) / filename).read_bytes())
     else:
         Path(str(reference)).mkdir()
     converter = replace(config.hf_checkpoint_converter(), reference_checkpoint=RepoRef(str(reference)))
     if reference_kind == "hub":
 
         def download(*, repo_id, filename, revision):
-            assert (repo_id, filename, revision) == ("test/reference", "generation_config.json", "pinned-revision")
+            assert (repo_id, revision) == ("test/reference", "pinned-revision")
+            assert filename in ("generation_config.json", "tokenizer.json")
             return str(reference / filename)
 
         monkeypatch.setattr(hf_checkpoints, "hf_hub_download", download)
@@ -219,6 +227,90 @@ def test_export_preserves_reference_generation_config(
             else:
                 assert saved[key] == value
     assert saved["do_sample"] is True
+
+
+DERIVED_GENERATION_CONFIG = {
+    "bos_token_id": 1,
+    "eos_token_id": [2, 3],
+    "do_sample": True,
+    "temperature": 0.6,
+    "top_p": 0.95,
+}
+
+
+@pytest.mark.parametrize(
+    ("reference_vocab", "reference_generation_config", "expected"),
+    [
+        pytest.param(
+            {"[UNK]": 0, "a": 1, "b": 2, "c": 3, "d": 4, "<|endoftext|>": 5, "<|im_end|>": 6},
+            {
+                "bos_token_id": 5,
+                "do_sample": True,
+                "eos_token_id": [6, 5],
+                "pad_token_id": 5,
+                "temperature": 0.6,
+                "top_k": 20,
+                "top_p": 0.95,
+            },
+            DERIVED_GENERATION_CONFIG,
+            id="qwen3-ids-outside-vocabulary",
+        ),
+        pytest.param(
+            {"[UNK]": 0, "<s>": 1, "</s>": 2},
+            {"bos_token_id": 1, "do_sample": True, "eos_token_id": 2, "temperature": 0.9, "top_p": 0.6},
+            DERIVED_GENERATION_CONFIG,
+            id="llama2-ids-name-other-tokens",
+        ),
+        pytest.param(
+            {"[UNK]": 0, "<|begin_of_text|>": 1, "<|end_of_text|>": 2, "<|eot_id|>": 3, "<|reserved_0|>": 4},
+            {"bos_token_id": 1, "eos_token_id": 2, "suppress_tokens": [4], "temperature": 0.3},
+            DERIVED_GENERATION_CONFIG,
+            id="same-stop-ids-other-vocabulary",
+        ),
+        pytest.param(
+            None,
+            {"eos_token_id": 2, "temperature": 0.3},
+            DERIVED_GENERATION_CONFIG,
+            id="reference-without-tokenizer",
+        ),
+        pytest.param(
+            {"[UNK]": 0, "<|begin_of_text|>": 1, "<|end_of_text|>": 2, "<|eot_id|>": 3},
+            {"eos_token_id": 2, "temperature": 0.3},
+            {"bos_token_id": 1, "eos_token_id": [2, 3], "do_sample": True, "temperature": 0.3, "top_p": 0.95},
+            id="exported-tokenizer-extends-reference",
+        ),
+    ],
+)
+def test_export_preserves_reference_generation_config_only_for_its_vocabulary(
+    tmp_path, reference_vocab, reference_generation_config, expected
+):
+    reference = tmp_path / "reference"
+    reference.mkdir()
+    if reference_vocab is not None:
+        PreTrainedTokenizerFast(
+            tokenizer_object=Tokenizer(WordLevel(vocab=reference_vocab, unk_token="[UNK]")), unk_token="[UNK]"
+        ).save_pretrained(reference)
+    (reference / "generation_config.json").write_text(json.dumps(reference_generation_config))
+    training_tokenizer = tmp_path / "training_tokenizer"
+    llama3_style_chat_tokenizer().save_pretrained(training_tokenizer)
+    config = Qwen3Config(
+        hidden_dim=16,
+        intermediate_dim=32,
+        num_heads=2,
+        num_kv_heads=2,
+        num_layers=1,
+        max_seq_len=32,
+        tokenizer=str(training_tokenizer),
+    )
+    converter = config.hf_checkpoint_converter(str(reference))
+    output = tmp_path / "output"
+    with use_test_mesh():
+        model = config.build(converter.Vocab, key=PRNGKey(0))
+        converter.save_pretrained(
+            model, str(output), save_reference_code=False, generation_config_defaults=SAMPLING_DEFAULTS
+        )
+
+    assert json.loads((output / "generation_config.json").read_text()) == expected
 
 
 def test_export_propagates_unavailable_hub_generation_config(tmp_path, local_gpt2_tokenizer_path, monkeypatch):
