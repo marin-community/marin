@@ -39,3 +39,15 @@ trials:
     id_balance_gain: '0.024'
   commit: 55305d20e9
   priority: interactive
+- id: t003
+  variant: ID Balancing bias in place of QB, id_balance_gain=0.096
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0265
+  date: '2026-11-27'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0265
+  wandb: []
+  settings:
+    id_balance_gain: '0.096'
+  commit: 7264bfac76
+  priority: interactive
