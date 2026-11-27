@@ -444,7 +444,7 @@ async def test_cancelled_batch_retains_completed_task_receipts(worker_config, tm
     assert len(rows) == len({receipt.task_id for receipt in rows}) == 2
     receipts = {receipt.task_id: receipt for receipt in rows}
     assert receipts["complete"].exception_type is None
-    assert receipts["complete"].source_row == (None, "fixture", "1", "0")
+    assert receipts["complete"].task_key == (None, "fixture", "1", "0")
     assert receipts["cancelled"].exception_type == "CancelledError"
     assert receipts["cancelled"].outcome == Outcome.INFRA_ERROR
 

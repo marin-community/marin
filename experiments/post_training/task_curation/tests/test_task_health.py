@@ -136,6 +136,7 @@ def test_native_receipts_match_stored_task_documents(tmp_path, selection_file, t
                 "rollout_id": "training-probe",
                 "task_id": probe_task.id,
                 "task_digest": selection_digest(probe_task),
+                "task_key": ("fixture", "fixture-swe", "release", "training-probe"),
                 "outcome": Outcome.GRADED,
             }
         )
@@ -164,11 +165,12 @@ def test_native_receipts_match_stored_task_documents(tmp_path, selection_file, t
         (receipt.task_digest, 1),
         (selection_digest(killed), 137),
     }
+    selected_source = "selected-fixture" if digest_matches else "fixture"
     pq.write_table(
         pa.table(
             {
                 TASK_SPEC_COLUMN: [json.dumps(stored_task), killed.model_dump_json()],
-                "source": ["fixture", "fixture"],
+                "source": [selected_source, "fixture"],
             }
         ),
         tmp_path / selection_file,
@@ -183,7 +185,7 @@ def test_native_receipts_match_stored_task_documents(tmp_path, selection_file, t
     (listed,) = pq.read_table(str(skip / SKIP_FILENAME)).to_pylist()
     assert listed["task_id"] == task.id
     assert listed["task_digest"] == canonical_sha256(stored_task)
-    assert listed["task_key"] == ["fixture", "fixture-swe", "release", "example"]
+    assert listed["task_key"] == ["selected-fixture", "fixture-swe", "release", "example"]
 
 
 def write_tasks(path: Path, tasks: list[TaskSpec]) -> Path:
