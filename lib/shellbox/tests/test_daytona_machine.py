@@ -1208,10 +1208,28 @@ def _sdk_error(error: Exception) -> DaytonaError:
         (_sdk_error(_bad_gateway()), SandboxState.STARTED, ConnectionError),
         (DaytonaValidationError("Is the Sandbox started?"), SandboxState.STOPPED, MachineTerminated),
         (DaytonaValidationError("Is the Sandbox started?"), None, MachineTerminated),
+        (
+            DaytonaValidationError(
+                "Failed to execute command: bad request: failed to resolve container IP after 3 attempts: "
+                "no IP address found. Is the Sandbox started?",
+                status_code=400,
+            ),
+            SandboxState.STARTED,
+            ConnectionError,
+        ),
         (DaytonaValidationError("Invalid request", status_code=400), SandboxState.STARTED, DaytonaValidationError),
         (DaytonaValidationError("Invalid request", status_code=400), "unreachable", ConnectionError),
     ],
-    ids=["lost-connection", "timed-out", "bad-gateway", "stopped", "destroyed", "started", "probe-unreachable"],
+    ids=[
+        "lost-connection",
+        "timed-out",
+        "bad-gateway",
+        "stopped",
+        "destroyed",
+        "missing-container-ip",
+        "started",
+        "probe-unreachable",
+    ],
 )
 def test_daytona_provider_failures_report_a_lost_machine(provider_error, state, expected):
     class FailedRequest(LocalProcess):

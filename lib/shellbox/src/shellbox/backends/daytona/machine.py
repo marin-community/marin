@@ -84,6 +84,7 @@ CLAIMED_MARKER = "SHELLBOX_CLAIMED"
 CLIPPED_OUTPUT_SUFFIX = ".limited"
 PROVIDER_DIAGNOSTIC_CHAR_LIMIT = 4096
 DISK_FULL_MESSAGE = os.strerror(errno.ENOSPC)
+MISSING_CONTAINER_IP_MESSAGE = "no IP address found"
 # The exit trap records the command's status, so a request that lost its connection can still read it.
 RUN_COMMAND = (
     'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; '
@@ -475,8 +476,13 @@ class DaytonaMachine:
                 ) from error
             if self.sandbox.state != SandboxState.STARTED:
                 raise MachineTerminated(f"Daytona sandbox {self.sandbox.id} is {self.sandbox.state}: {error}") from error
-            # The SDK reports a failed file transfer's HTTP response without its status code.
-            if error.status_code is None or error.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR:
+            # The SDK reports a failed file transfer without its status code. Daytona also
+            # returns 400 when the proxy cannot resolve a started sandbox's container IP.
+            if (
+                error.status_code is None
+                or error.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR
+                or (error.status_code == HTTPStatus.BAD_REQUEST and MISSING_CONTAINER_IP_MESSAGE in str(error))
+            ):
                 raise ConnectionError(f"Daytona cannot reach sandbox {self.sandbox.id}: {error}") from error
             raise
 
