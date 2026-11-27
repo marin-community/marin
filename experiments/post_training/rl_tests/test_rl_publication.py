@@ -363,7 +363,7 @@ def test_nightly_distinguishes_interruptions_and_failures(
 
 
 def test_nightly_reserves_mochi_racks_and_skips_duplicate_launches(
-    monkeypatch, tmp_path, capsys, cache_native_compositions
+    recorded_runs, monkeypatch, tmp_path, capsys, cache_native_compositions
 ):
     marina, iris = FakeMarina(monkeypatch), FakeIris(monkeypatch)
     launcher = FakeLauncher(monkeypatch)
@@ -441,7 +441,7 @@ def test_nightly_reserves_mochi_racks_and_skips_duplicate_launches(
     assert not marina.rows
 
 
-def test_nightly_reserves_snowball_budget_across_ticks(monkeypatch, tmp_path, cache_native_compositions):
+def test_nightly_reserves_snowball_budget_across_ticks(recorded_runs, monkeypatch, tmp_path, cache_native_compositions):
     FakeMarina(monkeypatch)
     iris, launcher = FakeIris(monkeypatch), FakeLauncher(monkeypatch)
     models = nightly.select_presets("snowball")
