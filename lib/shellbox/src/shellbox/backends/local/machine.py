@@ -37,7 +37,7 @@ from shellbox.backends.local.disk import LocalDisk, LocalDiskPool
 from shellbox.backends.local.images import PreparedLocalImage, cached_local_image, prepare_local_image
 from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
 from shellbox.backends.local.transfers import unpack_local_archive
-from shellbox.image import PreparedImage, RegistryImage, process_image_cache
+from shellbox.image import PreparedImage, RegistryImage, host_image_architecture, process_image_cache
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     LINUX_PROCESS_CAPABILITIES,
@@ -1302,7 +1302,10 @@ class LocalMachineFactory:
         self.cgroup_parent = delegated_cgroup_parent() if cgroup_parent is None else cgroup_parent.resolve()
         if self.cgroup_parent is not None:
             check_cgroup_parent(self.cgroup_parent)
-        self.image_cache = process_image_cache(image_cache or Path.home() / ".cache/shellbox/images", authfile, policy)
+        # Local guests run the host's own binaries, so they pull the host's image platform.
+        self.image_cache = process_image_cache(
+            image_cache or Path.home() / ".cache/shellbox/images", authfile, policy, host_image_architecture()
+        )
         self.umoci = umoci
         self.read_only = tuple(directory.absolute() for directory in read_only)
         missing = [str(directory) for directory in self.read_only if not directory.is_dir()]

@@ -13,9 +13,18 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from shellbox import image as image_module
 from shellbox.backends.local.images import prepare_local_image
 from shellbox.backends.qemu.image import QemuAssets, stage_qemu_image
-from shellbox.image import DockerfileSource, ImageCache, PreparedImage, RegistryImage, prepared_image_workdir
+from shellbox.image import (
+    DockerfileSource,
+    ImageArchitecture,
+    ImageCache,
+    PreparedImage,
+    RegistryImage,
+    host_image_architecture,
+    prepared_image_workdir,
+)
 
 
 @pytest.mark.parametrize("working_directory,expected", [("/task workspace", "/task workspace"), ("", "/")])
@@ -41,7 +50,7 @@ def test_image_working_directory(tmp_path, working_directory, expected):
             }
         )
     )
-    image = PreparedImage(tmp_path, f"sha256:{manifest_digest}", RegistryImage("fixture"))
+    image = PreparedImage(tmp_path, f"sha256:{manifest_digest}", RegistryImage("fixture"), ImageArchitecture.AMD64)
     assert prepared_image_workdir(image) == expected
     config_path.write_bytes(json.dumps({"config": {"WorkingDir": "/changed"}}).encode())
     with pytest.raises(ValueError):
@@ -121,7 +130,7 @@ def test_pinned_registry_image_reuses_verified_local_layout_offline(tmp_path, la
 
     monkeypatch.setattr(subprocess, "run", unavailable)
     source = RegistryImage(f"registry.invalid/task@{image.manifest_digest}")
-    prepared = ImageCache(cache_dir).prepare(source)
+    prepared = ImageCache(cache_dir, architecture=ImageArchitecture.AMD64).prepare(source)
     assert prepared.manifest_digest == image.manifest_digest
     assert prepared.layout == destination
     assert prepared_image_workdir(prepared) == "/data"
@@ -134,7 +143,7 @@ def test_pinned_registry_cache_rejects_corruption(tmp_path, layered_oci_image, m
     cache_dir = tmp_path / "cache"
     destination = cache_dir / image.manifest_digest.replace(":", "-")
     shutil.copytree(image.layout, destination)
-    cache = ImageCache(cache_dir)
+    cache = ImageCache(cache_dir, architecture=ImageArchitecture.AMD64)
     source = RegistryImage(f"registry.invalid/task@{image.manifest_digest}")
     if already_loaded:
         cache.prepare(source)
@@ -169,7 +178,9 @@ def test_pinned_registry_cache_still_requires_configured_signature_verification(
 
     monkeypatch.setattr(subprocess, "run", rejected)
     with pytest.raises(RuntimeError, match="signature verification rejected"):
-        ImageCache(cache_dir, policy=policy).prepare(RegistryImage(f"registry.invalid/task@{image.manifest_digest}"))
+        ImageCache(cache_dir, policy=policy, architecture=ImageArchitecture.AMD64).prepare(
+            RegistryImage(f"registry.invalid/task@{image.manifest_digest}")
+        )
 
 
 def test_registry_index_pin_can_resolve_platform_manifest_online(tmp_path, layered_oci_image, monkeypatch):
@@ -181,7 +192,9 @@ def test_registry_index_pin_can_resolve_platform_manifest_online(tmp_path, layer
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", copy)
-    prepared = ImageCache(tmp_path / "cache").prepare(RegistryImage(f"registry.invalid/task@sha256:{'0' * 64}"))
+    prepared = ImageCache(tmp_path / "cache", architecture=ImageArchitecture.AMD64).prepare(
+        RegistryImage(f"registry.invalid/task@sha256:{'0' * 64}")
+    )
     assert prepared.manifest_digest == image.manifest_digest
     assert prepared_image_workdir(prepared) == "/data"
 
@@ -241,7 +254,7 @@ def test_identical_contexts_share_a_build_and_content_changes_rebuild(tmp_path, 
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", run)
-    cache = ImageCache(tmp_path / "cache")
+    cache = ImageCache(tmp_path / "cache", architecture=ImageArchitecture.AMD64)
     first = cache.prepare(DockerfileSource(contexts[0], contexts[0] / "Dockerfile"))
     shutil.rmtree(contexts[0])
     second = cache.prepare(DockerfileSource(contexts[1], contexts[1] / "Dockerfile"))
@@ -280,3 +293,33 @@ def test_identical_contexts_share_a_build_and_content_changes_rebuild(tmp_path, 
     changed = cache.prepare(DockerfileSource(contexts[1], contexts[1] / "Dockerfile"))
     assert builds == [b"first", b"changed"]
     assert changed.manifest_digest != first.manifest_digest
+
+
+def test_registry_platform_follows_the_requested_architecture(tmp_path, oci_image, monkeypatch):
+    image = oci_image((), {"WorkingDir": "/data"}, ImageArchitecture.ARM64)
+    copies = []
+
+    def copy(args, **_kwargs):
+        copies.append(args[args.index("--override-arch") + 1])
+        shutil.copytree(image.layout, Path(args[-1].removeprefix("oci:").removesuffix(":image")))
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", copy)
+    index = RegistryImage(f"registry.invalid/task@sha256:{'0' * 64}")
+    prepared = ImageCache(tmp_path / "arm64", architecture=ImageArchitecture.ARM64).prepare(index)
+    assert (prepared.manifest_digest, prepared.architecture) == (image.manifest_digest, ImageArchitecture.ARM64)
+    with pytest.raises(ValueError, match="not a Linux amd64 image"):
+        ImageCache(tmp_path / "amd64", architecture=ImageArchitecture.AMD64).prepare(index)
+    assert copies == ["arm64", "amd64"]
+
+
+@pytest.mark.parametrize("machine,expected", [("x86_64", ImageArchitecture.AMD64), ("aarch64", ImageArchitecture.ARM64)])
+def test_host_image_architecture(monkeypatch, machine, expected):
+    monkeypatch.setattr(image_module.platform, "machine", lambda: machine)
+    assert host_image_architecture() is expected
+
+
+def test_unknown_host_architecture_fails_fast(monkeypatch):
+    monkeypatch.setattr(image_module.platform, "machine", lambda: "riscv64")
+    with pytest.raises(ValueError, match="riscv64"):
+        host_image_architecture()

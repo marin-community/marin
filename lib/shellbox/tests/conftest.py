@@ -14,7 +14,7 @@ from itertools import count
 from pathlib import Path
 
 import pytest
-from shellbox.image import PreparedImage, RegistryImage
+from shellbox.image import ImageArchitecture, PreparedImage, RegistryImage
 
 HOST_REQUIREMENTS = {
     "requires_host_setsid": "The local Linux guest fake needs the host setsid executable",
@@ -42,10 +42,14 @@ def pytest_addoption(parser):
 
 
 @pytest.fixture
-def oci_image(tmp_path: Path) -> Callable[[tuple[bytes, ...], dict[str, object]], PreparedImage]:
+def oci_image(tmp_path: Path) -> Callable[..., PreparedImage]:
     sequence = count()
 
-    def build(layers: tuple[bytes, ...], process: dict[str, object]) -> PreparedImage:
+    def build(
+        layers: tuple[bytes, ...],
+        process: dict[str, object],
+        architecture: ImageArchitecture = ImageArchitecture.AMD64,
+    ) -> PreparedImage:
         layout = tmp_path / f"oci-{next(sequence)}"
         blobs = layout / "blobs/sha256"
         blobs.mkdir(parents=True)
@@ -58,7 +62,7 @@ def oci_image(tmp_path: Path) -> Callable[[tuple[bytes, ...], dict[str, object]]
         descriptors = tuple(blob(layer, "application/vnd.oci.image.layer.v1.tar") for layer in layers)
         config = {
             "os": "linux",
-            "architecture": "amd64",
+            "architecture": architecture.value,
             "config": process,
             "rootfs": {"type": "layers", "diff_ids": [layer["digest"] for layer in descriptors]},
         }
@@ -70,7 +74,7 @@ def oci_image(tmp_path: Path) -> Callable[[tuple[bytes, ...], dict[str, object]]
         manifest["annotations"] = {"org.opencontainers.image.ref.name": "image"}
         (layout / "index.json").write_text(json.dumps({"schemaVersion": 2, "manifests": [manifest]}))
         (layout / "oci-layout").write_text(json.dumps({"imageLayoutVersion": "1.0.0"}))
-        return PreparedImage(layout, str(manifest["digest"]), RegistryImage("offline-fixture"))
+        return PreparedImage(layout, str(manifest["digest"]), RegistryImage("offline-fixture"), architecture)
 
     return build
 

@@ -6,17 +6,41 @@
 import hashlib
 import json
 import os
+import platform
 import re
 import subprocess
 import tempfile
 import threading
 import uuid
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from functools import cache
 from pathlib import Path
 from typing import Any
 
 OCI_TAG = "image"
+
+
+class ImageArchitecture(StrEnum):
+    """The OCI architecture of a Linux image platform."""
+
+    AMD64 = "amd64"
+    ARM64 = "arm64"
+
+
+HOST_ARCHITECTURES = {
+    "x86_64": ImageArchitecture.AMD64,
+    "aarch64": ImageArchitecture.ARM64,
+    "arm64": ImageArchitecture.ARM64,
+}
+
+
+def host_image_architecture() -> ImageArchitecture:
+    """The image platform that runs natively on this host; unknown hosts fail fast."""
+    machine = platform.machine()
+    if machine not in HOST_ARCHITECTURES:
+        raise ValueError(f"No Linux image architecture for host machine {machine!r}")
+    return HOST_ARCHITECTURES[machine]
 
 
 @dataclass(frozen=True)
@@ -36,11 +60,12 @@ class DockerfileSource:
 
 @dataclass(frozen=True)
 class PreparedImage:
-    """One Linux amd64 image resolved to a content-addressed OCI layout."""
+    """One Linux image of a single architecture resolved to a content-addressed OCI layout."""
 
     layout: Path
     manifest_digest: str
     source: RegistryImage | DockerfileSource
+    architecture: ImageArchitecture
 
 
 def _oci_blob(layout: Path, digest: str) -> Path:
@@ -114,8 +139,16 @@ class ImageCache:
     Dockerfile contexts are fingerprinted on each call so edits cause a new build.
     """
 
-    def __init__(self, directory: Path, *, authfile: Path | None = None, policy: Path | None = None):
+    def __init__(
+        self,
+        directory: Path,
+        *,
+        architecture: ImageArchitecture,
+        authfile: Path | None = None,
+        policy: Path | None = None,
+    ):
         self.directory = directory
+        self.architecture = architecture
         self.authfile = authfile
         self.policy = policy
         self._images: dict[str, PreparedImage] = {}
@@ -130,11 +163,12 @@ class ImageCache:
         with lock:
             image = self._images.get(key)
             if image is not None and self.policy is None:
-                _manifest_digest(image.layout, expected=image.manifest_digest)
+                _manifest_digest(image.layout, architecture=self.architecture, expected=image.manifest_digest)
                 return replace(image, source=source)
             image = prepare_image(
                 source,
                 self.directory,
+                architecture=self.architecture,
                 authfile=self.authfile,
                 policy=self.policy,
             )
@@ -143,8 +177,10 @@ class ImageCache:
 
 
 @cache
-def process_image_cache(directory: Path, authfile: Path | None, policy: Path | None) -> ImageCache:
-    return ImageCache(directory.resolve(), authfile=authfile, policy=policy)
+def process_image_cache(
+    directory: Path, authfile: Path | None, policy: Path | None, architecture: ImageArchitecture
+) -> ImageCache:
+    return ImageCache(directory.resolve(), architecture=architecture, authfile=authfile, policy=policy)
 
 
 def _run(*args: str) -> None:
@@ -153,14 +189,14 @@ def _run(*args: str) -> None:
         raise RuntimeError(f"{' '.join(args[:2])} failed: {result.stderr[-2000:]}")
 
 
-def _manifest_digest(layout: Path, *, expected: str | None = None) -> str:
+def _manifest_digest(layout: Path, *, architecture: ImageArchitecture, expected: str | None = None) -> str:
     digest = _tagged_manifest_digest(layout)
     if expected is not None and digest != expected:
         raise ValueError("Prepared image tag no longer selects its pinned manifest")
     manifest = _oci_json_blob(layout, digest)
     config = _oci_json_blob(layout, manifest["config"]["digest"])
-    if config["os"] != "linux" or config["architecture"] != "amd64":
-        raise ValueError("Only Linux amd64 images are supported")
+    if config["os"] != "linux" or config["architecture"] != architecture:
+        raise ValueError(f"Prepared image is not a Linux {architecture} image")
     for layer in manifest["layers"]:
         _oci_blob(layout, layer["digest"])
     return digest
@@ -170,10 +206,14 @@ def prepare_image(
     source: RegistryImage | DockerfileSource,
     cache: Path,
     *,
+    architecture: ImageArchitecture,
     authfile: Path | None = None,
     policy: Path | None = None,
 ) -> PreparedImage:
-    """Copy or build an image and retain its selected platform by manifest digest.
+    """Copy or build an image for ``architecture`` and retain that platform by manifest digest.
+
+    A multi-architecture index resolves to its ``architecture`` manifest; a single-platform
+    image of another architecture fails.
 
     The default Skopeo policy accepts unsigned images. TLS verification remains
     enabled. Digest-pinned platform manifests already present in the cache are
@@ -190,13 +230,13 @@ def prepare_image(
     if pinned_digest is not None and policy is None:
         destination = cache / pinned_digest.replace(":", "-")
         if destination.exists():
-            _manifest_digest(destination, expected=pinned_digest)
-            return PreparedImage(destination, pinned_digest, source)
+            _manifest_digest(destination, architecture=architecture, expected=pinned_digest)
+            return PreparedImage(destination, pinned_digest, source, architecture)
     with tempfile.TemporaryDirectory(prefix="image-", dir=cache) as temporary:
         layout = Path(temporary) / "oci"
         skopeo_args = ["skopeo"]
         skopeo_args.extend(("--policy", str(policy)) if policy is not None else ("--insecure-policy",))
-        skopeo_args.extend(("--override-os", "linux", "--override-arch", "amd64", "copy"))
+        skopeo_args.extend(("--override-os", "linux", "--override-arch", architecture, "copy"))
         if authfile is not None:
             skopeo_args.extend(("--src-authfile", str(authfile)))
         if isinstance(source, RegistryImage):
@@ -208,7 +248,7 @@ def prepare_image(
                     "docker",
                     "build",
                     "--platform",
-                    "linux/amd64",
+                    f"linux/{architecture}",
                     "-f",
                     str(source.dockerfile),
                     "-t",
@@ -221,12 +261,12 @@ def prepare_image(
                 subprocess.run(("docker", "image", "rm", tag), capture_output=True)
         if isinstance(source, RegistryImage):
             _run(*skopeo_args, source_ref, f"oci:{layout}:{OCI_TAG}")
-        digest = _manifest_digest(layout)
+        digest = _manifest_digest(layout, architecture=architecture)
         destination = cache / digest.replace(":", "-")
         if not destination.exists():
             try:
                 layout.rename(destination)
             except FileExistsError:
                 pass  # Another process published this content-addressed layout.
-        _manifest_digest(destination, expected=digest)
-        return PreparedImage(destination, digest, source)
+        _manifest_digest(destination, architecture=architecture, expected=digest)
+        return PreparedImage(destination, digest, source, architecture)

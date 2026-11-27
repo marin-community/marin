@@ -36,8 +36,8 @@ def prepare_local_image(image: PreparedImage, directory: Path, *, umoci: Path) -
     if directory.exists() or directory.is_symlink():
         raise FileExistsError(directory)
     config = prepared_image_config(image)
-    if config["os"] != "linux" or config["architecture"] != "amd64":
-        raise ValueError("Only Linux amd64 images are supported")
+    if config["os"] != "linux" or config["architecture"] != image.architecture:
+        raise ValueError(f"Local guests require a Linux {image.architecture} image")
     process = config.get("config") or {}
     environment = {}
     for entry in process.get("Env") or ():
