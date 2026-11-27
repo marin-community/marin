@@ -3069,27 +3069,27 @@
       "status": "Excluded",
       "intended_use": "train",
       "pipeline": {
-        "name": "swe-rebench-v2-1-repaired-release-20261126-v1",
+        "name": "swe-rebench-v2-1-repaired-actor-image-pinned",
         "files": [
           "tasks.parquet"
         ],
-        "source": "open-athena/swe-rebench-v2-1-repaired-release-20261126-v1",
+        "source": "open-athena/swe-rebench-v2-1-repaired-actor-image-pinned-20261127-v1",
         "version": "2026.11.20.2",
-        "revision": "adaba5629b54ca31f8e6055ae2ae680d5555fd49"
+        "revision": "c55add0ecd6db8844b9120d066c63b7697cdc9d8"
       },
       "current_release": {
-        "url": "https://huggingface.co/datasets/open-athena/swe-rebench-v2-1-repaired-release-20261126-v1/tree/adaba5629b54ca31f8e6055ae2ae680d5555fd49",
-        "repo": "open-athena/swe-rebench-v2-1-repaired-release-20261126-v1",
-        "revision": "adaba5629b54ca31f8e6055ae2ae680d5555fd49"
+        "url": "https://huggingface.co/datasets/open-athena/swe-rebench-v2-1-repaired-actor-image-pinned-20261127-v1/tree/c55add0ecd6db8844b9120d066c63b7697cdc9d8",
+        "repo": "open-athena/swe-rebench-v2-1-repaired-actor-image-pinned-20261127-v1",
+        "revision": "c55add0ecd6db8844b9120d066c63b7697cdc9d8"
       },
-      "dataset_id": "open-athena/swe-rebench-v2-1-repaired-release-20261126-v1",
-      "dataset_revision": "adaba5629b54ca31f8e6055ae2ae680d5555fd49",
+      "dataset_id": "open-athena/swe-rebench-v2-1-repaired-actor-image-pinned-20261127-v1",
+      "dataset_revision": "c55add0ecd6db8844b9120d066c63b7697cdc9d8",
       "actor_census_input": {
-        "dataset_id": "open-athena/swe-rebench-v2-1-repaired-release-20261126-v1",
+        "dataset_id": "open-athena/swe-rebench-v2-1-repaired-actor-image-pinned-20261127-v1",
         "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/swe-repair/2026.11.20.1/measurements/rl-data/atlas/intake-population/swe-rebench-v2-1-repaired/2026.11.20.3/.artifact.json",
         "carry_forward": null,
         "measured_tasks": 7207,
-        "dataset_revision": "adaba5629b54ca31f8e6055ae2ae680d5555fd49",
+        "dataset_revision": "c55add0ecd6db8844b9120d066c63b7697cdc9d8",
         "converter_version": "2026.11.20.2",
         "task_specs_sha256": "d6c14ac019e3686771241880430b3170929dffd9c78a58c574e6f9ad1c9cacc1",
         "converter_revision": "9c01efa7e76beb99f0b5755799c1c86250aef55a"
@@ -3117,7 +3117,15 @@
           "revision": "26c0145ded93168b0d5d095420155901ad2d5a2f"
         },
         "change": "bound to the sealed 7,207-task TaskSpec release declared on atlas-env-audit (repair_releases.py; fingerprint 37dec5e342)",
-        "evidence": "atlas-env-audit experiments/post_training/task_curation/datasets/repair_releases.py; release tasks.parquet 7,207 rows"
+        "evidence": "atlas-env-audit experiments/post_training/task_curation/datasets/repair_releases.py; release tasks.parquet 7,207 rows",
+        "actor_image_reseal": {
+          "parent": {
+            "repo": "open-athena/swe-rebench-v2-1-repaired-release-20261126-v1",
+            "revision": "adaba5629b54ca31f8e6055ae2ae680d5555fd49"
+          },
+          "change": "actor docker_build (8 contexts) replaced by built images ghcr.io/marin-community/rl-data-swe-rebench-v2-1-actor@sha256:... in the TaskSpec and as [environment] docker_image in each Harbor package task.toml; package Dockerfile, controller, contract and all other fields unchanged",
+          "evidence": "image-lineage.json and identity-inventory.jsonl in the release; jobs /benfeuer/mochi-campaign-swe-build-claude-20261127a, -swe-reseal-claude-20261127a, trial proof -swe-trial-proof-claude-20261127e"
+        }
       }
     },
     "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2": {
