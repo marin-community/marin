@@ -1313,7 +1313,7 @@ def test_snowball_paged_routes_replay_into_learner():
             new_token_dests=hax.named(jnp.asarray([0, 1, 2, 3, 4, -1]), position),
             page_size=4,
         )
-        cache = model.initial_cache(PageTableSpec(num_pages=2, page_size=4, max_seqs=1), dtype=jnp.float32)
+        cache = model.initial_cache(PageTableSpec(num_pages=2, page_size=batch.page_size, max_seqs=1), dtype=jnp.float32)
         logits, _, routes = eqx.filter_jit(model.decode_with_routes)(
             prompt, cache, batch, hax.arange(position, dtype=jnp.int32)
         )
