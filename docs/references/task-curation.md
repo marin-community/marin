@@ -832,7 +832,18 @@ Sample and full modes run the reviewed procedure below.
    Without a rubric, rows are kept as `unreviewed`.
 4. In full mode, convert and audit every row of an accepted source.
 5. Filter rows into kept, rejected and deferred.
-6. With controls, verify a seeded sample of at most 20 kept rows
+6. With a decontamination engine, render every kept row's conversation as text
+   and mark it against the frozen eval corpus (`--lexical-bloom`,
+   `--lexical-global-drop-set`, `--lexical-corpus-version`). The measurement —
+   contaminated rows, overlap statistics and matched benchmark families — is
+   recorded in the `lexical/` view and the manifest; its `measured_tasks`
+   counts the kept (post-filter) population the source is about to verify and
+   admit. A training source
+   rejects contaminated rows (`lexical:contaminated`) before verification, so
+   `final/` holds the retained population. Evaluation and benchmark sources
+   keep every task and record the measurement only. Without the engine the
+   stage is skipped.
+7. With controls, verify a seeded sample of at most 20 kept rows
    (`--verification-sample-size`): each task's one control runs once in a fresh
    machine, rerun up to twice more after an infrastructure error. At a 95% pass
    fraction, unsampled tasks can skip validation. Otherwise validate every kept
@@ -841,7 +852,7 @@ Sample and full modes run the reviewed procedure below.
    the network-denied grader sandbox; credentials stay out of task specifications
    and persisted campaign evidence. This threshold is independent of sampled
    GLM quality grades.
-7. Admit rows and write the outputs.
+8. Admit rows and write the outputs.
 
 For a standalone task batch, call
 `review_tasks(tasks, rubric, reviewer, cached=None)` from
@@ -978,7 +989,10 @@ Each source artifact `data/rl/<name>-<hash>` contains:
 | `verify/part-*.parquet` | Per-row checks, grader readiness and admission |
 | `verify/report.json` | Sampled controls, trials and the source verification decision |
 | `final/part-*.parquet` | Admitted rows only |
-| `manifest.json` | Status, counts, revisions, reports and the source admission |
+| `lexical/measurement.json` | The source's contamination measurement, when a decontamination engine is configured |
+| `lexical/task_flags/part-*.parquet` | Per-row overlap, matched eval IDs and families from the frozen corpus |
+| `lexical/drop_manifest.parquet` | The contaminated rows a training source dropped |
+| `manifest.json` | Status, counts, revisions, reports, the lexical measurement and the source admission |
 | `telemetry.json` | Zephyr execution IDs, counters and phase wall times |
 | `identity.json` | Resolved input, converter, grader, control and execution identities for recipe SAMPLE/FULL runs |
 

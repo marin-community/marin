@@ -49,6 +49,11 @@ from taskcompendium.pipeline.execution_telemetry import (
     execute_phase,
 )
 from taskcompendium.pipeline.inputs import SourceFileOverride
+from taskcompendium.pipeline.lexical import (
+    DecontaminationEngine,
+    LexicalStageResult,
+    decontaminate_population,
+)
 from taskcompendium.pipeline.models import (
     Admission,
     Disposition,
@@ -108,10 +113,12 @@ SOURCE_PIPELINE_REVISION = "14"
 PANEL_ROWS_PER_SHARD = 16
 ROWS_PER_SHARD = 1000
 MAX_PREPARATION_SHARDS = 64
-OUTPUT_VIEWS = ("download", "normalize", "review", "verify", "final")
+OUTPUT_VIEWS = ("download", "normalize", "review", "verify", "final", "lexical")
 SIDECAR_SHARD = "part-{shard:05d}.parquet"
 UNPROCESSED_REVIEW_TEMPLATE = "review/unprocessed-{shard:05d}.parquet"
-SCRATCH_PHASES = ("sample", "full", "quality", "audited", "filtered", "verified")
+SCRATCH_PHASES = ("sample", "full", "quality", "audited", "filtered", "lexical", "verified")
+EXPORT_CLEANUP_VIEWS = ("normalize", "review", "verify", "final")
+"""Views the export rebuilds from the checked audit; the lexical view is published by its own stage."""
 VERIFY_REPORT_PATH = "verify/report.json"
 """A source's verification report, relative to its output."""
 NO_CONTROLS_REASON = "The source declares no controls"
@@ -144,6 +151,8 @@ class SourcePipelineConfig:
     normalized_shards: int
     machines: GradingMachines | None
     judge_connection: JudgeConnection | None = None
+    decontamination: DecontaminationEngine | None = None
+    """Marks the kept population against a frozen eval corpus; ``None`` skips lexical decontamination."""
 
 
 @dataclass(frozen=True)
@@ -163,6 +172,7 @@ class SourcePipelineResult:
     review_path: str
     verify_path: str
     final_path: str
+    lexical_path: str | None
     manifest_path: str
     status: SourceStatus
 
@@ -388,8 +398,8 @@ def _sidecar_schema(columns: tuple[str, ...]) -> pa.Schema:
     return pa.schema([*(TASK_SCHEMA.field(column) for column in columns), *IDENTITY_FIELDS[1:]])
 
 
-def _skipped_verification(filtered: StoragePath, reason: str) -> dict[str, Any]:
-    manifest = _read_json(filtered / "manifest.json")
+def _skipped_verification(source: StoragePath, reason: str) -> dict[str, Any]:
+    manifest = _read_json(source / "manifest.json")
     return {
         **manifest,
         "verification": {
@@ -617,15 +627,35 @@ def _filter(run: _SourceRun) -> None:
         )
 
 
-def _verify(run: _SourceRun) -> tuple[dict[str, Any], StoragePath]:
-    """Run the recipe's controls on the filtered rows; return the verified manifest and its stage directory."""
-    filtered = run.scratch("filtered")
+def _decontaminate(run: _SourceRun) -> LexicalStageResult | None:
+    """Mark the kept population against the configured frozen eval corpus, when one is configured."""
+    engine = run.config.decontamination
+    if engine is None:
+        return None
+    return decontaminate_population(
+        str(run.scratch("filtered")),
+        str(run.output / "lexical"),
+        str(run.scratch("lexical")),
+        source_name=run.recipe.name,
+        dataset_id=run.recipe.source.dataset,
+        dataset_revision=run.recipe.source.revision,
+        converter_revision=run.recipe.version,
+        intended_use=run.recipe.intended_use,
+        engine=engine,
+        context=run.context,
+        telemetry=run.telemetry,
+    )
+
+
+def _verify(run: _SourceRun, checked: str | None = None) -> tuple[dict[str, Any], StoragePath]:
+    """Run the recipe's controls on the checked rows; return the verified manifest and its stage directory."""
+    source = StoragePath(checked) if checked is not None else run.scratch("filtered")
     if run.recipe.controls is None:
-        return _skipped_verification(filtered, NO_CONTROLS_REASON), filtered
+        return _skipped_verification(source, NO_CONTROLS_REASON), source
     verified = run.scratch("verified")
     with run.telemetry.phase("verification") as phase:
         verification = verify_source(
-            str(filtered),
+            str(source),
             str(verified),
             run.config.verification_policy,
             control_suite(run.recipe.controls, run.config.machines, run.config.judge_connection),
@@ -744,7 +774,7 @@ def _export_sidecars(
     output = run.output
     # A recovered panel can expand a formerly deferred source. Remove old
     # derived shards, including unprocessed locators, before publishing that view.
-    for name in OUTPUT_VIEWS[1:]:
+    for name in EXPORT_CLEANUP_VIEWS:
         previous_output = output / name
         if previous_output.exists():
             previous_output.rmtree()
@@ -806,6 +836,7 @@ def _write_manifest(
     expanded: bool,
     unavailable_reviews: int,
     status: SourceStatus,
+    lexical: LexicalStageResult | None = None,
 ) -> None:
     """Write the review and verify reports and manifests, then the source manifest that joins every view."""
     output, recipe, config = run.output, run.recipe, run.config
@@ -822,7 +853,7 @@ def _write_manifest(
         "normalized_shard_limit": config.normalized_shards,
         "source_input": run.source_input,
         "source_file_overrides": {name: asdict(file) for name, file in (run.source_overrides or {}).items()},
-        "datasets": {name: str(output / name) for name in OUTPUT_VIEWS},
+        "datasets": {name: str(output / name) for name in OUTPUT_VIEWS if name != "lexical" or lexical is not None},
         "source_dataset": recipe.source.dataset,
         "source_revision": recipe.source.revision,
         "recipe_revision": recipe.version,
@@ -837,6 +868,7 @@ def _write_manifest(
         "unavailable_reviews": unavailable_reviews,
         "quality": decision.model_dump(mode="json"),
         "verification": report,
+        "lexical": lexical.evidence.model_dump(mode="json") if lexical is not None else None,
         "admission": source_admission(admissions),
         "admission_counts": admissions,
         "processed_rows": verification["input_rows"],
@@ -907,7 +939,8 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
     prepared = _expand_full(run, panel) if expanded and not panel.census else run.scratch("sample")
     unavailable_reviews = _audit(run, prepared, review)
     _filter(run)
-    verification, checked = _verify(run)
+    lexical = _decontaminate(run)
+    verification, checked = _verify(run, lexical.checked if lexical is not None else None)
     verification_status = SourceVerificationStatus(verification["verification"]["status"])
     _write_download_manifest(run, panel.sample.population_count)
     admissions = _export_sidecars(run, panel, decision, checked, verification_status, expanded=expanded)
@@ -928,10 +961,16 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
         expanded=expanded,
         unavailable_reviews=unavailable_reviews,
         status=status,
+        lexical=lexical,
     )
     _finish_scratch(run, status)
     return SourcePipelineResult(
-        *(str(run.output / name) for name in OUTPUT_VIEWS),
+        str(run.output / "download"),
+        str(run.output / "normalize"),
+        str(run.output / "review"),
+        str(run.output / "verify"),
+        str(run.output / "final"),
+        str(run.output / "lexical") if lexical is not None else None,
         manifest_path=str(run.output / "manifest.json"),
         status=status,
     )

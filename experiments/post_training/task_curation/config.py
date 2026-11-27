@@ -9,6 +9,7 @@ from pathlib import Path
 
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
 from taskcompendium.pipeline.controls import GradingMachines
+from taskcompendium.pipeline.lexical import DecontaminationEngine
 from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode
 from taskcompendium.pipeline.source_quality import SOURCE_QUALITY_SAMPLE_SIZE
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig
@@ -35,6 +36,8 @@ class RecipeSettings:
     verification_sample_size: int = 20
     curation_attempt: int = 0
     execution: AuditExecution = field(default_factory=AuditExecution)
+    decontamination: DecontaminationEngine | None = None
+    """The frozen eval-corpus engine for lexical decontamination; ``None`` skips the stage."""
 
 
 @dataclass(frozen=True)

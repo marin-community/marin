@@ -30,6 +30,7 @@ from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.datakit.decontam.eval_families import UNCHEATABLE_ID_RE, eval_id_to_family
 from experiments.datakit.testbed.decon_arm import (
     MIN_MATCHED_FEATURES,
     NGRAM_LENGTH,
@@ -39,9 +40,6 @@ from experiments.datakit.testbed.decon_arm import (
 
 logger = logging.getLogger(__name__)
 
-_SPLIT_RE = re.compile(r"^(.*)-(validation|test|training|train|dev|eval)-\d+$")
-# Uncheatable Eval ids are ``uncheatable-<subset>-<record>``; the artifact sits in ``uncheatable/<subset>/``.
-_UNCHEATABLE_ID_RE = re.compile(r"^uncheatable-(?P<subset>[a-z0-9_]+)-\d+$")
 _SAMPLES_PER_SOURCE = 60
 _MAX_MATCHED_EVALS = 5
 _MAX_MATCHED_NGRAMS = 12
@@ -85,16 +83,9 @@ def _overlapping_ngrams(text: str, matched_hashes: set[int], ngram: NGramConfig)
     return out
 
 
-def eval_id_to_family(eval_id: str) -> str:
-    if uncheatable := _UNCHEATABLE_ID_RE.match(eval_id):
-        return f"uncheatable_{uncheatable['subset']}"
-    m = _SPLIT_RE.match(eval_id)
-    return m.group(1) if m else eval_id
-
-
 def _eval_artifact_dir(eval_id: str) -> str:
     """Return the name of the corpus directory that holds *eval_id*'s artifact."""
-    if uncheatable := _UNCHEATABLE_ID_RE.match(eval_id):
+    if uncheatable := UNCHEATABLE_ID_RE.match(eval_id):
         return uncheatable["subset"]
     return eval_id_to_family(eval_id)
 
