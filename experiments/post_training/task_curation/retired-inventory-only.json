@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-rl-data-atlas-registry",
-  "revision": "090e753ab87fb3efb4d0c56cc2044bbe551f945c",
-  "path": "experiments/post_training/task_curation/retired-inventory-only.json",
-  "sha256": "49c78e43aaad34d23d2b4ae293ba7bebc3b8d6afe9b60d8222b649bb720d646d"
+  "revision": "6a28f9dfdd72adc790693064df69dfa8e88f8a43",
+  "path": "experiments/post_training/task_curation/retired-inventory-only_projection_native_shapes_20261126_v1.json",
+  "sha256": "faa1751c20f4bfd4c02faea60b261a160deb8d543a3b3020ee9c5070e4e3fcbd"
 }
