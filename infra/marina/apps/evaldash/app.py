@@ -601,7 +601,8 @@ class RecordStore:
         ``None`` when the model has no records, so the route can answer 404.
         """
         records, _by_id = self._snapshot()
-        return build_model_detail(records, model, request, self.admission())
+        admission = self.admission()
+        return build_model_detail(admission.view(records, request.cohort_version), model, request, admission)
 
     def group_siblings(self, group_id: str, exclude_run_id: str) -> list[dict]:
         records, _by_id = self._snapshot()

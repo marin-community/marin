@@ -39,11 +39,13 @@ def read_releases(prefix: str) -> dict[str, PolicyRelease]:
 
 def _compliance(record: EvalRunRecord) -> RunCompliance | None:
     """The compliance file beside a policy run's record, or None if the run has none."""
-    suffix = f"/{record.run_id}/results"
-    if record.results_path is None or not record.results_path.endswith(suffix):
+    if record.results_path is None:
+        return None
+    run_dir = StoragePath(record.results_path).parent
+    if run_dir.name != record.run_id:
         return None
     try:
-        with open_url(compliance_path(record.results_path.removesuffix(suffix), record.run_id), "rb") as handle:
+        with open_url(compliance_path(str(run_dir.parent), record.run_id), "rb") as handle:
             return RunCompliance.model_validate_json(handle.read())
     except FileNotFoundError:
         return None
