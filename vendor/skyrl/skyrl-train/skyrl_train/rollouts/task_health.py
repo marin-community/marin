@@ -11,7 +11,7 @@ from rigging.redaction import redact_string
 from rolloutengine.models import SETUP_COMPLETED_METRIC, RolloutFailure, RolloutOperation, TaskRolloutSpec
 from shellbox.machine import ExitReason
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import task_key
+from taskcompendium.identity import task_key
 from taskcompendium.runtime.environment import environment_identity
 
 from skyrl_train.rollouts.training_record import TrainingRollout
@@ -63,9 +63,9 @@ def attempt_receipt(
     return AttemptReceipt(
         attempt_id=attempt_id,
         rollout_id=rollout_id,
-        source_row=task_key(source_id, task),
         task_id=task.id,
         task_digest=task_digest,
+        task_key=task_key(source_id, task),
         outcome=Outcome.INFRA_ERROR if setup_failed else grade.status,
         grading_failure=grade.failure,
         exception_type=failure.exception_type if failure is not None else None,

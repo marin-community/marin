@@ -1142,11 +1142,6 @@ class TaskSpec(BaseModel):
         return self
 
 
-def task_key(source_id: str | None, task: TaskSpec) -> tuple[str | None, str, str, str]:
-    """Identify an upstream row within its curated source, when known."""
-    return source_id, task.source.dataset, task.source.revision, task.source.row
-
-
 def task_subset(task: TaskSpec) -> str:
     """Return the reporting subset, using source provenance for unlabelled tasks."""
     return task.labels.get(SUBSET_LABEL) or task.source.dataset

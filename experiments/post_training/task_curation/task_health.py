@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.run_records import LaunchState
+from finestore.rl.strata import TaskStrata
 from finestore.rl.task_health import ATTEMPT_RECEIPTS_DIRECTORY, EVALUATION_RECEIPTS_DIRECTORY, AttemptReceipt, Phase
 from marin.execution.artifact import validate_path_segment
 from marin.execution.lazy import OUT, ArtifactStep, apply
@@ -33,7 +34,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
 from rigging.task_errors import setup_exit_is_task_failure
 from taskcompendium.grading_result import GradingFailure, Outcome
-from taskcompendium.identity import canonical_sha256
+from taskcompendium.identity import canonical_sha256, task_key
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.environment import environment_identity
 from taskcompendium.runtime.resources import resource_bytes
@@ -78,18 +79,29 @@ NATIVE_VERIFIER_TASK_FAILURES = frozenset(
 HARBOR_SETUP_COMMAND_FAILURE = re.compile(r"^Declared task setup command \d+ exited -?[1-9]\d*\b")
 # Only ungraded attempts carry the output tails and the attempt's address.
 ATTEMPT_COLUMNS = (
-    "run selection training_phase attempt_id rollout_id task_id task_digest source_row outcome grading_failure "
+    "run selection training_phase attempt_id rollout_id task_id task_digest task_key outcome grading_failure "
     "exception_type error phase docker_image setup_sha256 setup_completed setup_exit_code setup_stdout setup_stderr "
     "verifier_stdout verifier_stderr address"
 ).split()
 ATTEMPT_COLUMN_TYPES = {
     "setup_completed": pa.bool_(),
     "setup_exit_code": pa.int64(),
-    "source_row": pa.list_(pa.string()),
+    "task_key": pa.list_(pa.string()),
 }
 ATTEMPT_SCHEMA = pa.schema([(name, ATTEMPT_COLUMN_TYPES.get(name, pa.string())) for name in ATTEMPT_COLUMNS])
-SKIP_COLUMNS = (TASK_SPEC_COLUMN, "task_id", "unit", "attempts", "failed_attempts", "error", "example")
-SKIP_SCHEMA = pa.schema([(name, pa.int64() if name.endswith("attempts") else pa.string()) for name in SKIP_COLUMNS])
+SKIP_SCHEMA = pa.schema(
+    [
+        (TASK_SPEC_COLUMN, pa.string()),
+        ("task_id", pa.string()),
+        ("task_digest", pa.string()),
+        ("task_key", pa.list_(pa.string())),
+        ("unit", pa.string()),
+        ("attempts", pa.int64()),
+        ("failed_attempts", pa.int64()),
+        ("error", pa.string()),
+        ("example", pa.string()),
+    ]
+)
 
 
 def _text(path: StoragePath) -> str | None:
@@ -133,12 +145,22 @@ def _environment(task: TaskSpec) -> tuple[str | None, str | None]:
     return image, setup
 
 
-def _tasks(data: bytes) -> dict[str, tuple[TaskSpec, str]]:
+def _tasks(data: bytes) -> dict[str, tuple[TaskSpec, str, str | None]]:
     """A task file's rows keyed by the digest a selection's task manifest records."""
     tasks = {}
-    for raw in pq.read_table(io.BytesIO(data), columns=[TASK_SPEC_COLUMN])[TASK_SPEC_COLUMN].to_pylist():
-        task = TaskSpec.model_validate_json(raw)
-        tasks[canonical_sha256(json.loads(raw))] = task, raw
+    parquet = pq.ParquetFile(io.BytesIO(data))
+    columns = [TASK_SPEC_COLUMN]
+    if "source" in parquet.schema_arrow.names:
+        columns.append("source")
+    untagged = TaskStrata().source
+    for row in parquet.read(columns=columns).to_pylist():
+        raw = row[TASK_SPEC_COLUMN]
+        source_id = row.get("source")
+        tasks[canonical_sha256(json.loads(raw))] = (
+            TaskSpec.model_validate_json(raw),
+            raw,
+            None if source_id == untagged else source_id,
+        )
     return tasks
 
 
@@ -237,12 +259,15 @@ def _native_attempt_rows(root: StoragePath) -> list[dict]:
 
 def _historical_attempt_rows(agent: dict, source: dict) -> list[dict]:
     tasks = _tasks((StoragePath(source["uri"]) / source["relative_path"]).read_bytes())
-    digests = {task.id: canonical_sha256(task.model_dump(mode="json")) for task, _ in tasks.values()}
+    identities = {
+        task.id: {"task_digest": digest, "task_key": task_key(source_id, task)}
+        for digest, (task, _, source_id) in tasks.items()
+    }
     reward_key = agent.get("trial_reward_key", DEFAULT_REWARD_KEY)
     attempts = sorted(StoragePath(agent["output_path"]).ls(), key=str)
     with ThreadPoolExecutor(READ_THREADS) as pool:
         return [
-            {**row, "task_digest": digests.get(row["task_id"])}
+            {**row, **identities.get(row["task_id"], {})}
             for row in pool.map(lambda attempt: _attempt_row(attempt, reward_key), attempts)
             if row is not None
         ]
@@ -286,17 +311,13 @@ def publish_skip_list(
         raise ValueError(f"No training or validation task files in {selection}")
     data = {str(path): path.read_bytes() for path in (*members, *attempts, *([release] if release else []))}
     tasks = {digest: task for path in members for digest, task in _tasks(data[str(path)]).items()}
-    normalized_digests = {digest: canonical_sha256(task.model_dump(mode="json")) for digest, (task, _) in tasks.items()}
-    stored_digests = {normalized: digest for digest, normalized in normalized_digests.items() if normalized not in tasks}
     unique = {}
     for path in dict.fromkeys(attempts):
         for row in pq.read_table(io.BytesIO(data[str(path)])).to_pylist():
-            digest = row["task_digest"]
-            if digest is None:
+            if row["task_digest"] is None:
                 continue
-            row["task_digest"] = stored_digests.get(digest, digest)
             row["training_phase"] = row.get("training_phase") or "train"
-            for column in ("setup_exit_code", "rollout_id", "source_row"):
+            for column in ("setup_exit_code", "rollout_id", "task_key"):
                 row.setdefault(column, None)
             key = (row["run"], row["rollout_id"] or row["attempt_id"])
             if unique.setdefault(key, row) != row:
@@ -336,17 +357,18 @@ def publish_skip_list(
         for environment, count in environments.items()
         if environment[0] is not None and count >= MIN_FAILED_TASKS_PER_ENVIRONMENT
     }
-    released = {task.id: task for task, _ in _tasks(data[str(release)]).values()} if release else {}
+    released = {task.id: (task, raw) for task, raw, _ in _tasks(data[str(release)]).values()} if release else {}
     listed = []
-    for digest, (task, raw) in tasks.items():
+    for digest, (task, raw, source_id) in tasks.items():
         unit = "task" if digest in broken else "environment" if _environment(task) in broken_environments else None
         if unit is None:
             continue
-        replacement = released.get(task.id)
-        if replacement is not None:
-            if "agentic" in task.tags:
-                replacement = with_agentic_tag(replacement)
-            if canonical_sha256(replacement.model_dump(mode="json")) != normalized_digests[digest]:
+        if task.id in released:
+            replacement, replacement_raw = released[task.id]
+            document = json.loads(replacement_raw)
+            if "agentic" in task.tags and "agentic" not in replacement.tags:
+                document["tags"] = with_agentic_tag(replacement).tags
+            if canonical_sha256(document) != digest:
                 continue
         failed = failures.get(digest, [])
         lines = Counter(row["error"].partition("\n")[0] for row in failed if row["error"])
@@ -354,6 +376,8 @@ def publish_skip_list(
             {
                 TASK_SPEC_COLUMN: raw,
                 "task_id": task.id,
+                "task_digest": digest,
+                "task_key": task_key(source_id, task),
                 "unit": unit,
                 "attempts": attempted[digest],
                 "failed_attempts": len(failed),

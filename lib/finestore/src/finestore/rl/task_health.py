@@ -25,6 +25,7 @@ class AttemptReceipt(BaseModel):
     attempt_id: str
     task_id: str
     task_digest: str
+    task_key: tuple[str | None, str, str, str] | None = None
     outcome: str
     grading_failure: str | None
     exception_type: str | None
@@ -38,5 +39,4 @@ class AttemptReceipt(BaseModel):
     verifier_stdout: str | None
     verifier_stderr: str | None
     setup_exit_code: int | None = None
-    source_row: tuple[str | None, str, str, str] | None = None
     rollout_id: str | None = None

@@ -388,7 +388,7 @@ async def test_native_eval_failure_joins_receipt_to_transcript_after_shutdown(tm
     assert result.failure is not None
     (receipt,) = read_receipts(tmp_path / ATTEMPT_RECEIPTS_DIRECTORY / EVALUATION_RECEIPTS_DIRECTORY)
     assert receipt.task_digest == canonical_sha256(stored_task)
-    assert receipt.source_row == ("curated-math", "upstream/data", "1", "0")
+    assert receipt.task_key == ("curated-math", "upstream/data", "1", "0")
     assert receipt.exception_type == "ConnectionError"
     assert receipt.rollout_id
     events = tables[EVENTS_NAMESPACE].rows

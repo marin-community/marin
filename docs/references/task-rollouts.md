@@ -660,15 +660,17 @@ again.
 
 Native SkyRL task workers record each training and evaluation attempt, including retries, in the
 run's export directory. Evaluation receipts are under `task-health/eval/`. Each receipt joins to
-Finelog by `rollout_id` and carries the curated source ID, upstream dataset, revision and row
-locator in `source_row`. Inputs without a curated source ID have a null first element.
+Finelog by `rollout_id`. The receipt's `task_digest` hashes the stored task document. Its
+`task_key` records the curated source ID, upstream dataset, pinned revision and row locator.
+Inputs without a curated source ID have a null first element.
 In Iris, the workers send events and available transcript messages to Finelog and flush on shutdown.
 
 `task_health extract` collects receipts from both phases and publishes a snapshot keyed by the native
 launch attempt and extraction schema. The `training_phase` column names the workload phase. The
 `selection` column identifies the sole training input when the run has one. Evaluation rows leave it
-null. `task_health skip` matches both phases' evidence against the target selection's training and
-active validation rows.
+null. `task_health skip` matches both phases' evidence against the stored digests of the target
+selection's training and active validation rows. The skip file carries `task_digest` for matching
+and `task_key` for locating the upstream row.
 
 `content_fraction` is the share of task attempts whose content is written. A hash of `rollout_id` decides, so a
 task attempt has all of its content or none, and the events table has every task attempt. On an event row,

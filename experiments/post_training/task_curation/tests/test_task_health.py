@@ -16,6 +16,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
+    UPGRADABLE_SCHEMA_VERSION,
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
@@ -74,9 +75,15 @@ def selection_digest(task: TaskSpec) -> str:
 
 
 @pytest.mark.parametrize(
-    ("selection_file", "training_sources"), [(TRAIN_FILENAME, 1), (VALIDATION_FILENAME, 1), (VALIDATION_FILENAME, 2)]
+    ("selection_file", "training_sources", "digest_matches"),
+    [
+        (TRAIN_FILENAME, 1, True),
+        (VALIDATION_FILENAME, 1, True),
+        (VALIDATION_FILENAME, 2, True),
+        (VALIDATION_FILENAME, 1, False),
+    ],
 )
-def test_native_receipts_drive_task_health_without_the_harbor_trial_store(tmp_path, selection_file, training_sources):
+def test_native_receipts_match_stored_task_documents(tmp_path, selection_file, training_sources, digest_matches):
     task = harbor_task("example", SHARED_IMAGE)
     killed = harbor_task("killed", "swe/killed")
     export = tmp_path / "export"
@@ -85,12 +92,12 @@ def test_native_receipts_drive_task_health_without_the_harbor_trial_store(tmp_pa
     stored_task = task.model_dump(mode="json")
     if evaluating:
         receipts = receipts / EVALUATION_RECEIPTS_DIRECTORY
-        stored_task.pop("labels")
+        stored_task["schema_version"] = UPGRADABLE_SCHEMA_VERSION
     receipts.mkdir(parents=True)
     receipt = AttemptReceipt(
         attempt_id="trial-1",
         task_id=task.id,
-        task_digest=selection_digest(task),
+        task_digest=canonical_sha256(stored_task) if digest_matches else selection_digest(task),
         outcome=Outcome.INFRA_ERROR,
         grading_failure=None,
         exception_type="VerifierRuntimeError",
@@ -104,25 +111,19 @@ def test_native_receipts_drive_task_health_without_the_harbor_trial_store(tmp_pa
         setup_stderr=MISSING_MODULE,
         verifier_stdout=None,
         verifier_stderr=None,
-        source_row=("fixture", "fixture-swe", "release", "example"),
+        task_key=("fixture", "fixture-swe", "release", "example"),
     )
     first = receipts / "first.jsonl"
     second = receipts / "second.jsonl"
     for ordinal, path in enumerate((first, second), start=1):
-        failed_setup = receipt.model_copy(
-            update={
-                "attempt_id": "setup",
-                "rollout_id": f"setup-rollout-{ordinal}",
-                "task_digest": canonical_sha256(stored_task) if ordinal == 2 else receipt.task_digest,
-            }
-        )
+        failed_setup = receipt.model_copy(update={"attempt_id": "setup", "rollout_id": f"setup-rollout-{ordinal}"})
         killed_setup = receipt.model_copy(
             update={
                 "attempt_id": f"killed-{ordinal}",
                 "rollout_id": f"killed-rollout-{ordinal}",
                 "task_id": killed.id,
                 "task_digest": selection_digest(killed),
-                "source_row": ("fixture", "fixture-swe", "release", "killed"),
+                "task_key": ("fixture", "fixture-swe", "release", "killed"),
                 "docker_image": "swe/killed",
                 "setup_exit_code": 137,
             }
@@ -155,21 +156,34 @@ def test_native_receipts_drive_task_health_without_the_harbor_trial_store(tmp_pa
     assert {row["selection"] for row in rows} == {None if evaluating else "fixture-pi-0"}
     assert {row["training_phase"] for row in rows} == {"eval" if evaluating else "train"}
     assert {row["address"] for row in rows} == {str(first), str(second)}
-    assert {(row["rollout_id"], tuple(row["source_row"])) for row in rows if row["task_id"] == task.id} == {
+    assert {(row["rollout_id"], tuple(row["task_key"])) for row in rows if row["task_id"] == task.id} == {
         ("setup-rollout-1", ("fixture", "fixture-swe", "release", "example")),
         ("setup-rollout-2", ("fixture", "fixture-swe", "release", "example")),
     }
     assert {(row["task_digest"], row["setup_exit_code"]) for row in rows} == {
         (receipt.task_digest, 1),
-        (canonical_sha256(stored_task), 1),
         (selection_digest(killed), 137),
     }
     pq.write_table(
-        pa.table({TASK_SPEC_COLUMN: [json.dumps(stored_task), killed.model_dump_json()]}), tmp_path / selection_file
+        pa.table(
+            {
+                TASK_SPEC_COLUMN: [json.dumps(stored_task), killed.model_dump_json()],
+                "source": ["fixture", "fixture"],
+            }
+        ),
+        tmp_path / selection_file,
     )
+    selection = StoragePath(str(tmp_path))
     skip = StoragePath(str(tmp_path / "skip"))
-    publish_skip_list(StoragePath(str(tmp_path)), [snapshot], skip, "fixture")
-    assert pq.read_table(str(skip / SKIP_FILENAME))["task_id"].to_pylist() == [task.id]
+    if not digest_matches:
+        with pytest.raises(ValueError, match="No tasks meet the skip criteria"):
+            publish_skip_list(selection, [snapshot], skip, "fixture")
+        return
+    publish_skip_list(selection, [snapshot], skip, "fixture")
+    (listed,) = pq.read_table(str(skip / SKIP_FILENAME)).to_pylist()
+    assert listed["task_id"] == task.id
+    assert listed["task_digest"] == canonical_sha256(stored_task)
+    assert listed["task_key"] == ["fixture", "fixture-swe", "release", "example"]
 
 
 def write_tasks(path: Path, tasks: list[TaskSpec]) -> Path:
@@ -222,7 +236,10 @@ def write_attempt(
 
 def test_extract_records_each_attempts_grade_phase_and_output_tails(tmp_path, monkeypatch):
     task = harbor_task("swe:1")
-    selection = write_tasks(tmp_path / "selection" / TRAIN_FILENAME, [task]).parent
+    selection = tmp_path / "selection"
+    selection.mkdir()
+    stored_task = {**task.model_dump(mode="json"), "schema_version": UPGRADABLE_SCHEMA_VERSION}
+    pq.write_table(pa.table({TASK_SPEC_COLUMN: [json.dumps(stored_task)]}), selection / TRAIN_FILENAME)
     store = tmp_path / "attempts/trajectories/installed-agents"
     run_output = tmp_path / "run-artifacts/fixture-run/2026.11.20.1"
     run_output.mkdir(parents=True)
@@ -293,7 +310,7 @@ def test_extract_records_each_attempts_grade_phase_and_output_tails(tmp_path, mo
     assert (rows["setup-exit"]["error"], rows["setup-exit"]["setup_completed"]) == (SETUP_EXIT, False)
     assert rows["setup-exit"]["address"] == str(store / "setup-exit")
     assert {(row["selection"], row["task_digest"]) for row in rows.values()} == {
-        ("fixture@2026.11.20.1", selection_digest(task))
+        ("fixture@2026.11.20.1", canonical_sha256(stored_task))
     }
     assert extract_attempts(StoragePath(str(run_output)), "fixture-run@2026.11.20.1", output) == path
 
@@ -438,6 +455,8 @@ def test_skip_lists_tasks_and_environments_that_fail_setup_or_verification(tmp_p
         "shared-untried": "environment",
     }
     assert (listed["repeated"]["failed_attempts"], listed["repeated"]["error"]) == (3, MISSING_MODULE)
+    assert listed["changed-task"]["failed_attempts"] == 2
+    assert listed["shared-untried"]["task_key"] == [None, "fixture-swe", "release", "shared-untried"]
     assert {name: TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN]) for name, row in listed.items()} == {
         name: tasks[name] for name in listed
     }
@@ -455,7 +474,7 @@ def test_skip_lists_tasks_and_environments_that_fail_setup_or_verification(tmp_p
     empty = StoragePath(str(tmp_path / "empty-skip"))
     one_attempt = inputs[0].parent / "one-attempt.parquet"
     table = pq.read_table(inputs[0]).slice(0, 1)
-    pq.write_table(table.drop(["training_phase", "rollout_id", "source_row"]), one_attempt)
+    pq.write_table(table.drop(["training_phase", "rollout_id", "task_key"]), one_attempt)
     duplicate = one_attempt.with_name("duplicate.parquet")
     pq.write_table(table, duplicate)
     with pytest.raises(ValueError, match="No tasks meet the skip criteria"):
