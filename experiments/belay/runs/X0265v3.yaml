@@ -1,0 +1,14 @@
+experiment: X0265v3
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: ID Balancing bias in place of QB, id_balance_gain=0.096
+    flags:
+    - --model-set
+    - id_balance_gain=0.096
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
+    shared: belay-X0265v1-control
