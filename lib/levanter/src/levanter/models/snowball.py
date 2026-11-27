@@ -168,7 +168,7 @@ _GATED_NORM_RANK = 128
 _CACHE_LAYER_AXIS = "layer"
 _LONG_ATTENTION_INTERVAL = 4
 _ROUTING_RENORM_SUM = 2.5
-_STRICT_MOE_IMPLEMENTATION = "ring_gather_combine"
+_STRICT_MOE_IMPLEMENTATION = "ring_ordered_combine"
 _QK_RMS_NORM_EPS = 1e-6  # q/k rms_norm uses the function default 1e-6, NOT layer_norm_eps
 # June 67B qk_mult (YaRN mscale 1.3*(0.1*ln(65536/8192)+1)); used as the field default and the
 # from_hf_config fallback so the two never drift. Real grug_moe exports always carry qk_mult.
@@ -1186,7 +1186,12 @@ class SnowballMoEMLP(eqx.Module):
         # Sigmoid combine weights on UNbiased logits for the selected experts, renormed to sum to 2.5.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         combine_weights_f = jax.nn.sigmoid(unbiased_topk)
-        denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
+        if self.cfg.replay_precision == "zero_kl":
+            denom = combine_weights_f[:, :1]
+            for expert in range(1, self.cfg.num_experts_per_token):
+                denom = denom + combine_weights_f[:, expert : expert + 1]
+        else:
+            denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
         combine_weights = combine_weights_f if self.cfg.router_combine_fp32 else combine_weights_f.astype(x.dtype)
 

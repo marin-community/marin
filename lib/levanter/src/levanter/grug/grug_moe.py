@@ -59,6 +59,7 @@ from levanter.grug._moe.ep_ring import (
     _gather_dispatch_combine,
     _moe_mlp_ep_ring_local,
     _moe_mlp_ep_small_local,
+    _ordered_expert_reduce,
     _scatter_add_dispatch_combine,
 )
 from levanter.grug._moe.ep_ring_filtered import _moe_mlp_ep_ring_filtered_local
@@ -801,9 +802,10 @@ def moe_mlp(
     has_expert_axis = _mesh_has_axis(mesh, "expert")
     expert_axis_size = _mesh_axis_size(mesh, "expert")
     expert_parallel = mesh is not None and not mesh.empty and has_expert_axis and expert_axis_size > 1
-    if combine_in_fp32 and expert_parallel and resolved_implementation not in ("ring", "ring_gather_combine"):
+    fp32_combine_implementations = ("ring", "ring_gather_combine", "ring_ordered_combine")
+    if combine_in_fp32 and expert_parallel and resolved_implementation not in fp32_combine_implementations:
         raise ValueError(
-            "combine_in_fp32 with expert parallelism is implemented only for ring and ring_gather_combine; "
+            f"combine_in_fp32 with expert parallelism requires one of {fp32_combine_implementations}; "
             f"got implementation={resolved_implementation!r}"
         )
 
@@ -865,6 +867,13 @@ def moe_mlp(
                 _moe_mlp_ep_ring_local,
                 make_dispatch_combine=_gather_dispatch_combine,
                 combine_in_fp32=combine_in_fp32,
+            )
+        elif resolved_implementation == "ring_ordered_combine":
+            shard_local_fn = partial(
+                _moe_mlp_ep_ring_local,
+                make_dispatch_combine=_gather_dispatch_combine,
+                combine_in_fp32=combine_in_fp32,
+                reduce_experts=_ordered_expert_reduce,
             )
         elif resolved_implementation == "ring_filtered":
             shard_local_fn = partial(

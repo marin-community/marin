@@ -182,6 +182,17 @@ def _gather_dispatch_combine(
     )
 
 
+def _ordered_expert_reduce(out_global: jax.Array) -> jax.Array:
+    """Exchange each destination's token rows and accumulate in source-rank order."""
+    shards = jax.lax.axis_size("expert")
+    arrivals = jax.lax.all_to_all(out_global, "expert", split_axis=0, concat_axis=0, tiled=True)
+    arrivals = arrivals.reshape(shards, -1, out_global.shape[-1])
+    result = arrivals[0]
+    for source in range(1, shards):
+        result = result + arrivals[source]
+    return result
+
+
 def _moe_mlp_ep_ring_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -196,12 +207,15 @@ def _moe_mlp_ep_ring_local(
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
     combine_in_fp32: bool = False,
+    reduce_experts: Callable[[jax.Array], jax.Array] = partial(
+        jax.lax.psum_scatter, axis_name="expert", scatter_dimension=0, tiled=True
+    ),
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
-    """Ring-style EP routed path: all-gather dispatch + psum-scatter collect.
+    """Ring-style expert routing with all-gather dispatch.
 
     ``make_dispatch_combine`` chooses how rows move between the gathered token buffer and the dispatch slots.
     With ``combine_in_fp32`` the weights keep their (float32) dtype, so the weighted rows, their per-token sum
-    and the psum-scatter run in float32, and the output is cast to ``x_local``'s dtype at the end.
+    and the cross-rank reduction run in float32. The output is cast to ``x_local``'s dtype.
     """
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
@@ -270,7 +284,7 @@ def _moe_mlp_ep_ring_local(
         out_global = dispatch_combine.combine(out_dispatch, weight_dispatch)
         # #2710 ring EP strategy: collect only this shard's token slice after
         # reducing contributions from experts across the EP mesh.
-        out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
+        out_local = reduce_experts(out_global)
         if combine_in_fp32:
             out_local = out_local.astype(x_local.dtype)
         dropped_total = jax.lax.psum(dropped_local, token_sharding_axes)
