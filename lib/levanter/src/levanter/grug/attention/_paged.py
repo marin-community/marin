@@ -12,10 +12,14 @@ from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 
+from levanter.grug.attention._paged_gpu import gpu_paged_attention, gpu_paged_prefill
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.kernels.pallas.paged_attention import tpu_paged_attention, tpu_paged_attention_available
 
-PagedAttentionImplementation = Literal["reference", "tpu"]
+PagedAttentionImplementation = Literal["reference", "tpu", "gpu"]
+_GPU_PAGED_QUERY_LIMIT = 8
+_GPU_FULL_DECODE_SPLITS = 128
+_GPU_WINDOWED_DECODE_SPLITS = 16
 
 
 def ragged_paged_attention(
@@ -43,16 +47,19 @@ def ragged_paged_attention(
         sm_scale: Query/key logit multiplier.
         sliding_window: Number of visible tokens, including the query itself.
         soft_cap: Optional tanh logit cap, applied before masking.
-        implementation: Use the reference or the upstream FP32 TPU kernel.
+        implementation: Reference, FP32 TPU, or BF16 CUDA split-K decode and FA4 prefill.
 
     Query positions start at ``kv_lens - diff(cu_q_lens)`` for each sequence.
     Padding queries produce zero. By default, FP32 inputs on supported TPUs use Pallas
     and other inputs use the reference. The KV-head axis can be sharded.
     Page and slot axes and sequence metadata must be replicated.
     """
-    if implementation not in (None, "tpu", "reference"):
+    if implementation not in (None, "tpu", "reference", "gpu"):
         raise ValueError(f"Unknown paged attention implementation: {implementation}")
-    if implementation != "reference":
+    if implementation == "gpu":
+        if jax.default_backend() != "gpu" or q.dtype != jnp.bfloat16 or kv_pages.dtype != jnp.bfloat16:
+            raise ValueError("GPU paged attention requires CUDA with BF16 queries and cache")
+    if implementation in (None, "tpu"):
         supports_tpu = q.dtype == kv_pages.dtype == jnp.float32 and tpu_paged_attention_available()
         if implementation == "tpu" and not supports_tpu:
             raise ValueError("The Pallas paged attention kernel requires a supported TPU and FP32 queries and cache")
@@ -65,7 +72,7 @@ def ragged_paged_attention(
         raise ValueError("Expected grouped queries and interleaved KV pages with matching heads and head_dim")
 
     fn = partial(
-        _tpu_attention if implementation == "tpu" else _reference_attention,
+        {"gpu": _gpu_attention, "tpu": _tpu_attention, "reference": _reference_attention}[implementation],
         sm_scale=sm_scale,
         sliding_window=sliding_window,
         soft_cap=soft_cap,
@@ -109,6 +116,45 @@ def _query_metadata(q, kv_lens, cu_q_lens, num_seqs) -> _QueryMetadata:
     valid = jnp.any(belongs, axis=0)
     position = kv_lens[seq] - (cu_q_lens[seq + 1] - cu_q_lens[seq]) + token - cu_q_lens[seq]
     return _QueryMetadata(seq, position, valid)
+
+
+def _gpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap):
+    if q.shape[0] <= _GPU_PAGED_QUERY_LIMIT:
+        metadata = _query_metadata(q, kv_lens, cu_q_lens, num_seqs)
+        upper = jnp.where(metadata.valid, metadata.position + 1, 0)
+        lower = jnp.zeros_like(upper) if sliding_window is None else jnp.maximum(0, upper - sliding_window)
+        return gpu_paged_attention(
+            q,
+            kv_pages,
+            jnp.maximum(page_indices[metadata.sequence], 0),
+            jnp.stack((lower, upper), axis=-1),
+            sm_scale,
+            max_splits=_GPU_FULL_DECODE_SPLITS if sliding_window is None else _GPU_WINDOWED_DECODE_SPLITS,
+            soft_cap=soft_cap,
+        )
+    if soft_cap is not None or not isinstance(sm_scale, (float, int)):
+        raise ValueError("GPU prefill requires a static scale and does not support soft caps")
+
+    # The scheduler pads the page table to its slot capacity. Only active
+    # sequences enter FA4, each with its own query span and reordered KV pages.
+    tokens = jnp.arange(q.shape[0])
+
+    def attend_sequence(seq, output):
+        start, stop = cu_q_lens[seq], cu_q_lens[seq + 1]
+        indices = start + tokens
+        query = q[jnp.minimum(indices, q.shape[0] - 1)]
+        attended = gpu_paged_prefill(
+            query,
+            kv_pages,
+            jax.lax.dynamic_slice_in_dim(kv_lens, seq, 1),
+            page_indices[seq],
+            stop - start,
+            sm_scale=float(sm_scale),
+            sliding_window=sliding_window,
+        )
+        return output.at[jnp.where(indices < stop, indices, q.shape[0])].set(attended, mode="drop")
+
+    return jax.lax.fori_loop(0, num_seqs.reshape(()), attend_sequence, jnp.zeros_like(q))
 
 
 class _ReferenceState(NamedTuple):
