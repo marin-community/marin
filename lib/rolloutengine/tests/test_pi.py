@@ -225,7 +225,7 @@ async def test_relay_rejects_unsupported_requests_and_reports_context_rejections
 async def test_relay_callback_keeps_trial_clock_across_http_task_context():
     clock = InferenceClock(2280)
 
-    async def complete(prompt: Prompt) -> ModelTurn:
+    async def complete(_prompt: Prompt) -> ModelTurn:
         assert current_inference_clock() is clock
         return turn({"role": "assistant", "content": "12"})
 

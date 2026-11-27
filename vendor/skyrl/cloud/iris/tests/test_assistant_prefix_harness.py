@@ -44,6 +44,8 @@ from transformers import PreTrainedTokenizerFast
 from verifyit.closure_scoring import ClosureFormat
 from verifyit.spec import NumericSpec, StructureClosureSpec
 
+TEST_INFERENCE_QUEUE_ALLOWANCE = 60
+
 
 class WorkerTokenizer:
     eos_token_id = 99
@@ -148,7 +150,7 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
 
     worker = TaskRolloutWorker(
         config, WholeTaskProjection(config, WorkerTokenizer()), DirectModelClient(Engine()), {},
-        shutdown_timeout=30, inference_queue_timeout=60,
+        shutdown_timeout=30, inference_queue_timeout=TEST_INFERENCE_QUEUE_ALLOWANCE,
     )
     try:
         (result,) = await worker.generate(request)
@@ -220,7 +222,7 @@ async def test_assistant_prefix_worker_grades_only_an_ended_turn_without_its_ter
 
     worker = TaskRolloutWorker(
         config, WholeTaskProjection(config, WorkerTokenizer()), DirectModelClient(Engine()), {},
-        shutdown_timeout=30, inference_queue_timeout=60,
+        shutdown_timeout=30, inference_queue_timeout=TEST_INFERENCE_QUEUE_ALLOWANCE,
     )
     try:
         (result,) = await worker.generate(request)
@@ -270,7 +272,7 @@ async def test_a_malformed_turn_is_rejected_or_penalized_by_reward_shaping(
 
     worker = TaskRolloutWorker(
         config, WholeTaskProjection(config, WorkerTokenizer()), Client(), {},
-        shutdown_timeout=30, inference_queue_timeout=60,
+        shutdown_timeout=30, inference_queue_timeout=TEST_INFERENCE_QUEUE_ALLOWANCE,
     )
     try:
         (rollout,) = await worker.generate(request)

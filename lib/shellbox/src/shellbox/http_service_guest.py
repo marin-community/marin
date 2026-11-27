@@ -152,7 +152,7 @@ def receive_responses(server):
         server.shutdown()
 
 
-def serve(port, request_timeout=REQUEST_TIMEOUT):
+def serve(port, request_timeout):
     with Server(port, request_timeout) as server:
         server.emit({"type": "ready"})
         threading.Thread(target=receive_responses, args=(server,), daemon=True).start()
@@ -160,4 +160,4 @@ def serve(port, request_timeout=REQUEST_TIMEOUT):
 
 
 if __name__ == "__main__":
-    serve(int(sys.argv[1]), float(sys.argv[2]) if len(sys.argv) > 2 else REQUEST_TIMEOUT)
+    serve(int(sys.argv[1]), float(sys.argv[2]))

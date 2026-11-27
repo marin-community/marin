@@ -4,12 +4,13 @@
 """Trial execution budgets exclude a saturated engine's admission queue."""
 
 import asyncio
+from dataclasses import replace
 
 import pytest
-from rigging.inference_clock import InferenceClock
+from rigging.inference_clock import PARTIAL_DEADLINE_STOP_REASON, InferenceClock
 from taskcompendium.grading_result import Outcome
 
-from rolloutengine.models import TOTAL_TURN_TIMEOUT_STOP_REASON, GradedRolloutInterrupted
+from rolloutengine.models import MODEL_TURN_TIMEOUT_STOP_REASON, TOTAL_TURN_TIMEOUT_STOP_REASON, GradedRolloutInterrupted
 from rolloutengine.test_support import ReplayModel, arithmetic_task, engine, rollout_spec
 
 
@@ -123,3 +124,20 @@ async def test_transport_without_scheduling_notice_keeps_the_turn_deadline():
     assert result.rollout.stop_reason == TOTAL_TURN_TIMEOUT_STOP_REASON
     assert result.grade.status == Outcome.UNAVAILABLE
     assert clock.scheduled_requests == 0
+
+
+async def test_partial_deadline_uses_the_same_clock_timer_as_the_abort():
+    clock = InferenceClock(20)
+
+    class PartialModel(ReplayModel):
+        async def complete(self, request):
+            async with clock.queue():
+                clock.scheduled()
+            turn = await super().complete(request)
+            return replace(turn, stop_reason=PARTIAL_DEADLINE_STOP_REASON)
+
+    spec = rollout_spec(arithmetic_task(), model_turn_timeout=1, total_turn_timeout=2, attempt_timeout=3)
+    with clock.scope():
+        result = await engine(PartialModel([{"role": "assistant", "content": "12"}])).run_task(spec)
+    assert result.rollout.stop_reason == MODEL_TURN_TIMEOUT_STOP_REASON
+    assert result.grade.reward == 1.0

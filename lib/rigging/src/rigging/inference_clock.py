@@ -36,6 +36,7 @@ class _Timer:
     admitted: bool = False
 
 
+# Task-local scope; detached HTTP callback tasks restore the registered trial clock explicitly.
 _current: ContextVar[InferenceClock | None] = ContextVar("inference_clock", default=None)
 
 
@@ -118,12 +119,23 @@ class InferenceClock:
         self.scheduled_requests += 1
         self._resume(admitted=True)
 
+    def nearest_execution_timeout(self, completed_call: asyncio.Timeout | None = None) -> asyncio.Timeout | None:
+        """Return the governing timer, including a call just removed from scope."""
+        active = [timer.timeout for timer in self.timers if timer.timeout.when() is not None]
+        if completed_call is not None and completed_call.when() is not None:
+            active.append(completed_call)
+        if not active:
+            return None
+        return min(active, key=lambda timeout: timeout.when())
+
     def execution_remaining(self) -> float | None:
         """Return the nearest active execution budget after admission."""
-        deadlines = [deadline for timer in self.timers if (deadline := timer.timeout.when()) is not None]
-        if not deadlines:
+        nearest = self.nearest_execution_timeout()
+        if nearest is None:
             return None
-        return max(0.0, min(deadlines) - asyncio.get_running_loop().time())
+        deadline = nearest.when()
+        assert deadline is not None
+        return max(0.0, deadline - asyncio.get_running_loop().time())
 
     def metrics(self) -> dict[str, float]:
         return {

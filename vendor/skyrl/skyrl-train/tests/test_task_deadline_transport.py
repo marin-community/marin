@@ -10,7 +10,10 @@ from rigging.inference_clock import InferenceClock, execution_timeout
 from rigging.inference_clock import PARTIAL_DEADLINE_STOP_REASON
 
 from skyrl_train.inference_engines import ray_wrapped_inference_engine as transport
+from skyrl_train.inference_engines.base import REQUEST_ID_HEADER
 from skyrl_train.inference_engines.request_timing import RequestCompleted, RequestScheduled
+
+QUEUE_ALLOWANCE = 200.0
 
 
 @dataclass
@@ -62,7 +65,7 @@ def pending_actor(monkeypatch, partial: dict | None) -> PendingActor:
             result = loop.create_future()
             result.set_result(partial is not None)
             return result
-        request_id = payload["request_ids"][0] if "request_ids" in payload else payload["headers"]["x-request-id"]
+        request_id = payload["request_ids"][0] if "request_ids" in payload else payload["headers"][REQUEST_ID_HEADER]
         return result_stream
 
     cancelled = []
@@ -91,7 +94,7 @@ async def test_partial_return_uses_the_remaining_trial_budget_after_an_earlier_t
         "choices": [{"finish_reason": "abort", **sampled}]
     }
     actor = pending_actor(monkeypatch, partial)
-    clock = InferenceClock(2280)
+    clock = InferenceClock(QUEUE_ALLOWANCE)
 
     async def run():
         nonlocal offset
@@ -103,7 +106,7 @@ async def test_partial_return_uses_the_remaining_trial_budget_after_an_earlier_t
                 if endpoint == "generate":
                     result = await actor.engine.generate({"prompt_token_ids": [[1]], "session_ids": ["sample_0"]})
                 else:
-                    result = await actor.engine.chat_completion({"headers": {"x-request-id": "sample"}})
+                    result = await actor.engine.chat_completion({"headers": {REQUEST_ID_HEADER: "sample"}})
                 assert not deadline.expired()
                 return result
 
@@ -128,7 +131,7 @@ async def test_partial_return_uses_the_remaining_trial_budget_after_an_earlier_t
 @pytest.mark.asyncio
 async def test_caller_cancellation_does_not_turn_into_a_partial_response(monkeypatch):
     actor = pending_actor(monkeypatch, {"stop_reasons": ["abort"], "response_ids": [[7]]})
-    clock = InferenceClock(2280)
+    clock = InferenceClock(QUEUE_ALLOWANCE)
 
     async def run():
         with clock.scope():
@@ -152,7 +155,7 @@ async def test_empty_active_request_remains_unavailable_at_the_execution_deadlin
     offset = 0.0
     monkeypatch.setattr(loop, "time", lambda: real_time() + offset)
     actor = pending_actor(monkeypatch, None)
-    clock = InferenceClock(2280)
+    clock = InferenceClock(QUEUE_ALLOWANCE)
 
     async def run():
         with clock.scope():

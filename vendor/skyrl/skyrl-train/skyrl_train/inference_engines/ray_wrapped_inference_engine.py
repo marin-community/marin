@@ -320,6 +320,15 @@ async def _submit_actor_task(
         raise
 
 
+def _terminal_before_schedule(result: RequestCompleted[dict]) -> bool:
+    """Recognize errors and empty aborts that cannot acquire a slot notice."""
+    value = result.value
+    if "error" in value or value.get("stop_reasons") == [ABORT_FINISH_REASON]:
+        return True
+    choices = value.get("choices")
+    return bool(choices) and choices[0]["finish_reason"] == ABORT_FINISH_REASON
+
+
 class RayWrappedInferenceEngine(InferenceEngineInterface):
     """
     A thin wrapper around a Ray ActorHandle to another InferenceEngineInterface.
@@ -397,11 +406,7 @@ class RayWrappedInferenceEngine(InferenceEngineInterface):
                 ref = await anext(stream)
                 first = await ref
                 if isinstance(first, RequestCompleted):
-                    if (
-                        "error" in first.value
-                        or first.value.get("stop_reasons") == [ABORT_FINISH_REASON]
-                        or (first.value.get("choices") and first.value["choices"][0]["finish_reason"] == ABORT_FINISH_REASON)
-                    ):
+                    if _terminal_before_schedule(first):
                         return first.value, False
                     raise RuntimeError("Completed inference did not report engine-slot ownership")
                 assert isinstance(first, RequestScheduled)

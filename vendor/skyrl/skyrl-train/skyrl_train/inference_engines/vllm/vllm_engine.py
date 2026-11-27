@@ -1402,7 +1402,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
             self._request_timings.forget_schedule(request_id)
 
     async def abort_active_partial_request(self, request_id: str) -> bool:
-        """Return whether an abort was issued; the caller still awaits partial output."""
+        """Return true only if a live sampled request was aborted; the caller awaits its output."""
         key = self._request_timings.request_key(request_id)
         timing = self._request_timings.requests.get(key)
         if timing is None or timing.generated_tokens == 0:

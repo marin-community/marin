@@ -259,6 +259,16 @@ class _Recorder:
         """Name the active budget that prompted an early partial return."""
         deadlines = self.deadlines
         assert deadlines is not None
+        clock = current_inference_clock()
+        if clock is not None:
+            nearest = clock.nearest_execution_timeout(call)
+            if nearest is call:
+                return MODEL_TURN_TIMEOUT_STOP_REASON
+            if nearest is deadlines.total:
+                return TOTAL_TURN_TIMEOUT_STOP_REASON
+            if nearest is deadlines.attempt:
+                return ATTEMPT_TIMEOUT_STOP_REASON
+            raise RolloutContractError("The partial deadline has no recorder-owned execution budget")
         candidates = (
             (call.when(), MODEL_TURN_TIMEOUT_STOP_REASON),
             (deadlines.total.when(), TOTAL_TURN_TIMEOUT_STOP_REASON),
