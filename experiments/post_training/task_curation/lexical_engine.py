@@ -198,7 +198,9 @@ class DatakitDecontamination:
             # Open the sink through the configured storage filesystem so remote
             # targets see the caller's credentials; StoragePath.open returns a
             # lazy fsspec handle, so it must be entered before writing.
-            combined = pa.concat_tables(tables)
+            # An audit partition with no kept rows yields a zero-row mark file;
+            # keep its (empty) flags so one output still matches one input.
+            combined = pa.concat_tables(tables) if tables else TASK_FLAGS_SCHEMA.empty_table()
             with StoragePath(target).open("wb", auto_mkdir=True) as sink:
                 pq.write_table(combined, sink, compression="zstd")
             rows += combined.num_rows
