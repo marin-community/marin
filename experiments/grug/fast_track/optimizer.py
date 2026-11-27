@@ -524,6 +524,45 @@ def scale_by_adamc(b1: float, b2: float, eps: float, learning_rate, decay_mult: 
     return optax.GradientTransformation(init_fn, update_fn)
 
 
+class TokenNormMomentumState(NamedTuple):
+    momentum: optax.Params
+
+
+def scale_by_token_norm_momentum(learning_rate, decay_mult: float) -> optax.GradientTransformation:
+    """Per-token normalized momentum for the output head ``[d, V]`` (row-norm update for vocabulary-indexed matrices).
+
+    ``M <- b M + (1 - b) G`` and ``N = (1 - b) G + b M`` with ``b = TOKEN_NORM_HEAD_MOMENTUM``; ``N`` minus its mean
+    over the vocab axis, each token column divided by its L2 norm, minus the vocab mean again, is ``U``. The step is
+    ``W <- W - lr TOKEN_NORM_HEAD_SCALE sqrt(d) U - decay_mult lr^2 W``, no sphere projection.
+    """
+    b = TOKEN_NORM_HEAD_MOMENTUM
+
+    def init_fn(params):
+        return TokenNormMomentumState(momentum=otu.tree_zeros_like(params, dtype=jnp.float32))
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("scale_by_token_norm_momentum requires params")
+
+        def momentum_of(g, m):
+            return _pin_sharding(b * m + (1 - b) * g.astype(jnp.float32), m)
+
+        new_momentum = jax.tree.map(momentum_of, updates, state.momentum)
+
+        def step(p, g, m):
+            n = _pin_sharding((1 - b) * g.astype(jnp.float32) + b * m, p)
+            n = _pin_sharding(n - jnp.mean(n, axis=-1, keepdims=True), p)
+            n = _pin_sharding(n / (jnp.sqrt(jnp.sum(jnp.square(n), axis=-2, keepdims=True)) + TOKEN_NORM_HEAD_EPS), p)
+            u = n - jnp.mean(n, axis=-1, keepdims=True)
+            scale = learning_rate * TOKEN_NORM_HEAD_SCALE * math.sqrt(p.shape[-2])
+            return (-scale * u - decay_mult * jnp.square(learning_rate) * p.astype(jnp.float32)).astype(p.dtype)
+
+        new_updates = jax.tree.map(step, params, updates, new_momentum)
+        return new_updates, TokenNormMomentumState(new_momentum)
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 def _multi_transform_when_used(
     transforms: dict[str, optax.GradientTransformation],
     optional: dict[str, optax.GradientTransformation],
@@ -567,6 +606,11 @@ NONSI_RADIUS_B2 = 0.99
 """``muonh_nonsi_anneal``: Adam betas of the log-radius step."""
 MUONC_ANNEAL_ADAMW_DECAY = 0.05
 """``muonc_anneal_decay``: AdamW decoupled decay of the head and of the rank >= 2 leaves of every Adam group."""
+TOKEN_NORM_HEAD_MOMENTUM = 0.95
+TOKEN_NORM_HEAD_SCALE = 0.02
+TOKEN_NORM_HEAD_EPS = 1e-8
+"""``muonc_anneal_head_token_norm``: the head's momentum, its step ``lr_h TOKEN_NORM_HEAD_SCALE sqrt(d) U`` (the
+whole-matrix norm of AdamC's ``lr_h r0`` at init) and the column-norm epsilon."""
 LAW_CAP_TAU = 39.0
 LAW_CAP_LAMBDA = 0.2
 """``muonh_law_cap_ball``: the ball radius is ``kappa |U|`` with
@@ -692,6 +736,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """With ``muonc_anneal_decay``: the ``muonh`` and ``kda_beta`` groups take the law-cap ball of
     ``muonh_law_cap_ball`` at the late-annealed matrix LR in place of MuonC's matrix decay; the head and Adam groups
     keep ``muonc_anneal_decay``'s rules (and ``muonc_anneal_adamc``'s when set)."""
+    muonc_anneal_head_token_norm: bool = False
+    """With ``muonc_anneal_adamc``: the head takes ``scale_by_token_norm_momentum`` (one fp32 momentum buffer, a
+    per-token normalized direction) in place of AdamC, at the same ``lr_h`` and decay ``muonc_anneal_adamc lr_h^2``.
+    Everything else keeps ``muonc_anneal_adamc``'s rules."""
     muonh_law_cap_ball: bool = False
     """Law-cap ball (``scale_with_grug_muon_law_cap``) in place of the MuonH sphere for the ``muonh`` and ``kda_beta``
     groups, ``s(t) = lr_t / lr_max`` of the MuonH schedule: a plain Muon step at the matrix LR ``lr_m = lr_t`` until
@@ -938,6 +986,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         ),
                         _match_named_update_sharding(),
                     )
+                if self.muonc_anneal_head_token_norm:
+                    transforms["adamh"] = optax.chain(
+                        scale_by_token_norm_momentum(
+                            learning_rate * learning_rate / self.learning_rate, self.muonc_anneal_adamc
+                        ),
+                        _match_named_update_sharding(),
+                    )
             if self.muonc_anneal_law_cap_ball:
                 transforms["muonh"] = muon_law_cap_at(matrix_lr)
                 transforms["kda_beta"] = muon_law_cap_at(matrix_lr * KDA_BETA_LR_MULT)
@@ -1016,6 +1071,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             raise ValueError("muonc_anneal_decay_floor_frac must be in [0, 1] and needs muonc_anneal_decay")
         if self.muonc_anneal_lr_floor and not self.muonc_anneal_decay:
             raise ValueError("muonc_anneal_lr_floor needs muonc_anneal_decay")
+        if self.muonc_anneal_head_token_norm and not self.muonc_anneal_adamc:
+            raise ValueError("muonc_anneal_head_token_norm needs muonc_anneal_adamc")
         if self.muonh_law_cap_ball and (
             self.muonh_radial_softcap or self.muonc_decay_mult or self.muonh_nonsi_anneal or self.muonc_anneal_decay
         ):
