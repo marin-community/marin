@@ -28,7 +28,7 @@ from shellbox.machine import UnsupportedMachineSpec
 from taskcompendium.backend_requirements import execution_resource_shape
 from taskcompendium.grading_environment import GradingEnvironmentStatus, assess_grading_environment
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskSpec, missing_environment
+from taskcompendium.models import Backend, CommandSemantics, EnvironmentRequirements, TaskSpec, missing_environment
 from taskcompendium.pipeline.conversion import ConvertedRow, convert_source_row
 from taskcompendium.pipeline.models import ImportRejection, NormalizedTask, SourceRecipe
 from taskcompendium.pipeline.sources import conversion_context, source_shards, staged_raw_file_rows
@@ -238,7 +238,14 @@ def measure_envelopes(documents: Iterable[tuple[dict, dict]]) -> EnvelopeCensus:
                 "network": network,
                 **execution_resource_shape(task, shapes.get(slot), role),
             }
-            if role == "grader" and declared and declared.get("packages_lock"):
+            if declared and declared.get("required_backend"):
+                # A task that declares its backend routes the role there (the
+                # per-task required_backend mechanism, 0f612f8c81): the census
+                # counts the slot under the declared backend exactly as the
+                # survey and the serving wave do. LOCAL slots run the same
+                # check_local_environment validation below.
+                shape["backend"] = Backend(declared["required_backend"]).value
+            elif role == "grader" and declared and declared.get("packages_lock"):
                 shape["backend"] = "local"
             runtime[slot] = shape if needs_machine else None
             if not needs_machine:
