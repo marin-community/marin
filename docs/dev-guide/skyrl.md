@@ -10,6 +10,11 @@ Marin invokes the nested `marinskyrl` executable in an isolated child process:
 uv run --isolated --project vendor/skyrl --frozen --extra cpu --no-group dev marinskyrl --help
 ```
 
+`--isolated` builds the environment once in the shared uv cache; without it, uv
+materializes a `vendor/skyrl/.venv` (about 2 GB with the `cpu` extra) in every
+checkout. The `cpu` extra runs on macOS. The `vllm` and `megatron` extras and
+GPU torch builds do not run on macOS; run GPU work through Iris.
+
 The launcher clears the parent's Python environment selection. SkyRL installs
 Marin libraries and Harbor as editable dependencies from this checkout, using
 the paths in `vendor/skyrl/pyproject.toml`. Marin calls SkyRL through the executable.
@@ -78,6 +83,27 @@ results.
 
 The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
 The pinned Ray release has no Intel macOS wheel.
+
+## Task errors
+
+[rigging.task_errors](https://github.com/marin-community/marin/blob/main/lib/rigging/src/rigging/task_errors.py)
+owns `ErrorCategory`, `RetrySettings` and names shared by task producers and SDKs.
+Each framework owns its remaining categories: Shellbox owns machine and Daytona
+errors, Harbor owns its native errors, and SkyRL owns its rollout errors.
+SkyRL composes the shared, Shellbox and SkyRL maps, plus Harbor's map when Harbor
+is installed. Composition rejects names assigned by more than one owner.
+
+SkyRL maps categories to training treatment in `skyrl_train.task_error_handling`:
+infrastructure failures are excluded, agent failures receive zero reward, and
+passthrough failures retain available verifier output. Unknown names use the
+configured fallback and emit an error log.
+
+Add a new persisted exception name to its producer's category map. Put a name
+used by several producers in the shared map once. Per-name training overrides
+belong in `ErrorHandlingConfig`.
+
+SkyRL retains passthrough terminal results with usable verifier output. Native
+Harbor may retry when environment teardown is unconfirmed.
 
 ## Run records
 
@@ -446,7 +472,7 @@ An explicit empty mapping is retained, including `environment.task_sessions.loca
 After changing SkyRL YAML or group options, regenerate the author classes from the nested environment:
 
 ```bash
-uv run --project vendor/skyrl --frozen --extra cpu --no-group dev python vendor/skyrl/scripts/generate_recipe_schema.py
+uv run --isolated --frozen --project vendor/skyrl --extra cpu --no-group dev python vendor/skyrl/scripts/generate_recipe_schema.py
 ```
 
 Types and open mappings that YAML cannot express belong in `vendor/skyrl/scripts/recipe_schema_sidecar.py`.

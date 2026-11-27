@@ -9,6 +9,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from finestore.rl.status_taxonomy import DataRestriction
 from marin.execution.lazy import run
 from taskcompendium.models import (
     AnswerType,
@@ -16,6 +17,7 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     FileReward,
+    GraderMachine,
     PlainText,
     ResourceGroups,
     RewardFile,
@@ -31,7 +33,7 @@ from experiments.post_training.task_curation import prebuilt
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.driver import _write_corpus
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 IMAGE = "ubuntu:24.04@sha256:" + "a" * 64
 
@@ -46,7 +48,9 @@ def _task(task_id: str, *, image: str | None = IMAGE, capabilities: tuple[str, .
     )
     grader = ScriptGrader(
         argv=("true",),
-        environment=EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=image),
+        placement=GraderMachine(
+            environment=EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=image)
+        ),
         reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),)),
     )
     spec = TaskSpec(
@@ -107,7 +111,13 @@ def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_pat
     source = RlDataSource(
         config=_cohort(2),
         pipeline=prebuilt.import_prebuilt,
-        info=SourceInfo(id="fixture", title="fixture", origin="fixture"),
+        info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="static",
+            upstream_name="static",
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+        ),
     )
     artifact = run(prebuilt.import_prebuilt(source, PipelineOptions(mode, CampaignRuntime())))[0]
     destination = Path(artifact.path)

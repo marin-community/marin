@@ -3,11 +3,16 @@
 
 """Validate gate results and retained progress records."""
 
+import re
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, StrictInt, field_validator, model_validator
+
+GRADER_REPORTS_DIR = "grader_reports"
+GRADER_REPORT_FILENAME = "grader_report.json"
 
 
 class Verdict(StrEnum):
@@ -48,6 +53,14 @@ class Invariant(BaseModel):
     replicate: int = 0
 
 
+class EvaluationScore(BaseModel):
+    profile: str
+    step: int
+    statistic: str
+    final: bool
+    comparability: str | None = None
+
+
 class Comparison(BaseModel):
     metric: str
     role: ComparisonRole
@@ -67,6 +80,7 @@ class Comparison(BaseModel):
     tasks: int | None = None
     control_min: float | None = None
     control_max: float | None = None
+    evaluation_score: EvaluationScore | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 Count = Annotated[StrictInt, Field(ge=0)]
@@ -84,19 +98,73 @@ class GateResult(BaseModel):
     replicates: Annotated[StrictInt, Field(gt=0)]
 
 
+class GradingLatency(TypedDict):
+    count: Count
+    mean: FiniteFloat | None
+    p95: FiniteFloat | None
+    max: FiniteFloat | None
+
+
+class SuccessSummary(TypedDict):
+    attempted: Count
+    verified: Count
+    passed: Count
+    verification_coverage: FiniteFloat
+    success_rate: FiniteFloat | None
+
+
+class SubsetSummary(SuccessSummary):
+    subset_id: str
+    data_sources: list[str]
+    verification_statuses: dict[str, Count]
+    grading_failures: dict[str, Count]
+    rollout_failures: dict[str, Count]
+    grading_latency_seconds: GradingLatency
+
+
+class TaskSummary(SuccessSummary):
+    task_id: str
+    subset_ids: list[str]
+
+
+class GraderReport(BaseModel):
+    """Stored training and evaluation counts by subset and task."""
+
+    model_config = ConfigDict(strict=True, extra="ignore")
+    training: dict[str, list[SubsetSummary]] = Field(default_factory=dict)
+    training_tasks: dict[str, list[TaskSummary]] = Field(default_factory=dict)
+    evaluation: dict[str, list[SubsetSummary]] = Field(default_factory=dict)
+    evaluation_tasks: dict[str, list[TaskSummary]] = Field(default_factory=dict)
+    evaluation_duration_seconds: dict[str, FiniteFloat] = Field(default_factory=dict, exclude_if=lambda value: not value)
+
+
 class AttemptSummary(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
+    model_config = ConfigDict(strict=True, extra="ignore")
     run_id: Identity
+    native_run_id: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     attempt_id: Identity
     label: Identity
     series: str | None = None
     model: Identity | None = None
+    preset_version: Identity | None = None
+    base_commit: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    base_preset_version: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    evaluation_data_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    is_control: bool | None = Field(default=None, exclude_if=lambda value: value is None)
+    user: Identity | None = None
+    branch: str | None = None
+    commit: Identity | None = None
+    settings: list[str] = Field(default_factory=list)
+    launch_config: dict[str, Any] | None = Field(default=None, exclude_if=lambda value: value is None)
+    dirty: bool | None = None
+    pr_number: Annotated[StrictInt, Field(gt=0)] | None = None
+    cluster: Identity | None = None
     issue: StrictInt | None = None
-    evaldash_run_ids: list[Identity] | None = None
     iris_job_id: str | None = None
     wandb_url: str | None = None
     grafana_url: str | None = None
     evaluations: list[Comparison] = Field(default_factory=list)
+    grader_report: GraderReport | None = None
     engine: dict[str, Any] | None = None
     gate_result: GateResult | None = None
     gate: str | None = None
@@ -105,13 +173,14 @@ class AttemptSummary(BaseModel):
     started_at: str | None
     completed_at: str | None
     elapsed_seconds: Annotated[FiniteFloat, Field(ge=0)] | None
+    elapsed_excluding_eval_seconds: Annotated[FiniteFloat, Field(ge=0)] | None = None
     timing_scope: Identity
-    status: Literal["succeeded", "failed"]
+    status: Literal["running", "succeeded", "failed"]
     optimizer_steps: Count | None
     planned_updates: Count | None = None
     measured_updates: list[Count] | None = None
     source_revision: Identity
-    data_identity: Identity
+    data_identity: Identity | None
     initializer_identity: Identity
     artifact_uri: str | None
     evidence: list[str]
@@ -143,3 +212,42 @@ class AttemptSummary(BaseModel):
         if self.failed_facts:
             self.status = "failed"
         return self
+
+
+def completed_controls(
+    records: Iterable[AttemptSummary],
+    *,
+    model: str | None = None,
+    preset: str | None = None,
+    version: str | None = None,
+    limit: int | None = None,
+) -> list[AttemptSummary]:
+    """Select the most recent completed control attempt from each matching native run."""
+    ordered = sorted(
+        (
+            record
+            for record in records
+            if record.is_control
+            and record.branch == "main"
+            and record.dirty is False
+            and record.base_commit is not None
+            and record.commit is not None
+            and (
+                record.commit == record.base_commit
+                or (re.fullmatch(r"[0-9a-f]{7,40}", record.commit) and record.base_commit.startswith(record.commit))
+            )
+            and record.status == "succeeded"
+            and record.artifact_uri
+            and record.completed_at
+            and (model is None or record.model == model)
+            and (preset is None or record.series == preset)
+            and (version is None or record.preset_version == version)
+        ),
+        key=lambda record: (datetime.fromisoformat(record.completed_at or ""), record.run_id, record.attempt_id),
+        reverse=True,
+    )
+    by_run: dict[tuple[str, str | None, str | None, str | None], AttemptSummary] = {}
+    for record in ordered:
+        identity = (record.native_run_id or record.run_id, record.model, record.series, record.preset_version)
+        by_run.setdefault(identity, record)
+    return list(by_run.values())[:limit]

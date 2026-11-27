@@ -60,3 +60,34 @@ def test_the_turn_after_a_tool_call_with_a_lone_surrogate_renders():
     # The tokenizer raises TypeError for a lone surrogate, and the task worker stops the run on a TypeError.
     assert _generate(client, [user, assistant, tool_reply])["prompt_ids"][0]
     assert json.loads(assistant["tool_calls"][0]["function"]["arguments"]) == {"command": "echo \ufffd é"}
+
+
+def test_direct_chat_renders_and_serves_the_same_extension_options():
+    class CaptureClient(_InferenceClient):
+        async def tokenize(self, request):
+            self.rendered = request["json"]
+            return {"tokens": [0]}
+
+        async def chat_completion(self, request):
+            self.served = request["json"]
+            return await super().chat_completion(request)
+
+    inference = CaptureClient()
+    request = InferenceEngineInput(
+        prompts=[[{"role": "user", "content": "go"}]],
+        chat_completion_params=[
+            {
+                "chat_template_kwargs": {"enable_thinking": False, "include_header": True},
+                "extra_body": {"chat_template_kwargs": {"enable_thinking": True}, "max_tokens": 2},
+            }
+        ],
+        sampling_params={"max_tokens": 4},
+    )
+
+    result = asyncio.run(DirectModelClient(inference).generate(request))
+
+    assert inference.rendered["chat_template_kwargs"] == {"enable_thinking": True, "include_header": True}
+    assert inference.served["chat_template_kwargs"] == inference.rendered["chat_template_kwargs"]
+    assert inference.served["max_completion_tokens"] == 2
+    assert "extra_body" not in inference.served
+    assert result["response_ids"] == [[1, 2]]

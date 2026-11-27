@@ -15,6 +15,7 @@ from shellbox.image import PreparedImage, RegistryImage
 
 HOST_REQUIREMENTS = {
     "requires_host_setsid": "The local Linux guest fake needs the host setsid executable",
+    "requires_linux_procfs": "The reset test reads Linux /proc process records",
     "requires_linux_process_api": "The local process fake needs Linux /proc and waitid with WNOWAIT",
 }
 
