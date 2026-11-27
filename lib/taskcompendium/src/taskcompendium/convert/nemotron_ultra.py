@@ -20,6 +20,7 @@ from taskcompendium.chat import message_text
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.grader import GraderPackage
 from taskcompendium.models import (
+    SUBSET_LABEL,
     AnswerType,
     AssistantToolCalls,
     ConversationEvent,
@@ -230,6 +231,7 @@ def blend_task(
             grader=package.grader,
             reasoning_markup=reasoning_markup,
             resources=ResourceGroups(verifier=package.resources),
+            labels={SUBSET_LABEL: blend_component(request.contract)},
         ),
         (*changes, *request.changes),
     )

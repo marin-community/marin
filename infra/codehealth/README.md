@@ -51,6 +51,9 @@ connections, verifies that pull-request fingerprints remain stable during
 hydration, and bounds GitHub GraphQL and REST usage. GitHub does not expose
 deleted comments or prior edited bodies. Raw diffs can be absent when GitHub
 returns its oversized-diff response; per-file metadata remains available.
+GitHub's pull-request commit connection stops after 250 entries even when its
+`totalCount` is larger. The stored pull request keeps that reported count and
+sets `commits_truncated` when the stored commit list reaches the API cap.
 Every sync still performs the bounded GitHub activity scan, edited-comment seed
 queries, fingerprint rechecks, and Finelog query. Matching event seeds reuse the
 stored pull request after the scan fingerprint passes both observations. New or
@@ -89,9 +92,22 @@ negative-cached; pass `context --refresh-source` to retry one deliberately.
 `probe` runs one selected YAML rule against that context with an agent-selected
 model and reasoning effort.
 Probe output is experimental evidence, not a human label or a recall estimate.
+
+For changes to whole-PR review, replay the complete PR at the commit the
+human reviewed. Run the old and proposed review instructions in fresh sessions
+with the same model, effort, requested behavior and immutable base/head pair.
+Allow read-only inspection of those trees. Keep discussion, review comments
+and later fixes out of both sessions. Compare the reports against distinct
+human concerns by the consequence and remedy each identifies. Record useful
+unmatched findings and unsupported claims too. Include a separate PR outside
+the examples that prompted the change, and report the sample size.
+
 `rule-activity` reports which historical catalog identities have stored
 snapshots. The current checkout is snapshotted on every successful sync;
 catalog identities without a stored snapshot remain explicitly unknown.
+Its exposure counts include successful `pre-commit-review` invocations only;
+other review tools carry the catalog SHA in telemetry but do not run these
+rules. Lane-specific invocations count only for their selected lane.
 
 The agent writes its own Markdown report and may use seaborn for charts.
 `post-report` publishes a versioned Loom artifact and appends a typed result to

@@ -12,12 +12,12 @@ import dataclasses
 
 from fray.types import ResourceConfig
 from levanter.optim.config import AdamConfig
-from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.checkpoints import hf_to_levanter
 from marin.experiment.namespacing import user_owned_name
 from rigging.filesystem.storage_path import prefix_join
+from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
 
 from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.models import SNOWBALL_VLLM_ARGS

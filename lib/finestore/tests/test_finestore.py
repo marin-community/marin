@@ -12,20 +12,25 @@ import json
 import random
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from dataclasses import dataclass
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from botocore.exceptions import ClientError
+from finestore import reader as reader_module
 from finestore import shard_writer
 from finestore import store as store_module
-from finestore.commit import CommitConflict, CommitCoordinator, CommitDelta
+from finestore.admin import drop_table
+from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, read_snapshot
 from finestore.compaction import COMPACTION_TARGET_BYTES, CompactionResult, _compact_shards, compact_table
 from finestore.layout import (
     CHUNKED_BLOBS_FEATURE,
     FORMAT_VERSION,
+    INITIAL_TABLE_INCARNATION,
     RESERVED_COLUMNS,
+    TABLE_INCARNATIONS_FEATURE,
     ArchiveMetadata,
     BlobColumns,
     BlobTables,
@@ -34,6 +39,8 @@ from finestore.layout import (
     HeadMetadata,
     KeyRange,
     OnConflict,
+    TableMetadata,
+    TableNameConflict,
 )
 from finestore.migrations import LegacyReadView, migrate
 from finestore.reader import BlobCorruptionError, FilterClause, ReadView, shard_may_contain
@@ -52,6 +59,7 @@ from rigging import timing
 from rigging.filesystem import factory
 from rigging.filesystem.conditional_object import ConditionalWriteError
 from rigging.filesystem.storage_path import StoragePath
+from rigging.provenance import LAUNCH_PROVENANCE_ENV
 
 
 def _parquet_metadata(path: str) -> pq.FileMetaData:
@@ -238,6 +246,206 @@ def test_seal_records_superseded_rows(archive_root):
     assert marker.superseded["samples"] == 1
 
 
+def test_drop_clears_current_seal_and_preserves_pinned_snapshot(archive_root):
+    with DataStore.open(archive_root) as store:
+        store.table("items", primary_key=("id",)).append({"id": 1})
+        store.seal()
+    pinned = ReadView(archive_root)
+
+    drop_table(archive_root, "items")
+
+    current = ReadView(archive_root)
+    assert current.point("items", id=1) is None
+    assert not current.is_sealed()
+    assert current.token is not None
+    manifest = json.loads(StoragePath(current.token.manifest_path).read_text())
+    assert TABLE_INCARNATIONS_FEATURE in manifest["required_features"]
+    assert pinned.point("items", id=1)["id"] == 1
+    assert pinned.is_sealed()
+
+
+def test_drop_fences_buffered_writes_even_after_same_schema_recreation(archive_root):
+    with pytest.raises(CommitConflict):
+        with DataStore.open(archive_root, flush_interval=3600) as stale:
+            table = stale.table("items", primary_key=("id",))
+            table.append({"id": 1})
+            stale.flush()
+            table.append({"id": 2})
+
+            with DataStore.open(archive_root) as fresh:
+                drop_table(archive_root, "items")
+                with pytest.raises(CommitConflict):
+                    stale.flush()
+                assert ReadView(archive_root).table_names() == ()
+
+                fresh.table("items", primary_key=("id",)).append({"id": 3})
+                fresh.flush()
+                with pytest.raises(CommitConflict):
+                    stale.flush()
+                assert ReadView(archive_root).keys("items") == {(3,)}
+
+
+def test_private_table_rename_publishes_all_staged_shards_with_transaction_objects(archive_root):
+    with DataStore.open(archive_root, flush_interval=3600) as store:
+        store.table("items", primary_key=("id",)).append({"id": 0})
+        store.write_object("completion", b"old")
+        store.flush()
+        pinned = store.read_view()
+
+        with store.transaction(max_bytes=256) as transaction:
+            staged = transaction.create_table("scratch", metadata=TableMetadata(primary_key=("id",)))
+            staged.extend({"id": key, "payload": "p" * 128} for key in range(1, 4))
+            assert "scratch" not in store.read_view().table_names()
+            transaction.rename_table("scratch", "items", on_conflict=TableNameConflict.REPLACE)
+            transaction.write_object("completion", b"new")
+            assert store.read_view().token == pinned.token
+
+        current = store.read_view()
+        assert current.token == transaction.token
+        assert len(current.list_shards("items")) > 1
+        assert current.keys("items") == {(1,), (2,), (3,)}
+        assert current.read_blob("completion") == b"new"
+        assert "scratch" not in current.table_names()
+        assert pinned.keys("items") == {(0,)}
+        assert pinned.read_blob("completion") == b"old"
+
+
+def test_ddl_keeps_buffered_appends_and_retires_the_store_handle_on_success(archive_root):
+    with DataStore.open(archive_root, flush_interval=3600) as store:
+        table = store.table("items", primary_key=("id",))
+        table.append({"id": 1})
+        store.flush()
+        stale = store.transaction()
+        stale.table("items").add({"id": 2})
+
+        table.append({"id": 3})
+        with pytest.raises(CommitConflict, match="flush buffered appends"):
+            with store.transaction() as transaction:
+                transaction.drop_table("items")
+        store.flush()
+        assert store.read_view().keys("items") == {(1,), (3,)}
+
+        with store.transaction() as transaction:
+            staged = transaction.create_table("scratch", metadata=TableMetadata(primary_key=("id",)))
+            staged.add({"id": 10})
+            transaction.rename_table("scratch", "items", on_conflict=TableNameConflict.REPLACE)
+
+        with pytest.raises(CommitConflict):
+            table.append({"id": 4})
+        store.table("items", primary_key=("id",)).append({"id": 11})
+        with pytest.raises(CommitConflict):
+            stale.commit()
+        with store.transaction() as transaction:
+            transaction.table("items").add({"id": 12})
+        store.flush()
+        assert store.read_view().keys("items") == {(10,), (11,), (12,)}
+
+
+def test_guard_only_transaction_checks_pinned_base_without_publishing(archive_root):
+    with DataStore.open(archive_root, flush_interval=3600) as store:
+        table = store.table("source", primary_key=("id",))
+        table.append({"id": 1})
+        store.flush()
+        before = store.read_view()
+        table.append({"id": 2})
+        current = store.flush()
+
+        with pytest.raises(CommitConflict, match="table 'source' changed"):
+            with store.transaction(base=before) as transaction:
+                transaction.require_unchanged("source")
+
+        with store.transaction(author="schema-admin", message="check source") as transaction:
+            transaction.require_unchanged("source")
+            transaction.drop_table("missing")
+        assert transaction.token == current == store.read_view().token
+
+
+def test_private_table_rename_rebases_over_source_and_target_compaction(archive_root):
+    with DataStore.open(archive_root, flush_interval=3600) as store:
+        store.table("derived", primary_key=("id",)).append({"id": 0})
+        store.table("source", primary_key=("id",)).append({"id": 1})
+        store.flush()
+        before = store.read_view()
+
+        with store.transaction(base=before) as transaction:
+            transaction.require_unchanged("source")
+            staged = transaction.create_table("scratch", metadata=TableMetadata(primary_key=("id",)))
+            staged.extend({"id": row["id"]} for row in before.iter_rows("source"))
+            transaction.rename_table("scratch", "derived", on_conflict=TableNameConflict.REPLACE)
+            compact_table(archive_root, "source")
+            compact_table(archive_root, "derived")
+            compacted = store.read_view()
+            for name in ("source", "derived"):
+                assert compacted.list_shards(name) != before.list_shards(name)
+
+        current = store.read_view()
+        assert current.list_shards("source") == compacted.list_shards("source")
+        assert current.keys("derived") == {(1,)}
+
+
+def test_private_table_rename_rejects_a_concurrent_source_append(archive_root):
+    with DataStore.open(archive_root, flush_interval=3600) as store:
+        store.table("derived", primary_key=("id",)).append({"id": 0})
+        source = store.table("source", primary_key=("id",))
+        source.append({"id": 1})
+        store.flush()
+
+        with pytest.raises(CommitConflict):
+            with store.transaction() as transaction:
+                transaction.require_unchanged("source")
+                staged = transaction.create_table("scratch", metadata=TableMetadata(primary_key=("id",)))
+                staged.add({"id": 1})
+                transaction.rename_table("scratch", "derived", on_conflict=TableNameConflict.REPLACE)
+                with DataStore.open(archive_root) as other:
+                    other.table("source", primary_key=("id",)).append({"id": 2})
+
+        reader = store.read_view()
+        assert reader.keys("source") == {(1,), (2,)}
+        assert reader.keys("derived") == {(0,)}
+        assert "scratch" not in reader.table_names()
+
+
+def test_rename_published_table_moves_existing_shards_and_appends(archive_root):
+    with DataStore.open(archive_root, flush_interval=3600) as store:
+        store.table("source", primary_key=("id",)).append({"id": 1})
+        store.table("destination", primary_key=("id",)).append({"id": 0})
+        store.flush()
+        pinned = store.read_view()
+
+        with store.transaction() as transaction:
+            transaction.table("source").add({"id": 2})
+            with pytest.raises(ValueError):
+                transaction.rename_table("source", "destination")
+            transaction.rename_table("source", "destination", on_conflict=TableNameConflict.REPLACE)
+            transaction.table("destination").add({"id": 3})
+
+        current = store.read_view()
+        assert current.table_names() == ("destination",)
+        assert current.keys("destination") == {(1,), (2,), (3,)}
+        assert pinned.keys("source") == {(1,)}
+        assert pinned.keys("destination") == {(0,)}
+        assert pinned.list_shards("source")[0] in current.list_shards("destination")
+
+
+def test_transaction_can_publish_empty_tables_and_drop_existing_tables(archive_root):
+    with DataStore.open(archive_root, flush_interval=3600) as store:
+        store.table("old", primary_key=("id",)).append({"id": 1})
+        store.flush()
+
+        with store.transaction(author="schema-admin", message="reset items") as transaction:
+            transaction.create_table("empty", metadata=TableMetadata(primary_key=("id",)))
+            transaction.drop_table("old")
+            assert store.read_view().table_names() == ("old",)
+
+        current = store.read_view()
+        assert current.table_names() == ("empty",)
+        assert current.table_metadata("empty").primary_key == ("id",)
+        assert current.schema_version("empty") == 1
+        info = current.commit_info
+        assert info is not None
+        assert (info.author, info.message) == ("schema-admin", "reset items")
+
+
 def test_multi_writer_compose(archive_root):
     root = archive_root
     with DataStore.open(root, writer_id="worker-a") as a:
@@ -309,6 +517,7 @@ def test_arrow_byte_cap_requests_an_early_flush(tmp_path):
         writer_id="w1",
         layout=FineStoreLayout(str(tmp_path / "run")),
         metadata_path=str(tmp_path / "schema.json"),
+        incarnation=INITIAL_TABLE_INCARNATION,
         max_buffer_bytes=160,
         scheduler=scheduler,
         primary_key=("id",),
@@ -353,6 +562,67 @@ def test_row_groups_use_arrow_buffer_bytes(monkeypatch, explicit_schema, archive
     metadata = _parquet_metadata(shard)
     assert metadata.num_rows == 3
     assert metadata.num_row_groups == 2
+
+
+def test_full_read_of_overlapping_shards_holds_a_few_row_groups_per_shard(monkeypatch, archive_root):
+    # Every shard spans the whole key range, so the ordered read keeps all of them open together.
+    # Shrink the row groups, read-ahead and merge slices so each shard has about 30 groups.
+    monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", 64 * 1024)
+    monkeypatch.setattr(reader_module, "_ROW_GROUP_PREFETCH_BYTES", 64 * 1024)
+    monkeypatch.setattr(reader_module, "_MERGE_BATCH_BYTES", 16 * 1024)
+    shards, rows_per_shard, payload_bytes = 8, 2_000, 1_000
+    rng = random.Random(0)
+    with DataStore.open(archive_root, writer_id="w", flush_interval=3600) as store:
+        table = store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE)
+        for shard in range(shards):
+            table.extend(
+                {"id": index * shards + shard, "payload": rng.randbytes(payload_bytes)}
+                for index in range(rows_per_shard)
+            )
+            store.flush()
+
+    baseline = pa.total_allocated_bytes()
+    peak = rows = 0
+    for _ in ReadView(archive_root).iter_rows("samples"):
+        rows += 1
+        if rows % 50 == 0:
+            peak = max(peak, pa.total_allocated_bytes() - baseline)
+
+    assert rows == shards * rows_per_shard
+    # A shard decodes to about 2 MB; holding each one whole would take about 16 MB.
+    assert peak < 4 * 1024 * 1024
+
+
+class _CountingExecutor(ThreadPoolExecutor):
+    def __init__(self) -> None:
+        super().__init__(max_workers=2)
+        self.submitted = 0
+
+    def submit(self, fn, /, *args, **kwargs):
+        self.submitted += 1
+        return super().submit(fn, *args, **kwargs)
+
+
+@pytest.mark.parametrize(("budget", "reads_before_first_group"), [(64 * 1024, 2), (16 * 1024, 1)])
+def test_row_groups_far_above_the_read_ahead_budget_get_no_read_ahead(
+    monkeypatch, archive_root, budget, reads_before_first_group
+):
+    # Groups of about 60 KB: one budget's worth reads one group ahead, a quarter of it reads none,
+    # so a shard written with large row groups holds one decoded group, not two.
+    monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", 64 * 1024)
+    monkeypatch.setattr(reader_module, "_ROW_GROUP_PREFETCH_BYTES", budget)
+    with DataStore.open(archive_root, writer_id="w", flush_interval=3600) as store:
+        table = store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE)
+        table.extend({"id": index, "payload": bytes(1_000)} for index in range(500))
+        store.flush()
+    view = ReadView(archive_root)
+    plan = view._read_plan("samples", None, None)
+    assert plan is not None
+    with _CountingExecutor() as executor:
+        groups = reader_module.iter_shard_row_groups(plan.shards[0], plan.schema, plan.filesystem, executor)
+        with closing(groups):
+            next(groups)
+            assert executor.submitted == reads_before_first_group
 
 
 def test_schema_evolution_null_promotes_missing_column(archive_root):
@@ -1158,12 +1428,16 @@ def test_transaction_exception_publishes_nothing(archive_root):
         with pytest.raises(RuntimeError, match="abort"):
             with store.transaction() as transaction:
                 transaction.table("purchases").add({"order_id": "o1"})
+                staged = transaction.create_table("scratch", metadata=TableMetadata(primary_key=("id",)))
+                staged.add({"id": 1})
+                transaction.rename_table("scratch", "items")
                 transaction.write_object("receipts/o1", b"paid")
                 raise RuntimeError("abort")
 
         view = ReadView(root)
         assert view.scan("purchases") is None
         assert view.read_blob("receipts/o1") is None
+        assert view.table_names() == ()
 
 
 def test_transaction_limit_uses_arrow_buffer_bytes(archive_root):
@@ -1687,3 +1961,39 @@ def test_compaction_prepared_under_an_older_epoch_is_rejected(archive_root):
         )
         assert result.written == 0
         assert ReadView(root).list_shards("samples") == shards_before
+
+
+def test_transaction_author_and_message_are_recorded_only_on_their_commit(archive_root):
+    with DataStore(archive_root, writer_id="w", flush_interval=3600) as store:
+        store.table("tasks", primary_key=("task_id",), on_conflict=OnConflict.SUPERSEDE)
+        with store.transaction(author="ana", message="fix a") as transaction:
+            transaction.table("tasks").add({"task_id": "a", "n": 1})
+        first = ReadView(archive_root).commit_info
+        with store.transaction() as transaction:
+            transaction.table("tasks").add({"task_id": "b", "n": 2})
+        second = read_snapshot(FineStoreLayout(archive_root)).manifest
+    assert (first.author, first.message) == ("ana", "fix a")
+    # The next manifest is copied from this one and must not inherit its author.
+    assert second.commit_info is None
+
+
+def test_commit_info_an_older_writer_copies_forward_reads_as_absent(archive_root):
+    with DataStore(archive_root, writer_id="w", flush_interval=3600) as store:
+        store.table("tasks", primary_key=("task_id",), on_conflict=OnConflict.SUPERSEDE)
+        with store.transaction(author="ana", message="fix a") as transaction:
+            transaction.table("tasks").add({"task_id": "a", "n": 1})
+    snapshot = read_snapshot(FineStoreLayout(archive_root))
+    # An older writer publishes the next commit with the parent's record unchanged.
+    child = snapshot.manifest.model_copy(update={"sequence": snapshot.manifest.sequence + 1})
+    assert ReadView(archive_root, ArchiveSnapshot(manifest=child, token=snapshot.token)).commit_info is None
+
+
+def test_transaction_author_defaults_to_the_launching_user(archive_root, monkeypatch):
+    monkeypatch.delenv(LAUNCH_PROVENANCE_ENV, raising=False)
+    monkeypatch.setenv("LOGNAME", "ana")
+    with DataStore(archive_root, writer_id="w", flush_interval=3600) as store:
+        store.table("tasks", primary_key=("task_id",), on_conflict=OnConflict.SUPERSEDE)
+        with store.transaction(message="fix a") as transaction:
+            transaction.table("tasks").add({"task_id": "a", "n": 1})
+    info = ReadView(archive_root).commit_info
+    assert (info.author, info.message) == ("ana", "fix a")

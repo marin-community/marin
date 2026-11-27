@@ -95,6 +95,81 @@ except RuntimeError:
 release.set()
 print(started)
 """
+# The shared native root-delivery grading quiesce (taskcompendium's harbor.root_delivery,
+# whose grading collect runs it first, before restoring private verifier material): kill
+# every process outside the exec's own ancestry, sparing PID 1 and zombies. The grader
+# also spares the keeper sleeper by its exact argv; these copies omit that spare, so a
+# machine survives them only because its init respawns the sleeper.
+ROOT_DELIVERY_QUIESCE_PROGRAM = """\
+import os, signal
+
+mine = set()
+pid = os.getpid()
+while pid > 1:
+    mine.add(pid)
+    try:
+        with open(f"/proc/{pid}/stat") as stream:
+            fields = stream.read().rsplit(") ", 1)[1].split()
+        pid = int(fields[1])
+    except (OSError, IndexError, ValueError):
+        break
+killed = []
+for entry in os.scandir("/proc"):
+    if not entry.name.isdecimal():
+        continue
+    victim = int(entry.name)
+    if victim in mine or victim == 1:
+        continue
+    try:
+        with open(f"/proc/{victim}/stat") as stream:
+            fields = stream.read().rsplit(") ", 1)[1].split()
+        state = fields[0]
+    except (OSError, IndexError, ValueError):
+        continue
+    if state.startswith("Z"):
+        continue
+    try:
+        os.kill(victim, signal.SIGKILL)
+        killed.append(victim)
+    except ProcessLookupError:
+        continue
+print(len(killed))
+"""
+
+ROOT_DELIVERY_QUIESCE_SCRIPT = """\
+set -eu
+self=$$
+ancestry=" $self "
+pid=$self
+while [ "$pid" -gt 1 ]; do
+  line=$(cat "/proc/$pid/stat" 2>/dev/null) || break
+  rest=${line##*) }
+  state=${rest%% *}
+  ppid=${rest#* }
+  ppid=${ppid%% *}
+  case $ppid in ''|*[!0-9]*) break;; esac
+  ancestry="$ancestry $ppid "
+  pid=$ppid
+done
+killed=0
+for entry in /proc/[0-9]*; do
+  victim=${entry#/proc/}
+  case $ancestry in *" $victim "*) continue;; esac
+  [ "$victim" -gt 1 ] || continue
+  line=$(cat "/proc/$victim/stat" 2>/dev/null) || continue
+  rest=${line##*) }
+  case ${rest%% *} in Z*) continue;; esac
+  if kill -9 "$victim" 2>/dev/null; then
+    killed=$((killed + 1))
+  elif [ ! -d "/proc/$victim" ]; then
+    continue
+  else
+    echo "quiesce kill failed for $victim" >&2
+    exit 1
+  fi
+done
+echo "$killed"
+"""
 SPEC = MachineSpec(HostImage(), workdir="/app")
 PYTHON_VERSION = "3.12.13"
 # A hash lock as ``uv pip compile --generate-hashes`` writes it, for a small pure-Python package.
@@ -479,6 +554,97 @@ def test_losing_the_host_launcher_reclaims_its_still_running_guest(factory):
             await asyncio.wait_for(machine.run(Command(("sleep", "3600"))), 5)
         await machine.close()
         assert not machine.root.exists()
+
+    on_machine(factory, SPEC, scenario)
+
+
+def test_the_guest_init_keeps_the_keeper_payload_running(factory):
+    """The machine's lifecycle sleeper runs as the guest init's child.
+
+    The init is PID 1 of the guest PID namespace, which quiesces that spare
+    PID 1 cannot kill, and it respawns the sleeper whenever it dies. The
+    sleeper's exact argv stays visible in the namespace because graders also
+    spare machines by it.
+    """
+    find_sleeper = """
+import os
+
+for entry in os.scandir("/proc"):
+    if not entry.name.isdecimal():
+        continue
+    try:
+        with open(f"/proc/{entry.name}/cmdline", "rb") as stream:
+            argv = stream.read().split(b"\\0")
+        with open(f"/proc/{entry.name}/stat") as stream:
+            fields = stream.read().rsplit(") ", 1)[1].split()
+    except OSError:
+        continue
+    if tuple(argv[:2]) == (b"sleep", b"2147483647"):
+        print(int(fields[1]))
+"""
+
+    async def scenario(machine):
+        async with asyncio.timeout(5):
+            while True:
+                result = await machine.run(Command(("python3", "-c", find_sleeper)))
+                assert result.exit_code == 0, result.stderr
+                parents = result.stdout.split()
+                if parents:
+                    assert parents == [b"1"], f"the sleeper's parent is not the guest init: {parents}"
+                    return
+                await asyncio.sleep(0.05)
+
+    on_machine(factory, SPEC, scenario)
+
+
+def test_the_guest_init_reaps_an_orphaned_background_process(factory):
+    """A guest process orphaned by its command's exit is collected when it dies.
+
+    Guest code observes a dead daemon through ``kill -0``, ``/proc`` and
+    ``pgrep``, as on the Docker backend's ``--init``: a PID-file restart or a
+    "service stopped" check fails while the zombie is unreaped. Only the guest
+    init can collect the orphan, since reparenting aims at PID 1.
+    """
+
+    async def scenario(machine):
+        stray = await machine.run(
+            Command(("/bin/sh", "-c", "sleep 3600 & printf '%s\\n' \"$!\" > /app/orphan-pid; exit 0"))
+        )
+        assert stray.exit_code == 0, stray.stderr
+        pid = (await machine.run(Command(("cat", "/app/orphan-pid")))).stdout.strip().decode()
+        assert pid.isdigit(), pid
+        killed = await machine.run(Command(("kill", "-9", pid)))
+        assert killed.exit_code == 0, killed.stderr
+        # The daemon was orphaned when its command's shell exited, so its zombie
+        # belongs to the init. The init must reap it promptly.
+        async with asyncio.timeout(5):
+            while (await machine.run(Command(("test", "-d", f"/proc/{pid}")))).exit_code == 0:
+                await asyncio.sleep(0.05)
+
+    on_machine(factory, SPEC, scenario)
+
+
+@pytest.mark.parametrize(
+    "quiesce",
+    [("python3", "-I", "-c", ROOT_DELIVERY_QUIESCE_PROGRAM), ("bash", "-c", ROOT_DELIVERY_QUIESCE_SCRIPT)],
+    ids=["python", "shell"],
+)
+def test_machine_survives_the_root_delivery_quiesce(factory, quiesce):
+    """Kill a stray with the quiesce and require the machine to stay open."""
+
+    async def scenario(machine):
+        stray = await machine.run(Command(("/bin/sh", "-c", "sleep 3600 & printf '%s\\n' \"$!\" > /app/stray-pid")))
+        assert stray.exit_code == 0, stray.stderr
+        pid = (await machine.run(Command(("cat", "/app/stray-pid")))).stdout.strip().decode()
+        result = await machine.run(Command(quiesce))
+        assert result.exit_code == 0, (result.stdout, result.stderr)
+        # The quiesce must have killed the stray, and the init must have reaped
+        # the orphan: guest code reads a dead process through /proc, so the
+        # machine's later commands must not see it still there.
+        async with asyncio.timeout(5):
+            while (await machine.run(Command(("test", "-d", f"/proc/{pid}")))).exit_code == 0:
+                await asyncio.sleep(0.05)
+        assert (await machine.run(Command(("printf", "alive")))).stdout == b"alive"
 
     on_machine(factory, SPEC, scenario)
 

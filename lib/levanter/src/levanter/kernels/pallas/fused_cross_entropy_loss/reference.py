@@ -7,6 +7,8 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
+from levanter.kernels.logsumexp import accurate_logsumexp
+
 
 def _tpu_exp(x: jax.Array) -> jax.Array:
     return jax.lax.exp(x, accuracy=jax.lax.AccuracyMode.HIGHEST)
@@ -16,20 +18,12 @@ def _cross_entropy_exp(x: jax.Array) -> jax.Array:
     return jax.lax.platform_dependent(x, tpu=_tpu_exp, default=jnp.exp)
 
 
-def _tpu_logsumexp(logits: jax.Array) -> jax.Array:
-    # Default TPU logarithms can introduce ~1e-4 errors in FP32 cross-entropy.
-    maximum = jnp.max(logits, axis=-1)
-    maximum = jax.lax.stop_gradient(jnp.where(jnp.isfinite(maximum), maximum, 0))
-    total = jnp.sum(_tpu_exp(logits - maximum[..., None]), axis=-1)
-    return maximum + jax.lax.log(total, accuracy=jax.lax.AccuracyMode.HIGHEST)
-
-
 def _default_logsumexp(logits: jax.Array) -> jax.Array:
     return jax.nn.logsumexp(logits, axis=-1)
 
 
 def _cross_entropy_logsumexp(logits: jax.Array) -> jax.Array:
-    return jax.lax.platform_dependent(logits, tpu=_tpu_logsumexp, default=_default_logsumexp)
+    return jax.lax.platform_dependent(logits, tpu=accurate_logsumexp, default=_default_logsumexp)
 
 
 @jax.custom_jvp

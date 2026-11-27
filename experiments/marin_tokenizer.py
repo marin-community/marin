@@ -15,7 +15,7 @@ import os
 import tempfile
 from typing import cast
 
-from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
+from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from experiments.llama import llama3_tokenizer as llama3_tokenizer_hf_path

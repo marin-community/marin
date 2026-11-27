@@ -1,0 +1,396 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""One subprocess and durable replay log per proposal."""
+
+import argparse
+import asyncio
+import hashlib
+import json
+import logging
+import os
+import subprocess
+import sys
+import traceback
+from dataclasses import asdict, dataclass
+from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
+
+from pydantic import TypeAdapter
+from rigging.filesystem.factory import open_url, url_to_fs
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import prefix_join
+from rigging.log_setup import configure_logging
+from rigging.secrets import get_secret, list_secret_names, require_secret
+from taskcompendium.models import TaskSpec
+
+from taskforge.checkpoint import CheckpointSink
+from taskforge.coordinator import reasons, run_workpiece
+from taskforge.effects.events import StageCompleted
+from taskforge.effects.issues import Hold, LogFailure, Restart, Transient
+from taskforge.effects.log import EventLog, JsonlSink, Status, fold
+from taskforge.lowering import check_candidates
+from taskforge.model.controls import CONTROLS, Control
+from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
+from taskforge.model.review import Incomplete
+from taskforge.model.workpiece import WORKPIECE, Submission, Terminal, Workpiece
+from taskforge.policy import (
+    DRIVER_SETTINGS,
+    SOURCE_IMAGES,
+    SOURCE_TASK_ID,
+    SOURCE_TASK_SOURCE,
+    Policy,
+    load_policy,
+    parse_overlay,
+)
+from taskforge.report import report
+from taskforge.resources.sandbox.factories import grading_environment
+from taskforge.stages.classify import replayable_grade
+from taskforge.wiring import endpoint_source, install, runtime
+
+
+@dataclass(frozen=True, slots=True)
+class SampleEntry:
+    rank: int
+    proposal: str
+
+
+PROPOSAL_SUFFIX = ".proposal.json"
+TASK_SUFFIX = ".task.json"
+"""A ``TaskSpec`` JSON written by another source, repaired without a proposal."""
+CONTROLS_SUFFIX = ".controls.json"
+"""Beside a source task, optionally: the JSON list of ``Control`` values its source supplies, as an author's
+``controls.json`` holds them."""
+SOURCE_TASK_NOTES = "source task"
+
+
+def input_key(path: str) -> PurePosixPath:
+    """The output identity of an input file: its directory and its name without the input suffix.
+
+    A proposal's ``slot-`` prefix is dropped; a source task keeps its whole name, so ``slot-a.task.json``
+    and ``slot-a.proposal.json`` keep distinct identities.
+    """
+    file = PurePosixPath(urlsplit(path).path)
+    if file.name.endswith(TASK_SUFFIX):
+        return PurePosixPath(file.parent.name, file.name.removesuffix(TASK_SUFFIX))
+    return PurePosixPath(file.parent.name, file.name.removesuffix(PROPOSAL_SUFFIX).removeprefix("slot-"))
+
+
+def input_bucket(path: str, buckets: int) -> int:
+    return int.from_bytes(hashlib.sha256(str(input_key(path)).encode()).digest()) % buckets
+
+
+def inputs(source: str, ranks: tuple[int, ...] = ()) -> tuple[str, ...]:
+    fs, prefix = url_to_fs(source)
+    if source.endswith((PROPOSAL_SUFFIX, TASK_SUFFIX)):
+        paths = (source,)
+    elif source.endswith(".json"):
+        with open_url(source, "rt") as stream:
+            sample = TypeAdapter(tuple[SampleEntry, ...]).validate_python(json.load(stream)["sample"])
+        if set(ranks) - {entry.rank for entry in sample}:
+            raise ValueError("Requested ranks are missing from the sample")
+        paths = tuple(entry.proposal for entry in sample if not ranks or entry.rank in ranks)
+    elif fs.isfile(prefix):
+        with open_url(source, "rt") as stream:
+            paths = tuple(line.strip() for line in stream if line.strip())
+    else:
+        found = (
+            path for suffix in (PROPOSAL_SUFFIX, TASK_SUFFIX) for path in fs.glob(prefix_join(prefix, f"*{suffix}"))
+        )
+        paths = tuple(fs.unstrip_protocol(path) for path in sorted(found))
+    if ranks and not source.endswith("sample.json"):
+        raise ValueError("Rank selection requires sample.json")
+    if not paths:
+        raise ValueError(f"No proposal or task files at {source}")
+    if len({input_key(path) for path in paths}) != len(paths):
+        raise ValueError("Inputs have duplicate output identities")
+    return paths
+
+
+SNAPSHOT_FILES = ("workpiece.json", "events.jsonl", "status.json")
+"""Published in this order, so an interrupted publish leaves the stream with its input's workpiece but without
+its status."""
+STATE_FILES = ("workpiece.json", "status.json")
+
+
+def publish(workdir: Path, destination: str, names: tuple[str, ...] = SNAPSHOT_FILES) -> None:
+    for name in names:
+        with (workdir / name).open("rb") as source, open_url(prefix_join(destination, name), "wb") as target:
+            target.write(source.read())
+
+
+async def recover(workdir: Path, destination: str) -> Status | None:
+    """Restore the published snapshot; the event stream, not status.json, decides whether work exists.
+
+    Starting fresh whenever the status is missing would append a second stream numbered from 1 beside
+    the published one, and the next read would splice the two.
+    """
+    sink = JsonlSink(prefix_join(destination, "events.jsonl"))
+    try:
+        snapshot = {"events.jsonl": await asyncio.to_thread(sink.read_bytes)}
+    except FileNotFoundError:
+        return None
+    for name in STATE_FILES:
+        try:
+            with open_url(prefix_join(destination, name), "rb") as source:
+                snapshot[name] = source.read()
+        except FileNotFoundError:
+            logging.warning("Published %s lacks %s", destination, name)
+            (workdir / name).unlink(missing_ok=True)
+    for name, data in snapshot.items():
+        (workdir / name).write_bytes(data)
+    if "status.json" in snapshot:
+        return TypeAdapter(Status).validate_json(snapshot["status.json"])
+    return fold(tuple(record.event for record in await sink.read()))
+
+
+def run_policy(path: str) -> tuple[Policy, Policy]:
+    declared = load_policy(Path(__file__).parent / "policy" / "defaults")
+    with open_url(path, "rt") as source:
+        overlay = parse_overlay(source.read())
+    if owned := sorted(set(DRIVER_SETTINGS) & set(overlay)):
+        raise ValueError(f"{path} sets {', '.join(owned)}, which the driver sets from each source task")
+    return declared, declared.overlaid(overlay)
+
+
+def eligible(proposal: TaskProposal, policy: Policy) -> bool:
+    for field, key in (("environment", "proposals.environments"), ("verification", "proposals.verifications")):
+        value = getattr(proposal.header, field).value
+        if value not in policy.setting(key, tuple):
+            logging.info("SKIP %s: %s=%s", proposal.header.id, field, value)
+            return False
+    return True
+
+
+def seed(path: str, policy: Policy) -> Workpiece | None:
+    """The new workpiece for an input file, or ``None`` when the policy skips its proposal.
+
+    A ``TASK_SUFFIX`` file holds a task from another source: the workpiece starts from it as the
+    submission, with no proposal and the controls of its ``source_controls``.
+    """
+    with open_url(path, "rt") as source:
+        text = source.read()
+    if path.endswith(TASK_SUFFIX):
+        task = TaskSpec.model_validate_json(text)
+        submission = Submission(task, source_controls(path, task), SOURCE_TASK_NOTES)
+        return Workpiece(task.id, submission=submission, source=submission)
+    proposal = TASK_PROPOSAL.validate_json(text)
+    return Workpiece(proposal.header.id, proposal) if eligible(proposal, policy) else None
+
+
+def source_controls(task_path: str, task: TaskSpec) -> tuple[Control, ...]:
+    """The controls in the ``CONTROLS_SUFFIX`` file beside ``task_path``, or none when the source supplied none.
+
+    Raises:
+        ValueError: the file does not hold valid controls for ``task``.
+    """
+    path = task_path.removesuffix(TASK_SUFFIX) + CONTROLS_SUFFIX
+    try:
+        with open_url(path, "rb") as source:
+            controls = CONTROLS.validate_json(source.read())
+    except FileNotFoundError:
+        logging.info("%s has no %s; review will ask the author for controls", task_path, CONTROLS_SUFFIX)
+        return ()
+    check_candidates(task, tuple(control.candidate for control in controls))
+    return controls
+
+
+def source_images(seed: Workpiece) -> tuple[str, ...]:
+    """The container images a task from another source brings, for ``sandbox.source_images``; none for a proposal.
+
+    These are the task's and its grader's own images, the pinned image included when the source uses it:
+    lowering admits exactly these for the task, so a revision cannot move it onto another image.
+    """
+    if seed.proposal is not None or seed.submission is None:
+        return ()
+    task = seed.submission.task
+    grader = grading_environment(task)
+    images = {task.environment_requirements.docker_image, None if grader is None else grader.docker_image}
+    return tuple(sorted(image for image in images if image is not None))
+
+
+def source_settings(seed: Workpiece) -> dict[str, list[str] | str]:
+    """The policy settings the driver owns for ``seed``: a source task's images and identity, unset otherwise."""
+    if seed.source is None:
+        return {SOURCE_IMAGES: [], SOURCE_TASK_ID: "", SOURCE_TASK_SOURCE: ""}
+    task = seed.source.task
+    return {
+        SOURCE_IMAGES: list(source_images(seed)),
+        SOURCE_TASK_ID: task.id,
+        SOURCE_TASK_SOURCE: task.source.model_dump_json(),
+    }
+
+
+def check_seed(published: Path, initial: Workpiece) -> None:
+    """Refuse to resume a published event stream for an input that has changed since it was published.
+
+    A relaunch replays the published event stream, so a re-converted source task or an edited proposal
+    would otherwise continue another input's run. Checkpoints publish the workpiece before their first
+    events, so a stream without one cannot be matched to its input.
+
+    Raises:
+        ValueError: the published workpiece is missing or started from another proposal or source task.
+    """
+    if not published.exists():
+        raise ValueError(f"{published.parent} has published events but no workpiece; use a new --output")
+    previous = WORKPIECE.validate_json(published.read_bytes())
+    if (previous.proposal, previous.source) != (initial.proposal, initial.source):
+        raise ValueError(f"{published} was published for another version of this input; use a new --output")
+
+
+async def one(args: argparse.Namespace) -> None:
+    configure_coreweave_s3()
+    _, policy = run_policy(args.policy)
+    initial = seed(args.inputs, policy)
+    if initial is None:
+        return
+    policy = policy.overlaid(source_settings(initial))
+    identity = input_key(args.inputs)
+    if identity.is_absolute() or ".." in identity.parts:
+        raise ValueError("Proposal id must be a relative path without '..'")
+    workdir = Path(args.work_dir) / identity
+    workdir.mkdir(parents=True, exist_ok=True)
+    destination = prefix_join(args.output, str(identity))
+    sink = JsonlSink(str(workdir / "events.jsonl"))
+    wp = initial
+    log: EventLog | None = None
+    skipped = False
+    try:
+        restored = await recover(workdir, destination)
+        if restored is not None:
+            try:
+                check_seed(workdir / "workpiece.json", initial)
+            except ValueError:
+                skipped = True  # A refused input leaves its published result in place.
+                raise
+        if restored is not None and (restored.finished or (restored.terminal is Terminal.HELD and not args.resume_held)):
+            logging.info("SKIP %s: published terminal=%s", identity, restored.terminal)
+            skipped = True
+            return
+        previous = await sink.read() if Path(sink.path).exists() else ()
+        checkpoints = CheckpointSink(sink, destination, WORKPIECE.dump_json(wp))
+        log = EventLog(sink=checkpoints, replay_from=previous, replayable=replayable_grade)
+        async with checkpoints.running():
+            source = endpoint_source(
+                os.environ.get("GLM_BASE_URL"),
+                os.environ.get("GLM_RELAY_JOB"),
+                require_secret("GLM_API_KEY"),
+                policy.setting("author.model", str),
+                policy.setting("provider.pool", str),
+            )
+            async with runtime(policy, args.arm, source, get_secret("PARALLEL_API_KEY") or "") as (config, resources):
+                wp = await run_workpiece(initial, config, resources, log, install=install)
+    except* (Hold, Restart, Transient, LogFailure) as error:
+        wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
+        if log is not None:
+            await log.record(StageCompleted(None, "", "Held", wp.round, Terminal.HELD))
+        logging.warning("Taskforge workpiece %s held: %s", initial.id, reasons(error))
+    except* Exception as error:
+        detail = traceback.format_exc()
+        wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete((f"bug: {detail}",))))
+        if log is not None:
+            await log.record(StageCompleted(None, "", "bug", wp.round, Terminal.HELD))
+        logging.exception("Taskforge workpiece %s failed", initial.id)
+        if len(error.exceptions) == 1:
+            raise error.exceptions[0] from None
+        raise
+    finally:
+        if not skipped:
+            (workdir / "workpiece.json").write_bytes(WORKPIECE.dump_json(wp))
+            # A stream that could not be read is left as published, so its parts stay repairable.
+            status = (
+                fold(tuple(record.event for record in log.records)) if log is not None else Status(terminal=wp.terminal)
+            )
+            (workdir / "status.json").write_text(json.dumps(asdict(status)))
+            publish(workdir, destination, SNAPSHOT_FILES if log is not None else STATE_FILES)
+
+
+async def run(args: argparse.Namespace) -> None:
+    configure_coreweave_s3()
+    logging.info("Secret files (names only): %s", ", ".join(list_secret_names()) or "none")
+    start, end = args.bucket_range or (0, args.buckets)
+    if args.concurrency < 1 or not 0 <= start < end <= args.buckets:
+        raise ValueError("Concurrency must be positive and bucket range nonempty within buckets")
+    pending = (path for path in inputs(args.inputs, args.ranks) if start <= input_bucket(path, args.buckets) < end)
+    active: dict[asyncio.Task[int], tuple[str, subprocess.Popen[bytes]]] = {}
+    failures: list[str] = []
+    _, policy = run_policy(args.policy)
+    skipped = completed = submitted = 0
+    try:
+        exhausted = False
+        while active or not exhausted:
+            while len(active) < args.concurrency and not exhausted:
+                path = next(pending, None)
+                if path is None:
+                    exhausted = True
+                    break
+                try:
+                    initial = seed(path, policy)
+                except (ValueError, OSError) as error:
+                    # One unreadable or malformed input must not stop the shard's other workpieces.
+                    logging.error("FAILED %s: input could not be read: %s", path, error)
+                    failures.append(path)
+                    continue
+                if initial is None:
+                    skipped += 1
+                    continue
+                command = [sys.executable, "-u", "-m", "taskforge.driver", "one", "--inputs", path]
+                command += [
+                    item
+                    for name in ("arm", "output", "policy", "work_dir")
+                    for item in (f"--{name.replace('_', '-')}", getattr(args, name))
+                ]
+                if args.resume_held:
+                    command.append("--resume-held")
+                process = subprocess.Popen(command)
+                submitted += 1
+                active[asyncio.create_task(asyncio.to_thread(process.wait))] = (path, process)
+            if active:
+                done, _ = await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    path, _ = active.pop(task)
+                    completed += 1
+                    if task.result() != 0:
+                        failures.append(path)
+    finally:
+        for _, process in active.values():
+            if process.poll() is None:
+                process.terminate()
+        await asyncio.gather(*active, return_exceptions=True)
+    print(f"SUMMARY submitted={submitted} completed={completed} failed={len(failures)} skipped={skipped}", flush=True)
+    if failures:
+        raise RuntimeError(f"{len(failures)} workpieces failed: {failures}")
+
+
+def main() -> None:
+    configure_logging()
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    summary = commands.add_parser("report")
+    summary.add_argument("output_root")
+    summary.add_argument("--since-hours", type=float)
+    for name in ("run", "one"):
+        command = commands.add_parser(name)
+        command.add_argument(
+            "--inputs", required=True, help=f"{PROPOSAL_SUFFIX} proposals and {TASK_SUFFIX} source tasks"
+        )
+        command.add_argument("--arm", choices=("S", "T"), required=True)
+        command.add_argument("--output", required=True)
+        command.add_argument("--policy", required=True)
+        command.add_argument("--work-dir", default="forge-work")
+        command.add_argument("--resume-held", action="store_true", help="Explicitly resume published held workpieces")
+        if name == "run":
+            command.add_argument("--concurrency", type=int, required=True)
+            command.add_argument("--buckets", type=int, default=4096)
+            command.add_argument("--bucket-range", type=lambda value: tuple(map(int, value.split(":"))))
+            command.add_argument("--ranks", type=lambda value: tuple(map(int, value.split(","))), default=())
+    args = parser.parse_args()
+    if args.command == "report":
+        configure_coreweave_s3()
+        print("\n".join(asyncio.run(report(args.output_root, args.since_hours))))
+    else:
+        asyncio.run(run(args) if args.command == "run" else one(args))
+
+
+if __name__ == "__main__":
+    main()
