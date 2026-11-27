@@ -233,15 +233,18 @@ function normalizedTurns(parsed: unknown): NormalizedTurn[] | null {
   return turns
 }
 
-function selectedTrial(turns: NormalizedTurn[], preferredUid?: string): NormalizedTurn[] | null {
+function selectedTrial(turns: NormalizedTurn[], preferredUid?: string): NormalizedTurn[] {
   const selected = preferredUid !== undefined
     ? turns.filter((turn) => turn.uid === preferredUid)
     : turns
-  if (selected.length === 0) return null
+  const documentId = preferredUid === undefined ? '(unspecified)' : JSON.stringify(preferredUid)
+  if (selected.length === 0) throw new Error(`No SkyRL record matches doc_id ${documentId}.`)
   if (selected.length > 1) {
     const key = selected[0].trialKey
     // Flat dumps lack a repetition identity; matching uids alone cannot establish one trial.
-    if (key === null || selected.some((turn) => turn.trialKey !== key)) return null
+    if (key === null || selected.some((turn) => turn.trialKey !== key)) {
+      throw new Error(`Ambiguous SkyRL records for doc_id ${documentId}: multiple trials or repetitions cannot be distinguished.`)
+    }
   }
   selected.sort((left, right) => left.step - right.step)
   return selected
@@ -264,10 +267,10 @@ function trajectoryFromTurns(selected: NormalizedTurn[]): Trajectory {
   }
 }
 
-/** Render one unambiguous writer-defined trial; unmatched or ambiguous lists return null. */
+/** Return null for unknown formats; throw when a recognized list cannot identify one trial. */
 export function skyrlTurnsToTrajectory(parsed: unknown, preferredUid?: string): Trajectory | null {
   const turns = normalizedTurns(parsed)
   if (turns === null) return null
   const selected = selectedTrial(turns, Array.isArray(parsed) ? preferredUid : undefined)
-  return selected === null ? null : trajectoryFromTurns(selected)
+  return trajectoryFromTurns(selected)
 }

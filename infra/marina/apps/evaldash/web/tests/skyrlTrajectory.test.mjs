@@ -54,8 +54,11 @@ test('a length-stopped schema_v7 record shows its stop_reason', () => {
 
 test('a list spanning uids requires an unambiguous viewed sample', () => {
   const lengthUid = SCHEMA_V7_LENGTH.trajectory.instance_id
-  assert.equal(skyrlTurnsToTrajectory([SCHEMA_V7_STOP, SCHEMA_V7_LENGTH]), null)
-  assert.equal(skyrlTurnsToTrajectory([SCHEMA_V7_STOP, SCHEMA_V7_LENGTH], 'missing'), null)
+  assert.throws(() => skyrlTurnsToTrajectory([SCHEMA_V7_STOP, SCHEMA_V7_LENGTH]), /Ambiguous SkyRL records/)
+  assert.throws(
+    () => skyrlTurnsToTrajectory([SCHEMA_V7_STOP, SCHEMA_V7_LENGTH], 'missing'),
+    /No SkyRL record matches doc_id "missing"/,
+  )
   const viewed = skyrlTurnsToTrajectory([SCHEMA_V7_STOP, SCHEMA_V7_LENGTH], lengthUid)
   assert.equal(viewed.steps.at(-1).annotations['stop reason'], 'length')
   assert.equal(viewed.agent.name, 'taskcompendium')
@@ -68,13 +71,20 @@ test('distinct repetitions of one instance never merge into the viewed trajector
     response: { ...SCHEMA_V7_STOP.response, text: 'a different trial' },
   }
   const uid = SCHEMA_V7_STOP.trajectory.instance_id
-  assert.equal(skyrlTurnsToTrajectory([SCHEMA_V7_STOP, repeated], uid), null)
-  assert.equal(skyrlTurnsToTrajectory([SCHEMA_V7_STOP, repeated]), null)
+  assert.throws(() => skyrlTurnsToTrajectory([SCHEMA_V7_STOP, repeated], uid), (error) => {
+    assert.ok(error.message.includes(`doc_id ${JSON.stringify(uid)}`))
+    assert.match(error.message, /Ambiguous.*repetitions/)
+    return true
+  })
+  assert.throws(() => skyrlTurnsToTrajectory([SCHEMA_V7_STOP, repeated]), /Ambiguous SkyRL records/)
 })
 
 test('flat dump lists reject same-uid rows without a producer-defined trial key', () => {
   const another = { ...EVAL_DUMP_ROW, ordinal: EVAL_DUMP_ROW.ordinal + 1, output_response: 'another repetition' }
-  assert.equal(skyrlTurnsToTrajectory([EVAL_DUMP_ROW, another], EVAL_DUMP_ROW.uid), null)
+  assert.throws(
+    () => skyrlTurnsToTrajectory([EVAL_DUMP_ROW, another], EVAL_DUMP_ROW.uid),
+    /Ambiguous SkyRL records for doc_id "12"/,
+  )
   const viewed = skyrlTurnsToTrajectory([EVAL_DUMP_ROW, EVAL_DUMP_ROW_NULL_MESSAGES], EVAL_DUMP_ROW_NULL_MESSAGES.uid)
   assert.equal(viewed.steps.at(-1).annotations['verification'], 'verified')
   assert.equal(viewed.steps.length, 2)
@@ -153,4 +163,9 @@ test('incomplete tool argument JSON stays visible as unparsed text', () => {
   assert.equal(call.function_name, 'bash')
   assert.equal(call.arguments.unparsed_arguments, argumentsText)
   assert.equal(trajectory.steps.at(-1).message, record.output_response)
+})
+
+test('unrecognized artifacts return null rather than a SkyRL selection diagnostic', () => {
+  assert.equal(skyrlTurnsToTrajectory({ steps: [] }, 'missing'), null)
+  assert.equal(skyrlTurnsToTrajectory({ summary: 'another artifact format' }), null)
 })
