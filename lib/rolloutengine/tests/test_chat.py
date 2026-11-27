@@ -29,7 +29,6 @@ from rolloutengine.models import (
     Continuation,
     GradedRolloutInterrupted,
     ModelRequest,
-    RolloutFailure,
     TokenUsage,
     TraceMode,
 )
@@ -187,9 +186,10 @@ async def test_a_response_without_usage_is_a_model_failure():
     with pytest.raises(GradedRolloutInterrupted) as caught:
         await engine.run_task(spec, server.model())
 
-    assert caught.value.rollout.failure == RolloutFailure(
-        "ModelResponseError", {"operation": "model", "error": "The chat endpoint reported no token usage"}
-    )
+    failure_record = caught.value.rollout.failure
+    assert failure_record is not None
+    assert failure_record.exception_type == "ModelResponseError"
+    assert failure_record.operation == "model"
 
 
 async def test_assistant_prefix_harness_reaches_chat_endpoint_as_text_without_pinned_tokens():

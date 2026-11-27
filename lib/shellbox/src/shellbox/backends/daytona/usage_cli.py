@@ -1,204 +1,182 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Report a Daytona account's quota and live usage to size concurrency.
-
-``shellbox-daytona-usage`` reads the account's sandbox inventory and usage
-overview through one explicitly selected API key and prints the remaining
-capacity and a suggested maximum concurrency.
-"""
+"""Report per-region headroom from paginated Daytona inventory, without usage API access."""
 
 import argparse
 import asyncio
 import json
 import os
 from collections.abc import Mapping
-from typing import Any
+from enum import StrEnum
+from types import MappingProxyType
+from typing import TypedDict
 
 from shellbox.backends.daytona.connection import DAYTONA_TARGET, DaytonaConnection
 from shellbox.backends.daytona.usage import (
     DEFAULT_HEADROOM,
-    DEFAULT_SANDBOX_CLASS,
-    AccountUsage,
-    RegionCapacity,
-    ResourceCapacity,
+    AccountLimits,
+    RegionLimits,
     SandboxProfile,
-    account_resource_capacities,
+    UsageReport,
     account_usage,
-    max_concurrency,
-    region_for_launch,
-    region_resource_capacities,
     usage_report,
+    validate_headroom,
 )
 
-# The accounts use dedicated keys, not the SDK's ambient DAYTONA_API_KEY.
-ALL_ACCOUNTS: tuple[tuple[str, str], ...] = (
-    ("eval", "DAYTONA_EVAL_API_KEY"),
-    ("rl", "DAYTONA_RL_API_KEY"),
-    ("data", "DAYTONA_DATA_API_KEY"),
+
+class Account(StrEnum):
+    EVAL = "eval"
+    RL = "rl"
+    DATA = "data"
+
+
+# Single quota source of record. Owner-supplied organization limits (2026-11-19)
+# recorded for the accounts' production region, the one Daytona region Marin
+# launches in. Update these presets when the account owner changes the limits,
+# and add regions when the owner supplies their rows.
+QUOTA_SOURCE = (
+    "account-owner limits (2026-11-19), ACCOUNT_LIMITS in lib/shellbox/src/shellbox/backends/daytona/usage_cli.py"
 )
+PER_SANDBOX_MAXIMUM = SandboxProfile(cpu=4, memory_gib=8, disk_gib=10)
+ACCOUNT_LIMITS = MappingProxyType(
+    {
+        Account.EVAL: AccountLimits(
+            regions=MappingProxyType({DAYTONA_TARGET: RegionLimits(2500, 7500, 25000)}),
+            per_sandbox=PER_SANDBOX_MAXIMUM,
+        ),
+        Account.RL: AccountLimits(
+            regions=MappingProxyType({DAYTONA_TARGET: RegionLimits(6000, 12000, 20000)}),
+            per_sandbox=PER_SANDBOX_MAXIMUM,
+        ),
+        Account.DATA: AccountLimits(
+            regions=MappingProxyType({DAYTONA_TARGET: RegionLimits(2000, 4000, 10000)}),
+            per_sandbox=PER_SANDBOX_MAXIMUM,
+        ),
+    }
+)
+ACCOUNT_KEY_ENVS = MappingProxyType(
+    {
+        Account.EVAL: "DAYTONA_EVAL_API_KEY",
+        Account.RL: "DAYTONA_RL_API_KEY",
+        Account.DATA: "DAYTONA_DATA_API_KEY",
+    }
+)
+
+
+class SkippedAccount(TypedDict):
+    skipped: str
+
+
+class AccountReport(UsageReport):
+    account: str
+    quota_source: str
 
 
 def _profile(arguments: argparse.Namespace) -> SandboxProfile | None:
     given = [arguments.cpu is not None, arguments.memory_gib is not None, arguments.disk_gib is not None]
     if any(given) and not all(given):
         raise SystemExit("Provide all of --cpu, --memory-gib and --disk-gib to size concurrency")
-    if arguments.headroom is not None and not all(given):
-        raise SystemExit("--headroom sizes concurrency; provide --cpu, --memory-gib and --disk-gib")
-    if arguments.cpu is None:
+    if not any(given):
         return None
-    return SandboxProfile(cpu=arguments.cpu, memory_gib=arguments.memory_gib, disk_gib=arguments.disk_gib)
+    return SandboxProfile(arguments.cpu, arguments.memory_gib, arguments.disk_gib)
 
 
-def _number(value: float | None) -> str:
-    if value is None:
-        return "-"
-    if value == int(value):
-        return str(int(value))
-    return f"{value:.1f}"
+def _selected_accounts(arguments: argparse.Namespace) -> Mapping[Account, str]:
+    if arguments.all:
+        if arguments.limits is not None:
+            raise SystemExit("--limits applies to a single --api-key-env selection")
+        return ACCOUNT_KEY_ENVS
+    account = arguments.limits
+    if account is None:
+        account = next((name for name, key in ACCOUNT_KEY_ENVS.items() if key == arguments.api_key_env), None)
+    if account is None:
+        raise SystemExit("A custom --api-key-env requires --limits eval, rl or data")
+    return {Account(account): arguments.api_key_env}
 
 
-def _over_maximum_line(profile: SandboxProfile, region: RegionCapacity) -> str | None:
-    maxima = (
-        ("cpu", profile.cpu, region.max_cpu_per_sandbox),
-        ("memory-gib", profile.memory_gib, region.max_memory_gib_per_sandbox),
-        ("disk-gib", profile.disk_gib, region.max_disk_gib_per_sandbox),
+def _print_report(report: AccountReport) -> None:
+    print(f"account {report['account']}  organization {report['organization_id'] or 'empty inventory'}")
+    print(f"  sandboxes {report['sandboxes']['total']}  started {report['sandboxes']['started']}")
+    maximum = report["per_sandbox"]
+    print(
+        f"  per-sandbox maximum {maximum['cpu']} vCPU / {maximum['memory_gib']} GiB RAM / {maximum['disk_gib']} GiB disk"
     )
-    exceeded = [
-        f"--{name} {value} exceeds the per-sandbox maximum {_number(maximum)} "
-        f"in {region.region_id} ({region.sandbox_class}); requests above the maximum fail at creation"
-        for name, value, maximum in maxima
-        if maximum is not None and value > maximum
-    ]
-    return "; ".join(exceeded) if exceeded else None
-
-
-def _capacity_rows(capacities: Mapping[str, ResourceCapacity]) -> list[tuple[str, str, str, str]]:
-    return [
-        (name, _number(capacity.quota), _number(capacity.used), _number(capacity.remaining))
-        for name, capacity in capacities.items()
-    ]
-
-
-def _print_account(
-    usage: AccountUsage, profile: SandboxProfile | None, headroom: float, region: RegionCapacity | None
-) -> None:
-    print(f"organization  {usage.organization_id}")
-    print("  " + "  ".join(column.ljust(12) for column in ("resource", "quota", "used", "remaining")))
-    for row in _capacity_rows(account_resource_capacities(usage)):
-        print("  " + "  ".join(column.ljust(12) for column in row))
-    if len(usage.regions) > 1:
-        for row_region in usage.regions:
-            print(f"  region {row_region.region_id} ({row_region.sandbox_class})")
-            for row in _capacity_rows(region_resource_capacities(row_region)):
-                print("  " + "  ".join(column.ljust(12) for column in row))
-    elif usage.regions:
-        print(f"  region {usage.regions[0].region_id} ({usage.regions[0].sandbox_class})")
-    states = "  ".join(f"{state} {count}" for state, count in usage.sandbox_states) or "none"
-    print(f"  sandboxes {usage.sandboxes}  states: {states}")
-    if profile is not None and region is not None:
+    for name, region in report["regions"].items():
+        counts = region["sandboxes"]
         print(
-            f"  max concurrency {max_concurrency(region, profile, headroom=headroom)} sandboxes "
-            f"at {profile.cpu}cpu/{_number(profile.memory_gib)}g/{_number(profile.disk_gib)}g, "
-            f"{headroom:.0%} headroom, in {region.region_id} ({region.sandbox_class})"
+            f"  region {name}  sandboxes {counts['total']}"
+            f"  compute charged {counts['compute_charged']}  disk charged {counts['disk_charged']}"
         )
-        exceeded = _over_maximum_line(profile, region)
-        if exceeded:
-            print(f"  warning: {exceeded}")
-
-
-def _launch_region(
-    usage: AccountUsage, arguments: argparse.Namespace, profile: SandboxProfile | None
-) -> RegionCapacity | None:
-    """The quota row the launch is charged against, or None when nothing sizes."""
-    if profile is None:
-        return None
-    return region_for_launch(usage, target=DAYTONA_TARGET, sandbox_class=arguments.sandbox_class)
+        print("    resource       quota         used          remaining     available")
+        for resource, capacity in region["resources"].items():
+            print(
+                f"    {resource:12} "
+                + " ".join(f"{capacity[field]:13.2f}" for field in ("quota", "used", "remaining", "available"))
+            )
+        if "max_concurrency" in region:
+            sizing = region["max_concurrency"]
+            print(f"    additional sandboxes {sizing['limit']}")
+            if sizing["exceeds_per_sandbox_maximum"]:
+                print("    profile exceeds per-sandbox maximum: " + ", ".join(sizing["exceeds_per_sandbox_maximum"]))
+    print(f"  reserve {report['headroom_fraction']:.0%} of each region's quota; memory and disk in GiB")
 
 
 async def _run(arguments: argparse.Namespace) -> None:
+    validate_headroom(arguments.headroom)
     profile = _profile(arguments)
-    headroom = DEFAULT_HEADROOM if arguments.headroom is None else arguments.headroom
-    if arguments.all:
-        reports: dict[str, Any] = {}
-        for account, name in ALL_ACCOUNTS:
-            api_key = os.environ.get(name)
-            if not api_key:
-                if arguments.json:
-                    reports[account] = {"skipped": f"missing {name}"}
-                else:
-                    print(f"{account}: skipped (missing {name})")
-                continue
-            usage = await account_usage(DaytonaConnection(api_key=api_key))
-            try:
-                region = _launch_region(usage, arguments, profile)
-            except RuntimeError as error:
-                # One account's missing quota row must not lose the reports
-                # already read for the rest of the sweep.
-                if arguments.json:
-                    reports[account] = {"skipped": str(error)}
-                else:
-                    print(f"{account}: skipped ({error})")
-                continue
-            if arguments.json:
-                reports[account] = usage_report(usage, profile, region=region, headroom=headroom)
-            else:
-                print(f"account {account}")
-                _print_account(usage, profile, headroom, region)
-        if arguments.json:
-            print(json.dumps(reports, indent=2, sort_keys=True))
-        return
-
-    api_key = os.environ.get(arguments.api_key_env)
-    if not api_key:
-        raise SystemExit(f"Missing Daytona credential environment variable: {arguments.api_key_env}")
-    usage = await account_usage(DaytonaConnection(api_key=api_key))
-    region = _launch_region(usage, arguments, profile)
+    reports: dict[str, AccountReport | SkippedAccount] = {}
+    for account, key_env in _selected_accounts(arguments).items():
+        api_key = os.environ.get(key_env)
+        if not api_key:
+            if not arguments.all:
+                raise SystemExit(f"Missing Daytona credential environment variable: {key_env}")
+            reports[account] = {"skipped": f"missing {key_env}"}
+            if not arguments.json:
+                print(f"{account}: skipped (missing {key_env})")
+            continue
+        connection = DaytonaConnection(api_key=api_key)
+        usage = await account_usage(connection, ACCOUNT_LIMITS[account])
+        report: AccountReport = {
+            **usage_report(usage, profile, headroom=arguments.headroom),
+            "account": account,
+            "quota_source": QUOTA_SOURCE,
+        }
+        reports[account] = report
+        if not arguments.json:
+            _print_report(report)
     if arguments.json:
-        print(json.dumps(usage_report(usage, profile, region=region, headroom=headroom), indent=2, sort_keys=True))
-    else:
-        _print_account(usage, profile, headroom, region)
+        print(json.dumps(reports if arguments.all else next(iter(reports.values())), indent=2, sort_keys=True))
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="shellbox-daytona-usage",
-        description=(
-            "Report a Daytona account's quota, live usage and sandbox inventory, and size "
-            "the maximum additional concurrency from the remaining capacity."
-        ),
+        description="Read sandbox inventory and size per-region headroom from owner-provided quota limits.",
     )
     account = parser.add_mutually_exclusive_group(required=True)
+    account.add_argument("--api-key-env", help="Environment variable holding the selected account's API key.")
     account.add_argument(
-        "--api-key-env",
-        help="Environment variable holding the selected account's API key.",
-    )
-    account.add_argument(
-        "--all",
-        action="store_true",
-        help="Read the three known accounts (eval, rl, data) from their standard key variables.",
+        "--all", action="store_true", help="Read eval, rl and data using their dedicated key variables."
     )
     parser.add_argument(
-        "--sandbox-class",
-        default=DEFAULT_SANDBOX_CLASS,
-        help=f"Sandbox class of the launch (default {DEFAULT_SANDBOX_CLASS}).",
+        "--limits", type=Account, choices=list(Account), help="Quota preset; inferred for standard key variables."
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON.")
-    parser.add_argument("--cpu", type=int, help="Per-sandbox CPU request for concurrency sizing.")
-    parser.add_argument("--memory-gib", type=float, help="Per-sandbox memory request in GiB.")
-    parser.add_argument("--disk-gib", type=float, help="Per-sandbox disk request in GiB.")
+    parser.add_argument("--cpu", type=int, help="Per-sandbox vCPU allocation.")
+    parser.add_argument("--memory-gib", type=int, help="Per-sandbox RAM allocation in whole GiB.")
+    parser.add_argument("--disk-gib", type=int, help="Per-sandbox disk allocation in whole GiB.")
     parser.add_argument(
         "--headroom",
         type=float,
-        default=None,
-        help=f"Fraction of remaining capacity kept in reserve (default {DEFAULT_HEADROOM * 100:.0f}%%).",
+        default=DEFAULT_HEADROOM,
+        help=f"Fraction of total quota to keep free (default {DEFAULT_HEADROOM}).",
     )
     return parser
 
 
 def main() -> None:
-    arguments = _parser().parse_args()
-    asyncio.run(_run(arguments))
+    asyncio.run(_run(_parser().parse_args()))
 
 
 if __name__ == "__main__":

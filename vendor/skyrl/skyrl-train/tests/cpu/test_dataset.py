@@ -2,6 +2,7 @@ import errno
 import json
 import os
 from dataclasses import replace
+from types import SimpleNamespace
 from importlib.util import spec_from_file_location
 from pathlib import Path
 
@@ -364,9 +365,10 @@ def test_prepared_selection_reuses_lengths_across_budgets_and_preserves_rollout_
         pytest.fail("A prepared cache hit should not render or tokenize prompts")
 
     monkeypatch.setattr(TokenizersBackend, "apply_chat_template", unavailable)
-    warm = SourceTaskDataset(
-        [cache.path], _selection_tokenizer(), 100, environment_configs=configs, prepared_cache=cache
-    )
+    config = get_default_config()
+    config.trainer.max_prompt_length = 100
+    OmegaConf.update(config, "runtime.prepared_task_cache", OmegaConf.structured(cache), force_add=True)
+    warm = BasePPOExp.task_dataset(SimpleNamespace(cfg=config, tokenizer=_selection_tokenizer()), [cache.path])
 
     assert [full.label(i) for i in range(len(full))] == ["fixture:4", "fixture:1", "fixture:3"]
     assert [warm.label(i) for i in range(len(warm))] == ["fixture:4", "fixture:3"]

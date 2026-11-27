@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from rigging.task_errors import RetryDisposition, setup_exit_is_task_failure
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
     Backend,
@@ -173,6 +174,13 @@ class MachineSetupError(RuntimeError):
             f"Environment setup command failed: {self.reason}, exit={self.exit_code}; "
             f"command: {self.command!r}; stdout: {self.stdout!r}; stderr: {self.stderr!r}"
         )
+
+    def retry_disposition(self) -> RetryDisposition:
+        """Classify the setup exit at its source: a signal exit or lost shell can
+        pass on a fresh machine; a normal non-zero exit is the task's own failure."""
+        if self.reason is ExitReason.TIMED_OUT or not setup_exit_is_task_failure(self.exit_code or 0):
+            return RetryDisposition.TRANSIENT
+        return RetryDisposition.PERMANENT
 
 
 class MachineSetupTimeout(MachineSetupError, TimeoutError):

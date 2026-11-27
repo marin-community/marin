@@ -34,7 +34,7 @@ def attempt_receipt(
     image, setup = environment_identity(task.environment_requirements)
     grade, failure = result.grade, result.failure
     diagnostics = failure.diagnostics if failure is not None else {}
-    operation = diagnostics.get("operation")
+    operation = failure.operation if failure is not None else None
     evidence = grade.diagnostics
     setup_exit = diagnostics.get("setup_exit_code") if diagnostics.get("setup_reason") == ExitReason.EXITED else None
     setup_failed = "setup_reason" in diagnostics

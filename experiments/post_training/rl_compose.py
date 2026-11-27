@@ -62,6 +62,7 @@ from experiments.post_training.rl_checkpoint_eval import (
     CHECKPOINT_HARNESS_OPTIONS,
     CHECKPOINT_PROFILE,
     CHECKPOINT_REPLY_TOKENS,
+    CHECKPOINT_RETRY_BUDGET,
     CHECKPOINT_TASKS_FILENAME,
     checkpoint_tasks,
 )
@@ -513,10 +514,14 @@ def _checkpoint_session_patch(config: RecipePatch) -> RecipePatch:
     }
     if get_path(config.to_skyrl(), "environment.task_sessions.daytona.api_key_env") is MISSING:
         daytona.update(api_key_env=DAYTONA_EVAL_API_KEY_ENV, ttl_minutes=CHECKPOINT_DAYTONA_TTL)
+    retry = get_path(config.to_skyrl(), "environment.task_sessions.retry")
+    if retry is MISSING:
+        retry = {"max_retries": CHECKPOINT_RETRY_BUDGET}
     return RecipePatch(
         environment=sections.Environment(
             task_sessions={
                 "daytona": daytona,
+                "retry": retry,
                 "agent_harnesses": {TERMINUS_HARNESS: dict(CHECKPOINT_HARNESS_OPTIONS)},
             }
         )

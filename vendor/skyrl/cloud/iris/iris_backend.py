@@ -746,9 +746,7 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
 
     replicas = args.num_nodes
     if args.role_topology is not None:
-        coscheduling = CoschedulingConfig(
-            group_by="nvlink.domain", group_sizes=args.role_topology.locality.group_sizes
-        )
+        coscheduling = CoschedulingConfig(group_by="nvlink.domain", group_sizes=args.role_topology.locality.group_sizes)
     else:
         coscheduling = _gpu_multinode(args.gpu_variant, args.gpus_per_node, replicas)
 
@@ -831,9 +829,10 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
             env_vars[k] = v
     env_vars.update(_forwarded_environment(forward_env))
     env_vars.update(wandb_launch_environment(entity=args.wandb_entity))
-    with submission_client(
-        args.cluster_config, args.target_cluster, args.parent_cluster_config, workspace
-    ) as (client, cluster_pin):
+    with submission_client(args.cluster_config, args.target_cluster, args.parent_cluster_config, workspace) as (
+        client,
+        cluster_pin,
+    ):
         if cluster_pin is not None:
             constraints.append(cluster_pin)
         entrypoint = Entrypoint.from_command(*command)

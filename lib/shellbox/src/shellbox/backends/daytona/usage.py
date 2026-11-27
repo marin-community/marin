@@ -1,39 +1,149 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Read one Daytona account's quota, live usage and sandbox inventory.
-
-Reports what an account can still run, so agents size concurrency from live
-numbers instead of static tables: the provider's CPU, memory, disk, snapshot
-and volume quotas, current use, and sandbox counts by state.
-"""
+"""Estimate per-region Daytona headroom from sandbox inventory and supplied quotas."""
 
 import math
-from collections.abc import Iterable
-from dataclasses import dataclass
-from typing import Any
+from collections import Counter
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from typing import NotRequired, TypedDict
 
 from daytona import AsyncDaytona, AsyncSandbox
-from daytona.common.snapshot import Snapshot
-from daytona.common.volume import Volume
-from daytona_api_client_async import (
-    OrganizationsApi,
-    OrganizationUsageOverview,
-    RegionUsageOverview,
-)
+from daytona_api_client_async import SandboxDesiredState, SandboxState
 
 from shellbox.backends.daytona.connection import DaytonaConnection
-from shellbox.backends.daytona.snapshot import list_snapshots
 
 REQUEST_TIMEOUT_SECONDS = 30.0
 DEFAULT_HEADROOM = 0.2
-DEFAULT_SANDBOX_CLASS = "container"
+GB_TO_GIB = 10**9 / 2**30
+# Provider quota rules: daytonaio/daytona@b5a5d9e, apps/api/src/organization/constants/.
+COMPUTE_CHARGED_STATES = frozenset(
+    (
+        SandboxState.CREATING,
+        SandboxState.RESTORING,
+        SandboxState.STARTED,
+        SandboxState.STARTING,
+        SandboxState.STOPPING,
+        SandboxState.PENDING_BUILD,
+        SandboxState.BUILDING_SNAPSHOT,
+        SandboxState.UNKNOWN,
+        SandboxState.PULLING_SNAPSHOT,
+        SandboxState.FORKING,
+        SandboxState.PAUSING,
+        SandboxState.RESUMING,
+    )
+)
+CONDITIONAL_COMPUTE_CHARGED_STATES = frozenset((SandboxState.RESIZING, SandboxState.SNAPSHOTTING))
+DISK_CHARGED_STATES = (
+    COMPUTE_CHARGED_STATES
+    | CONDITIONAL_COMPUTE_CHARGED_STATES
+    | frozenset(
+        (
+            SandboxState.STOPPED,
+            SandboxState.PAUSED,
+            SandboxState.ARCHIVING,
+        )
+    )
+)
+UNCHARGED_STATES = frozenset(
+    (
+        SandboxState.ARCHIVED,
+        SandboxState.BUILD_FAILED,
+        SandboxState.DESTROYED,
+        SandboxState.DESTROYING,
+        SandboxState.ERROR,
+    )
+)
+
+
+class CapacityReport(TypedDict):
+    quota: float
+    used: float
+    remaining: float
+    available: float
+
+
+class RegionLimitsReport(TypedDict):
+    cpu: int
+    memory_gb: int
+    disk_gb: int
+
+
+class RegionCounts(TypedDict):
+    total: int
+    compute_charged: int
+    disk_charged: int
+
+
+class ConcurrencyReport(TypedDict):
+    profile: dict[str, int]
+    by_resource: dict[str, int]
+    exceeds_per_sandbox_maximum: list[str]
+    limit: int
+
+
+class RegionReport(TypedDict):
+    limits: RegionLimitsReport
+    resources: dict[str, CapacityReport]
+    sandboxes: RegionCounts
+    max_concurrency: NotRequired[ConcurrencyReport]
+
+
+class SandboxCounts(TypedDict):
+    total: int
+    started: int
+    by_state: dict[str, int]
+
+
+class UsageReport(TypedDict):
+    organization_id: str | None
+    observed_at: str
+    usage_source: str
+    headroom_fraction: float
+    per_sandbox: dict[str, int]
+    regions: dict[str, RegionReport]
+    sandboxes: SandboxCounts
+
+
+def validate_headroom(headroom: float) -> None:
+    if not 0 <= headroom < 1:
+        raise ValueError("Headroom must be in [0, 1)")
+
+
+@dataclass(frozen=True)
+class SandboxProfile:
+    """Declared per-sandbox allocations in vCPU and whole GiB."""
+
+    cpu: int
+    memory_gib: int
+    disk_gib: int
+
+    def __post_init__(self) -> None:
+        if min(self.cpu, self.memory_gib, self.disk_gib) <= 0:
+            raise ValueError("Sandbox allocations must be positive")
+
+
+@dataclass(frozen=True)
+class RegionLimits:
+    """Owner-supplied limits for one region in vCPU and decimal GB."""
+
+    cpu: int
+    memory_gb: int
+    disk_gb: int
+
+
+@dataclass(frozen=True)
+class AccountLimits:
+    """Owner-supplied quota limits: per-region capacity and the per-sandbox maximum."""
+
+    regions: Mapping[str, RegionLimits]
+    per_sandbox: SandboxProfile
 
 
 @dataclass(frozen=True)
 class ResourceCapacity:
-    """Quota and live use for one resource; remaining is never negative."""
-
     quota: float
     used: float
 
@@ -41,239 +151,186 @@ class ResourceCapacity:
     def remaining(self) -> float:
         return max(self.quota - self.used, 0.0)
 
+    def available(self, headroom: float) -> float:
+        return max(self.quota * (1 - headroom) - self.used, 0.0)
+
 
 @dataclass(frozen=True)
-class RegionCapacity:
-    """One region's reported quota, use and per-sandbox maxima."""
+class RegionUsage:
+    """One region's quota-charged inventory usage."""
 
-    region_id: str
-    sandbox_class: str
+    region: str
+    sandboxes: int
+    compute_sandboxes: int
+    disk_sandboxes: int
     cpu: ResourceCapacity
     memory_gib: ResourceCapacity
     disk_gib: ResourceCapacity
-    gpu: ResourceCapacity
-    max_cpu_per_sandbox: float | None
-    max_memory_gib_per_sandbox: float | None
-    max_disk_gib_per_sandbox: float | None
-
-
-@dataclass(frozen=True)
-class SandboxProfile:
-    """The per-sandbox resource request used to size concurrency."""
-
-    cpu: int
-    memory_gib: float
-    disk_gib: float
 
 
 @dataclass(frozen=True)
 class AccountUsage:
-    """One Daytona organization's quota, live usage and sandbox inventory."""
+    """One full inventory reading; an empty inventory has no organization ID."""
 
-    organization_id: str
-    regions: tuple[RegionCapacity, ...]
-    snapshots: ResourceCapacity
-    volumes: ResourceCapacity
-    sandboxes: int
+    organization_id: str | None
+    limits: AccountLimits
+    regions: tuple[RegionUsage, ...]
     sandbox_states: tuple[tuple[str, int], ...]
-
-    @property
-    def cpu(self) -> ResourceCapacity:
-        return _summed(region.cpu for region in self.regions)
-
-    @property
-    def memory_gib(self) -> ResourceCapacity:
-        return _summed(region.memory_gib for region in self.regions)
-
-    @property
-    def disk_gib(self) -> ResourceCapacity:
-        return _summed(region.disk_gib for region in self.regions)
-
-
-def _summed(capacities: Iterable[ResourceCapacity]) -> ResourceCapacity:
-    total_quota = 0.0
-    total_used = 0.0
-    for capacity in capacities:
-        total_quota += capacity.quota
-        total_used += capacity.used
-    return ResourceCapacity(quota=total_quota, used=total_used)
-
-
-def account_resource_capacities(usage: AccountUsage) -> dict[str, ResourceCapacity]:
-    """The account-level resources in report order; the one shared resource list."""
-    return {
-        "cpu": usage.cpu,
-        "memory_gib": usage.memory_gib,
-        "disk_gib": usage.disk_gib,
-        "snapshots": usage.snapshots,
-        "volumes": usage.volumes,
-    }
-
-
-def region_resource_capacities(region: RegionCapacity) -> dict[str, ResourceCapacity]:
-    """One region's resources in report order."""
-    return {
-        "cpu": region.cpu,
-        "memory_gib": region.memory_gib,
-        "disk_gib": region.disk_gib,
-        "gpu": region.gpu,
-    }
-
-
-def _capacity_dict(capacity: ResourceCapacity) -> dict[str, float]:
-    return {"quota": capacity.quota, "used": capacity.used, "remaining": capacity.remaining}
-
-
-def _region(row: RegionUsageOverview) -> RegionCapacity:
-    return RegionCapacity(
-        region_id=row.region_id,
-        sandbox_class=row.sandbox_class.value,
-        cpu=ResourceCapacity(quota=row.total_cpu_quota, used=row.current_cpu_usage),
-        memory_gib=ResourceCapacity(quota=row.total_memory_quota, used=row.current_memory_usage),
-        disk_gib=ResourceCapacity(quota=row.total_disk_quota, used=row.current_disk_usage),
-        gpu=ResourceCapacity(quota=row.total_gpu_quota, used=row.current_gpu_usage),
-        max_cpu_per_sandbox=row.max_cpu_per_sandbox,
-        max_memory_gib_per_sandbox=row.max_memory_per_sandbox,
-        max_disk_gib_per_sandbox=row.max_disk_per_sandbox,
-    )
-
-
-def region_for_launch(usage: AccountUsage, *, target: str, sandbox_class: str = DEFAULT_SANDBOX_CLASS) -> RegionCapacity:
-    """The quota row that a launch into ``target`` is charged against.
-
-    Daytona enforces each row's quota per region and sandbox class, so sizing
-    must use that one row; summing the rows over-reports capacity when the org
-    holds quota in several of them.
-    """
-    for region in usage.regions:
-        if region.region_id == target and region.sandbox_class == sandbox_class:
-            return region
-    rows = ", ".join(f"{region.region_id}/{region.sandbox_class}" for region in usage.regions) or "none"
-    raise RuntimeError(f"No {sandbox_class} quota row for region {target}; the org's quota rows: {rows}")
-
-
-def max_concurrency(region: RegionCapacity, profile: SandboxProfile, *, headroom: float = DEFAULT_HEADROOM) -> int:
-    """Suggest how many additional sandboxes one quota row can hold.
-
-    The minimum over the row's CPU, memory and disk remaining capacity, each
-    reduced by ``headroom`` (a fraction kept in reserve, default 20%), divided
-    by the profile's per-sandbox request and floored. GPU use is not part of
-    the minimum; a GPU workload must check the gpu capacity itself.
-    """
-    if profile.cpu <= 0 or profile.memory_gib <= 0 or profile.disk_gib <= 0:
-        raise ValueError(f"Sandbox profile must be positive: {profile}")
-    if not 0 <= headroom < 1:
-        raise ValueError(f"Headroom must be in [0, 1): {headroom}")
-    return max(
-        0,
-        math.floor(
-            min(
-                region.cpu.remaining * (1 - headroom) / profile.cpu,
-                region.memory_gib.remaining * (1 - headroom) / profile.memory_gib,
-                region.disk_gib.remaining * (1 - headroom) / profile.disk_gib,
-            )
-        ),
-    )
+    observed_at: str
 
 
 async def _inventory_sandboxes(client: AsyncDaytona) -> list[AsyncSandbox]:
-    """Read every sandbox in the authenticated account across all pages."""
-    return [sandbox async for sandbox in client.list(request_timeout=REQUEST_TIMEOUT_SECONDS)]
+    """Read every sandbox across all SDK result pages and account regions."""
+    sandboxes = []
+    seen = set()
+    async for sandbox in client.list(request_timeout=REQUEST_TIMEOUT_SECONDS):
+        if sandbox.id in seen:
+            raise ValueError("Repeated sandbox ID in paginated inventory; retry the reading")
+        seen.add(sandbox.id)
+        sandboxes.append(sandbox)
+    return sandboxes
 
 
-async def _fetch_usage_overview(client: AsyncDaytona, organization_id: str) -> OrganizationUsageOverview:
-    api = OrganizationsApi(client._api_client)
-    return await api.get_organization_usage_overview(organization_id, _request_timeout=REQUEST_TIMEOUT_SECONDS)
-
-
-async def _organization_id(client: AsyncDaytona, sandboxes: list[AsyncSandbox]) -> str:
-    """Resolve the organization an API key belongs to from its own inventory.
-
-    The ``/organizations`` endpoint rejects API-key credentials with 401, so
-    the organization is taken from inventory rows. Sandboxes carry it; when the
-    organization has no sandboxes, snapshots and then volumes are read instead.
-    An inventory spanning several organizations is an account-selection error,
-    not a reportable mix, so it raises rather than reporting either one.
-    """
-    ids = {row.organization_id for row in sandboxes if row.organization_id}
-    if not ids:
-        snapshots: list[Snapshot] = await list_snapshots(client)
-        ids = {snapshot.organization_id for snapshot in snapshots if snapshot.organization_id}
-    if not ids:
-        volumes: list[Volume] = await client.volume.list()
-        ids = {volume.organization_id for volume in volumes if volume.organization_id}
-    if len(ids) > 1:
-        raise RuntimeError(f"The API key lists rows in {len(ids)} organizations; the account is ambiguous")
-    if not ids:
-        raise RuntimeError("Cannot resolve the organization: the account has no sandboxes, snapshots or volumes")
-    return ids.pop()
-
-
-async def account_usage_from_client(client: AsyncDaytona) -> AccountUsage:
-    """Read one account's quota, usage and sandbox inventory through an SDK client."""
-    sandboxes = await _inventory_sandboxes(client)
-    organization_id = await _organization_id(client, sandboxes)
-    overview = await _fetch_usage_overview(client, organization_id)
-    state_counts: dict[str, int] = {}
-    for sandbox in sandboxes:
-        state = sandbox.state.value if sandbox.state else "unknown"
-        state_counts[state] = state_counts.get(state, 0) + 1
-    return AccountUsage(
-        organization_id=organization_id,
-        regions=tuple(_region(row) for row in overview.region_usage),
-        snapshots=ResourceCapacity(quota=overview.total_snapshot_quota, used=overview.current_snapshot_usage),
-        volumes=ResourceCapacity(quota=overview.total_volume_quota, used=overview.current_volume_usage),
-        sandboxes=len(sandboxes),
-        sandbox_states=tuple(sorted(state_counts.items())),
+def _region_usage(
+    region: str,
+    sandboxes: list[AsyncSandbox],
+    compute: list[AsyncSandbox],
+    disk: list[AsyncSandbox],
+    limits: RegionLimits,
+) -> RegionUsage:
+    in_region = [sandbox for sandbox in sandboxes if sandbox.target == region]
+    compute_region = [sandbox for sandbox in compute if sandbox.target == region]
+    disk_region = [sandbox for sandbox in disk if sandbox.target == region]
+    return RegionUsage(
+        region=region,
+        sandboxes=len(in_region),
+        compute_sandboxes=len(compute_region),
+        disk_sandboxes=len(disk_region),
+        cpu=ResourceCapacity(limits.cpu, sum(sandbox.cpu for sandbox in compute_region)),
+        memory_gib=ResourceCapacity(limits.memory_gb * GB_TO_GIB, sum(sandbox.memory for sandbox in compute_region)),
+        disk_gib=ResourceCapacity(limits.disk_gb * GB_TO_GIB, sum(sandbox.disk for sandbox in disk_region)),
     )
 
 
-async def account_usage(connection: DaytonaConnection) -> AccountUsage:
-    """Read one explicitly selected Daytona account's quota and live usage."""
+def _checked_inventory(sandboxes: list[AsyncSandbox], limits: AccountLimits) -> str | None:
+    """Reject inventories that cannot be accounted for; return the single organization ID."""
+    organization_ids = {sandbox.organization_id for sandbox in sandboxes}
+    if len(organization_ids) > 1 or (sandboxes and not all(organization_ids)):
+        raise ValueError("Sandbox inventory must identify exactly one organization")
+    for sandbox in sandboxes:
+        if not sandbox.target:
+            raise ValueError(f"Sandbox {sandbox.id} does not identify its region")
+        if sandbox.state is None or sandbox.state == SandboxState.UNKNOWN_DEFAULT_OPEN_API:
+            raise ValueError(f"Sandbox {sandbox.id} has an unclassified state")
+        if sandbox.state in CONDITIONAL_COMPUTE_CHARGED_STATES and sandbox.desired_state in (
+            None,
+            SandboxDesiredState.UNKNOWN_DEFAULT_OPEN_API,
+        ):
+            raise ValueError(f"Sandbox {sandbox.id} lacks the desired state needed to account for compute")
+    unrecorded = sorted({sandbox.target for sandbox in sandboxes} - set(limits.regions))
+    if unrecorded:
+        raise ValueError(f"No recorded limits for region(s) {', '.join(unrecorded)}; add them to ACCOUNT_LIMITS")
+    return next(iter(organization_ids), None)
+
+
+async def account_usage_from_client(client: AsyncDaytona, limits: AccountLimits) -> AccountUsage:
+    """Aggregate allocations per region using provider compute and disk quota rules.
+
+    The provider enforces each region's quota separately, so usage is grouped by
+    the inventory's ``target`` and never summed across regions.
+    """
+    sandboxes = await _inventory_sandboxes(client)
+    organization_id = _checked_inventory(sandboxes, limits)
+    compute = [
+        sandbox
+        for sandbox in sandboxes
+        if sandbox.state in COMPUTE_CHARGED_STATES
+        or (sandbox.state in CONDITIONAL_COMPUTE_CHARGED_STATES and sandbox.desired_state == SandboxDesiredState.STARTED)
+    ]
+    disk = [sandbox for sandbox in sandboxes if sandbox.state in DISK_CHARGED_STATES]
+    for sandbox in disk:
+        for value in (sandbox.cpu, sandbox.memory, sandbox.disk):
+            if value is None or not math.isfinite(value) or value <= 0:
+                raise ValueError(f"Quota-charged sandbox {sandbox.id} lacks a positive resource allocation")
+    regions = tuple(
+        _region_usage(region, sandboxes, compute, disk, limits.regions[region]) for region in sorted(limits.regions)
+    )
+    states = Counter(sandbox.state.value for sandbox in sandboxes)
+    return AccountUsage(
+        organization_id=organization_id,
+        limits=limits,
+        regions=regions,
+        sandbox_states=tuple(sorted(states.items())),
+        observed_at=datetime.now(UTC).isoformat(),
+    )
+
+
+async def account_usage(connection: DaytonaConnection, limits: AccountLimits) -> AccountUsage:
+    """Aggregate allocations from the selected account's full sandbox inventory."""
     async with connection.client_factory()() as client:
-        return await account_usage_from_client(client)
+        return await account_usage_from_client(client, limits)
+
+
+def _region_report(
+    usage: RegionUsage,
+    limits: RegionLimits,
+    profile: dict[str, int] | None,
+    exceeded: list[str] | None,
+    headroom: float,
+) -> RegionReport:
+    resources = {"cpu": usage.cpu, "memory_gib": usage.memory_gib, "disk_gib": usage.disk_gib}
+    report: RegionReport = {
+        "limits": {"cpu": limits.cpu, "memory_gb": limits.memory_gb, "disk_gb": limits.disk_gb},
+        "resources": {
+            name: {
+                "quota": capacity.quota,
+                "used": capacity.used,
+                "remaining": capacity.remaining,
+                "available": capacity.available(headroom),
+            }
+            for name, capacity in resources.items()
+        },
+        "sandboxes": {
+            "total": usage.sandboxes,
+            "compute_charged": usage.compute_sandboxes,
+            "disk_charged": usage.disk_sandboxes,
+        },
+    }
+    if profile is not None:
+        per_resource = {
+            name: math.floor(capacity.available(headroom) / profile[name]) for name, capacity in resources.items()
+        }
+        report["max_concurrency"] = {
+            "profile": profile,
+            "by_resource": per_resource,
+            "exceeds_per_sandbox_maximum": exceeded or [],
+            "limit": 0 if exceeded else min(per_resource.values()),
+        }
+    return report
 
 
 def usage_report(
-    usage: AccountUsage,
-    profile: SandboxProfile | None,
-    *,
-    region: RegionCapacity | None = None,
-    headroom: float = DEFAULT_HEADROOM,
-) -> dict[str, Any]:
-    """Return one account's usage as the CLI JSON interchange.
-
-    The resource block sums CPU, memory and disk across regions and includes
-    account-level snapshot and volume quotas. The region block lists each
-    quota row. ``max_concurrency`` is sized against ``region``, the row charged
-    for a launch into the target region.
-    """
-    report: dict[str, Any] = {
+    usage: AccountUsage, profile: SandboxProfile | None = None, *, headroom: float = DEFAULT_HEADROOM
+) -> UsageReport:
+    """Return per-region inventory usage and additional capacity below a quota reserve."""
+    validate_headroom(headroom)
+    requested = asdict(profile) if profile is not None else None
+    maxima = asdict(usage.limits.per_sandbox)
+    exceeded = [name for name, value in requested.items() if value > maxima[name]] if requested is not None else None
+    states = dict(usage.sandbox_states)
+    return {
         "organization_id": usage.organization_id,
-        "resources": {name: _capacity_dict(capacity) for name, capacity in account_resource_capacities(usage).items()},
-        "regions": [
-            {
-                "region_id": row.region_id,
-                "sandbox_class": row.sandbox_class,
-                **{name: _capacity_dict(capacity) for name, capacity in region_resource_capacities(row).items()},
-                "max_cpu_per_sandbox": row.max_cpu_per_sandbox,
-                "max_memory_gib_per_sandbox": row.max_memory_gib_per_sandbox,
-                "max_disk_gib_per_sandbox": row.max_disk_gib_per_sandbox,
-            }
-            for row in usage.regions
-        ],
-        "sandboxes": {"total": usage.sandboxes, "by_state": dict(usage.sandbox_states)},
+        "observed_at": usage.observed_at,
+        "usage_source": "sandbox_inventory",
+        "headroom_fraction": headroom,
+        "per_sandbox": maxima,
+        "regions": {
+            region.region: _region_report(region, usage.limits.regions[region.region], requested, exceeded, headroom)
+            for region in usage.regions
+        },
+        "sandboxes": {
+            "total": sum(states.values()),
+            "started": states.get("started", 0),
+            "by_state": states,
+        },
     }
-    if profile is not None:
-        if region is None:
-            raise ValueError("Sizing a profile requires the launch's quota row")
-        report["max_concurrency"] = {
-            "region_id": region.region_id,
-            "sandbox_class": region.sandbox_class,
-            "cpu": profile.cpu,
-            "memory_gib": profile.memory_gib,
-            "disk_gib": profile.disk_gib,
-            "headroom": headroom,
-            "limit": max_concurrency(region, profile, headroom=headroom),
-        }
-    return report

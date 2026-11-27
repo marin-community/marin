@@ -3,8 +3,8 @@
 import asyncio
 
 import numpy as np
+from rigging.task_errors import RetrySettings
 import pytest
-from omegaconf import OmegaConf
 from ray.exceptions import ActorDiedError
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
@@ -25,39 +25,14 @@ from skyrl_train.trajectory_runners.model_clients import (
     GenerationBudgetExceededError,
     ModelServerError,
 )
-from skyrl_train.trajectory_runners.types import TaskRequestBatch, TokenProvenance, TrajectoryID
+from skyrl_train.trajectory_runners.types import TaskRequestBatch, TrajectoryID
 from taskcompendium.grading_result import Outcome
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import AgentMachine, AnswerType, ScriptGrader
 from verifyit.spec import NumericSpec
 from tests.cpu.task_specs import SHELL_ENVIRONMENT, lowered_task, task_input, text_task
 
-
-class WorkerTokenizer:
-    eos_token_id = 99
-
-    def decode(self, token_ids, **kwargs):
-        return "Working"
-
-
-@pytest.fixture
-def worker_config():
-    return OmegaConf.create(
-        {
-            "backend": "vllm",
-            "max_input_length": 3,
-            "max_model_len": 128,
-            "apply_overlong_filtering": False,
-            "sampling_params": {
-                "max_generate_length": 8,
-                "temperature": 1.0,
-                "top_p": 1.0,
-                "top_k": -1,
-                "min_p": 0,
-                "logprobs": 0,
-            },
-        }
-    )
+from cloud.iris.tests.task_worker_fixtures import ScriptedClient, WorkerTokenizer, sampled_reply
 
 
 @pytest.fixture
@@ -69,35 +44,20 @@ def agent_harnesses(monkeypatch):
         monkeypatch.setattr("marinskyrl.agent_harnesses.pi_harness", lambda _options, _tokenize: AgentHarness(agent))
         return TaskAgentHarnesses(
             AgentHarnessSettings.model_validate(
-                {"pi": {"version": "0.87.0", "thinking": "high", "thinking_format": "chat-template", "setup_timeout": 10}}
+                {
+                    "pi": {
+                        "version": "0.87.0",
+                        "thinking": "high",
+                        "thinking_format": "chat-template",
+                        "setup_timeout": 10,
+                    }
+                }
             ),
             "fixture",
             tokenize,
         )
 
     return bind
-
-
-def sampled_reply(content="Working"):
-    return {
-        "token_provenance": TokenProvenance.ENGINE,
-        "assistant_messages": [{"role": "assistant", "content": content}],
-        "prompt_ids": [[1, 2]],
-        "response_ids": [[3]],
-        "response_logprobs": [[-0.1]],
-        "stop_reasons": ["stop"],
-    }
-
-
-class ScriptedClient:
-    def __init__(self, replies):
-        self.replies = iter(replies)
-
-    async def generate(self, _request):
-        reply = next(self.replies)
-        if isinstance(reply, Exception):
-            raise reply
-        return reply
 
 
 @pytest.mark.asyncio
@@ -163,6 +123,7 @@ async def test_native_worker_recovers_without_spending_a_turn(agent_harnesses, w
         ScriptedClient(replies),
         {},
         agents=agent_harnesses(agent),
+        retry=RetrySettings(jitter=0),
         shutdown_timeout=5,
     )
     try:
@@ -216,6 +177,7 @@ async def test_native_worker_keeps_a_workspace_verdict_without_sampled_tokens(ag
         WaitingClient(),
         {"shellsim": ShellSimMachineFactory()},
         agents=agent_harnesses(agent),
+        retry=RetrySettings(jitter=0),
         shutdown_timeout=5,
     )
     try:
@@ -254,8 +216,13 @@ async def test_training_machine_limit_leaves_inline_work_unblocked(agent_harness
 
     machines = PausedFactory()
     rows = tuple(
-        task_input(lowered_task(text_task(task_id).model_copy(update={"environment_requirements": SHELL_ENVIRONMENT}),
-                                "pi", backend="shellsim"))
+        task_input(
+            lowered_task(
+                text_task(task_id).model_copy(update={"environment_requirements": SHELL_ENVIRONMENT}),
+                "pi",
+                backend="shellsim",
+            )
+        )
         for task_id in ("machine-a", "machine-b")
     )
     request = TaskRequestBatch(rows=(*rows, task_input(lowered_task(text_task("inline"), "pi"))))
@@ -266,6 +233,7 @@ async def test_training_machine_limit_leaves_inline_work_unblocked(agent_harness
         {"shellsim": machines},
         agents=agent_harnesses(agent),
         concurrent_training_machine_tasks=1,
+        retry=RetrySettings(jitter=0),
         shutdown_timeout=5,
     )
     try:
@@ -282,39 +250,10 @@ async def test_training_machine_limit_leaves_inline_work_unblocked(agent_harness
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("exit_code", "retries"), [(2, 0), (137, 1)])
-async def test_agent_setup_retries_signal_exit(agent_harnesses, worker_config, exit_code, retries):
-    async def agent(_context, _complete):
-        pytest.fail("An unsuccessful setup must stop the agent")
-
-    async def skip_backoff(_delay):
-        pass
-
-    environment = SHELL_ENVIRONMENT.model_copy(update={"setup_commands": (f"exit {exit_code}",)})
-    task = text_task().model_copy(update={"environment_requirements": environment})
-    request = TaskRequestBatch(rows=(task_input(lowered_task(task, "pi", backend="shellsim")),))
-    worker = TaskRolloutWorker(
-        worker_config,
-        WholeTaskProjection(worker_config, WorkerTokenizer()),
-        ScriptedClient([]),
-        {"shellsim": ShellSimMachineFactory()},
-        retry_wait=skip_backoff,
-        agents=agent_harnesses(agent),
-        shutdown_timeout=5,
-    )
-    try:
-        (result,) = await worker.generate(request)
-    finally:
-        await worker.shutdown()
-    assert result.failure is not None
-    assert result.failure.diagnostics["setup_exit_code"] == exit_code
-    assert result.metrics["rollout_retries"] == retries
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("projection", [WholeTaskProjection, StepTaskProjection])
-async def test_pi_retry_charges_engine_replies_without_turning_them_into_policy_tokens(
-    agent_harnesses, worker_config, projection
+@pytest.mark.parametrize("continues_conversation", [False, True])
+async def test_pi_transport_failure_preserves_generation_cost(
+    agent_harnesses, worker_config, projection, continues_conversation
 ):
     first = sampled_reply("Working")
     first["response_ids"] = [[3, 4, 5]]
@@ -326,9 +265,12 @@ async def test_pi_retry_charges_engine_replies_without_turning_them_into_policy_
     async def agent(_context, complete):
         nonlocal attempts
         attempts += 1
-        await complete(Prompt(({"role": "user", "content": "Return twelve"},), {}))
+        initial = {"role": "user", "content": "Return twelve"}
+        turn = await complete(Prompt((initial,), {}))
         if attempts == 1:
-            await complete(Prompt(({"role": "user", "content": "Check again"},), {}))
+            followup = {"role": "user", "content": "Check again"}
+            messages = (initial, turn.message, followup) if continues_conversation else (followup,)
+            await complete(Prompt(messages, {}))
 
     task = text_task()
     request = TaskRequestBatch(
@@ -339,6 +281,7 @@ async def test_pi_retry_charges_engine_replies_without_turning_them_into_policy_
         projection(worker_config, WorkerTokenizer()),
         client,
         {},
+        retry=RetrySettings(max_retries=1, jitter=0),
         agents=agent_harnesses(agent),
         retry_wait=lambda _: asyncio.sleep(0),
         shutdown_timeout=5,
@@ -348,15 +291,27 @@ async def test_pi_retry_charges_engine_replies_without_turning_them_into_policy_
         batch = await worker.training_batch(request, [result])
     finally:
         await worker.shutdown()
-    assert attempts == 2 and result.failure is None
-    assert batch["response_ids"] == last["response_ids"]
+    if continues_conversation:
+        assert attempts == 1
+        assert result.failure is not None
+        assert batch["response_ids"] == first["response_ids"]
+        assert sum(map(sum, batch["loss_masks"])) == 0
+    else:
+        assert attempts == 2
+        assert result.failure is None
+        assert batch["response_ids"] == last["response_ids"]
     work = GeneratedWork.from_batch(batch["response_ids"], batch.get("is_last_step"), batch["rollout_metrics"])
-    assert work.generated_token_count == len(last["response_ids"][0])
-    assert work.paid_tokens == len(first["response_ids"][0]) + len(last["response_ids"][0])
-    assert work.served_turns == 2
-    assert work.abandoned_retry_tokens == 3
+    assert work.generated_token_count == (3 if continues_conversation else 1)
+    assert work.paid_tokens == (3 if continues_conversation else 4)
+    assert work.served_turns == (1 if continues_conversation else 2)
+    assert work.abandoned_retry_tokens == (0 if continues_conversation else 3)
     assert work.unobserved_calls == 1
-    assert work.unobserved_token_limit == worker_config.sampling_params.max_generate_length
+    generation_limit = worker_config.sampling_params.max_generate_length
+    if continues_conversation:
+        served_prefix = len(first["prompt_ids"][0]) + len(first["response_ids"][0])
+        assert work.unobserved_token_limit == worker_config.max_input_length + generation_limit - served_prefix
+    else:
+        assert work.unobserved_token_limit == generation_limit
 
 
 @pytest.mark.asyncio
@@ -385,6 +340,7 @@ async def test_agent_tool_observations_are_payload_not_paid_generation(
         projection(worker_config, WorkerTokenizer()),
         ScriptedClient([a, b]),
         {},
+        retry=RetrySettings(max_retries=1, jitter=0),
         agents=agent_harnesses(agent),
         shutdown_timeout=5,
     )

@@ -10,11 +10,14 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
+from rigging.task_errors import ErrorIdentity
 from shellbox.machine import NetworkPolicy
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import TaskSpec
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.reasoning_markup import ReasoningViolation
+
+CLEANUP_ERRORS_DIAGNOSTIC = "cleanup_errors"
 
 GROSS_ROLLOUT_TOKENS_METRIC = "rollout/gross_response_tokens"
 CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC = "rollout/gross_response_tokens_total"
@@ -175,14 +178,6 @@ class GenerationLimitReached(Exception):
 
 
 @dataclass(frozen=True)
-class RolloutFailure:
-    """Safe failure fields for consumers of a rollout record."""
-
-    exception_type: str
-    diagnostics: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
 class ConversationRecord:
     """One conversation of an attempt: from a ``ModelSession.start`` to the next one, or to the end."""
 
@@ -218,8 +213,9 @@ class Rollout:
     """The last step's metrics, and engine values such as the count of undelivered events."""
     outputs: dict[str, bytes] = field(default_factory=dict)
     """The files under ``TaskSpec.output_paths``, by path. The engine reads them after the harness ends."""
-    failure: RolloutFailure | None = None
-    """For an interrupted attempt: the exception type and the operation that failed."""
+    failure: ErrorIdentity | None = None
+    """For an interrupted attempt: the failure identity with its exception name, category, cause,
+    operation, provider status, and retry disposition."""
 
 
 @dataclass(frozen=True)

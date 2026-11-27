@@ -6,8 +6,16 @@ from collections import Counter
 from types import SimpleNamespace
 
 import pytest
+from omegaconf import OmegaConf
+from rigging.task_errors import ErrorIdentity
+from rolloutengine.models import RolloutOperation
 from skyrl_gym.verification import VerificationResult
-from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAILURE
+from taskcompendium.grading_result import (
+    GRADING_DURATION_SECONDS,
+    GRADING_FAILURE,
+    GradeResult,
+    Outcome,
+)
 
 from skyrl_train.dynamic_sampling import DynamicSamplingType, GroupSelectionPolicy
 from skyrl_train.grader_reporting import GraderStats, write_grader_report
@@ -25,8 +33,40 @@ from skyrl_train.rollouts.buffer import (
 )
 from skyrl_train.rollouts.prompt_order import JudgedGroup
 from skyrl_train.rollouts import context as rollout_context
+from skyrl_train.rollouts.task_projections import WholeTaskProjection
+from skyrl_train.rollouts.training_record import TrainingRollout
 from skyrl_train.task_inputs import TrajectoryMetadata
-from skyrl_train.trajectory_runners.types import TrajectoryBatch
+from skyrl_train.trajectory_runners.trajectory_processing import normalize_trajectory_batches
+from skyrl_train.trajectory_runners.types import BatchFields, TaskRequestBatch, TrajectoryBatch
+from tests.cpu.task_specs import lowered_task, task_input, text_task
+
+
+class ProjectionTokenizer:
+    """Minimal tokenizer for the projection, which runs with overlong filtering off."""
+
+    eos_token_id = 99
+
+
+def projected_failure_rollout(failure: ErrorIdentity, grade: GradeResult) -> TrajectoryBatch:
+    """Project one interrupted attempt the way the task worker does, as a final whole-task row."""
+    rollout = TrainingRollout(
+        task_id="fixture",
+        messages=(),
+        prompt_token_ids=(1,),
+        response_token_ids=(),
+        loss_mask=(),
+        logprobs=None,
+        grade=grade,
+        stop_reason="error",
+        failure=failure,
+    )
+    projection = WholeTaskProjection(
+        OmegaConf.create({"sampling_params": {"logprobs": None}, "apply_overlong_filtering": False}),
+        ProjectionTokenizer(),
+    )
+    batch = projection.project([rollout], TaskRequestBatch(rows=(task_input(lowered_task(text_task())),)))
+    batch["is_last_step"] = [True]
+    return batch
 
 
 @pytest.mark.asyncio
@@ -132,9 +172,12 @@ def test_grader_report_keeps_baseline_and_final_success_by_task_and_subset(tmp_p
     math_b = TrajectoryMetadata("row-1", "taskcompendium", "other", task_id="math-b", subset_id="math")
     code = TrajectoryMetadata("row-2", "taskcompendium", "blend", task_id="code-a", subset_id="code")
     baseline = GraderStats()
-    batch = TrajectoryBatch(
-        rewards=[1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
-        is_last_step=[False, True, True, True, True, True, True],
+    graded_rows = TrajectoryBatch(
+        prompt_token_ids=[[1]] * 6,
+        response_ids=[[2]] * 6,
+        loss_masks=[[0]] * 6,
+        rewards=[1.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        is_last_step=[False, True, True, True, True, True],
         verification_results=[
             VerificationResult.verified(1.0, passed=True),
             VerificationResult.verified(1.0, passed=True, diagnostics={GRADING_DURATION_SECONDS: 1.0}),
@@ -142,14 +185,19 @@ def test_grader_report_keeps_baseline_and_final_success_by_task_and_subset(tmp_p
             VerificationResult.error(
                 "timeout", diagnostics={GRADING_DURATION_SECONDS: 9.0, GRADING_FAILURE: "timeout"}
             ),
-            VerificationResult.error("no response", diagnostics={"operation": "model"}),
             VerificationResult.error(
                 "worker error", diagnostics={GRADING_DURATION_SECONDS: 2.0, GRADING_FAILURE: "execution"}
             ),
             VerificationResult.unavailable("no model output"),
         ],
     )
-    baseline.add(batch, [math_b, math_a, math_b, math_a, math_b, code, code])
+    model_failure = ErrorIdentity(exception_type="ModelServerError", operation=RolloutOperation.MODEL.value)
+    failed = projected_failure_rollout(model_failure, GradeResult(Outcome.INFRA_ERROR, None))
+    batch = normalize_trajectory_batches(
+        [graded_rows, failed],
+        fields=BatchFields.from_groups([BatchFields.from_batch(graded_rows), BatchFields.from_batch(failed)]),
+    )
+    baseline.add(batch, [math_b, math_a, math_b, math_a, code, code, math_b])
     summary = baseline.summary()
     write_grader_report(export_path, "0", {"evaluation": summary["subsets"], "evaluation_tasks": summary["tasks"]})
 
@@ -188,6 +236,18 @@ def test_grader_report_keeps_baseline_and_final_success_by_task_and_subset(tmp_p
     assert tasks["math-b"]["success_rate"] == 0.0
     assert tasks["math-b"]["attempted"] == 2
     assert report["evaluation_tasks"]["25"][0]["success_rate"] == 1.0
+
+
+def test_grader_report_counts_a_grade_phase_failure_from_the_projected_identity():
+    """An interrupted grade without a recorded grading failure counts as a grading execution failure."""
+    grade_failure = ErrorIdentity(exception_type="VerifierTimeoutError", operation=RolloutOperation.GRADE.value)
+    batch = projected_failure_rollout(grade_failure, GradeResult(Outcome.UNAVAILABLE, None, "verifier interrupted"))
+    stats = GraderStats()
+    stats.add(batch, [TrajectoryMetadata("row-0", "taskcompendium", "fixture", subset_id="set")])
+    (subset,) = stats.summary()["subsets"]
+    assert subset["grading_failures"] == {"execution": 1}
+    assert subset["rollout_failures"] == {}
+    assert subset["verification_statuses"] == {"error": 1}
 
 
 def test_grader_report_recovers_from_a_failed_write(tmp_path, monkeypatch):

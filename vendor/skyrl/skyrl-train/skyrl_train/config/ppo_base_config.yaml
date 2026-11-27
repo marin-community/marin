@@ -413,7 +413,7 @@ generator:
   weight_sync_pause_timeout_seconds: 30.0
   max_turns: 1
 
-  # Mask unknown terminal failures and zero rewards for known agent errors.
+  # Terminal-error treatment by name/category; unknown failures use the configured default treatment.
   error_handling:
     enable_error_classification: true
     passthrough_exceptions: []

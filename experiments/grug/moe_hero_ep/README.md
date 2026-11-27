@@ -308,10 +308,25 @@ a failed post aborts submission. Iris also records `MARIN_PROVENANCE`.
 ## Context-length switches
 
 The scaling ladder holds 4,194,304 tokens per rack per update, so the 11-rack hero uses batch 11264
-at 4K, 5632 at 8K, 2816 at 16K, 704 at 65K, and 176 at 262K with the same 390251-step schedule, learning rates, and weight
-decay. Eval runs at the training context, so the `eval_dropless/*` series shift at each switch. Training evals drop each corpus's final partial window, so at 262K `ptb` and `wikitext_103` have no window and log no loss. `eval_dropless/macro_loss` and `eval_dropless/paloma/macro_loss` exclude them, which raises the Paloma macro from 1.960 to 2.043 at step-390251. Do not lengthen the schedule
-to train longer: its length sizes the learning rates and prior context phases. Set the extension described in
-[Hero cutovers](#hero-cutovers-and-wb-lineage) instead.
+at 4K, 5632 at 8K, 2816 at 16K, 704 at 65K, and 176 at 262K with the same 390,251-step schedule,
+learning rates, and weight decay. The schedule also sizes earlier context phases. To train longer,
+set the extension described in [Hero cutovers](#hero-cutovers-and-wb-lineage).
+
+The d6144 Hero and eval-enabled diagnostics score the current training length and the fixed 4K,
+65K, and 262K lengths that training has reached. Each distinct length runs once per scheduled eval
+and logs metrics such as `eval_dropless/seq_len_4096/paloma/macro_loss`. The unqualified
+`eval_dropless/paloma/macro_loss` tracks the training length. Set `GrugEvalConfig.seq_lens` to choose
+other lengths. For a single-length eval, leave `seq_lens` unset and use `max_seq_len` to override the
+training length.
+
+Continuous-text validation retains the final partial sequence with right padding and masks padding
+from attention and loss. This keeps PTB and WikiText-103 in the 262K Paloma macro and can change
+historical packing-matched comparisons at shorter lengths.
+
+`eval_batch_size` sets the batch at the training length. Other lengths use the same token budget,
+rounded down to whole batch shards. Dropless evals use the training context axis and fold the
+expert axis into data, preserving collective groups. GPU peak memory and wall time for the
+combined multi-length training hook have not been measured.
 
 A switch's deploy PR edits Python only. It sets the `HERO_MODEL` fields in `heuristic.py`
 (`max_seq_len`, and `qk_mult`, `qk_mult_long_scale`, `capacity_factor`, or

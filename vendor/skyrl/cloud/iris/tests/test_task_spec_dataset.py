@@ -17,6 +17,7 @@ from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineSpe
 from skyrl_gym.rollout_specs import is_shell_harness
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import SourceTaskDataset
+from marinskyrl.agent_harnesses import PI_HARNESS
 from skyrl_train.task_inputs import TaskInput, task_messages
 from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.models import (

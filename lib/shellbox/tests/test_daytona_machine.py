@@ -18,7 +18,9 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from http import HTTPStatus
 from pathlib import Path
+from ssl import SSLCertVerificationError
 from types import SimpleNamespace
 
 import pytest
@@ -45,7 +47,9 @@ from daytona import (
 from daytona._utils.errors import intercept_errors
 from daytona_api_client_async import SnapshotState
 from multidict import CIMultiDict, CIMultiDictProxy
+from rigging.task_errors import RetryDisposition
 from shellbox.backends.daytona.connection import DaytonaConnection
+from shellbox.backends.daytona.errors import daytona_error_identity
 from shellbox.backends.daytona.machine import (
     PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
     DaytonaImageBuild,
@@ -65,6 +69,7 @@ from shellbox.backends.daytona.snapshot import (
     snapshot_request_for_spec,
     snapshot_resources,
 )
+from shellbox.backends.daytona.transient import retry_transient
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
@@ -2100,3 +2105,55 @@ def test_sandbox_deletion_reports_a_conflict_that_outlasts_the_deadline(monkeypa
         asyncio.run(_delete_named_sandbox(StuckSandbox(), "fixture"))
 
     assert caught.value is conflict
+
+
+@pytest.mark.parametrize("status_code", [None, HTTPStatus.CONFLICT])
+def test_daytona_connection_and_delete_conflict_use_shared_retry_identity(status_code):
+    reset = daytona_error_identity(DaytonaConnectionError("connection reset"), operation="create")
+    assert reset.retry_disposition is RetryDisposition.TRANSIENT
+    conflict = DaytonaConflictError("state change in progress", status_code=status_code)
+    assert daytona_error_identity(conflict, operation="delete").retry_disposition is RetryDisposition.TRANSIENT
+    expected = RetryDisposition.UNKNOWN if status_code is None else RetryDisposition.TRANSIENT
+    assert daytona_error_identity(conflict, operation="create").retry_disposition is expected
+
+
+@pytest.mark.parametrize(
+    "status_code",
+    [HTTPStatus.REQUEST_TIMEOUT, HTTPStatus.CONFLICT, HTTPStatus.TOO_MANY_REQUESTS, HTTPStatus.SERVICE_UNAVAILABLE],
+)
+def test_repeatable_daytona_requests_retry_shared_transient_statuses(status_code, no_retry_wait):
+    attempts = 0
+
+    async def request():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise DaytonaError("temporary failure", status_code=status_code)
+        return "result"
+
+    assert asyncio.run(retry_transient(request)) == "result"
+    assert attempts == 2
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        DaytonaError("request failed", status_code=HTTPStatus.UNAUTHORIZED),
+        DaytonaError("request failed", status_code=HTTPStatus.NOT_FOUND),
+        DaytonaConnectionError("TLS connection failed"),
+    ],
+)
+def test_repeatable_daytona_requests_stop_on_nontransient_failures(failure, no_retry_wait):
+    if isinstance(failure, DaytonaConnectionError):
+        failure.__cause__ = SSLCertVerificationError("certificate rejected")
+    attempts = 0
+
+    async def request():
+        nonlocal attempts
+        attempts += 1
+        raise failure
+
+    with pytest.raises(type(failure)) as caught:
+        asyncio.run(retry_transient(request))
+    assert caught.value is failure
+    assert attempts == 1

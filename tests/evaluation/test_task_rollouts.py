@@ -99,6 +99,8 @@ from verifyit.spec import (
 )
 from zephyr.context import ZephyrContext
 
+CORPUS_TRIAL_SEED = 7
+
 
 def convert(row: RawRow, _context: ConversionContext):
     task = exact_answer_task(row, prompt=row.data["question"], answers=("red",), ignore_case=False)
@@ -175,7 +177,7 @@ def published_corpora(tmp_path):
                     sampling=Sampling(
                         temperature=0.7, top_p=1, top_k=None, max_tokens=8, stop=(), chat_template_kwargs={}
                     ),
-                    trials=TrialPolicy(count=2, seed=7),
+                    trials=TrialPolicy(count=2, seed=CORPUS_TRIAL_SEED),
                     metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
                     primary_metric="accuracy",
                     summary=SummaryKind.MEAN,
@@ -219,7 +221,7 @@ def run_config():
 @pytest.mark.asyncio
 async def test_unexpected_model_error_is_saved_and_propagates(tmp_path, published_corpora, run_config):
     async def model(_request):
-        raise RuntimeError("model adapter bug")
+        raise RuntimeError("model adapter bug") from ConnectionError("connection reset")
 
     output = str(tmp_path / "unexpected-error")
     with pytest.raises(ExceptionGroup) as failure:
@@ -230,8 +232,48 @@ async def test_unexpected_model_error_is_saved_and_propagates(tmp_path, publishe
     failed = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
     assert failed
     assert all((row["retry"], row["outcome"]) == (0, "infra_error") for row in failed)
-    assert all(
-        json.loads(reader.read_blob(row["result_blob"]))["failure"]["exception_type"] == "RuntimeError" for row in failed
+    failures = [json.loads(reader.read_blob(row["result_blob"]))["failure"] for row in failed]
+    assert all(record["exception_type"] == "RuntimeError" for record in failures)
+    assert all(record["cause_type"] == "ConnectionError" for record in failures)
+    assert all(record["operation"] == "model" for record in failures)
+    assert all(record["retry_disposition"] == "transient" for record in failures)
+
+
+@pytest.mark.asyncio
+async def test_malformed_model_tool_arguments_score_zero_without_cancelling_other_attempts(
+    tmp_path, published_corpora, run_config
+):
+    malformed_arguments = '{"cmd": "oops'
+
+    async def model(request):
+        prompt = request.messages[-1]["content"]
+        if prompt == "colors/0" and request.options["seed"] == CORPUS_TRIAL_SEED:
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call-1", "type": "function", "function": {"name": "bash", "arguments": malformed_arguments}}
+                ],
+            }
+        else:
+            message = {"role": "assistant", "content": "red"}
+        return ModelTurn(message, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+    output = str(tmp_path / "results")
+    await run_evaluation((published_corpora[0],), output, run_config, model, machine_factories={})
+
+    reader = ReadView(output)
+    finished = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert Counter(row["outcome"] for row in finished) == {"submission_failure": 1, "graded": 3}
+    failed = next(row for row in finished if row["outcome"] == "submission_failure")
+    assert failed["retry"] == 0
+    raw = json.loads(reader.read_blob(failed["result_blob"]))
+    assert raw["grade"]["reward"] == 0
+    samples = list(reader.iter_rows(ARCHIVE_SAMPLES_TABLE))
+    assert Counter(row["grading"]["score"] for row in samples) == {0.0: 1, 1.0: 3}
+    assert (
+        raw["conversations"][0]["steps"][0]["turn"]["message"]["tool_calls"][0]["function"]["arguments"]
+        == malformed_arguments
     )
 
 
@@ -1286,6 +1328,42 @@ def publish_episodes(tmp_path, questions, agent, convert=convert_episode_row):
     return str(output)
 
 
+@pytest.mark.asyncio
+async def test_reused_model_tool_call_id_scores_zero_without_cancelling_other_attempts(tmp_path, run_config):
+    corpus = publish_episodes(tmp_path, ("episode/reused", "episode/solve"), ShellAgent())
+
+    async def model(request):
+        question = request.messages[0]["content"]
+        observations = sum(message["role"] == "tool" for message in request.messages)
+        if question == "episode/reused" and observations < 2:
+            call = {
+                "id": "reused",
+                "type": "function",
+                "function": {"name": "shell", "arguments": json.dumps({"command": "echo red"})},
+            }
+            message = {"role": "assistant", "content": "", "tool_calls": [call]}
+        else:
+            message = {"role": "assistant", "content": "red"}
+        return ModelTurn(message, (), (), None, "stop", usage=TokenUsage(5, 2))
+
+    config = run_config.model_copy(update={"source_limit": None, "task_machine": machine_runtime(backend="shellsim")})
+    output = str(tmp_path / "results")
+    await run_evaluation(
+        (corpus,),
+        output,
+        config,
+        model,
+        machine_factories={"shellsim": ShellSimMachineFactory()},
+        harnesses={"shell": lambda _agent, _budget: ShellHarness(command_timeout=None)},
+    )
+
+    reader = ReadView(output)
+    finished = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert Counter(row["outcome"] for row in finished) == {"submission_failure": 1, "graded": 1}
+    failed = next(row for row in finished if row["outcome"] == "submission_failure")
+    assert json.loads(reader.read_blob(failed["result_blob"]))["grade"]["reward"] == 0.0
+
+
 @pytest.fixture
 def episode_corpus(tmp_path):
     return publish_episodes(tmp_path, ("episode/flaky", STALL, "episode/solve"), ShellAgent())
@@ -1357,7 +1435,7 @@ async def test_agent_episodes_grade_turn_deadlines_and_retry_machine_start_failu
         ("rows.jsonl:1", 0): "submission_failure",
         ("rows.jsonl:2", 0): "graded",
     }
-    assert finished["rows.jsonl:0", 0][1]["failure"]["diagnostics"]["operation"] == "start"
+    assert finished["rows.jsonl:0", 0][1]["failure"]["operation"] == "start"
     stalled = finished["rows.jsonl:1", 0][1]
     assert (stalled["stop_reason"], stalled["limits"]["total_turn_timeout"]) == ("total_turn_timeout", 0.5)
     samples = [sample_from_archive_row(row) for row in reader.iter_rows(ARCHIVE_SAMPLES_TABLE)]
@@ -1717,16 +1795,12 @@ async def test_reuse_asks_the_model_when_a_sampling_option_changed(tmp_path, run
 
 
 @pytest.mark.asyncio
-async def test_reuse_records_the_source_run_and_its_driver_revision_outside_the_run_identity(
-    tmp_path, run_config, monkeypatch
-):
+async def test_reuse_records_the_source_run_outside_the_run_identity(tmp_path, run_config):
     strict = publish_colors_corpus(tmp_path, "strict")
     lenient = publish_colors_corpus(tmp_path, "lenient", converter=convert_ignoring_case)
     source, output, fresh = (str(tmp_path / name) for name in ("stored", "regraded", "fresh"))
     red = dict.fromkeys(COLORS, "red")
-    with monkeypatch.context() as older:
-        older.setattr(evaluation, "EVALUATION_EXECUTION_REVISION", "older-driver")
-        await run_evaluation((strict,), source, run_config, ScriptedModel(red), machine_factories={})
+    await run_evaluation((strict,), source, run_config, ScriptedModel(red), machine_factories={})
     await run_evaluation((lenient,), fresh, run_config, ScriptedModel(red), machine_factories={})
 
     await run_evaluation((lenient,), output, run_config, no_model, machine_factories={}, reuse_from=source)
@@ -1735,11 +1809,30 @@ async def test_reuse_records_the_source_run_and_its_driver_revision_outside_the_
 
     regraded = json.loads(ReadView(output).read_blob(RUN_OBJECT))
     assert regraded[RESPONSE_SOURCES] == [
-        {"root": source, "run": stored_run_identity(source), "driver_revision": "older-driver"}
+        {
+            "root": source,
+            "run": stored_run_identity(source),
+        }
     ]
     assert regraded["driver_revision"] == evaluation.EVALUATION_EXECUTION_REVISION
     assert RESPONSE_SOURCES not in json.loads(ReadView(fresh).read_blob(RUN_OBJECT))
     assert run_identity(regraded) == stored_run_identity(fresh)
+
+
+@pytest.mark.asyncio
+async def test_reuse_rejects_a_source_stored_by_another_execution_revision(tmp_path, run_config, monkeypatch):
+    strict = publish_colors_corpus(tmp_path, "strict")
+    source, output = str(tmp_path / "stored"), str(tmp_path / "regraded")
+    with monkeypatch.context() as older:
+        older.setattr(evaluation, "EVALUATION_EXECUTION_REVISION", "older-driver")
+        await run_evaluation(
+            (strict,), source, run_config, ScriptedModel(dict.fromkeys(COLORS, "red")), machine_factories={}
+        )
+
+    with pytest.raises(ValueError, match="execution revision"):
+        await run_evaluation((strict,), output, run_config, no_model, machine_factories={}, reuse_from=source)
+
+    assert ReadView(output).read_blob(RUN_OBJECT) is None
 
 
 @pytest.mark.asyncio

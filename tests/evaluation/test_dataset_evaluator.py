@@ -23,12 +23,12 @@ from marin.evaluation.task_worker import (
     DAYTONA_EGRESS,
     JUDGE_API_KEY,
     JUDGE_ENDPOINT,
-    DaytonaConnection,
     machine_factories,
 )
 from marin.inference.types import InferenceBackendState
 from openai import OpenAI
 from rolloutengine.agents.mini_swe.agent import MiniSweModelFormat
+from shellbox.backends.daytona.connection import DaytonaConnection
 
 from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.launch import LaunchSpec, prepare_evaluation_batch

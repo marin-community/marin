@@ -3,9 +3,10 @@
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
-from rolloutengine.models import ConversationRecord, GradedRollout, ModelTurn, RolloutFailure, TaskRolloutSpec
+from rigging.task_errors import ErrorIdentity
+from rolloutengine.models import ConversationRecord, GradedRollout, ModelTurn, TaskRolloutSpec
 from skyrl_gym.task_records import FOLDED_GRADE_HARNESSES, StepReward, fold_grades
-from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.grading_result import GradeResult, Outcome, grading_failure_identity
 from taskcompendium.models import NoGrader
 from verifyit.reasoning_markup import ReasoningViolation
 
@@ -68,7 +69,7 @@ class TrainingRollout:
     steps: tuple[TrainingStep, ...] = ()
     metrics: dict[str, Any] = field(default_factory=dict)
     outputs: dict[str, bytes] = field(default_factory=dict)
-    failure: RolloutFailure | None = None
+    failure: ErrorIdentity | None = None
     conversations: tuple[ConversationRecord, ...] = ()
     generation_usage: ModelGenerationUsage | None = None
 
@@ -155,3 +156,11 @@ def reject_malformed_reasoning(rollout: TrainingRollout) -> TrainingRollout:
         for step in rollout.steps
     )
     return replace(rollout, grade=grade, steps=steps)
+
+
+def rollout_with_verifier_failure(rollout: TrainingRollout) -> TrainingRollout:
+    """Retain an attempt's failure or attach the verifier's shared identity."""
+    if rollout.failure is not None:
+        return rollout
+    failure = grading_failure_identity(rollout.grade)
+    return rollout if failure is None else replace(rollout, failure=failure)

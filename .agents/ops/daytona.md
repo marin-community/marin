@@ -112,38 +112,73 @@ Read the account's current quota and inventory before submission. Snapshot quota
 and live sandbox capacity are separate limits. A successful GPU allocation proves
 neither is available.
 
-`shellbox-daytona-usage` reads the account's live quota, current usage and
-remaining capacity. It lists the account's sandboxes (paginated) and reports
-the usage overview with sandbox counts by state. The `/organizations` endpoint
-rejects API-key credentials with 401, so the command resolves the organization
-ID from the inventory; when the org has no sandboxes, it reads snapshots and
-then volumes instead:
+`shellbox-daytona-usage` reads every page of the sandbox inventory and reports
+headroom per region. It does not call the organization-usage endpoint, which
+rejects API keys with 401. The quota presets are the `ACCOUNT_LIMITS` mapping in
+`lib/shellbox/src/shellbox/backends/daytona/usage_cli.py` — the single source of
+record. They hold the account owner's limits (2026-11-19) for the `us` region,
+the one Daytona region Marin launches in (`DAYTONA_TARGET`); add further regions
+to that mapping when the owner supplies their rows.
 
 ```bash
 uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-usage \
-  --api-key-env DAYTONA_RL_API_KEY --cpu 2 --memory-gib 8 --disk-gib 8
+  --api-key-env DAYTONA_RL_API_KEY --cpu 2 --memory-gib 8 --disk-gib 8 --json
+
+uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-usage \
+  --all --cpu 4 --memory-gib 8 --disk-gib 10 --headroom 0.2 --json
 ```
 
-`--all` reads the three known accounts in one sweep (eval =
-`DAYTONA_EVAL_API_KEY`; rl = `DAYTONA_RL_API_KEY`;
-data = `DAYTONA_DATA_API_KEY`). `DAYTONA_API_KEY` is never an account
-selector here: the SDK treats it as an ambient variable, and some launchers
-load the RL key into it. `--json` emits the
-machine-readable report, including per-region rows with the provider's
-per-sandbox maxima.
+`--all` uses the dedicated keys: eval = `DAYTONA_EVAL_API_KEY`,
+rl = `DAYTONA_RL_API_KEY`, data = `DAYTONA_DATA_API_KEY`. Missing keys produce
+explicit skipped-account entries. A single standard key selects its quota
+preset. For another variable, select the limits explicitly, for example
+`--api-key-env DAYTONA_API_KEY --limits eval`. Check that this variable holds
+the intended account's key. The ambient `DAYTONA_API_KEY` never selects an
+account by itself.
 
-Size concurrency from the remaining capacity. The `max concurrency` line sizes
-against the quota row for the launch's target region and sandbox class
-(`--target`, `--sandbox-class`, default class `container`), because the
-provider enforces each row's quota separately; the summed totals above it are
-informational. The line applies the headroom (default 20%, `--headroom`) to
-that row's remaining CPU, memory and disk capacity, divides by the per-sandbox
-request from `--cpu`, `--memory-gib` and `--disk-gib`, and reports the
-minimum. The sandbox state counts show what is live. The reading moves as
-lanes start and stop, so re-read before large submissions. A
-per-sandbox request above the row's `max_cpu_per_sandbox`,
-`max_memory_gib_per_sandbox` or `max_disk_gib_per_sandbox` fails at creation;
-the command prints a warning when the profile exceeds one.
+Daytona enforces quota per region (and per sandbox class) with no organization
+total, so the command groups inventory usage by each sandbox's `target` and
+compares it only with that region's recorded limits; it never sums across
+regions. Each preset also caps one sandbox at 4 vCPU, 8 GiB RAM and 10 GiB
+disk. The report converts decimal GB quotas to GiB to match inventory
+allocations, and `--memory-gib` and `--disk-gib` take whole GiB. The command
+does not fetch live quotas.
+
+The report counts every state. Compute is charged for `creating`, `restoring`,
+`started`, `starting`, `stopping`, `pending_build`, `building_snapshot`,
+`unknown`, `pulling_snapshot`, `forking`, `pausing` and `resuming`.
+`resizing` and `snapshotting` also charge compute when their desired state is
+`started`. Disk is charged for every compute state plus `stopped`, `paused`,
+`archiving`, `resizing` and `snapshotting`, regardless of desired state.
+`destroyed`, `destroying`, `error`, `build_failed` and `archived` consume
+nothing. These rules follow the provider's
+[compute](https://github.com/daytonaio/daytona/blob/b5a5d9e/apps/api/src/organization/constants/sandbox-states-consuming-compute.constant.ts)
+and [disk](https://github.com/daytonaio/daytona/blob/b5a5d9e/apps/api/src/organization/constants/sandbox-states-consuming-disk.constant.ts)
+quota state definitions. Unrecognized API states and missing desired states for
+conditional compute fail the reading. For each resource, `remaining` is `max(0, quota - used)`,
+and `available` is `max(0, quota * (1 - headroom) - used)`. The default
+`--headroom 0.2` reserves 20% of each region's quota. Each region's
+`max_concurrency.limit` is the minimum of `floor(available / per_sandbox_request)`
+across CPU, RAM and disk. A profile above any per-sandbox maximum gets a zero
+limit.
+
+JSON includes `organization_id`, `observed_at`, `usage_source`, `quota_source`,
+`headroom_fraction`, `per_sandbox`, account-wide `sandboxes` (`total`,
+`started`, `by_state`), and `regions`. Each `regions` entry is keyed by region
+and carries that region's `limits`, `resources`, and `sandboxes` (`total`,
+`compute_charged`, `disk_charged`). A supplied profile adds `max_concurrency`
+per region (`profile`, `by_resource`, `exceeds_per_sandbox_maximum`, `limit`).
+Resource fields are `quota`, `used`, `remaining` and `available`.
+An empty inventory reports zero usage and a null organization ID, without
+querying snapshots or volumes. Duplicate IDs, mixed organizations, regions
+without recorded limits, or missing active allocations fail the reading instead
+of reporting free capacity.
+
+Inventory estimates capacity at read time. It reserves no capacity. Re-read it
+before and during submissions, include the entire simultaneous batch, and
+back off when it does not fit. Keep lane admission locks and pending-create
+reservations: this read-only command does not coordinate concurrent submitters
+or enforce creation-rate limits. Snapshot quota is separate.
 
 1. Inventory snapshots in the intended account, including every result page:
 

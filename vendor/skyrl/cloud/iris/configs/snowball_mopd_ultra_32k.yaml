@@ -26,6 +26,9 @@ context_budget:
 environment:
   env_class: nemotron_ultra
   task_sessions:
+    retry:
+      max_retries: 3
+      wait_multiplier: 2.0
     nemotron_ultra:
       grading: skip
 

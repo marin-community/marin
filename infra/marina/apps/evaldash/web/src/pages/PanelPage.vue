@@ -14,7 +14,7 @@ import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatDelta, formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { UNVERSIONED_COHORT, cellCoverageLabel, cellsByModel, cohortWarning, fleetBest, isPartialCoverage, scoredItemsLabel, withVariant } from '@/utils/panel'
+import { ALL_COHORTS, UNVERSIONED_COHORT, cellCoverageLabel, cellsByModel, cohortWarning, fleetBest, isPartialCoverage, scoredItemsLabel, withVariant } from '@/utils/panel'
 import { compareCells, meanReciprocalRanks } from '@/utils/ranking'
 import { MAX_COMPARE, isSmokeEval } from '@/constants'
 import {
@@ -938,6 +938,7 @@ function goToModel(model: string) {
       v-if="historyTarget"
       :model="historyTarget.model"
       :task="historyTarget.task"
+      :cohort="cohort || ALL_COHORTS"
       @close="historyTarget = null"
     />
   </section>
