@@ -2250,6 +2250,20 @@ def say_rollover_escalation(repo: Path, target: str, owner: str, why: str) -> No
     )
 
 
+def unrecorded_specs(repo: Path, previous: str, entries: dict[str, dict]) -> list[str]:
+    """Run spec paths on the weekly branch ``previous`` whose registry entry still has a trial without a result: a
+    run that ends after the cut is recorded, repaired or relaunched from its spec, so the new week needs it."""
+    paths = git(repo, "ls-tree", "--name-only", f"origin/{previous}", f"{SPECS}/").splitlines()
+    return [
+        path
+        for path in paths
+        if any(
+            not (t.get("loss_delta") or t.get("delta"))
+            for t in entries[registry_of(Path(path).stem)].get("trials") or []
+        )
+    ]
+
+
 def finish_rollover(repo: Path, rollover: Rollover, *, dry_run: bool) -> None:
     """Gate every carried change together on the recipe, push the week, then record each port's commit as its idea's
     code (so the next rollover and any retest carry the port, not the original)."""
@@ -2273,6 +2287,12 @@ def finish_rollover(repo: Path, rollover: Rollover, *, dry_run: bool) -> None:
                 '--body "<the gate output>", then start again)'
             )
             return
+    previous = latest_week(repo, rollover.target)
+    specs = [] if previous is None else unrecorded_specs(repo, previous, {e["id"]: e for e in all_entries()})
+    if specs:
+        print(f"carrying {len(specs)} run spec(s) from {previous} whose runs have no result yet")
+        run_git(repo, ["checkout", f"origin/{previous}", "--", *specs], dry_run=dry_run)
+        run_git(repo, ["commit", "--quiet", "-m", f"Belay: run specs from {previous} awaiting results"], dry_run=dry_run)
     run_git(repo, ["push", "--quiet", "-u", "origin", rollover.target], dry_run=dry_run)
     if not dry_run:
         clear_rollover_blocked(repo)

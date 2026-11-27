@@ -318,7 +318,8 @@ of ideas still in play: ideas in progress (approved, planned or running, or with
 not yet adopted. Their code commits come from the registry (`code_commits`). Losses, noise, declined and closed
 ideas stay behind on the old branch; settings-only ideas carry nothing. A carried idea whose code calls code from an
 idea left behind brings that code too, with its flag off: the cut scans each carried commit for names only a
-left-behind idea defines (`carrying X#### as code X#### needs`).
+left-behind idea defines (`carrying X#### as code X#### needs`). The cut also brings last week's run specs whose
+runs have no recorded result yet, so a run that ends after the cut is still recorded from this week's branch.
 
 The cut must never stop Belay. Until this week's branch exists, `start` runs the events on last week's branch, and
 a later session retries the cut. One idea that cannot be carried is left behind (`--drop`), not a reason to leave
@@ -328,6 +329,7 @@ the whole week uncut.
    - **Expect:**
      - `carrying <n> idea(s): X####, ...`, any `carrying X#### as code X#### needs` lines, then `cutting <branch>
        from origin/marin_belay_v1_recipe` and one `carrying <commit> X####: <flag> (default off)` line per commit;
+     - `carrying <n> run spec(s) from <last week> whose runs have no result yet`, when any;
      - the push, then `on <branch>: origin/marin_belay_v1_recipe plus <n> carried commit(s)`;
      - `next: B start ...`.
    - **If a carried commit conflicts** (`... conflicts in: <files>`), port it; the recipe moved under it, which is
