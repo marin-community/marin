@@ -66,7 +66,8 @@ trials:
   batch: X0265
   date: '2026-11-27'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0265
-  wandb: []
+  wandb:
+  - belay-X0265v3-seed0-t
   settings:
     id_balance_gain: '0.096'
   commit: f779655e2f
