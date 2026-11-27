@@ -22,13 +22,79 @@ from shellbox.machine import (
 )
 from shellbox.task import ContainerSpec, TaskSpec
 
-from lib.shellbox.tests.local_machine_support import (
-    ROOT_DELIVERY_QUIESCE_PROGRAM,
-    ROOT_DELIVERY_QUIESCE_SCRIPT,
-    SPEC,
-    make_factory,
-    on_machine,
-)
+from lib.shellbox.tests.local_machine_support import SPEC, make_factory, on_machine
+
+ROOT_DELIVERY_QUIESCE_PROGRAM = """\
+import os, signal
+
+mine = set()
+pid = os.getpid()
+while pid > 1:
+    mine.add(pid)
+    try:
+        with open(f"/proc/{pid}/stat") as stream:
+            fields = stream.read().rsplit(") ", 1)[1].split()
+        pid = int(fields[1])
+    except (OSError, IndexError, ValueError):
+        break
+killed = []
+for entry in os.scandir("/proc"):
+    if not entry.name.isdecimal():
+        continue
+    victim = int(entry.name)
+    if victim in mine or victim == 1:
+        continue
+    try:
+        with open(f"/proc/{victim}/stat") as stream:
+            fields = stream.read().rsplit(") ", 1)[1].split()
+        state = fields[0]
+    except (OSError, IndexError, ValueError):
+        continue
+    if state.startswith("Z"):
+        continue
+    try:
+        os.kill(victim, signal.SIGKILL)
+        killed.append(victim)
+    except ProcessLookupError:
+        continue
+print(len(killed))
+"""
+
+
+ROOT_DELIVERY_QUIESCE_SCRIPT = """\
+set -eu
+self=$$
+ancestry=" $self "
+pid=$self
+while [ "$pid" -gt 1 ]; do
+  line=$(cat "/proc/$pid/stat" 2>/dev/null) || break
+  rest=${line##*) }
+  state=${rest%% *}
+  ppid=${rest#* }
+  ppid=${ppid%% *}
+  case $ppid in ''|*[!0-9]*) break;; esac
+  ancestry="$ancestry $ppid "
+  pid=$ppid
+done
+killed=0
+for entry in /proc/[0-9]*; do
+  victim=${entry#/proc/}
+  case $ancestry in *" $victim "*) continue;; esac
+  [ "$victim" -gt 1 ] || continue
+  line=$(cat "/proc/$victim/stat" 2>/dev/null) || continue
+  rest=${line##*) }
+  case ${rest%% *} in Z*) continue;; esac
+  if kill -9 "$victim" 2>/dev/null; then
+    killed=$((killed + 1))
+  elif [ ! -d "/proc/$victim" ]; then
+    continue
+  else
+    echo "quiesce kill failed for $victim" >&2
+    exit 1
+  fi
+done
+echo "$killed"
+"""
 
 
 @pytest.mark.parametrize("members", [1, 2], ids=["machine", "task"])

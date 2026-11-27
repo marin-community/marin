@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
+from shellbox.backends.local import disk_lifecycle
 from shellbox.backends.local.cgroup import delegated_cgroup_parent
 from shellbox.backends.local.disk import LocalDiskPool, verified_local_disk_pool
 from shellbox.backends.local.machine import LocalMachineFactory, check_local_environment
@@ -19,6 +20,7 @@ from shellbox.machine import (
     Command,
     CommandSemantics,
     ExitReason,
+    HostImage,
     MachineDiskFull,
     MachineSpec,
     MachineTerminated,
@@ -58,7 +60,7 @@ def disk_state(root: Path) -> DiskState:
     return DiskState(
         loops=tuple(row["name"] for row in loops["loopdevices"] if str(root) in row["back-file"]),
         mounts=tuple(row for row in Path("/proc/self/mountinfo").read_text().splitlines() if str(root) in row),
-        allocations=tuple(str(path) for path in root.glob("sandbox-*")),
+        allocations=tuple(str(path) for path in root.glob(f"{disk_lifecycle.ALLOCATION_PREFIX}*")),
     )
 
 
@@ -70,11 +72,15 @@ async def test_local_disk_verified_pool_is_shared_by_concurrent_host_requests(tm
     assert disk_state(first.root) == DiskState()
 
 
-async def test_local_disk_command_timeout_releases_spools_before_unmount(tmp_path, executable_oci_image, monkeypatch):
+@pytest.mark.parametrize("image_kind", ["host", "oci"])
+async def test_local_disk_command_timeout_releases_spools_before_unmount(
+    tmp_path, executable_oci_image, monkeypatch, image_kind
+):
     monkeypatch.setattr("shellbox.backends.local.machine.delegated_cgroup_parent", lambda: None)
     pool = LocalDiskPool(tmp_path / "disks")
     factory = LocalMachineFactory(disk_root=pool.root, image_cache=tmp_path / "images")
-    machine = await factory.create(MachineSpec(executable_oci_image, workdir="/app", storage_mb=64))
+    image = HostImage() if image_kind == "host" else executable_oci_image
+    machine = await factory.create(MachineSpec(image, workdir="/app", storage_mb=64))
     try:
         result = await machine.run(Command(("/bin/sleep", "60"), timeout=1))
         assert result.reason is ExitReason.TIMED_OUT

@@ -235,6 +235,10 @@ worker process, mount namespace and root directory identity in a bounded cache.
 The filesystem charges writable image layers, scratch, workdirs, `/dev/shm` and
 command spools. Shared read-only image layers remain outside it.
 
+SkyRL requires an absolute `disk_root`. Its launcher provisions `e2fsprogs` when
+absent from the pinned task image, requiring package-mirror access during startup.
+Direct LOCAL workers install these host tools before creating a factory.
+
 The worker requires Linux 5.8 or newer, root in a privileged pod,
 `/dev/loop-control`, permission to create block device nodes, available loop devices, `mkfs.ext4`, `mount`, `umount`, `losetup`, `findmnt` and `umoci`. The
 root must be root-owned mode 0700 in a private or slave mount namespace.

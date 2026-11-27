@@ -22,13 +22,22 @@ from shellbox.machine import (
 )
 from shellbox.transfer import download_files
 
-from lib.shellbox.tests.local_machine_support import (
-    SPEC,
-    _member,
-    _stream,
-    on_machine,
-    run_command,
-)
+from lib.shellbox.tests.local_machine_support import SPEC, on_machine, run_command
+
+
+def _stream(*members: tuple[tarfile.TarInfo, bytes]) -> bytes:
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w") as archive:
+        for member, data in members:
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+    return stream.getvalue()
+
+
+def _member(name: str, kind: bytes = tarfile.REGTYPE, linkname: str = "") -> tarfile.TarInfo:
+    member = tarfile.TarInfo(name)
+    member.type, member.linkname, member.mode = kind, linkname, 0o755 if kind == tarfile.DIRTYPE else 0o644
+    return member
 
 
 def test_recursive_download_preserves_hardlinks_as_files_and_literal_names(factory, tmp_path):

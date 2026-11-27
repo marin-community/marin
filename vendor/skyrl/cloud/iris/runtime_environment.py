@@ -1,9 +1,10 @@
-"""Resolve and install the immutable MarinSkyRL task environment."""
+"""Resolve the pinned task image and provision the selected runtime."""
 
 from __future__ import annotations
 
 import shlex
 from enum import StrEnum
+from pathlib import PurePosixPath
 
 
 MARINSKYRL_TASK_ROOT = "/app/vendor/skyrl"
@@ -46,6 +47,8 @@ def task_setup_command(profile: RuntimeProfile) -> str:
 
 def local_disk_setup_script(disk_root: str) -> str:
     """Return shell setup for ext4 tools and a new disk root; the pool validates existing roots."""
+    if not PurePosixPath(disk_root).is_absolute():
+        raise ValueError("LOCAL disk_root must be absolute")
     return f"""set -euo pipefail
 [ "$(id -u)" -eq 0 ] || {{ echo 'LOCAL disk quotas require a privileged root worker' >&2; exit 1; }}
 if ! command -v mkfs.ext4 >/dev/null; then

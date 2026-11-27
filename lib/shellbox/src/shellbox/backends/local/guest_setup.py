@@ -4,6 +4,7 @@
 """Initialize workdirs, task aliases, and requested tools inside a local guest."""
 
 import os
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from shellbox.backends.local import sandbox
@@ -85,3 +86,32 @@ def host_environment(
     if hash_seed is not None:
         environment["PYTHONHASHSEED"] = hash_seed
     return environment
+
+
+@dataclass(frozen=True)
+class HostLayout:
+    mounts: tuple[Mount, ...]
+    workdir: PurePosixPath
+    overlaid_workdir: PurePosixPath | None
+
+
+def host_layout(
+    host: HostImage,
+    read_only: tuple[Path, ...],
+    system_mounts: tuple[Mount, ...],
+    workdir: str,
+    system_directories: sandbox.SystemDirectories,
+) -> HostLayout:
+    mounts = host_mounts(host, read_only, system_mounts)
+    path = sandbox._absolute_path(workdir or "/")
+    overlaid = (
+        path
+        if system_directories is sandbox.SystemDirectories.COPY_ON_WRITE
+        and sandbox._within(path, sandbox.OVERLAID_DIRECTORIES)
+        else None
+    )
+    if (sandbox._within(path, sandbox.SYSTEM_DIRECTORIES) and overlaid is None) or any(
+        path.is_relative_to(mount.guest) for mount in mounts
+    ):
+        raise UnsupportedMachineSpec(f"The local backend's workdir {workdir} is a read-only host path")
+    return HostLayout(mounts, path, overlaid)

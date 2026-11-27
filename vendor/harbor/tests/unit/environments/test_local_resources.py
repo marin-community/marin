@@ -26,7 +26,7 @@ from tests.unit.environments.local_runtime import local_environment
 def test_local_unsupported_resources_fail_without_allocating_a_sandbox(
     tmp_path, monkeypatch, resources
 ):
-    def acquire(cache, source):
+    def acquire(_cache, _source):
         pytest.fail("An unsupported resource request reached image acquisition")
 
     monkeypatch.setattr(ImageCache, "prepare", acquire)
@@ -57,7 +57,7 @@ async def test_local_numeric_limits_do_not_bypass_required_containment(
         "shellbox.backends.local.machine.delegated_cgroup_parent", lambda: None
     )
 
-    def acquire(cache, source):
+    def acquire(_cache, _source):
         pytest.fail("A worker without containment reached image acquisition")
 
     monkeypatch.setattr(ImageCache, "prepare", acquire)

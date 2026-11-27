@@ -15,6 +15,7 @@ from types import MappingProxyType
 
 from shellbox.backends.local import launch
 from shellbox.backends.local.disk import LocalDisk
+from shellbox.backends.local.disk_lifecycle import STICKY_WORLD_WRITABLE
 from shellbox.machine import (
     Mount,
     NetworkPolicy,
@@ -86,7 +87,6 @@ CONTROL_ENVIRONMENT = MappingProxyType({"PATH": "/usr/bin:/bin", "HOME": str(HOM
 """The environment of the backend's own commands, such as transfers; ``MachineSpec.env`` does not reach them."""
 ROOT_MODE = 0o755
 """Lets a command that runs as another user traverse the machine's root directory."""
-STICKY_WORLD_WRITABLE = 0o1777
 PROBE_TIMEOUT = 30
 NS_GET_USERNS = 0xB701
 
@@ -201,17 +201,7 @@ def _sandbox_argv(
     mounts: Iterable[Mount],
     network: NetworkPolicy,
 ) -> list[str]:
-    """The bwrap invocation that runs the machine's keeper program over ``root``.
-
-    The system directories are read-only, or, with ``layers``, overlaid by the machine's layer of each.
-    The program runs without capabilities; as root, bwrap needs no user namespace for its own.
-    ``--as-pid-1`` makes the payload the guest PID namespace's PID 1: the machine's lifecycle
-    keeper must be PID 1, because grading quiesces kill every process outside their ancestry
-    except PID 1, and a keeper below PID 1 dies with them, closing the machine mid-grading.
-    The payload (``KEEPER_PAYLOAD``) is an init that keeps the sleeper ``sleep 2147483647``
-    running as its child, for graders that spare machines by that exact argv, and reaps the
-    guest's orphaned processes, which reparent to PID 1.
-    """
+    """Return bubblewrap arguments for a persistent isolated keeper over the private root."""
     argv = [str(bwrap), "--unshare-ipc", "--unshare-pid", "--unshare-uts", "--unshare-cgroup-try"]
     if network == NetworkPolicy.DENY:
         argv.append("--unshare-net")

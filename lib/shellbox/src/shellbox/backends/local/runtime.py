@@ -15,6 +15,7 @@ from shellbox.backends.local import sandbox
 from shellbox.backends.local.cgroup import MachineCgroup
 from shellbox.backends.local.commands import command_config, execute_command, start_process
 from shellbox.backends.local.disk import LocalDisk
+from shellbox.backends.local.disk_lifecycle import SHARED_MEMORY_DIRECTORY
 from shellbox.backends.local.images import PreparedLocalImage
 from shellbox.backends.local.keeper import allocate_keeper
 from shellbox.backends.local.transfers import (
@@ -182,7 +183,13 @@ class LocalMachine:
             if peer is None and self.spec.network is NetworkPolicy.DENY:
                 arguments.append("--unshare-net")
         if self._disk is not None:
-            arguments += ["--bind", str(self._disk.data / "shm"), sandbox.SHARED_MEMORY, "--remount-ro", "/dev"]
+            arguments += [
+                "--bind",
+                str(self._disk.data / SHARED_MEMORY_DIRECTORY),
+                sandbox.SHARED_MEMORY,
+                "--remount-ro",
+                "/dev",
+            ]
         # A new user namespace is needed for each independent mount namespace,
         # including members that inherit a peer's network namespace.
         if os.geteuid() != 0 and "--unshare-user" not in arguments:

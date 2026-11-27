@@ -11,6 +11,7 @@ from marinskyrl.task_machine_factories import task_machine_factories
 from skyrl_gym.rollout_specs import shell_harness
 from skyrl_train.dataset.tasks import source_row_task
 
+from cloud.iris.runtime_environment import local_disk_setup_script
 from cloud.iris.launch_config import LaunchTopology
 from cloud.iris.rl_config_translation import compose_skyrl_config, parse_rl_config
 
@@ -80,3 +81,12 @@ def test_empty_session_settings_preserve_published_limits_and_shell_timeout():
 
     assert spec.limits.max_turns == 3
     assert shell_harness(spec.harness).command_timeout == 17
+
+
+def test_relative_disk_root_is_rejected_before_launcher_and_worker_cwds_diverge():
+    config = composed_config({"local": {"disk_root": "cache"}})
+    # Provisioning precedes node_entrypoint's cd; factories are created after it.
+    with pytest.raises(ValueError):
+        local_disk_setup_script(config.environment.task_sessions.local.disk_root)
+    with pytest.raises(ValueError):
+        task_machine_factories(config.environment.task_sessions)

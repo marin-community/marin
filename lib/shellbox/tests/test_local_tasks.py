@@ -26,15 +26,62 @@ from shellbox.machine import (
 )
 from shellbox.task import ContainerSpec, ReadinessProbe, ServiceEndpoint, TaskSpec, single_container_task
 
-from lib.shellbox.tests.local_machine_support import (
-    CONNECT_PROBE,
-    HTTP_CLIENT,
-    SPEC,
-    make_factory,
-    on_machine,
-    private_task_spec,
-    run_command,
-)
+from lib.shellbox.tests.local_machine_support import SPEC, make_factory, on_machine, run_command
+
+HTTP_CLIENT = """import sys, urllib.request
+with urllib.request.urlopen(sys.argv[1], timeout=5) as response:
+    sys.stdout.buffer.write(response.read())
+"""
+
+
+SERVICE_SERVER = """import http.server, os, pathlib, sys
+pathlib.Path('/app/member-secret').write_text(sys.argv[1])
+pathlib.Path('/app/service-pid').write_text(str(os.getpid()))
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = pathlib.Path('/app/member-secret').read_bytes()
+        self.send_response(200)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *args):
+        pass
+http.server.ThreadingHTTPServer(('127.0.0.1', 8123), Handler).serve_forever()
+"""
+
+
+CONNECT_PROBE = """import socket, sys
+try:
+    socket.create_connection((sys.argv[2], int(sys.argv[1])), timeout=1).close()
+except OSError:
+    print('blocked')
+else:
+    print('connected')
+"""
+
+
+def private_task_spec(marker="service", readiness=None, peer_name="runtime"):
+    return TaskSpec(
+        containers=(
+            ContainerSpec(
+                name=peer_name,
+                machine=MachineSpec(HostImage(), workdir="/app", network=NetworkPolicy.DENY),
+                endpoints=(ServiceEndpoint("http", 8123),),
+                entrypoint=("python3", "-c", SERVICE_SERVER),
+                arguments=(marker,),
+                readiness=readiness
+                or ReadinessProbe(
+                    command=Command(
+                        ("python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 8123)).close()")
+                    ),
+                    timeout=10,
+                    interval=0.05,
+                ),
+            ),
+            ContainerSpec("actor", MachineSpec(HostImage(), workdir="/app", network=NetworkPolicy.DENY)),
+        ),
+        primary="actor",
+    )
 
 
 def test_persistent_machine_hides_host_processes_and_drops_all_privilege(factory):

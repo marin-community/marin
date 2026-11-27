@@ -39,7 +39,7 @@ NPROC_HEADROOM = 256
 FILE_SIZE_LIMIT = 1 << 30
 
 
-def _resource_limits(file_size_limit: int = FILE_SIZE_LIMIT) -> list[tuple[int, int]]:
+def _resource_limits(file_size_limit: int) -> list[tuple[int, int]]:
     host_tasks = int(Path("/proc/loadavg").read_text().split()[3].split("/")[1])
     return [
         (resource.RLIMIT_NPROC, host_tasks + NPROC_HEADROOM),

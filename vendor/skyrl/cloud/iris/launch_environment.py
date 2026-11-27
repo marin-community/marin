@@ -84,7 +84,7 @@ def config_task_environment(config: DictConfig) -> dict[str, str]:
 
 
 def _job_scope_fr_dump_path(prefix: str, job_name: str) -> str:
-    """Put the current job name into a job-scoped flight-recorder directory."""
+    """Rewrite the job directory in fr_dumps paths; return other paths unchanged."""
     parent = os.path.dirname(prefix)
     grandparent = os.path.dirname(parent)
     if os.path.basename(grandparent) != "fr_dumps":

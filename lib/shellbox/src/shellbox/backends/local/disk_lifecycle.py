@@ -21,6 +21,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+LOOP_CONTROL = Path("/dev/loop-control")
+SHARED_MEMORY_DIRECTORY = "shm"
+STICKY_WORLD_WRITABLE = 0o1777
 ALLOCATION_PREFIX = "sandbox-"
 BACKING_IMAGE = "disk.img"
 POOL_LOCK_FILE = "pool.lock"
@@ -70,7 +73,7 @@ class LoopConfig(ctypes.Structure):
 @contextmanager
 def attached_loop(image: Path) -> Iterator[Path]:
     """Attach an owned image, holding autoclear until its mount takes a reference."""
-    with open("/dev/loop-control", "rb") as control, image.open("r+b") as backing:
+    with LOOP_CONTROL.open("rb") as control, image.open("r+b") as backing:
         for _ in range(LOOP_ALLOCATION_ATTEMPTS):
             minor = fcntl.ioctl(control, LOOP_CTL_GET_FREE)
             device = Path(f"/dev/loop{minor}")
@@ -140,8 +143,8 @@ def guard(directory: Path, storage_mb: int) -> None:
             (directory / ROOT_DIRECTORY).mkdir()
             with attached_loop(image) as device:
                 run("mount", "-t", "ext4", "-o", "nodev,nosuid,noatime", str(device), str(data))
-            (data / "shm").mkdir(mode=0o1777)
-            (data / "shm").chmod(0o1777)
+            (data / SHARED_MEMORY_DIRECTORY).mkdir(mode=STICKY_WORLD_WRITABLE)
+            (data / SHARED_MEMORY_DIRECTORY).chmod(STICKY_WORLD_WRITABLE)
             print(READY_MESSAGE, flush=True)
             sys.stdin.buffer.read()
         finally:

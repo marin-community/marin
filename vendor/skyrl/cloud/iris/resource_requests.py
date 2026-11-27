@@ -7,7 +7,7 @@ import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict, cast
 
 import yaml
 
@@ -41,6 +41,45 @@ def _parse_quantity_to_gib(quantity: str) -> float:
         if quantity.endswith(suf):
             return float(quantity[: -len(suf)]) * mult / 2**30
     return float(quantity) / 2**30  # plain bytes
+
+
+class KubernetesMetadata(TypedDict, total=False):
+    name: str
+    labels: dict[str, str]
+
+
+class KubernetesResources(TypedDict, total=False):
+    requests: dict[str, str]
+
+
+class KubernetesContainer(TypedDict, total=False):
+    resources: KubernetesResources
+
+
+class KubernetesSpec(TypedDict, total=False):
+    nodeName: str
+    unschedulable: bool
+    containers: list[KubernetesContainer]
+    initContainers: list[KubernetesContainer]
+    overhead: dict[str, str]
+
+
+class KubernetesCondition(TypedDict, total=False):
+    type: str
+    status: str
+
+
+class KubernetesStatus(TypedDict, total=False):
+    phase: str
+    conditions: list[KubernetesCondition]
+    allocatable: dict[str, str]
+
+
+class KubernetesRecord(TypedDict, total=False):
+    kind: str
+    metadata: KubernetesMetadata
+    spec: KubernetesSpec
+    status: KubernetesStatus
 
 
 @dataclass(frozen=True)
@@ -77,11 +116,11 @@ class ResolvedResourceRequests:
     disk: str
 
 
-def _pod_resource_request_gib(pod: dict[str, Any], resource: str) -> float:
+def _pod_resource_request_gib(pod: KubernetesRecord, resource: str) -> float:
     """Return the scheduler-effective request for one pod resource."""
     spec = pod.get("spec", {})
 
-    def request(container: dict[str, Any]) -> float:
+    def request(container: KubernetesContainer) -> float:
         quantity = container.get("resources", {}).get("requests", {}).get(resource)
         return _parse_quantity_to_gib(quantity) if isinstance(quantity, str) else 0.0
 
@@ -92,13 +131,13 @@ def _pod_resource_request_gib(pod: dict[str, Any], resource: str) -> float:
     return max(application_request, init_request) + overhead_request
 
 
-def _node_is_ready(node: dict[str, Any]) -> bool:
+def _node_is_ready(node: KubernetesRecord) -> bool:
     conditions = node.get("status", {}).get("conditions", [])
     return any(condition.get("type") == "Ready" and condition.get("status") == "True" for condition in conditions)
 
 
 def _node_resource_budgets(
-    items: list[dict[str, Any]],
+    items: list[KubernetesRecord],
     *,
     gpu_variant: str,
     gpus_per_node: int,
@@ -190,7 +229,7 @@ def _inspect_cluster_resources(
     items = json.loads(out)["items"]
     if not isinstance(items, list):
         raise ValueError("kubectl node-and-pod snapshot has a non-list items field")
-    nodes = _node_resource_budgets(items, gpu_variant=gpu_variant, gpus_per_node=gpus_per_node)
+    nodes = _node_resource_budgets(cast(list[KubernetesRecord], items), gpu_variant=gpu_variant, gpus_per_node=gpus_per_node)
     return ClusterResourceSnapshot(
         context=context,
         gpu_variant=gpu_variant,

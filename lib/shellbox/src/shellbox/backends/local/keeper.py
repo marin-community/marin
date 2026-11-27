@@ -42,7 +42,7 @@ class KeeperHost(Protocol):
 
 
 def _pin_init(pid: int, namespace: int) -> int:
-    """Pin bwrap's init, verifying its identity through an anchored proc directory."""
+    """Return an owned pidfd for the verified guest init."""
     directory = os.open(f"/proc/{pid}", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     descriptor = None
     try:

@@ -16,7 +16,13 @@ from typing import cast
 from shellbox.backends.local import nix, sandbox
 from shellbox.backends.local.cgroup import check_cgroup_parent, delegated_cgroup_parent
 from shellbox.backends.local.disk import LocalDisk, verified_local_disk_pool
-from shellbox.backends.local.guest_setup import host_environment, host_mounts, start_host_machine, start_image_machine
+from shellbox.backends.local.guest_setup import (
+    HostLayout,
+    host_environment,
+    host_layout,
+    start_host_machine,
+    start_image_machine,
+)
 from shellbox.backends.local.images import PreparedLocalImage, cached_local_image, prepare_local_image
 from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
 from shellbox.backends.local.runtime import LocalMachine, _log_task_failure
@@ -108,7 +114,7 @@ class LocalMachineFactory:
     there. When the scope directly contains the worker's processes, discovery moves them into a child
     leaf group so the scope can enable controllers for children; sandbox groups become siblings of
     that leaf and never reach a parent above the container. Unavailable limits produce warnings.
-    ``cgroup_parent`` overrides discovery. ``disk_root`` enables host-probed ext4
+    ``cgroup_parent`` overrides discovery. An absolute ``disk_root`` enables host-probed ext4
     loop filesystems for declared storage_mb, including all writable layers.
 
     ``bwrap`` names the executable to use. By default the factory takes the first of the bundled bwrap
@@ -144,6 +150,8 @@ class LocalMachineFactory:
         if ttl is not None and ttl <= 0:
             raise ValueError("Local machine TTL must be positive")
         self.ttl = ttl
+        if disk_root is not None and not disk_root.is_absolute():
+            raise ValueError("LOCAL disk_root must be absolute")
         self.disk_root = disk_root
         self.cgroup_parent = delegated_cgroup_parent() if cgroup_parent is None else cgroup_parent.resolve()
         if self.cgroup_parent is not None:
@@ -256,56 +264,53 @@ class LocalMachineFactory:
             return await self._create_image(spec, source, peer, aliases)
 
         host = await self._host_image(source)
-        mounts = host_mounts(host, self.read_only, self._system_mounts)
-        workdir = sandbox._absolute_path(spec.workdir or "/")
-        copy_on_write = self.system_directories == sandbox.SystemDirectories.COPY_ON_WRITE
-        overlaid_workdir = copy_on_write and sandbox._within(workdir, sandbox.OVERLAID_DIRECTORIES)
-        if (sandbox._within(workdir, sandbox.SYSTEM_DIRECTORIES) and not overlaid_workdir) or any(
-            workdir.is_relative_to(mount.guest) for mount in mounts
-        ):
-            raise UnsupportedMachineSpec(f"The local backend's workdir {spec.workdir} is a read-only host path")
-        # A workdir in an overlaid directory is made by a command once the machine runs, so it lands in the layer.
+        layout = host_layout(host, self.read_only, self._system_mounts, spec.workdir, self.system_directories)
         disk = await self._allocate_disk(spec)
         try:
-            root, layers = sandbox._machine_directories(
-                None if overlaid_workdir else workdir, system_directories=self.system_directories, disk=disk
-            )
+            machine = self._host_machine(spec, host, layout, disk, aliases)
         except BaseException:
             if disk is not None:
                 await finish_owned(own_cleanup(asyncio.to_thread(disk.close)))
             raise
+        tools = source.tools if isinstance(source, PackageSpec) else ()
+        try:
+            await machine._start_keeper(peer)
+            await start_host_machine(machine, layout.overlaid_workdir, tools)
+        except BaseException:
+            await machine.close()
+            raise
+        return machine
+
+    def _host_machine(
+        self, spec: MachineSpec, host: HostImage, layout: HostLayout, disk: LocalDisk | None, aliases: str | None
+    ) -> LocalMachine:
+        root, layers = sandbox._machine_directories(
+            None if layout.overlaid_workdir is not None else layout.workdir,
+            system_directories=self.system_directories,
+            disk=disk,
+        )
         try:
             if aliases is not None:
                 # The copied host file can be read-only, as on NixOS.
                 (root / "etc/hosts").unlink(missing_ok=True)
                 (root / "etc/hosts").write_text(aliases)
             environment = host_environment(host, self.bin_dirs, self._system_bin_dirs, self.hash_seed)
-            machine = LocalMachine(
+            return LocalMachine(
                 spec,
                 bwrap=self.bwrap,
                 root=root,
                 layers=layers,
-                mounts=mounts,
+                mounts=layout.mounts,
                 environment=environment,
                 cgroup_parent=self.cgroup_parent,
                 disk=disk,
             )
         except BaseException:
-            if disk is not None:
-                await finish_owned(own_cleanup(asyncio.to_thread(disk.close)))
-            else:
+            if disk is None:
                 sandbox._remove(root)
                 if layers is not None:
                     sandbox._remove(layers)
             raise
-        tools = source.tools if isinstance(source, PackageSpec) else ()
-        try:
-            await machine._start_keeper(peer)
-            await start_host_machine(machine, workdir if overlaid_workdir else None, tools)
-        except BaseException:
-            await machine.close()
-            raise
-        return machine
 
     async def _prepare_image(
         self, source: PreparedImage | RegistryImage, disk: LocalDisk | None, bundle: Path

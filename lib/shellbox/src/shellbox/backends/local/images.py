@@ -8,7 +8,7 @@ import json
 import os
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 
 from shellbox.image import OCI_TAG, PreparedImage, prepared_image_config
@@ -25,6 +25,15 @@ class PreparedLocalImage:
     workdir: str
     entrypoint: tuple[str, ...]
     arguments: tuple[str, ...]
+    user: str | None
+
+
+@dataclass(frozen=True)
+class LocalImageMetadata:
+    environment: dict[str, str]
+    workdir: str
+    entrypoint: list[str]
+    arguments: list[str]
     user: str | None
 
 
@@ -85,23 +94,23 @@ def cached_local_image(image: PreparedImage, cache: Path, *, umoci: Path) -> Pre
         if not directory.exists():
             with tempfile.TemporaryDirectory(dir=cache) as staging:
                 prepared = prepare_local_image(image, Path(staging) / "bundle", umoci=umoci)
-                metadata = {
-                    "environment": prepared.environment,
-                    "workdir": prepared.workdir,
-                    "entrypoint": prepared.entrypoint,
-                    "arguments": prepared.arguments,
-                    "user": prepared.user,
-                }
-                (Path(staging) / CACHE_METADATA_FILE).write_text(json.dumps(metadata))
+                metadata = LocalImageMetadata(
+                    environment=prepared.environment,
+                    workdir=prepared.workdir,
+                    entrypoint=list(prepared.entrypoint),
+                    arguments=list(prepared.arguments),
+                    user=prepared.user,
+                )
+                (Path(staging) / CACHE_METADATA_FILE).write_text(json.dumps(asdict(metadata)))
                 # Move the complete unpack atomically; guests never bind this
                 # path writable and never receive a host descriptor to it.
                 os.rename(staging, directory)
-        metadata = json.loads((directory / CACHE_METADATA_FILE).read_text())
+        metadata = LocalImageMetadata(**json.loads((directory / CACHE_METADATA_FILE).read_text()))
     return PreparedLocalImage(
         root=directory / "bundle/rootfs",
-        environment=metadata["environment"],
-        workdir=metadata["workdir"],
-        entrypoint=tuple(metadata["entrypoint"]),
-        arguments=tuple(metadata["arguments"]),
-        user=metadata["user"],
+        environment=metadata.environment,
+        workdir=metadata.workdir,
+        entrypoint=tuple(metadata.entrypoint),
+        arguments=tuple(metadata.arguments),
+        user=metadata.user,
     )

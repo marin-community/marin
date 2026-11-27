@@ -133,7 +133,7 @@ class LocalDisk:
 def _validated_root(root: Path) -> Path:
     if sys.platform != "linux" or os.geteuid() != 0:
         raise UnsupportedMachineSpec("LOCAL disk enforcement requires a privileged Linux worker")
-    if not Path("/dev/loop-control").exists():
+    if not disk_lifecycle.LOOP_CONTROL.exists():
         raise UnsupportedMachineSpec("LOCAL disk enforcement requires /dev/loop-control in the privileged worker")
     for program in ("mkfs.ext4", "mount", "umount", "losetup", "findmnt"):
         if shutil.which(program) is None:
@@ -154,7 +154,7 @@ class LocalDiskPool:
     """A host capability: construction verifies mount, overlay, ENOSPC and cleanup.
 
     Use a private directory on the worker's disk, shared by its LOCAL factories.
-    Only allocations whose lease is released are reclaimed on startup.
+    Allocations with released leases are reclaimed at construction and before each allocation.
     """
 
     def __init__(self, root: Path):
@@ -185,7 +185,7 @@ class LocalDiskPool:
                     disk_lifecycle.reclaim(directory)
 
     def create(self, storage_mb: int) -> LocalDisk:
-        """Allocate exactly storage_mb MiB and wait for the ext4 mount."""
+        """Create a filesystem backed by a storage_mb MiB image; metadata consumes part of its capacity."""
         with (self.root / disk_lifecycle.POOL_LOCK_FILE).open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             self._reclaim()
