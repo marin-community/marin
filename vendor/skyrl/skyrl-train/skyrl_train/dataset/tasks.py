@@ -268,7 +268,7 @@ def canonical_task_spec(task: TaskSpec, config: Mapping[str, Any]) -> TaskRollou
         and grader.environment is not None
         and not (isinstance(grader, VerifyitGrader) and grades_with_judge(grader))
     ):
-        machine = (
+        machine = config.get("verifier_machine_by_dataset", {}).get(task.source.dataset) or (
             config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]
         )
         verifier = MachineRuntimeSpec.model_validate(machine)

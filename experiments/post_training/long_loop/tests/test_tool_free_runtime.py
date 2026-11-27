@@ -8,6 +8,7 @@ import json
 import pytest
 from pydantic import ValidationError
 from rolloutengine.harness.tool_free import TOOL_FREE_HARNESS, ToolFreeHarness, tool_free_prompt
+from rolloutengine.models import TaskRolloutSpec
 from skyrl_train.dataset.tasks import canonical_task_spec
 from taskcompendium.models import (
     AnswerType,
@@ -29,6 +30,8 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.runtime.reply_status import reply_status_files
+
+from experiments.post_training.long_loop.campaign_runtime import bind_runtime
 
 STATUS_PATH = "/app/answer_status.json"
 VERIFIER = {
@@ -123,3 +126,14 @@ def test_reply_status_reports_truncation_and_tool_events_from_the_host():
     assert staged_status(task, call, "tool_calls")["tool_events"] == ["reply[0].tool_calls"]
     with pytest.raises(ValueError, match="no stop reason"):
         reply_status_files(task, GradingAttempt(ConversationTrace(events=(*task.context.events, answer))))
+
+
+def test_dataset_placement_keeps_its_backend_under_runtime_shapes():
+    """Per-task-image sources stay on their LOCAL template when the cohort supplies machine shapes."""
+    task = tool_free_task()
+    local = {**VERIFIER, "backend": "local"}
+    config = {**CONFIG, "verifier_machine_by_dataset": {task.source.dataset: local}}
+    assert canonical_task_spec(task, config).verifier_machine.backend == "local"
+    row = {"task_spec": task.model_dump_json(), "runtime": {"verifier_machine": {"memory_mb": 4096}}}
+    lowered = TaskRolloutSpec.model_validate_json(bind_runtime(row, config)["task_rollout_spec"])
+    assert (lowered.verifier_machine.backend, lowered.verifier_machine.memory_mb) == ("local", 4096)

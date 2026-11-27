@@ -26,7 +26,9 @@ def bind_runtime(row: dict, environment: dict) -> dict:
         **environment,
         "harness_by_dataset": dict(environment["harness_by_dataset"]),
         "task_machine_by_dataset": dict(environment["task_machine_by_dataset"]),
+        "verifier_machine_by_dataset": dict(environment.get("verifier_machine_by_dataset", {})),
     }
+    dataset = task.source.dataset
     runtime = json.loads(row["runtime"]) if isinstance(row.get("runtime"), str) else row.get("runtime", {})
     # Only the original Harbor package importer delegates grading via NoGrader.
     # A scheduler's agentic route does not turn native TaskSpecs into packages.
@@ -35,14 +37,17 @@ def bind_runtime(row: dict, environment: dict) -> dict:
     if runtime.get("task_machine") is not None:
         # The native recipe's image-machine template selects Daytona and its network
         # policy; the published cohort supplies the actor's exact numeric resources.
-        settings["task_machine_by_dataset"][task.source.dataset] = {
-            **environment["image_verifier"],
+        # A dataset placed on its own machine template (per-task images on LOCAL) keeps that backend.
+        settings["task_machine_by_dataset"][dataset] = {
+            **environment["task_machine_by_dataset"].get(dataset, environment["image_verifier"]),
             **{key: value for key, value in runtime["task_machine"].items() if value is not None},
         }
     if runtime.get("verifier_machine") is not None:
         shape = {key: value for key, value in runtime["verifier_machine"].items() if value is not None}
         for field in ("image_verifier", "package_verifier"):
             settings[field] = {**environment[field], **shape}
+        if dataset in settings["verifier_machine_by_dataset"]:
+            settings["verifier_machine_by_dataset"][dataset] = {**settings["verifier_machine_by_dataset"][dataset], **shape}
     # Native lowering applies the TaskSpec's declared allocation minima and
     # deadlines. Overlaying shapes afterward would erase those requirements.
     lowered = canonical_task_spec(task, settings)
