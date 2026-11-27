@@ -649,7 +649,8 @@ uv run python -m experiments.post_training.snowball_rl \
   evaluate --init "$MODEL" --evals eval-lite --version dev
 ```
 
-Set `MODEL` to a published `NAME@VERSION`. Add `--run` to submit.
+Set `MODEL` to a published `NAME@VERSION`. Add `--run` to submit. When rescoring an export
+with a different sampling profile, supply a fresh evaluation version or use `--version dev`.
 
 To publish a checkpoint export, enable export and set `trainer.hf_hub_repo_id` in the training recipe.
 Gated Snowball presets fix that setting. For a manual checkpoint export use `--hf-hub-repo-id` on
