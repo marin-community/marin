@@ -26,7 +26,7 @@ for declaration fields and artifact outputs.
    `info.dataset=SourceReference(...)` and no pipeline. Use the `excluded` tag
    when the entry is deprecated or excluded from use.
 3. If adding a module, import it and include its `sources()` results in
-   [all_sources()](../sources.py). Add a behavioral conversion test in the family
+   [source_declarations()](../sources.py). Add a behavioral conversion test in the family
    test module, and run it with [test_catalog.py](../tests/test_catalog.py).
 4. Run a SAMPLE or FULL campaign to publish the updated inventory. Any campaign
    includes all source declarations; select the new source to also curate and

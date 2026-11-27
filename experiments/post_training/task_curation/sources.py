@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The task catalog: training and evaluation dataset declarations, keyed by name."""
+"""The task catalog: training and evaluation dataset declarations, keyed by source identity."""
 
 from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.post_training.task_curation.datasets import (
