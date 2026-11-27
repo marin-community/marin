@@ -1,0 +1,12 @@
+id: X0261
+slug: x0250-per-token-normalized-momentum-head
+name: X0250 + per-token normalized momentum head
+category: Optimizers
+summary: 🤖 Posted on behalf of @armorfaye.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-7206918115
+  author: armorfaye
+  approved_by: armorfaye (trusted)
