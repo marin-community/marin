@@ -32,7 +32,7 @@ from skyrl_train.objective.objective import (
     compute_policy_objective,
     megatron_loss_scale,
 )
-from skyrl_train.objective.reduction import policy_data_weights, step_counts
+from skyrl_train.objective.reduction import step_counts
 from skyrl_train.utils.profiler import Profiler
 from skyrl_train.timing_observability import PhaseBreakdown
 from skyrl_train.projected_softmax import projected_token_statistics
@@ -97,7 +97,6 @@ class MegatronPolicyMicroBatch:
     advantages: torch.Tensor
     loss_mask: torch.Tensor
     rollout_action_logprobs: Optional[torch.Tensor]
-    response_span_tags: Optional[torch.Tensor]
     distillation: Optional[TopKEvidence] = None
     ftpo: FTPOTargets | None = None
     correction_weights: Optional[torch.Tensor] = None
@@ -583,12 +582,6 @@ class MegatronModelWrapper:
             return value
 
         counts = step_counts(
-            [
-                policy_data_weights(
-                    micro.loss_mask, micro.response_span_tags, self.cfg.trainer.algorithm.think_token_weight
-                )
-                for micro in micro_batches
-            ],
             [micro.loss_mask for micro in micro_batches],
             [
                 micro.loss_mask * micro.distillation.valid_mask
@@ -618,7 +611,6 @@ class MegatronModelWrapper:
             advantages = data.advantages
             loss_mask = data.loss_mask
             rollout_action_logprobs = data.rollout_action_logprobs
-            response_span_tags = data.response_span_tags
 
             if self._output_projection_chunk_size is not None and (data.ftpo is not None or data.distillation is not None):
                 raise ValueError("Chunked output projection currently supports PPO without FTPO or top-K distillation")
@@ -682,9 +674,7 @@ class MegatronModelWrapper:
                 loss_mask=loss_mask,
                 rollout_logprobs=rollout_action_logprobs,
                 correction_weights=data.correction_weights,
-                response_span_tags=response_span_tags,
                 token_entropy=token_entropies[:, -num_actions - 1 : -1],
-                think_token_weight=self.cfg.trainer.algorithm.think_token_weight,
                 teacher=teacher,
                 ftpo=ftpo_inputs,
                 structural=structural,

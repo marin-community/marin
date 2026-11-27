@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
@@ -10,6 +11,9 @@ from typing import Mapping, Protocol, Sequence
 import numpy as np
 
 from marinskyrl.runtime_options import AdvantageEstimator
+
+MIN_BASELINE_GROUP_SIZE = 2
+FLAT_GROUP_REWARD_TOLERANCE = 1e-6
 
 
 @dataclass(frozen=True)
@@ -36,7 +40,6 @@ BUILTIN_GROUP_ADVANTAGE_CONTRACTS: Mapping[str, GroupAdvantageContract] = Mappin
         AdvantageEstimator.REINFORCE_PP: NoGroupAdvantage(),
         AdvantageEstimator.RLOO: ExactPhysicalGroup(),
         AdvantageEstimator.RLOO_N: MinimumBaselineEligibleGroup(),
-        "rloo_n_pbs": MinimumBaselineEligibleGroup(),
         AdvantageEstimator.GRPO: ExactPhysicalGroup(),
     }
 )
@@ -89,9 +92,9 @@ class GroupAdvantageInvariant:
         if self.kind is GroupAdvantageKind.MINIMUM_BASELINE_ELIGIBLE:
             if self.minimum_group_size is None:
                 raise ValueError("minimum_baseline_eligible requires minimum_group_size")
-            if not 2 <= self.minimum_group_size <= self.physical_group_size:
+            if not MIN_BASELINE_GROUP_SIZE <= self.minimum_group_size <= self.physical_group_size:
                 raise ValueError(
-                    "minimum_group_size must be between 2 and physical_group_size, got "
+                    f"minimum_group_size must be between {MIN_BASELINE_GROUP_SIZE} and physical_group_size, got "
                     f"{self.minimum_group_size} and {self.physical_group_size}"
                 )
         elif self.minimum_group_size is not None:
@@ -244,6 +247,26 @@ def _aligned_sequence(batch: Mapping[str, object], key: str, row_count: int) -> 
     return value
 
 
+def trial_row_masks(batch: Mapping[str, object], row_count: int) -> tuple[np.ndarray, np.ndarray]:
+    """Return masks for final rows and final rows that contribute to a baseline."""
+    final = _aligned_sequence(batch, "is_last_step", row_count)
+    final_rows = np.ones(row_count, dtype=bool) if final is None else np.asarray(final, dtype=bool)
+    excluded = _aligned_sequence(batch, "exclude_from_baseline", row_count)
+    eligible_rows = final_rows if excluded is None else final_rows & ~np.asarray(excluded, dtype=bool)
+    return final_rows, eligible_rows
+
+
+def baseline_group_rows(index: Sequence[object], excluded: Sequence[bool] | None) -> list[list[int]]:
+    """Collect eligible row indices by prompt."""
+    groups: dict[object, list[int]] = defaultdict(list)
+    if excluded is None:
+        excluded = [False] * len(index)
+    for row, (uid, is_excluded) in enumerate(zip(index, excluded, strict=True)):
+        if not is_excluded:
+            groups[uid].append(row)
+    return list(groups.values())
+
+
 @dataclass(frozen=True)
 class _GroupFacts:
     physical_count: int
@@ -272,17 +295,9 @@ def _inspect_group(group: GeneratedGroup) -> _GroupFacts:
                 f"loss_masks row {row_index} must align with response_ids, got {len(loss_mask)} and {len(response)}"
             )
 
-    is_last_step = _aligned_sequence(batch, "is_last_step", row_count)
-    final_indices = (
-        list(range(row_count)) if is_last_step is None else [i for i, value in enumerate(is_last_step) if value]
-    )
-    if not final_indices:
+    final, eligible = trial_row_masks(batch, row_count)
+    if not final.any():
         raise ValueError("is_last_step must identify at least one final trial row")
-
-    exclusions = _aligned_sequence(batch, "exclude_from_baseline", row_count)
-    baseline_contributor_count = (
-        len(final_indices) if exclusions is None else sum(not bool(exclusions[index]) for index in final_indices)
-    )
 
     rollout_logprobs = _aligned_sequence(batch, "rollout_logprobs", row_count)
     has_trainable_rollout_logprobs = rollout_logprobs is not None
@@ -302,9 +317,9 @@ def _inspect_group(group: GeneratedGroup) -> _GroupFacts:
                 has_trainable_rollout_logprobs = False
 
     return _GroupFacts(
-        physical_count=len(final_indices),
+        physical_count=int(final.sum()),
         trainable_count=sum(any(bool(token) for token in loss_mask) for loss_mask in loss_masks),
-        baseline_contributor_count=baseline_contributor_count,
+        baseline_contributor_count=int(eligible.sum()),
         has_rollout_logprobs=has_trainable_rollout_logprobs,
     )
 

@@ -163,3 +163,13 @@ def test_recipe_validation_reports_owned_removed_and_nonnullable_paths(base_reci
         assert f"{path}: {message}" in str(setting_error.value)
     with pytest.raises(ValueError, match="micro_forward_batch_size_per_gpu"):
         base.with_settings(["trainer.micro_forward_batch_size_per_gpu=null"])
+
+
+def test_recipe_rejects_pbs_estimator(base_recipe):
+    path = "trainer.algorithm.advantage_estimator"
+    document = base_recipe.to_skyrl()
+    set_path(document, path, "rloo_n_pbs")
+    with pytest.raises(ValueError, match=r"trainer\.algorithm\.advantage_estimator"):
+        schema.SkyRLRecipe.from_document(document)
+    with pytest.raises(ValueError, match=r"trainer\.algorithm\.advantage_estimator"):
+        base_recipe.with_settings([f"{path}=rloo_n_pbs"])

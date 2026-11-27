@@ -7,8 +7,6 @@ import torch
 
 from skyrl_train.config.objective_spec import LossReduction
 
-SPAN_THINK_TAG = 1
-
 
 @dataclass(frozen=True)
 class WeightCounts:
@@ -18,29 +16,14 @@ class WeightCounts:
 
 @dataclass(frozen=True)
 class StepCounts:
-    policy: WeightCounts
     mask: WeightCounts
     teacher: WeightCounts
     nonzero_advantage_rows: float
     max_seq_len: int
 
 
-def policy_data_weights(
-    loss_mask: torch.Tensor, response_span_tags: torch.Tensor | None, think_token_weight: float
-) -> torch.Tensor:
-    """Return loss eligibility weighted by the configured THINK-token contribution."""
-    if response_span_tags is None or think_token_weight == 1.0:
-        return loss_mask
-    # Tags and loss masks share response positions.
-    tags = torch.zeros_like(loss_mask)
-    width = min(response_span_tags.shape[-1], loss_mask.shape[-1])
-    tags[..., :width] = response_span_tags[..., :width]
-    return loss_mask * torch.where(tags == SPAN_THINK_TAG, think_token_weight, 1.0)
-
-
 @torch.no_grad()
 def step_counts(
-    policy_weights: Sequence[torch.Tensor],
     loss_masks: Sequence[torch.Tensor],
     teacher_weights: Sequence[torch.Tensor],
     advantages: Sequence[torch.Tensor],
@@ -48,20 +31,17 @@ def step_counts(
     all_reduce_sum: Callable[[torch.Tensor], torch.Tensor],
 ) -> StepCounts:
     """Sum data counts across the accumulation window and the data-parallel group."""
-    device = policy_weights[0].device
-    counts = torch.zeros(7, device=device, dtype=torch.float64)
-    for offset, weights in ((0, policy_weights), (2, loss_masks), (4, teacher_weights)):
+    device = loss_masks[0].device
+    counts = torch.zeros(5, device=device, dtype=torch.float64)
+    for offset, weights in ((0, loss_masks), (2, teacher_weights)):
         for weight in weights:
             counts[offset] += weight.sum(dtype=torch.float64)
             counts[offset + 1] += (weight.sum(-1) > 0).sum()
-    for weight, advantage in zip(policy_weights, advantages, strict=True):
+    for weight, advantage in zip(loss_masks, advantages, strict=True):
         valid_advantage = torch.where(weight > 0, advantage, 0)
-        counts[6] += ((valid_advantage.abs() * weight).sum(-1) > 0).sum()
-    policy_tokens, policy_rows, mask_tokens, mask_rows, teacher_tokens, teacher_rows, nonzero_rows = all_reduce_sum(
-        counts
-    ).tolist()
+        counts[4] += ((valid_advantage.abs() * weight).sum(-1) > 0).sum()
+    mask_tokens, mask_rows, teacher_tokens, teacher_rows, nonzero_rows = all_reduce_sum(counts).tolist()
     return StepCounts(
-        policy=WeightCounts(policy_tokens, policy_rows),
         mask=WeightCounts(mask_tokens, mask_rows),
         teacher=WeightCounts(teacher_tokens, teacher_rows),
         nonzero_advantage_rows=nonzero_rows,

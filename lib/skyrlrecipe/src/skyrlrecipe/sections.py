@@ -372,9 +372,7 @@ class Distillation(Section):
 
 class Algorithm(Section):
     batch_invariant: bool = field(False)
-    advantage_estimator: Literal["uniform", "reward", "reinforce++", "rloo", "rloo_n", "rloo_n_pbs", "grpo"] = field(
-        "grpo"
-    )
+    advantage_estimator: Literal["uniform", "reward", "reinforce++", "rloo", "rloo_n", "grpo"] = field("grpo")
     group_advantage_min_size: PositiveInt | None = field(None)
     resolved_group_advantage: ResolvedGroupAdvantage = Field(default_factory=ResolvedGroupAdvantage)
     kl_ctrl: KlCtrl = Field(default_factory=KlCtrl)
@@ -413,7 +411,6 @@ class Algorithm(Section):
         "token_mean", "sequence_mean", "pair_mean", "seq_mean_token_sum_norm", "seq_mean_token_sum_norm_global"
     ] = field("token_mean")
     grpo_norm_by_std: bool = field(True)
-    rloo_n_filter_zero_reward_groups: bool = field(True)
     gamma: int | float = field(1.0)
     eps_clip_low: int | float = field(0.2)
     eps_clip_high: int | float = field(0.2)
@@ -423,7 +420,6 @@ class Algorithm(Section):
     )
     off_policy_correction_rules: tuple[CorrectionRule, ...] | None = field(None)
     enable_token_reward_channel: bool = field(False)
-    think_token_weight: int | float = field(1.0)
     sapo: Sapo = Field(default_factory=Sapo)
     dynamic_sampling: DynamicSampling = Field(default_factory=DynamicSampling)
     group_admission: GroupAdmission = Field(default_factory=GroupAdmission)

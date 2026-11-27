@@ -10,6 +10,7 @@ from omegaconf import DictConfig
 from torch import Tensor
 
 from skyrl_train.config.objective_spec import off_policy_correction
+from skyrl_train.group_admission import FLAT_GROUP_REWARD_TOLERANCE, MIN_BASELINE_GROUP_SIZE, baseline_group_rows
 from skyrl_train.objective.correction import compute_correction
 from skyrl_train.rollouts.buffer import RowFacts
 from skyrl_train.telemetry import record_rollout_staleness
@@ -25,7 +26,6 @@ from skyrl_train.trajectory_runners.trajectory_reward_shaping import (
     shaping_groups,
 )
 from skyrl_train.trajectory_runners.types import BatchFields
-from skyrl_train.utils.advantage_estimators import GRPO_FLAT_REWARD_STD_TOLERANCE
 from skyrl_train.utils.importance_ratio_diagnostics import mismatch_ratio_metrics
 from skyrl_train.metric_reduction import MetricReduction, LocalReduction
 
@@ -199,17 +199,17 @@ def reward_metrics(facts: Sequence[RowFacts], uids: Sequence[str], *, n_samples_
     return metrics
 
 
-def _zero_std_group_fraction(uids: Sequence[str], rewards: torch.Tensor) -> float:
-    group_rewards: dict[str, list[torch.Tensor]] = {}
-    for uid, reward in zip(uids, rewards, strict=True):
-        group_rewards.setdefault(uid, []).append(reward)
-    if not group_rewards:
+def _flat_group_fraction(uids: Sequence[str], rewards: torch.Tensor, exclusions: Sequence[bool] | None) -> float:
+    group_count = len(set(uids))
+    if not group_count:
         return 0.0
-    flat_groups = sum(
-        len(group) > 1 and torch.std(torch.stack(group)).item() <= GRPO_FLAT_REWARD_STD_TOLERANCE
-        for group in group_rewards.values()
-    )
-    return flat_groups / len(group_rewards)
+    flat_groups = 0
+    for rows in baseline_group_rows(uids, exclusions):
+        if len(rows) >= MIN_BASELINE_GROUP_SIZE:
+            group = rewards[rows]
+            reward_range = group.max() - group.min()
+            flat_groups += int(reward_range <= FLAT_GROUP_REWARD_TOLERANCE)
+    return flat_groups / group_count
 
 
 def install_correction(
@@ -274,12 +274,17 @@ def advantage_metrics(
     rows = batch.batch_size - batch.metadata.get("pad_size", 0)
     uids = batch.metadata["uids"][:rows]
     rewards = batch["rewards"][:rows].sum(-1)
+    exclusions = batch.metadata.get("exclude_from_baseline")
     if step_wise:
         final_steps = batch["is_last_step"][:rows].bool()
         uids = [uid for uid, is_final in zip(uids, final_steps.tolist(), strict=True) if is_final]
         rewards = rewards[final_steps]
+    if group_scores is None and exclusions is not None:
+        exclusions = np.asarray(exclusions)[:rows]
+        if step_wise:
+            exclusions = exclusions[final_steps.cpu().numpy()]
     group_uids, group_rewards = (uids, rewards) if group_scores is None else group_scores
-    metrics = {"reward/zero_std_group_fraction": _zero_std_group_fraction(group_uids, group_rewards)}
+    metrics = {"reward/zero_std_group_fraction": _flat_group_fraction(group_uids, group_rewards, exclusions)}
     advantages = torch.masked_select(batch["advantages"][:rows], batch["response_mask"][:rows].bool())
     average_reward = reduction.mean(rewards)
     average_advantage = reduction.mean(advantages)

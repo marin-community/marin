@@ -83,7 +83,6 @@ RL_TRAINING_BASE = RecipePatch(
             use_kl_loss=False,
             group_advantage_min_size=2,
             advantage_batch_normalize=False,
-            rloo_n_filter_zero_reward_groups=True,
         ),
         rollout_buffer=sections.RolloutBuffer(object_store_root=None),
     ),

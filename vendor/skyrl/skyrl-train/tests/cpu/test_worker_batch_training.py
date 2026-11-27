@@ -51,6 +51,8 @@ def _worker_batch_config(root: Path, tiny_policy: Path, builder: str, estimator:
     cfg.trainer.training_metrics = True
     cfg.trainer.algorithm.advantage_estimator = estimator
     cfg.trainer.algorithm.group_advantage_min_size = None
+    # The synthetic answers give both builders nonzero GRPO updates with strict grading.
+    cfg.environment.task_sessions.gsm8k.reward_method = "strict"
     cfg.generator.trajectory_reward_shaping.enabled = True
     cfg.generator.trajectory_reward_shaping.overlong.penalty_scale = 0.0
     return cfg

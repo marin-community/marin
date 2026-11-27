@@ -664,7 +664,6 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                 advantages=advantages,
                 loss_mask=torch.ones(action_shape, device=device),
                 rollout_action_logprobs=old.clone(),
-                response_span_tags=torch.zeros(action_shape, dtype=torch.int8, device=device),
             )
             self.model.train()
             self.optimizer.zero_grad()
@@ -797,7 +796,6 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                         loss_mask=experience.loss_mask,
                         rollout_action_logprobs=experience.rollout_logprobs,
                         correction_weights=experience.correction_weights,
-                        response_span_tags=experience.response_span_tags,
                         distillation=experience.distillation,
                         ftpo=experience.ftpo,
                         rollout_routed_experts=experience.rollout_routed_experts,

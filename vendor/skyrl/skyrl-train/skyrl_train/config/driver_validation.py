@@ -39,6 +39,7 @@ from skyrl_train.config.weight_sync_pause import resolve_weight_sync_pause_polic
 from skyrl_train.dynamic_sampling import resolve_dynamic_sampling_criteria
 from skyrl_train.group_admission import (
     BUILTIN_GROUP_ADVANTAGE_CONTRACTS,
+    MIN_BASELINE_GROUP_SIZE,
     NoGroupAdvantage,
     resolve_group_advantage_invariant,
 )
@@ -567,6 +568,13 @@ def validate_driver_config(
 
     normalize_logging_backends(cfg)
     validate_rollout_launch(cfg, operation)
+    is_outcome_estimator = cfg.trainer.algorithm.advantage_estimator in OUTCOME_ADVANTAGE_ESTIMATORS
+    if cfg.trainer.step_wise_training and not is_outcome_estimator:
+        raise ValueError("step-wise training requires an outcome advantage estimator")
+    if is_outcome_estimator and cfg.generator.n_samples_per_prompt < MIN_BASELINE_GROUP_SIZE:
+        raise ValueError(
+            f"group-relative advantages require generator.n_samples_per_prompt >= {MIN_BASELINE_GROUP_SIZE}"
+        )
     validate_cfg(cfg, check_runtime_resources=check_runtime_resources)
     if check_runtime_resources:
         from skyrl_train.utils.progress import configure_progress

@@ -100,8 +100,8 @@ def validate_ftpo(cfg: DictConfig) -> None:
             or geometry.context_parallel_size != 1
         ):
             raise ValueError("FTPO requires TP=1, CP=1, and sequence_parallel_size=1; sharded scoring is future work")
-    if algorithm.loss_reduction != "token_mean" or algorithm.think_token_weight != 1:
-        raise ValueError("FTPO requires token_mean reduction and think_token_weight=1")
+    if algorithm.loss_reduction != "token_mean":
+        raise ValueError("FTPO requires token_mean reduction")
     if config.auxiliary_weight is None and (
         algorithm.advantage_estimator != "uniform" or algorithm.advantage_batch_normalize
     ):

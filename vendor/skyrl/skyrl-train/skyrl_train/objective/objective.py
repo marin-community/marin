@@ -10,7 +10,7 @@ from skyrl_train.config.ftpo import FTPOConfig
 from skyrl_train.ftpo import FTPOInputs, ftpo_loss
 from skyrl_train.objective.dpo import DPOInputs
 from skyrl_train.objective.losses import PolicyLoss, PolicyLossInputs, TokenLoss, complete_clip_metrics
-from skyrl_train.objective.reduction import StepCounts, policy_data_weights, reduce_to_step
+from skyrl_train.objective.reduction import StepCounts, reduce_to_step
 from skyrl_train.objective.teacher import TopKEvidence, mask_teacher_evidence, topk_teacher_loss
 from skyrl_train.utils.policy_math import differentiable_approx_kl
 
@@ -37,7 +37,6 @@ class FTPOAuxiliaryBatch:
 @dataclass(frozen=True)
 class ObjectiveMicroBatch:
     policy: PolicyLossInputs
-    policy_data_weights: torch.Tensor
     ref_log_probs: torch.Tensor | None
     token_entropy: torch.Tensor
     teacher: TopKTeacherBatch | None
@@ -69,9 +68,7 @@ def build_objective_micro_batch(
     advantages: torch.Tensor,
     loss_mask: torch.Tensor,
     rollout_logprobs: torch.Tensor | None,
-    response_span_tags: torch.Tensor | None,
     token_entropy: torch.Tensor,
-    think_token_weight: float,
     teacher: TopKTeacherBatch | None,
     ftpo: FTPOInputs | None = None,
     pair_roles: torch.Tensor | None = None,
@@ -103,7 +100,6 @@ def build_objective_micro_batch(
             ref_log_probs=None if base_action_log_probs is None else sanitize(base_action_log_probs),
             dpo=None if pair_roles is None else DPOInputs(pair_roles),
         ),
-        policy_data_weights=policy_data_weights(loss_mask, response_span_tags, think_token_weight),
         ref_log_probs=None if base_action_log_probs is None else sanitize(base_action_log_probs),
         token_entropy=sanitize(token_entropy),
         teacher=teacher,
@@ -132,8 +128,8 @@ def compute_policy_objective(
     mode = LossReduction(config.loss_reduction)
     policy_row = reduce_to_step(
         policy.values,
-        batch.policy_data_weights,
-        counts.policy,
+        batch.policy.loss_mask,
+        counts.mask,
         mode,
         numerator_weights=batch.correction_weights,
         **common,
