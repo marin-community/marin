@@ -27,7 +27,6 @@ from collections import defaultdict, deque
 
 import numpy as np
 from skyrl_train.dataset import PromptDataset
-from skyrl_train.distributed.strategy import CheckpointWriteStatus
 from skyrl_train.utils.tracking import Tracking
 from skyrl_train.training_batch import TrainingInputBatch, TrainingOutputBatch
 from skyrl_train.rollouts.buffer import RolloutGroup
@@ -189,7 +188,6 @@ class CheckpointSnapshot:
     trainer_state_path: str
     trainer_state_payload: bytes
     marker_path: str
-    has_pending_policy_write: bool
 
 
 _MODEL_INITIALIZATION_TIMEOUT = 60 * 60
@@ -286,8 +284,6 @@ class RayPPOTrainer:
             cfg.trainer.algorithm.resolved_group_advantage
         )
         self.colocate_all = cfg.trainer.placement.colocate_all
-        if cfg.trainer.checkpoint_max_staged_host_bytes <= 0:
-            raise ValueError("checkpoint_max_staged_host_bytes must be positive")
         self.tracker = tracker
         self.tokenizer = tokenizer
         self.train_dataset = train_dataset
@@ -692,7 +688,7 @@ class RayPPOTrainer:
                 with Timer("save_checkpoints", self.all_timings):
                     rollout_state = await self._rollout_state()
                     snapshot = await asyncio.to_thread(self._snapshot_checkpoint, rollout_state)
-                await self._start_checkpoint_upload(snapshot, final_state)
+                self._start_checkpoint_upload(snapshot, final_state)
                 if await self._drain_checkpoint_upload():
                     logger.info("Saved final checkpoint.")
             if self._control.should_save_hf_model:
@@ -733,23 +729,18 @@ class RayPPOTrainer:
             self._record_checkpoint_save_failure(state)
             return
 
-        await self._start_checkpoint_upload(snapshot, state)
+        self._start_checkpoint_upload(snapshot, state)
 
-    async def _start_checkpoint_upload(self, snapshot: CheckpointSnapshot, state: TrainerState) -> None:
+    def _start_checkpoint_upload(self, snapshot: CheckpointSnapshot, state: TrainerState) -> None:
         assert getattr(self, "_pending_checkpoint_upload", None) is None
-        if snapshot.has_pending_policy_write:
-            control = replace(self._control)
+        control = replace(self._control)
 
-            async def publish():
-                result = await self._finish_checkpoint_upload(snapshot)
-                await self.callback_handler.call_event_async("on_save", state, control, trainer=self)
-                return result
+        async def publish() -> tuple[float, float]:
+            result = await self._finish_checkpoint_upload(snapshot)
+            await self.callback_handler.call_event_async("on_save", state, control, trainer=self)
+            return result
 
-            task = asyncio.create_task(publish())
-        else:
-            await self.callback_handler.call_event_async("on_save", state, self._control, trainer=self)
-            task = asyncio.create_task(self._finish_checkpoint_upload(snapshot))
-        self._pending_checkpoint_upload = (task, state)
+        self._pending_checkpoint_upload = (asyncio.create_task(publish()), state)
 
     def _finish_policy_checkpoint(self) -> None:
         # An actor can be running an optimizer update. Poll without waiting
@@ -761,8 +752,7 @@ class RayPPOTrainer:
         ray.get(refs)
 
     def _finish_checkpoint_upload_blocking(self, snapshot: CheckpointSnapshot) -> tuple[float, float]:
-        if snapshot.has_pending_policy_write:
-            self._finish_policy_checkpoint()
+        self._finish_policy_checkpoint()
         io.write_bytes_atomic(snapshot.trainer_state_path, snapshot.trainer_state_payload)
         io.write_bytes_atomic(snapshot.rollout_state_path, snapshot.rollout_state_payload)
         io.write_bytes_atomic(snapshot.marker_path, str(snapshot.step).encode())
@@ -2860,7 +2850,7 @@ class RayPPOTrainer:
             "pass_through", "save_checkpoint", ckpt_dir=policy_save_dir, tokenizer=self.tokenizer
         )
         try:
-            has_pending_policy_write = CheckpointWriteStatus.DEFERRED in ray.get(refs)
+            ray.get(refs)
         except ray.exceptions.RayTaskError as error:
             # A rank can fail writing its control files after other ranks hand off staging.
             try:
@@ -2877,7 +2867,6 @@ class RayPPOTrainer:
             trainer_state_path=trainer_state_path,
             trainer_state_payload=trainer_state_buffer.getvalue(),
             marker_path=latest_checkpoint_file,
-            has_pending_policy_write=has_pending_policy_write,
         )
 
     def _cleanup_old_checkpoints(self, step: int):

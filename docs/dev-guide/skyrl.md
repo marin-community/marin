@@ -201,8 +201,8 @@ as it serializes them. Training can resume as soon as all ranks have copied
 their records. The resume marker is published after all shards and trainer state
 have committed.
 
-`trainer.checkpoint_max_staged_host_bytes` defaults to 16 GiB **per policy
-rank**. When the largest rank's share fits in its buffer, the remaining upload
+`trainer.policy.megatron_config.checkpoint_max_staged_host_bytes` sets the per-policy-rank budget. The default is 16 GiB.
+When the largest rank's share fits in its buffer, the remaining upload
 can overlap the next update. If a share exceeds the buffer, staging waits as
 records drain. A single record larger than the budget runs alone. Leave room on
 each node for the buffers of all its ranks and their separate multipart upload
@@ -217,8 +217,7 @@ TP, PP, CP, or EP geometry requires the fully reshardable format.
 
 `timing/save_checkpoints` includes rollout-state collection, snapshot
 preparation, and the staging wait. `timing/checkpoint_upload_blocking`
-measures the later wait when a complete
-checkpoint is required.
+measures the later wait when a complete checkpoint is required.
 
 ## CI checks
 

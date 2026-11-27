@@ -37,6 +37,17 @@ def finish_checkpoint_write(write: Future[Metadata]) -> None:
         raise RuntimeError(str(error)) from error
 
 
+def _wait_for_staging(staging: Future[None], write: Future[Metadata]) -> None:
+    wait((staging, write), return_when=FIRST_COMPLETED)
+
+    # MCore can enter its metadata barrier only after every rank hands off its data.
+    device = torch.cuda.current_device() if torch.cuda.is_available() else "cpu"
+    staged = torch.tensor(int(staging.done()), device=device)
+    dist.all_reduce(staged, op=dist.ReduceOp.MIN)
+    if not staged.item():
+        finish_checkpoint_write(write)
+
+
 # MCore 0.18 does not expose a storage-writer hook. Keep the adapter narrow: it
 # preserves MCore's state translation and planner and replaces only the writer.
 class DirectS3TorchDistSaveShardedStrategy(TorchDistSaveShardedStrategy):
@@ -77,15 +88,7 @@ class DirectS3TorchDistSaveShardedStrategy(TorchDistSaveShardedStrategy):
         )
 
         self.pending_write.add_done_callback(lambda _: executor.shutdown(wait=False))
-        wait((staged_writer.staged, self.pending_write), return_when=FIRST_COMPLETED)
-
-        # Planning or copying can fail before a rank hands off. Agree on that
-        # outcome on the training group before MCore enters its metadata barrier.
-        device = torch.cuda.current_device() if torch.cuda.is_available() else "cpu"
-        staged = torch.tensor(int(staged_writer.staged.done()), device=device)
-        dist.all_reduce(staged, op=dist.ReduceOp.MIN)
-        if not staged.item():
-            finish_checkpoint_write(self.pending_write)
+        _wait_for_staging(staged_writer.staged, self.pending_write)
 
 
 class DirectS3TorchDistLoadShardedStrategy(TorchDistLoadShardedStrategy):

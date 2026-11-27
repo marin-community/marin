@@ -280,9 +280,6 @@ trainer:
   reset_distillation_token_count_on_resume: false
   reset_global_step_on_resume: false
   ckpt_path: "${oc.env:HOME}/ckpts/"
-  # Periodic S3 saves stage a rank's final write plan in CPU RAM. A rank whose
-  # share exceeds this budget waits for the writer to release buffer space.
-  checkpoint_max_staged_host_bytes: 17179869184
   # Pending HF exports and the best native checkpoint are protected beyond this window.
   max_ckpts_to_keep: 2
   callbacks: null

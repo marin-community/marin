@@ -1,12 +1,14 @@
+import asyncio
 import json
+from threading import Event
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from omegaconf import OmegaConf
-from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME
+from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, LATEST_CHECKPOINT_FILE
 
-from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
+from skyrl_train.callbacks.base import CallbackHandler, TrainerCallback, TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import create_callbacks_from_config
 from skyrl_train.checkpoint_listing import ROLLOUT_STATE_FILENAME
 from skyrl_train.hf_export_schema import TRAINER_STATE_FILENAME
@@ -177,6 +179,7 @@ async def test_periodic_checkpoint_can_be_selected_on_write_once_storage(tmp_pat
         }
     )
     monkeypatch.setattr("skyrl_train.trainer.ray.get", lambda refs: refs)
+    monkeypatch.setattr("skyrl_train.trainer.ray.wait", lambda refs, **_: (refs, []))
 
     def make_trainer():
         trainer = RayPPOTrainer.__new__(RayPPOTrainer)
@@ -224,3 +227,80 @@ async def test_periodic_checkpoint_can_be_selected_on_write_once_storage(tmp_pat
     assert model.is_relative_to(output)
     assert (model / "rank_0.pt").read_bytes() == b"policy"
     assert json.loads((output / "exports/best_checkpoint.json").read_text()) == selected
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("writer_fails", [False, True])
+async def test_checkpoint_publication_waits_for_policy_write(tmp_path, monkeypatch, writer_fails):
+    marker = tmp_path / LATEST_CHECKPOINT_FILE
+    marker.write_text("1")
+    loop = asyncio.get_running_loop()
+    polled_pending_write = asyncio.Event()
+    write_done = Event()
+    saved_steps = []
+
+    class PolicyStorage:
+        def async_run_ray_method(self, _dispatch, method, **kwargs):
+            if method == "save_checkpoint":
+                self.path = Path(kwargs["ckpt_dir"]) / "rank_0.pt"
+                return [None]
+            if method == "checkpoint_write_done":
+                done = write_done.is_set()
+                if not done:
+                    loop.call_soon_threadsafe(polled_pending_write.set)
+                return [done]
+            assert method == "finish_checkpoint"
+            assert write_done.is_set()
+            if writer_fails:
+                raise OSError("checkpoint upload failed")
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_bytes(b"policy")
+            return [None]
+
+    class RecordSave(TrainerCallback):
+        def on_save(self, state, control, **kwargs):
+            saved_steps.append((state.global_step, marker.read_text()))
+
+    async def rollout_state():
+        return TrainingContextState(PromptLoaderState({}, []), [], None)
+
+    monkeypatch.setattr("skyrl_train.trainer.ray.get", lambda refs: refs)
+    monkeypatch.setattr("skyrl_train.trainer.ray.wait", lambda refs, **_: (refs, []))
+    trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+    trainer.cfg = OmegaConf.create({"trainer": {"ckpt_path": str(tmp_path), "max_ckpts_to_keep": -1}})
+    trainer.global_step = 2
+    trainer.policy_model = PolicyStorage()
+    trainer.context = SimpleNamespace(state_dict=rollout_state)
+    trainer.tokenizer = None
+    trainer.all_metrics = {}
+    trainer.all_timings = {}
+    trainer._last_saved_step = 1
+    trainer._checkpoint_save_failures = 0.0
+    trainer._ftpo_stopped = False
+    trainer._domain_balancer = None
+    trainer.distillation_scored_tokens_total = 0
+    trainer.colocate_all = False
+    trainer.callback_handler = CallbackHandler([RecordSave()])
+    trainer._control = TrainerControl()
+
+    await trainer._save_intermediate_checkpoint(TrainerState(2, 0, 2, 2))
+    try:
+        await asyncio.wait_for(polled_pending_write.wait(), timeout=10)
+        assert marker.read_text() == "1"
+        assert saved_steps == []
+    finally:
+        write_done.set()
+        published = await trainer._drain_checkpoint_upload()
+
+    checkpoint = tmp_path / "global_step_2"
+    if writer_fails:
+        assert published is False
+        assert marker.read_text() == "1"
+        assert saved_steps == []
+        assert not (checkpoint / TRAINER_STATE_FILENAME).exists()
+        assert trainer.all_metrics["trainer/checkpoint_save_failures"] == 1.0
+    else:
+        assert published is True
+        assert marker.read_text() == "2"
+        assert saved_steps == [(2, "2")]
+        assert (checkpoint / TRAINER_STATE_FILENAME).is_file()
+        assert (checkpoint / ROLLOUT_STATE_FILENAME).is_file()

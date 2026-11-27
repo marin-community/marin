@@ -18,7 +18,7 @@ from torch import distributed as dist
 from torch.distributed.checkpoint import CheckpointException
 from torch.distributed.checkpoint.metadata import Metadata
 
-from skyrl_train.distributed.strategy import CheckpointWriteStatus, DistributedStrategy
+from skyrl_train.distributed.strategy import DistributedStrategy
 from skyrl_train.distributed.utils import ModelOrModelOptimPair
 from skyrl_train.io import io
 from skyrl_train.workers.megatron.megatron_model_wrapper import MegatronModelWrapper
@@ -75,6 +75,7 @@ from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH
 # writes DP-local optimizer shards without a gather but cannot change non-DP geometry on load.
 _OPTIMIZER_CHECKPOINT_SHARDING_TYPES = {"fully_reshardable", "dp_reshardable"}
 _PARAM_STATE_SHARDING_TYPE_KEY = "param_state_sharding_type"
+_EXTRA_CHECKPOINT_STATE_FILENAME = "extra_state.pt"
 
 
 def _optimizer_checkpoint_metadata(sharding_type: str) -> dict:
@@ -199,15 +200,12 @@ class MegatronStrategy(DistributedStrategy):
         megatron_config,
         optimizer_config=None,
         seed: int = 42,
-        *,
-        checkpoint_max_staged_host_bytes: int,
     ) -> None:
         super().__init__()
         self.megatron_config = megatron_config
         self.optimizer_config = optimizer_config
         self.seed = seed
         self.hf_config = None  # Set by the megatron worker once configs are initialized.
-        self._checkpoint_max_staged_host_bytes = checkpoint_max_staged_host_bytes
         self._checkpoint_group: dist.ProcessGroup | None = None
         self._pending_checkpoint: _PendingCheckpoint | None = None
         if optimizer_config is not None:
@@ -366,7 +364,9 @@ class MegatronStrategy(DistributedStrategy):
             # DCP's background collectives must not interleave with training collectives.
             self._checkpoint_group = dist.new_group(backend="gloo", timeout=self._collective_timeout)
         return DirectS3TorchDistSaveShardedStrategy(
-            ckpt_dir, staging_bytes=self._checkpoint_max_staged_host_bytes, checkpoint_group=self._checkpoint_group
+            ckpt_dir,
+            staging_bytes=self.megatron_config.checkpoint_max_staged_host_bytes,
+            checkpoint_group=self._checkpoint_group,
         )
 
     def save_checkpoint(
@@ -379,18 +379,10 @@ class MegatronStrategy(DistributedStrategy):
         client_state: dict = {},
         tag=None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
-    ) -> CheckpointWriteStatus:
-        """Capture checkpoint data and report whether publication requires a separate join."""
+    ) -> None:
+        """Capture checkpoint data before the next model update."""
         if self._pending_checkpoint is not None:
             raise RuntimeError("The previous checkpoint has not finished")
-        # Extract base model.
-        model: List[nn.Module] = model.actor_module
-        materialize_megatron_params(model)
-        assert len(model) == 1, "Megatron virtual pipeline parallel is not yet supported"
-        model = model[0]
-        if hasattr(model, "module"):
-            model = model.module
-
         # Create checkpoint directory if it doesn't exist.
         if node_local_rank == 0:
             io.makedirs(ckpt_dir, exist_ok=True)
@@ -398,30 +390,7 @@ class MegatronStrategy(DistributedStrategy):
         # All ranks wait for the checkpoint directory to be created before saving.
         dist.barrier()
 
-        # Collect the sharded state dicts for model and optimizer, and full state dict for the scheduler.
-        sharded_state_dict = {}
-        model_sharded_state_dict = model.sharded_state_dict()
-        sharded_state_dict["model"] = model_sharded_state_dict
-        if optimizer:
-            # An empty training selection can reach checkpointing before the first
-            # update. Megatron's serializer still requires the lazy optimizer state.
-            optimizers = optimizer.chained_optimizers if isinstance(optimizer, ChainedOptimizer) else [optimizer]
-            for child in optimizers:
-                if child.optimizer is not None and child.init_state_fn is not None:
-                    child.init_state_fn(child.optimizer, child.config)
-            sharded_state_dict["optimizer"] = optimizer.sharded_state_dict(
-                model_sharded_state_dict,
-                metadata=_optimizer_checkpoint_metadata(self.megatron_config.optimizer_checkpoint_sharding_type),
-            )
-            if self.optimizer_config is not None and str(self.optimizer_config.optimizer).lower() == "muonh":
-                _muonh_fp32_groups_as_mapping(sharded_state_dict["optimizer"])
-                sharded_state_dict["optimizer_recipe"] = _muonh_checkpoint_recipe(self.optimizer_config)
-                sharded_state_dict["optimizer_recipe_step"] = _muonh_adamh_step(optimizer)
-        if scheduler:
-            sharded_state_dict["lr_scheduler"] = scheduler.state_dict()
-
-        # Save RNG state.
-        sharded_state_dict["rng"] = self.get_rng_state()
+        sharded_state_dict = self._checkpoint_state_dict(model, optimizer, scheduler)
 
         # Save the checkpoint across ranks in parallel. Each S3 rank shard is one
         # multipart object; the local work directory contains only small control files.
@@ -457,31 +426,71 @@ class MegatronStrategy(DistributedStrategy):
                 self._pending_checkpoint = _PendingCheckpoint(
                     direct_save.pending_write, controls.pop_all(), work_dir, ckpt_dir
                 )
-                return CheckpointWriteStatus.DEFERRED
+                return
 
         dist.barrier()
         ckpt_base.async_calls.close()
         ckpt_base.async_calls = AsyncCallsQueue(persistent=True)
         self.log(f"Checkpoint successfully saved to {ckpt_dir}")
-        return CheckpointWriteStatus.COMMITTED
+
+    def _checkpoint_state_dict(
+        self,
+        wrapped_model: MegatronModelWrapper,
+        optimizer: DistributedOptimizer | None,
+        scheduler: OptimizerParamScheduler | None,
+    ) -> dict:
+        modules = wrapped_model.actor_module
+        materialize_megatron_params(modules)
+        assert len(modules) == 1, "Megatron virtual pipeline parallel is not yet supported"
+        model = modules[0]
+        if hasattr(model, "module"):
+            model = model.module
+
+        # Collect the sharded state dicts for model and optimizer, and full state dict for the scheduler.
+        sharded_state_dict = {}
+        model_sharded_state_dict = model.sharded_state_dict()
+        sharded_state_dict["model"] = model_sharded_state_dict
+        if optimizer:
+            # An empty training selection can reach checkpointing before the first
+            # update. Megatron's serializer still requires the lazy optimizer state.
+            optimizers = optimizer.chained_optimizers if isinstance(optimizer, ChainedOptimizer) else [optimizer]
+            for child in optimizers:
+                if child.optimizer is not None and child.init_state_fn is not None:
+                    child.init_state_fn(child.optimizer, child.config)
+            sharded_state_dict["optimizer"] = optimizer.sharded_state_dict(
+                model_sharded_state_dict,
+                metadata=_optimizer_checkpoint_metadata(self.megatron_config.optimizer_checkpoint_sharding_type),
+            )
+            if self.optimizer_config is not None and str(self.optimizer_config.optimizer).lower() == "muonh":
+                _muonh_fp32_groups_as_mapping(sharded_state_dict["optimizer"])
+                sharded_state_dict["optimizer_recipe"] = _muonh_checkpoint_recipe(self.optimizer_config)
+                sharded_state_dict["optimizer_recipe_step"] = _muonh_adamh_step(optimizer)
+        if scheduler:
+            sharded_state_dict["lr_scheduler"] = scheduler.state_dict()
+
+        # Save RNG state.
+        sharded_state_dict["rng"] = self.get_rng_state()
+        return sharded_state_dict
 
     def _write_checkpoint_control_files(self, work_dir, tokenizer, client_state, tag) -> None:
         self.save_hf_configs(self.hf_config, os.path.join(work_dir, "huggingface"), tokenizer)
-        with io.open_file(os.path.join(work_dir, "extra_state.pt"), "wb") as output:
+        with io.open_file(os.path.join(work_dir, _EXTRA_CHECKPOINT_STATE_FILENAME), "wb") as output:
             torch.save({"client_state": client_state, "tag": tag}, output)
 
     def checkpoint_write_done(self) -> bool:
         """Return whether the rank is idle or its write has settled, even on failure."""
         return self._pending_checkpoint is None or self._pending_checkpoint.write.done()
 
+    def _take_pending_checkpoint(self) -> _PendingCheckpoint | None:
+        pending, self._pending_checkpoint = self._pending_checkpoint, None
+        return pending
+
     def finish_checkpoint(self) -> None:
-        if self._pending_checkpoint is not None:
-            pending, self._pending_checkpoint = self._pending_checkpoint, None
+        if (pending := self._take_pending_checkpoint()) is not None:
             pending.finish()
 
     def discard_checkpoint(self) -> None:
-        if self._pending_checkpoint is not None:
-            pending, self._pending_checkpoint = self._pending_checkpoint, None
+        if (pending := self._take_pending_checkpoint()) is not None:
             pending.discard()
 
     def load_checkpoint(
@@ -589,7 +598,7 @@ class MegatronStrategy(DistributedStrategy):
             self.load_rng_state(state_dict["rng"])
 
         states = {}
-        extra_state_path = os.path.join(ckpt_dir, "extra_state.pt")
+        extra_state_path = os.path.join(ckpt_dir, _EXTRA_CHECKPOINT_STATE_FILENAME)
         if load_training_state and io.exists(extra_state_path):
             with io.open_file(extra_state_path, "rb") as f:
                 extra_state = torch.load(f, weights_only=False)

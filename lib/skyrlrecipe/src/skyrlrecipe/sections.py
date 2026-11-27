@@ -182,6 +182,8 @@ class PolicyMegatronConfig(Section):
     optimizer_checkpoint_sharding_type: Literal["fully_reshardable", "dp_reshardable"] = field("fully_reshardable")
     """dp_reshardable avoids a CPU optimizer gather when the checkpoint keeps the same tensor/pipeline/context/expert
     geometry. Loading reads the format from the checkpoint."""
+    checkpoint_max_staged_host_bytes: PositiveInt = field(17179869184)
+    "Each policy rank waits for buffer space if its S3 checkpoint share exceeds this budget."
     check_train_eval_parity: bool = field(False)
     """Re-run the eval-mode and train-mode forwards inside ppo_train and log how far each is from the old log-probs,
     separating eval repeatability from train/eval drift."""
@@ -257,6 +259,8 @@ class RefMegatronConfig(Section):
     optimizer_checkpoint_sharding_type: Literal["fully_reshardable", "dp_reshardable"] = unset_field()
     """dp_reshardable avoids a CPU optimizer gather when the checkpoint keeps the same tensor/pipeline/context/expert
     geometry. Loading reads the format from the checkpoint."""
+    checkpoint_max_staged_host_bytes: int = unset_field()
+    "Each policy rank waits for buffer space if its S3 checkpoint share exceeds this budget."
     check_train_eval_parity: bool = unset_field()
     """Re-run the eval-mode and train-mode forwards inside ppo_train and log how far each is from the old log-probs,
     separating eval repeatability from train/eval drift."""
@@ -555,9 +559,6 @@ class Trainer(Section):
     reach the budget."""
     reset_distillation_token_count_on_resume: bool = field(False)
     reset_global_step_on_resume: bool = field(False)
-    checkpoint_max_staged_host_bytes: PositiveInt = field(17179869184)
-    """Periodic S3 saves stage a rank's final write plan in CPU RAM. A rank whose share exceeds this budget waits for
-    the writer to release buffer space."""
     callbacks: tuple[Callback, ...] | None = field(None)
     ckpt_interval: int = field(5)
     hf_save_interval: int = field(-1)
