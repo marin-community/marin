@@ -699,7 +699,10 @@ def math_source(source: MathSource) -> RlDataSource[CurationRecipe]:
             name=source.name,
             source=source.source,
             convert=source.convert,
-            version="1",
+            # Version 2: the symbolic nondimensionalization rows state the positive
+            # domain and bind the coefficients (the regrouped-answer fix, main
+            # #11930); version 1's stored rows predate it.
+            version="2" if source.name == "hardmath_rhs" else "1",
             intended_use=source.intended_use,
             rubric=source.rubric,
             controls=source.controls,

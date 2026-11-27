@@ -724,3 +724,23 @@ def test_hardmath_rhs_symbolic_nondimensionalization_states_domain_and_grades_re
     assert "Assume $a_1$, $a_2$, and $a_3$ are positive." in task.context.events[-1].content
     assert grade_reply(task, regrouped).reward == 1.0
     assert grade_reply(task, wrong).reward == 0.0
+
+
+def test_hardmath_rhs_poly1_train_row_binds_positive_symbols_and_grades_the_briefs_regrouping():
+    # The 89-row defect from the stale-grader brief: the regrouped equivalent of the
+    # 19/9 exponent pair scored 0 before the positive-symbol contract (#11930).
+    row = {
+        "question": (
+            r"Nondimensionalize $a_{1}x^{19}+a_{2}x^{9}+a_{3}$ into "
+            r"$\epsilon y^{19}+y^{9}+1$; express $\epsilon$ in terms of the coefficients."
+        ),
+        "ground_truths": r"$\boxed{\epsilon=\frac{a_{1}\left(\frac{a_{3}}{a_{2}}\right)^{\frac{19}{9}}}{a_{3}}}$",
+        "question_type": "nondimensionalization_symbolic",
+        "source": "poly1_train",
+    }
+    task = converted_task(RECIPES["hardmath_rhs"], row)
+    regrouped = r"\frac{a_{1}a_{3}^{\frac{19}{9}}}{a_{2}^{\frac{19}{9}}a_{3}}"
+
+    assert "Assume $a_1$, $a_2$, and $a_3$ are positive." in task.context.events[-1].content
+    assert task.grader.parameters["positive_symbols"] == ["a_1", "a_2", "a_3"]
+    assert grade_reply(task, regrouped).reward == 1.0
