@@ -11,7 +11,7 @@ import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import MachineSpec, NetworkPolicy, PackageSpec, UnsupportedMachineSpec
 
-from taskcompendium.evaluation.spec import AgentEpisode, EpisodeInputs, EpisodeLimits, MachineResources, TerminusAgent
+from taskcompendium.evaluation.spec import AgentEpisode, EpisodeInputs, EpisodeLimits, TerminusAgent
 from taskcompendium.importers.harbor.config import UnsupportedHarborFeature
 from taskcompendium.importers.harbor.package import (
     AnswerFile,
@@ -383,8 +383,6 @@ def test_prebuilt_image_with_separate_verifier(tmp_path):
         memory_mb=2048,
         storage_mb=10240,
         network=NetworkPolicy.DENY,
-        # Without its own [verifier.environment], Harbor's separate verifier copies the task's [environment].
-        verifier_resources=MachineResources(cpus=2, memory_mb=2048, storage_mb=10240),
     )
     assert TaskSpec.model_validate_json(task.model_dump_json()) == task
 
