@@ -52,6 +52,7 @@ _QUIET_VLLM_ARGS = ("--uvicorn-log-level", "warning")
 _VLLM_BATCH_INVARIANT_ENV = "VLLM_BATCH_INVARIANT"
 _VLLM_FLASHINFER_SAMPLER_ENV = "VLLM_USE_FLASHINFER_SAMPLER"
 _VLLM_NCCL_SYMM_MEM_ENV = "VLLM_USE_NCCL_SYMM_MEM"
+_VLLM_PP_LAYER_PARTITION_ENV = "VLLM_PP_LAYER_PARTITION"
 _RUNAI_STREAMER_CONCURRENCY_ENV = "RUNAI_STREAMER_CONCURRENCY"
 _RUNAI_STREAMER_S3_REQUEST_TIMEOUT_ENV = "RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"
 _SPECULATIVE_METRIC_FAMILIES = frozenset(
@@ -254,6 +255,7 @@ def _vllm_engine_config(
         launcher=launcher,
         source=source,
         version=serve.vllm_version,
+        nightly=serve.vllm_nightly,
         extra_requirements=serve.vllm_plugin_requirements,
         startup_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
         max_num_batched_tokens=(
@@ -297,6 +299,8 @@ def _vllm_environment_variables(serve: ServeConfig, platform: Platform) -> dict[
         environment[_VLLM_FLASHINFER_SAMPLER_ENV] = str(int(serve.vllm_use_flashinfer_sampler))
     if serve.vllm_use_nccl_symm_mem is not None:
         environment[_VLLM_NCCL_SYMM_MEM_ENV] = str(int(serve.vllm_use_nccl_symm_mem))
+    if serve.pipeline_layer_partition:
+        environment[_VLLM_PP_LAYER_PARTITION_ENV] = ",".join(str(layers) for layers in serve.pipeline_layer_partition)
     if serve.runai_streamer_concurrency is not None:
         environment[_RUNAI_STREAMER_CONCURRENCY_ENV] = str(serve.runai_streamer_concurrency)
     if serve.runai_streamer_s3_request_timeout_ms is not None:

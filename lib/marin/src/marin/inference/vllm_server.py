@@ -24,6 +24,7 @@ from urllib.parse import urlparse
 
 import requests
 from iris.cluster.log_highlights import extract_failure_highlights
+from iris.cluster.runtime.env import SCRATCH_CACHE_PATH
 from iris.runtime import telemetry as runtime_telemetry
 from prometheus_client.core import Metric as PrometheusMetric
 from rigging import telemetry
@@ -47,6 +48,7 @@ from marin.inference.config import (
     VLLM_METRIC_PREFIX,
     WORKER_PYTHON_VERSION,
     InferenceModelConfig,
+    UpstreamVllmNightly,
     VllmCompilationCacheMode,
     VllmRouterConfig,
     normalize_vllm_option,
@@ -71,9 +73,10 @@ _REMOVED_VLLM_MODE_MESSAGE = (
     "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
     "Unset MARIN_VLLM_MODE or set it to 'native'."
 )
-# Pin the RunAI loader for both CUDA variants. The upstream vllm[runai] extra allows a compatible
-# range, while the Marin git fork does not bundle it.
-_RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
+# Pin the RunAI loader for both CUDA variants: the Marin fork's wheel does not bundle it, and the upstream
+# vllm[runai] extra only sets a floor (>=0.17.1 for vLLM 0.34), which would let new streamer releases in unreviewed.
+_FORK_RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
+_UPSTREAM_RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.17.3"
 _UPSTREAM_CUDA_TORCH_BACKEND = "cu130"
 _PYTORCH_WHEEL_INDEX_BASE = "https://download.pytorch.org/whl"
 _NO_NATIVE_LOG_DIRECTORY = "<no log directory available for native vLLM server>"
@@ -109,8 +112,49 @@ if nvrtc.is_file() and not nvrtc_link.exists():
     nvrtc_link.symlink_to(nvrtc.name)
 os.environ["CUDA_HOME"] = str(cuda_home)
 os.environ["PATH"] = os.pathsep.join((str(nvcc.parent), os.environ["PATH"]))
-os.execvp(sys.argv[1], sys.argv[1:])
 """
+_CUDA_EXEC = """os.execvp(sys.argv[1], sys.argv[1:])
+"""
+# A pip-installed vLLM leaves FlashInfer's precompiled kernels to be downloaded file by file on first use, and
+# every tensor parallel worker contends for each file's lock. Upstream installs instead add the flashinfer-cubin
+# wheel matching the installed FlashInfer, which FlashInfer reads its kernels from. The wheel is installed once
+# per FlashInfer version into a node-cache directory and put on PYTHONPATH before vLLM starts.
+_FLASHINFER_CUBIN_INDEX = "https://flashinfer.ai/whl/flashinfer-cubin/"
+_FLASHINFER_CUBIN_CACHE_SUBDIR = "flashinfer-cubin"
+
+
+def _flashinfer_cubin_bootstrap(cache_root: str) -> str:
+    return f"""\
+import shutil
+import subprocess
+import tempfile
+
+flashinfer_version = importlib.metadata.version("flashinfer-python")
+cubin_root = Path({cache_root!r})
+cubin_site = cubin_root / flashinfer_version
+if not cubin_site.is_dir():
+    cubin_root.mkdir(parents=True, exist_ok=True)
+    staging = tempfile.mkdtemp(dir=cubin_root)
+    try:
+        subprocess.run(
+            [
+                "uv", "pip", "install", "--no-deps", "--python", sys.executable, "--target", staging,
+                "--find-links", {_FLASHINFER_CUBIN_INDEX!r}, f"flashinfer-cubin=={{flashinfer_version}}",
+            ],
+            check=True,
+        )
+        os.rename(staging, cubin_site)
+    except OSError:
+        # Another task on this node installed the same version first.
+        if not cubin_site.is_dir():
+            raise
+    finally:
+        # A failed install, or a copy that lost the rename to another task, stays out of the node cache.
+        shutil.rmtree(staging, ignore_errors=True)
+os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, (str(cubin_site), os.environ.get("PYTHONPATH"))))
+"""
+
+
 _PYTHON_FILE_BOOTSTRAP = """\
 import runpy
 import sys
@@ -211,6 +255,7 @@ class _CudaVllmInstall:
     torch_backend: str
     toolchain_version: str
     torch_install_args: tuple[str, ...]
+    runai_streamer_requirement: str
     executable: str
     executable_args: tuple[str, ...] = ()
 
@@ -225,7 +270,9 @@ class IsolatedCudaVllm:
 
     source: VllmType = VllmType.UPSTREAM
     version: str | None = None
-    """Exact PyPI pin; required for ``UPSTREAM`` and ignored for ``MARIN_FORK``."""
+    """Exact version pin; required for ``UPSTREAM`` and ignored for ``MARIN_FORK``."""
+    nightly: UpstreamVllmNightly | None = None
+    """Per-commit wheel index and CUDA build for an unreleased upstream ``version``."""
     extra_requirements: tuple[str, ...] = ()
     """Pinned vLLM plugins installed into the same isolated CUDA environment."""
     # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
@@ -236,6 +283,8 @@ class IsolatedCudaVllm:
     def __post_init__(self) -> None:
         if self.source is VllmType.UPSTREAM and not self.version:
             raise ValueError("IsolatedCudaVllm(UPSTREAM) requires an explicit vLLM version.")
+        if self.nightly is not None and self.source is not VllmType.UPSTREAM:
+            raise ValueError("a vLLM nightly pin requires upstream vLLM")
 
     def _install(self) -> _CudaVllmInstall:
         if self.source is VllmType.MARIN_FORK:
@@ -253,6 +302,7 @@ class IsolatedCudaVllm:
                     "--index-strategy",
                     "unsafe-best-match",
                 ),
+                runai_streamer_requirement=_FORK_RUNAI_STREAMER_REQUIREMENT,
                 executable="python",
                 executable_args=(
                     "-c",
@@ -261,23 +311,25 @@ class IsolatedCudaVllm:
                     provenance,
                 ),
             )
+        torch_backend = _UPSTREAM_CUDA_TORCH_BACKEND if self.nightly is None else self.nightly.torch_backend
+        # A nightly's index is consulted before PyPI, so the pinned dev version resolves from it.
+        index_args = () if self.nightly is None else ("--extra-index-url", self.nightly.index_url)
         return _CudaVllmInstall(
             requirement=f"vllm[runai]=={self.version}",
-            torch_backend=_UPSTREAM_CUDA_TORCH_BACKEND,
-            toolchain_version=CUDA_TOOLCHAIN_VERSION_BY_BACKEND[_UPSTREAM_CUDA_TORCH_BACKEND],
-            torch_install_args=("--torch-backend", _UPSTREAM_CUDA_TORCH_BACKEND),
+            torch_backend=torch_backend,
+            toolchain_version=(
+                CUDA_TOOLCHAIN_VERSION_BY_BACKEND[torch_backend]
+                if self.nightly is None
+                else self.nightly.cuda_toolchain_version
+            ),
+            torch_install_args=(*index_args, "--torch-backend", torch_backend),
+            runai_streamer_requirement=_UPSTREAM_RUNAI_STREAMER_REQUIREMENT,
             executable="vllm",
         )
 
     def command(self) -> list[str]:
         install = self._install()
-        command = [
-            "uvx",
-            "--from",
-            install.requirement,
-            "--with",
-            _RUNAI_STREAMER_REQUIREMENT,
-        ]
+        command = ["uvx", "--from", install.requirement, "--with", install.runai_streamer_requirement]
         if self.source is VllmType.MARIN_FORK:
             # The promoted release records the CUDA torch build; pin it so a conflict cannot select CPU torch.
             command.extend(("--with", f"torch=={self.release.torch_version}"))
@@ -288,11 +340,15 @@ class IsolatedCudaVllm:
             command.extend(("--with", requirement))
         command.extend(("--python", self.python_version))
         command.extend(install.torch_install_args)
+        flashinfer_bootstrap = ""
+        if self.source is VllmType.UPSTREAM:
+            cache_root = SCRATCH_CACHE_PATH if os.path.isdir(SCRATCH_CACHE_PATH) else tempfile.gettempdir()
+            flashinfer_bootstrap = _flashinfer_cubin_bootstrap(f"{cache_root}/{_FLASHINFER_CUBIN_CACHE_SUBDIR}")
         command.extend(
             (
                 "python",
                 "-c",
-                _CUDA_NVCC_BOOTSTRAP,
+                _CUDA_NVCC_BOOTSTRAP + flashinfer_bootstrap + _CUDA_EXEC,
                 install.executable,
                 *install.executable_args,
             )
