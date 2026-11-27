@@ -574,7 +574,8 @@ LAW_CAP_LAMBDA = 0.2
 ``LAW_CAP_LAMBDA`` (arXiv 2506.02285)."""
 _ADAM_LEAVES = re.compile(
     r"(?:^|\.)(value_embed|ve_lambda|ve_gate|head_ve_lambda|head_ve_gate|head_ve_gain|qk_mult"
-    r"|pointer_w|pointer_b|pointer_open|ngram_cache_w|ngram_cache_b|ngram_cache_open)$"
+    r"|pointer_w|pointer_b|pointer_open|ngram_cache_w|ngram_cache_b|ngram_cache_open"
+    r"|middle_loop_w_f|middle_loop_w_g)$"
 )
 # ``full_bandwidth_passes``' zero-initialised W_fuse: plain Muon at the MuonH LR (a hyperball step keeps a zero matrix at
 # zero), in its own group present only when the model has it.
@@ -1049,7 +1050,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             if "attn_res_query" in path_lower:
                 return "attn_res_query"
             # Inkling rel-pos weights; value embeddings and their mixing weights; small per-layer gates; the pointer
-            # and n-gram cache mixtures' weights (zero-initialised).
+            # and n-gram cache mixtures' weights and the middle-loop controller's W_f / W_g (zero-initialised).
             if ".rel_pos." in path_lower or _ADAM_LEAVES.search(path_lower):
                 return "adam"
             adamc_router_embed = self.adamc_head_router_embed or self.muonc_anneal_adamc

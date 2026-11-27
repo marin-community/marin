@@ -116,6 +116,28 @@ _HEAD_GATE_OFF = 0.1
 FINAL_NORM_INPUT_RMS_KEY = "_final_norm_input_rms"
 # Branch output SConv sites (``sconv_sites``).
 SCONV_SITES = ("k", "attn", "mlp")
+# ``middle_loop``: per-layer extras key of a middle layer's cross-loop AttnRes inputs (previous pass's middle blocks,
+# the cross pseudo-queries and the gating controller), the number of shared middle layers, and the controller rank.
+_MIDDLE_LOOP_CROSS = "middle_loop_cross"
+MIDDLE_LOOP_LAYERS = 2
+MIDDLE_LOOP_RANK = 64
+
+
+class MiddleLoop(NamedTuple):
+    """A ``middle_loop`` design: ``passes`` runs of the shared middle layers; ``cross`` reads the previous pass
+    through a separate cross-loop AttnRes and a gating controller, else through the middle gates' own pool."""
+
+    cross: bool
+    passes: int
+
+
+MIDDLE_LOOPS: dict[str, MiddleLoop | None] = {
+    "none": None,
+    "cross_x2": MiddleLoop(cross=True, passes=2),
+    "cross_x3": MiddleLoop(cross=True, passes=3),
+    "window_x2": MiddleLoop(cross=False, passes=2),
+    "window_x3": MiddleLoop(cross=False, passes=3),
+}
 
 
 class GradProbeSite(StrEnum):
@@ -507,6 +529,18 @@ class GrugModelConfig:
     token ids before the train step's ``value_and_grad``. Its zero-initialised ``w`` ``[D, 2]``, ``b`` ``[2]`` and
     ``o`` are on Adam without decay. Excludes ``cplm_plus``, ``lm_head_bilinear``, ``pointer_mixture`` and
     ``full_bandwidth_passes``."""
+    middle_loop: str = "none"
+    """Middle-loop transformer over Block AttnRes (``MIDDLE_LOOPS``): ``middle_loop_split`` splits the layers into a
+    prelude, ``MIDDLE_LOOP_LAYERS`` shared middle layers and a coda (2 / 2 / 2 at 6 layers); the middle layers run
+    ``passes`` times with their weights and AttnRes queries shared, and every layer application is its own AttnRes
+    block. Each pass restarts from the prelude: a middle gate reads the embedding, the prelude blocks and the current
+    pass's earlier blocks. ``window_x*`` adds the previous pass's two middle blocks to that pool. ``cross_x*`` instead
+    mixes them with a separate cross-loop pseudo-query ``m`` and combines it with the local mix ``u`` as
+    ``h = (1 - f) u + g m``, ``f = tanh(W_f z)``, ``g = tanh(W_g z)``, ``z = W_down [rms_norm(u); rms_norm(m)]``
+    (rank ``MIDDLE_LOOP_RANK``, ``W_f`` and ``W_g`` zero-initialised on Adam), one controller per middle sublayer
+    shared across passes; the first pass reads only the local mix. The coda and the final gate read the embedding,
+    the prelude, the last pass's middle blocks and the coda's own blocks. Needs ``attn_res``; excludes the AttnRes
+    plain sum, KV gates, layer skips and ``full_bandwidth_passes``."""
 
     def __post_init__(self) -> None:
         if self.full_bandwidth_passes and (self.full_bandwidth_passes < 2 or self.cplm_plus or self.pointer_mixture):
@@ -558,6 +592,23 @@ class GrugModelConfig:
             raise ValueError("skip_adapter_dim needs attn_res")
         if self.skip_router_layers and (not self.attn_res or not 0.0 < self.skip_router_frac < 1.0):
             raise ValueError("skip_router_layers needs attn_res and 0 < skip_router_frac < 1")
+        if self.middle_loop not in MIDDLE_LOOPS:
+            raise ValueError(f"middle_loop must be one of {list(MIDDLE_LOOPS)}, got {self.middle_loop!r}")
+        if self.middle_loop_design is not None and (
+            not self.attn_res
+            or self.num_layers < MIDDLE_LOOP_LAYERS + 2
+            or self.attn_res_plain_sum
+            or self.attn_res_kv_layers
+            or self.entropy_skip_layers
+            or self.skip_router_layers
+            or self.skip_adapter_dim
+            or self.full_bandwidth_passes
+        ):
+            raise ValueError(
+                f"middle_loop needs attn_res and num_layers >= {MIDDLE_LOOP_LAYERS + 2}, and excludes "
+                "attn_res_plain_sum, attn_res_kv_layers, entropy_skip_layers, skip_router_layers, skip_adapter_dim "
+                "and full_bandwidth_passes"
+            )
         if self.attn_res_kv_layers:
             if not self.attn_res:
                 raise ValueError("attn_res_kv_layers needs attn_res")
@@ -586,6 +637,10 @@ class GrugModelConfig:
     def kv_source_layers(self) -> int:
         """The leading layers whose outputs ``attn_res_kv_layers`` read (``attn_res_kv_source_layers``)."""
         return self.num_layers // 2 if self.attn_res_kv_source_layers is None else self.attn_res_kv_source_layers
+
+    @property
+    def middle_loop_design(self) -> MiddleLoop | None:
+        return MIDDLE_LOOPS[self.middle_loop]
 
     @property
     def Embed(self) -> Axis:
@@ -1333,7 +1388,7 @@ class MoEMLP(eqx.Module):
         router_stats[f"{_OUTSTAT_PREFIX}moe_active_k"] = jnp.asarray(float(k), jnp.float32)
         router_stats["margin_min"] = margin_min
         router_stats["margin_max"] = margin_max
-        if self.cfg.full_bandwidth_passes:
+        if self.cfg.full_bandwidth_passes or self.cfg.middle_loop_design is not None:
             router_stats[_QB_MARGINS] = reshard(jax.lax.stop_gradient(router_logits - alpha), P(_BATCH_AXES, None))
 
         routed_input = x_flat
@@ -1783,6 +1838,29 @@ def _attn_res_mix(
     return reshard(mixed.astype(sources[0].dtype), _batch_spec()), _gate_z(logits), mean_weights
 
 
+class MiddleLoopCross(NamedTuple):
+    """One middle layer's cross-loop inputs (``middle_loop`` ``cross_x*``): the previous pass's middle blocks and,
+    per sublayer (attention, MLP), the cross pseudo-query and the controller's ``W_down``, ``W_f`` and ``W_g``."""
+
+    blocks: tuple[jax.Array, ...]
+    queries: Float[Array, "2 D"]
+    down: Float[Array, "2 E R"]
+    w_f: Float[Array, "2 R D"]
+    w_g: Float[Array, "2 R D"]
+
+
+def _middle_loop_cross_combine(u: Float[Array, "B S D"], cross: MiddleLoopCross, sublayer: int, eps: float):
+    """``h = (1 - f) u + g m``: the local mix ``u`` gated with the cross-loop mix ``m`` of the previous pass."""
+    logits = [_attn_res_source_logits(b, cross.queries[sublayer][None], eps)[0] for b in cross.blocks]
+    _, m = _softmax_mix(logits, list(cross.blocks))
+    u32 = u.astype(jnp.float32)
+    features = jnp.concatenate([rms_norm(u32, eps), rms_norm(m, eps)], axis=-1)
+    z = _proj(features, cross.down[sublayer].astype(jnp.float32), out_sharding=_batch_spec())
+    f = jnp.tanh(_proj(z, cross.w_f[sublayer].astype(jnp.float32), out_sharding=_batch_spec()))
+    g = jnp.tanh(_proj(z, cross.w_g[sublayer].astype(jnp.float32), out_sharding=_batch_spec()))
+    return reshard(((1.0 - f) * u32 + g * m).astype(u.dtype), _batch_spec())
+
+
 # ``(layer, blocks, block_logits, partial, queries, extras)``: the differentiable inputs of one AttnRes layer.
 _LayerArgs = tuple[Block, tuple[jax.Array, ...], tuple[jax.Array, ...], jax.Array | None, jax.Array, dict | None]
 
@@ -1806,7 +1884,12 @@ def _attn_res_layer(
     layer, blocks, block_logits, partial, queries, extras = diff_args
     cfg = layer.attn.cfg
 
+    cross = None if extras is None else extras.get(_MIDDLE_LOOP_CROSS)
+
     def mix(p: jax.Array | None, gate_index: int, leading_sources_only: bool = False):
+        if cross is not None:
+            h, z, w = _attn_res_mix(blocks, block_logits, p, queries, gate_index, eps, plain_sum=False)
+            return _middle_loop_cross_combine(h, cross, gate_index % 2, eps), z, w
         if not leading_sources_only:
             return _attn_res_mix(blocks, block_logits, p, queries, gate_index, eps, plain_sum=cfg.attn_res_plain_sum)
         # The leading layers' sources: the blocks rolled at layers 0, seg, ... <= the cutoff (each holds only
@@ -1948,6 +2031,23 @@ def attn_res_block_starts(cfg: GrugModelConfig) -> tuple[int, ...]:
     return starts
 
 
+def middle_loop_split(cfg: GrugModelConfig) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    """``(prelude, middle, coda)`` layer indices of ``middle_loop``: ``MIDDLE_LOOP_LAYERS`` middle layers, the
+    prelude taking half the rest (rounded down) and the coda the remainder."""
+    num_prelude = (cfg.num_layers - MIDDLE_LOOP_LAYERS) // 2
+    num_middle_end = num_prelude + MIDDLE_LOOP_LAYERS
+    layers = tuple(range(cfg.num_layers))
+    return layers[:num_prelude], layers[num_prelude:num_middle_end], layers[num_middle_end:]
+
+
+def middle_loop_schedule(cfg: GrugModelConfig) -> tuple[int, ...]:
+    """The layer of each ``middle_loop`` layer application, in order: prelude, each middle pass, coda."""
+    design = cfg.middle_loop_design
+    assert design is not None
+    prelude, middle, coda = middle_loop_split(cfg)
+    return (*prelude, *(middle * design.passes), *coda)
+
+
 class LayerSkip(NamedTuple):
     """An eval ablation: on ``layers``, tokens with ``keep`` False contribute no attention or MLP output. Their
     K/V are still computed (other tokens attend to them as before), so with ``attn_res_kv_layers`` on those
@@ -1993,6 +2093,12 @@ class Transformer(eqx.Module):
     token_embed_ngram_case: Float[Array, "C D"] | None
     spelling_ngram_norm: RMSNorm | None
     full_bandwidth_fuse: Float[Array, "D D"] | None  # cfg.full_bandwidth_passes: W_fuse, zero-initialised
+    # cfg.middle_loop cross_x*: per middle sublayer (attention, MLP of each middle layer), the cross-loop
+    # pseudo-query and the controller's W_down [2D, R], zero-initialised W_f [R, D] and W_g [R, D].
+    middle_loop_attn_res_query_cross: Float[Array, "N D"] | None
+    middle_loop_down: Float[Array, "N E R"] | None
+    middle_loop_w_f: Float[Array, "N R D"] | None
+    middle_loop_w_g: Float[Array, "N R D"] | None
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -2028,6 +2134,17 @@ class Transformer(eqx.Module):
         def stack(layers: tuple[int, ...], use_kda: bool) -> ArrayStacked[Block]:
             keys = jnp.stack([block_keys[i] for i in layers])
             return ArrayStacked.init(len(layers), Block)(cfg, key=keys, use_kda=use_kda)
+
+        cross_query = cross_down = cross_w_f = cross_w_g = None
+        if (design := cfg.middle_loop_design) is not None and design.cross:
+            num_gates, hidden, rank = 2 * MIDDLE_LOOP_LAYERS, cfg.hidden_dim, MIDDLE_LOOP_RANK
+            cross_query = reshard(jnp.zeros((num_gates, hidden), jnp.float32), P(None, None))
+            cross_down = reshard(
+                _init_weight(random.fold_in(key, 14), (num_gates, 2 * hidden, rank), cfg.initializer_std),
+                P(None, None, None),
+            )
+            cross_w_f = reshard(jnp.zeros((num_gates, rank, hidden), jnp.float32), P(None, None, None))
+            cross_w_g = reshard(jnp.zeros((num_gates, rank, hidden), jnp.float32), P(None, None, None))
 
         softmax_layers, kda_layers = _stack_layer_indices(cfg)
         return Transformer(
@@ -2090,6 +2207,10 @@ class Transformer(eqx.Module):
                 if cfg.full_bandwidth_passes
                 else None
             ),
+            middle_loop_attn_res_query_cross=cross_query,
+            middle_loop_down=cross_down,
+            middle_loop_w_f=cross_w_f,
+            middle_loop_w_g=cross_w_g,
             config=cfg,
         )
 
@@ -2208,7 +2329,9 @@ class Transformer(eqx.Module):
             """One pass of the layers and the final norms over the trunk input ``hidden``."""
             final_gate_stats: dict[str, jax.Array] = {}
             if cfg.attn_res:
-                hidden, stacked_router_stats, final_gate_stats = self._attn_res_layers(
+                looped = cfg.middle_loop_design is not None
+                attn_res_layers = self._middle_loop_layers if looped else self._attn_res_layers
+                hidden, stacked_router_stats, final_gate_stats = attn_res_layers(
                     hidden,
                     token_ids,
                     long_mask.with_fa4_bounds(long_lower_bounds, valid),
@@ -2262,6 +2385,10 @@ class Transformer(eqx.Module):
                 router_metrics.update({k: v for k, v in stacked_router_stats.items() if k.startswith(_OUTSTAT_PREFIX)})
                 if _QB_MARGINS in stacked_router_stats:
                     router_metrics[_QB_MARGINS] = stacked_router_stats[_QB_MARGINS]
+                if cfg.middle_loop_design is not None:
+                    router_metrics["qb_beta_per_layer"] = self._middle_loop_qb_betas(
+                        router_metrics.pop(_QB_MARGINS), router_metrics["qb_beta_per_layer"]
+                    )
             router_metrics.update(final_gate_stats)
             if grad_probe is not None:
                 rms = jnp.sqrt(jnp.mean(jnp.square(jax.lax.stop_gradient(hidden).astype(jnp.float32)), axis=-1))
@@ -2459,6 +2586,140 @@ class Transformer(eqx.Module):
             final_stats[f"attn_res_query_norm_g{g:02d}"] = query_norms[g]
         stacked = jax.tree.map(lambda *xs: jnp.stack(xs), *stats_out)
         return hidden, stacked, final_stats
+
+    def _middle_loop_layers(
+        self,
+        hidden: Float[Array, "B S D"],
+        token_ids: Int[Array, "B S"],
+        long_layer_mask: AttentionMask,
+        short_layer_mask: AttentionMask,
+        layer_skip: LayerSkip | None,
+        extra_mlp_active: jax.Array | bool,
+        spelling_sources: tuple[Float[Array, "B S D"], ...],
+        head_ve: Float[Array, "B S D"] | None,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array]]:
+        """``_attn_res_layers`` for ``middle_loop``: the layer applications of ``middle_loop_schedule``, each one
+        AttnRes block whose gates read the sources ``middle_loop`` names. Each source's logits are computed once,
+        against every query, since a shared middle layer's gates read blocks made after them in layer order.
+
+        Returns the final gate's mix, the router stats stacked per application and the final gate's logs."""
+        del extra_mlp_active
+        if layer_skip is not None:
+            raise ValueError("layer_skip excludes middle_loop")
+        cfg = self.config
+        design = cfg.middle_loop_design
+        assert design is not None and self.attn_res_query_final is not None
+        eps = cfg.layer_norm_eps
+        prelude, middle, coda = middle_loop_split(cfg)
+        layers = self.layers()
+        gate_queries = []
+        for layer in layers:
+            assert layer.attn_res_query_attn is not None and layer.attn_res_query_mlp is not None
+            gate_queries.append(jnp.stack([layer.attn_res_query_attn, layer.attn_res_query_mlp]))
+        queries = jnp.concatenate([*gate_queries, self.attn_res_query_final[None]])
+        layer_fn = (
+            _attn_res_layer_remat
+            if cfg.attn_res_layer_backward == AttnResLayerBackward.RECOMPUTE
+            else _attn_res_layer_passthrough
+        )
+        # Every source by name: the block and its logits against every query (``_logit_rows``).
+        pool: dict[str, tuple[jax.Array, tuple[jax.Array, ...]]] = {}
+
+        def add(name: str, source: jax.Array) -> str:
+            pool[name] = (source, _logit_rows(_attn_res_source_logits(source, queries, eps)))
+            return name
+
+        stats_out: list[dict[str, jax.Array]] = []
+        z_out: list[jax.Array] = []
+
+        def apply(i: int, name: str, sources: list[str], extras: dict | None) -> str:
+            use_long = _is_long_layer(i, cfg.num_layers, cfg.global_every)
+            blocks = tuple(pool[n][0] for n in sources)
+            block_logits = tuple(pool[n][1] for n in sources)
+            out, blocks, block_logits, stats = layer_fn(
+                (layers[i], blocks, block_logits, None, queries, extras),
+                long_layer_mask if use_long else short_layer_mask,
+                token_ids,
+                head_ve,
+                use_long,
+                i,
+                eps,
+            )
+            # The history comes back through the layer (``_attn_res_layer_remat`` threads its cotangents).
+            pool.update(zip(sources, zip(blocks, block_logits, strict=True), strict=True))
+            z_out.append(stats.pop(_ATTN_RES_Z))
+            stats.pop(_ATTN_RES_W_ATTN)
+            stats.pop(_ATTN_RES_W_MLP)
+            stats_out.append(stats)
+            return add(name, out)
+
+        base = [add(f"spelling{n}", source) for n, source in enumerate(spelling_sources)] + [add("embed", hidden)]
+        prelude_blocks: list[str] = []
+        for i in prelude:
+            prelude_blocks.append(apply(i, f"prelude{i}", base + prelude_blocks, None))
+        previous: list[str] = []
+        for p in range(design.passes):
+            current: list[str] = []
+            for j, i in enumerate(middle):
+                sources = base + prelude_blocks + ([] if design.cross else previous) + current
+                extras = None
+                if design.cross and previous:
+                    assert self.middle_loop_attn_res_query_cross is not None
+                    assert self.middle_loop_down is not None
+                    assert self.middle_loop_w_f is not None and self.middle_loop_w_g is not None
+                    gates = slice(2 * j, 2 * j + 2)
+                    cross = MiddleLoopCross(
+                        tuple(pool[n][0] for n in previous),
+                        self.middle_loop_attn_res_query_cross[gates],
+                        self.middle_loop_down[gates],
+                        self.middle_loop_w_f[gates],
+                        self.middle_loop_w_g[gates],
+                    )
+                    extras = {_MIDDLE_LOOP_CROSS: cross}
+                current.append(apply(i, f"pass{p}_layer{i}", sources, extras))
+            previous = current
+        coda_blocks: list[str] = []
+        for i in coda:
+            coda_blocks.append(apply(i, f"coda{i}", base + prelude_blocks + previous + coda_blocks, None))
+
+        final_sources = base + prelude_blocks + previous + coda_blocks
+        final_index = queries.shape[0] - 1
+        logits = [_block_logit(pool[n][1], queries, final_index) for n in final_sources]
+        weights, mixed = _softmax_mix(logits, [pool[n][0] for n in final_sources])
+        z_final = _gate_z(logits)
+        final_stats = {
+            "attn_res_final_max_weight": jax.lax.stop_gradient(jnp.mean(jnp.max(weights, axis=0))),
+            "attn_res_final_entropy": jax.lax.stop_gradient(
+                jnp.mean(-jnp.sum(weights * jnp.log(jnp.maximum(weights, 1e-30)), axis=0))
+            ),
+            "attn_res_z": jax.lax.stop_gradient((sum(z_out) + z_final) / (len(z_out) + 1)),
+        }
+        hidden = reshard(mixed.astype(hidden.dtype), _batch_spec())
+        stacked = jax.tree.map(lambda *xs: jnp.stack(xs), *stats_out)
+        return hidden, stacked, final_stats
+
+    def _middle_loop_qb_betas(self, margins: Float[Array, "A T E"], betas: Float[Array, "A E"]) -> jax.Array:
+        """Per-layer QB thresholds ``[L, E]`` from the per-application ``margins`` and ``betas``: a layer run once
+        keeps its own, a shared middle layer pools the margins of all its passes (``qb_beta_hist_pooled``)."""
+        cfg = self.config
+        schedule = middle_loop_schedule(cfg)
+        rows = []
+        for layer in range(cfg.num_layers):
+            applications = [a for a, i in enumerate(schedule) if i == layer]
+            if len(applications) == 1:
+                rows.append(betas[applications[0]])
+                continue
+            rows.append(
+                qb_beta_hist_pooled(
+                    jnp.stack([margins[a] for a in applications]),
+                    get_abstract_mesh(),
+                    target_share=cfg.num_experts_per_token / cfg.num_experts,
+                    num_experts=cfg.num_experts,
+                    n_bins=_QB_HIST_BINS,
+                    batch_axes=_BATCH_AXES,
+                )
+            )
+        return jnp.stack(rows)
 
     def _skip_router_keep(self, stream: Float[Array, "B S D"]) -> tuple[Float[Array, "B S"], jax.Array]:
         """Per-token output scale for ``skip_router_layers`` (0: skip) and the skipped fraction."""
