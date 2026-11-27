@@ -75,7 +75,7 @@ def _read_declarations(ref: ArtifactRef) -> dict[str, dict]:
     return document
 
 
-def _completion_rows(ref: ArtifactRef) -> list[dict]:
+def _completion_rows(ref: ArtifactRef, *, release_id: str, prior_load_id: str, target_load_id: str) -> list[dict]:
     """The browse completion's staged panels."""
     payload = StoragePath(ref.uri).read_bytes()
     if hashlib.sha256(payload).hexdigest() != ref.sha256:
@@ -83,6 +83,13 @@ def _completion_rows(ref: ArtifactRef) -> list[dict]:
     completion = json.loads(payload)
     if completion.get("status") != "PASS":
         raise ValueError(f"the browse completion is {completion.get('status')!r}; the index needs a PASS")
+    if (
+        completion["release_id"] != release_id
+        or completion["source_load_id"] != prior_load_id
+        or completion["target_load_id"] != target_load_id
+        or completion.get("selected_pointer_changed")
+    ):
+        raise ValueError("browse completion names different release loads or changed selection")
     return completion.get("results") or []
 
 
@@ -258,13 +265,21 @@ def _retained_index_rows(inputs: FreshQcIndexInputs, declarations: dict[str, dic
     """Verify unchanged panel bytes and bindings before retaining their sealed references."""
     assert inputs.prior_index is not None
     prior = read_ref(inputs.prior_index)
-    if (
-        prior["kind"] != f"atlas-{inputs.release_id}-{INDEX_KIND_SUFFIX}"
-        or prior["load_id"] != inputs.target_load_id
-        or prior["release_id"] != inputs.release_id
-        or prior["provenance"]["browse_completion"] != inputs.qc_completion.model_dump(mode="json")
-    ):
-        raise ValueError("prior QC index names another release, target load or browse completion")
+    if prior["kind"] != f"atlas-{inputs.release_id}-{INDEX_KIND_SUFFIX}" or prior["release_id"] != inputs.release_id:
+        raise ValueError("prior QC index names another release")
+    _completion_rows(
+        ArtifactRef(**prior["provenance"]["browse_completion"]),
+        release_id=inputs.release_id,
+        prior_load_id=inputs.prior_load_id,
+        target_load_id=prior["load_id"],
+    )
+    copied = _completion_rows(
+        inputs.qc_completion,
+        release_id=inputs.release_id,
+        prior_load_id=inputs.prior_load_id,
+        target_load_id=inputs.target_load_id,
+    )
+    copied_receipts = {row["source_id"]: row["original_receipt"] for row in copied}
     old_declarations = _read_declarations(ArtifactRef(**prior["provenance"]["declarations"]))
     rows = prior["receipts"]
     if len({row["source_id"] for row in rows}) != len(rows):
@@ -287,6 +302,8 @@ def _retained_index_rows(inputs: FreshQcIndexInputs, declarations: dict[str, dic
         raw = manifest_bytes(ManifestReference(**row["reference"]))
         staged = json.loads(gzip.decompress(raw))
         receipt = staged["receipt"]
+        if source_id in copied_receipts and receipt != copied_receipts[source_id]:
+            raise ValueError(f"retained QC panel differs from the current copy receipt: {source_id}")
         if (
             row["status"] != "complete"
             or row["bytes"] != len(raw)
@@ -320,7 +337,12 @@ def run_fresh_qc_index(
         if inputs.prior_index is not None:
             index_rows = _retained_index_rows(inputs, declarations)
         else:
-            rows = _completion_rows(inputs.qc_completion)
+            rows = _completion_rows(
+                inputs.qc_completion,
+                release_id=inputs.release_id,
+                prior_load_id=inputs.prior_load_id,
+                target_load_id=inputs.target_load_id,
+            )
             carried_ids = {row["source_id"] for row in rows}
             overlap = carried_ids & inputs.fresh_panels.keys()
             if overlap:

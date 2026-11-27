@@ -45,6 +45,10 @@ def _completion(tmp_path: Path, *, status: str = "PASS") -> ArtifactRef:
     document = {
         "kind": "atlas-testrelease-prior-qc-browse",
         "status": status,
+        "release_id": "testrelease",
+        "source_load_id": "c" * 32,
+        "target_load_id": "a" * 32,
+        "selected_pointer_changed": False,
         "results": [
             {
                 "source_id": "Marin:fixture",
@@ -326,7 +330,9 @@ def test_reassembles_a_chunked_batch_record(tmp_path, fake_query):
     assert "payload_chunks" not in document["batches"][0]["record"]
 
 
-@pytest.mark.parametrize("fault", [None, "changed_retained_pin", "corrupt_retained_panel"])
+@pytest.mark.parametrize(
+    "fault", [None, "changed_retained_pin", "corrupt_retained_panel", "different_prior_load", "different_copy_receipt"]
+)
 def test_cli_refreshes_selected_panel_and_reuses_verified_staged_bytes(
     tmp_path, fake_query, fresh_panel, monkeypatch, capsys, fault
 ):
@@ -355,11 +361,24 @@ def test_cli_refreshes_selected_panel_and_reuses_verified_staged_bytes(
         StoragePath(retained["reference"]["uri"]).write_bytes(b"corrupt")
     current_path = StoragePath(str(tmp_path / "current-declarations.json"))
     current_path.write_text(json.dumps(declarations))
+    completion = json.loads(StoragePath(inputs.qc_completion.uri).read_bytes())
+    completion["target_load_id"] = "d" * 32
+    if fault == "different_prior_load":
+        completion["source_load_id"] = "e" * 32
+    if fault == "different_copy_receipt":
+        completion["results"][0]["original_receipt"]["artifact"]["sha256"] = "e" * 64
+    completion_path = tmp_path / "new-target-completion.json"
+    completion_path.write_text(json.dumps(completion))
+    completion_ref = ArtifactRef(
+        uri=str(completion_path), sha256=hashlib.sha256(completion_path.read_bytes()).hexdigest()
+    )
     refresh = dataclasses.replace(
         inputs,
         declarations=ArtifactRef(uri=str(current_path), sha256=hashlib.sha256(current_path.read_bytes()).hexdigest()),
         prior_index=ArtifactRef(**original["index"]),
         fresh_panels={declaration["id"]: fresh},
+        target_load_id="d" * 32,
+        qc_completion=completion_ref,
         snapshot_id="assembly-current-v2",
         source_revision="f" * 40,
         output_root=str(tmp_path / "refreshed"),
@@ -393,6 +412,8 @@ def test_cli_refreshes_selected_panel_and_reuses_verified_staged_bytes(
     assert replaced["receipt"]["current_pin"] is True
     assert {row["task_id"] for row in replaced["items"]} == {"kept", "dropped", "unshaped"}
     assert current["provenance"]["prior_index"] == original["index"]
+    assert current["provenance"]["browse_completion"] == completion_ref.model_dump(mode="json")
+    assert current["load_id"] == "d" * 32
     assert current["snapshot_id"] == "assembly-current-v2"
 
 

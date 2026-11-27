@@ -367,10 +367,15 @@ stay excluded. No new reviews are requested.
 To refresh an already staged index after a declaration changes, supply its
 digest-bound `prior_index` reference to `fresh_qc_index` and put replacement
 review references in `fresh_panels`. Use a new output root and current frozen
-declarations. The stage verifies every retained compressed panel's digest,
+declarations. A different target load may reuse staged panels when the prior
+index's browse completion and the new target's browse completion name the same
+release and source load. Each completion must bind its respective target load.
+For a retained panel copied to the new target, its stored review receipt must
+match that panel's original receipt in the new browse completion. The stage
+verifies every retained compressed panel's digest,
 counts, receipt identity, input binding and restriction, preserving its existing
 artifact reference. Changed task inputs, selected review or restriction require
-a fresh panel. This path makes no
+a fresh panel for that source. This path makes no
 SQL requests and records the prior index in the new index's provenance. Dry run
 performs the same verification without writing. The resulting index still needs
 the normal catalog-stage and catalog-load checks before release.
