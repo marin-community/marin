@@ -12,7 +12,7 @@ from loguru import logger
 import ray
 
 from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
-from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorTrainingConfig
+from marinskyrl.speculative_decoding import DraftModelConfig, DraftTrainingConfig
 from skyrl_train.inference_engines.vllm.online_eagle_trainer import (
     ONLINE_EAGLE_MERGED_CAPTURE_DIRECTORY,
     OnlineEagleTrainerRuntime,
@@ -111,7 +111,7 @@ class DraftUpdateRequest:
     target_revision: str
     num_speculative_tokens: int
     seed: int
-    training: SpeculatorTrainingConfig
+    training: DraftTrainingConfig
 
 
 def latest_draft_checkpoint_uri(checkpoint_root: str) -> str:
@@ -148,7 +148,7 @@ def read_latest_draft_checkpoint(
 class DraftTrainer:
     """Long-lived one-GPU owner for draft weights, optimizer state, and publication."""
 
-    def __init__(self, *, initial_model: SpeculatorModelConfig, checkpoint_root: str):
+    def __init__(self, *, initial_model: DraftModelConfig, checkpoint_root: str):
         if not is_cloud_uri(checkpoint_root):
             raise ValueError(f"DraftTrainer checkpoint root must be cloud-backed: {checkpoint_root}")
         self._initial_model = initial_model
@@ -278,7 +278,7 @@ class DraftTrainer:
         }
 
 
-def create_draft_trainer(*, initial_model: SpeculatorModelConfig, checkpoint_root: str):
+def create_draft_trainer(*, initial_model: DraftModelConfig, checkpoint_root: str):
     """Create the dedicated GPU actor outside the inference placement group."""
     actor = ray.remote(num_gpus=1, max_restarts=-1, max_task_retries=0)(DraftTrainer)
     return actor.options(runtime_env={"env_vars": {"TORCH_COMPILE_DISABLE": "1"}}).remote(

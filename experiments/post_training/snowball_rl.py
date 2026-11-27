@@ -66,7 +66,7 @@ EVAL_REPLY_TOKENS = 8192
 _DEFAULT_TASKS = f"snowball-100k@{DEFAULT_SELECTION_VERSION}"
 _DEFAULT_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
 
-_DSPARK = sections.SpeculatorModel(
+_DSPARK = sections.DraftModel(
     source_uri="hf://atutej/dspark_grug-67b-a2b-datakit-sft-dr-doom_datakit-sft-mix_targetgen-warm80k-20261020",
     source_identity="d22f4f21ce5cc0968dfd8e2c0d06aaf4adacbbf2",
 )

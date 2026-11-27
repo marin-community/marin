@@ -30,7 +30,7 @@ class SpeculativeDecodingMethod(StrEnum):
     DSPARK = "dspark"
 
 
-class SpeculatorModelSourceKind(StrEnum):
+class DraftModelSourceKind(StrEnum):
     """Storage kinds supported by the draft-model lifecycle."""
 
     HUGGING_FACE = "hugging_face"
@@ -84,11 +84,11 @@ def hugging_face_repo_from_source_uri(source_uri: str) -> str | None:
     if parsed.scheme != _HF_SOURCE_SCHEME:
         return None
     if parsed.query or parsed.fragment:
-        raise SpeculativeDecodingConfigError("Hugging Face speculator source_uri cannot contain a query or fragment")
+        raise SpeculativeDecodingConfigError("Hugging Face draft source_uri cannot contain a query or fragment")
     repo_id = f"{parsed.netloc}{parsed.path}"
     if not is_hugging_face_repo_id(repo_id):
         raise SpeculativeDecodingConfigError(
-            "Hugging Face speculator source_uri must have the form hf://namespace/repository"
+            "Hugging Face draft source_uri must have the form hf://namespace/repository"
         )
     return repo_id
 
@@ -103,14 +103,14 @@ def runai_model_uri(source_uri: str) -> str:
 
 
 @dataclass(frozen=True)
-class SpeculatorModelConfig:
+class DraftModelConfig:
     """One immutable local, Hugging Face, or object-store draft model."""
 
     source_uri: str
     source_identity: str
 
     @classmethod
-    def from_mapping(cls, value: object, *, context: str) -> "SpeculatorModelConfig":
+    def from_mapping(cls, value: object, *, context: str) -> "DraftModelConfig":
         mapping = _mapping(value, context)
         _reject_unknown(mapping, {"source_uri", "source_identity"}, context)
         missing = {field for field in ("source_uri", "source_identity") if not mapping.get(field)}
@@ -159,19 +159,19 @@ class SpeculatorModelConfig:
         return self.source_uri if os.path.isabs(self.source_uri) else None
 
     @property
-    def source_kind(self) -> SpeculatorModelSourceKind:
+    def source_kind(self) -> DraftModelSourceKind:
         if self.local_source_path is not None:
-            return SpeculatorModelSourceKind.LOCAL
+            return DraftModelSourceKind.LOCAL
         if self.hugging_face_repo_id is not None:
-            return SpeculatorModelSourceKind.HUGGING_FACE
-        return SpeculatorModelSourceKind.ARTIFACT
+            return DraftModelSourceKind.HUGGING_FACE
+        return DraftModelSourceKind.ARTIFACT
 
     def vllm_source_config(self) -> dict[str, Any]:
         """Return the vLLM fields needed to load this draft source."""
-        if self.source_kind is SpeculatorModelSourceKind.LOCAL:
+        if self.source_kind is DraftModelSourceKind.LOCAL:
             assert self.local_source_path is not None
             return {"model": self.local_source_path}
-        if self.source_kind is SpeculatorModelSourceKind.HUGGING_FACE:
+        if self.source_kind is DraftModelSourceKind.HUGGING_FACE:
             assert self.hugging_face_repo_id is not None
             model_id = self.hugging_face_repo_id
             return {"model": model_id, "revision": self.source_identity}
@@ -182,7 +182,7 @@ class SpeculatorModelConfig:
 
 
 @dataclass(frozen=True)
-class SpeculatorTrainingConfig:
+class DraftTrainingConfig:
     """Bounded single-rank online EAGLE update settings."""
 
     interval_steps: int = 1
@@ -206,7 +206,7 @@ class SpeculatorTrainingConfig:
     reserved_gpu_memory_gib: float = 8
 
     @classmethod
-    def from_mapping(cls, value: object, *, context: str) -> "SpeculatorTrainingConfig":
+    def from_mapping(cls, value: object, *, context: str) -> "DraftTrainingConfig":
         mapping = _mapping(value, context)
         field_names = {field.name for field in fields(cls)}
         _reject_unknown(mapping, field_names, context)
@@ -267,9 +267,9 @@ class SpeculativeDecodingConfig:
     """Managed serving and optional online-training configuration."""
 
     method: SpeculativeDecodingMethod
-    model: SpeculatorModelConfig
+    model: DraftModelConfig
     num_speculative_tokens: int
-    training: SpeculatorTrainingConfig | None
+    training: DraftTrainingConfig | None
 
     @classmethod
     def from_mapping(
@@ -297,11 +297,11 @@ class SpeculativeDecodingConfig:
         training = (
             None
             if raw_training is None
-            else SpeculatorTrainingConfig.from_mapping(raw_training, context=f"{context}.training")
+            else DraftTrainingConfig.from_mapping(raw_training, context=f"{context}.training")
         )
         return cls(
             method=method,
-            model=SpeculatorModelConfig.from_mapping(mapping["model"], context=f"{context}.model"),
+            model=DraftModelConfig.from_mapping(mapping["model"], context=f"{context}.model"),
             num_speculative_tokens=_positive_integer(
                 mapping["num_speculative_tokens"], f"{context}.num_speculative_tokens"
             ),

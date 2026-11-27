@@ -409,7 +409,7 @@ class Draft:
 
     name: str
     target: ArtifactStep
-    model: sections.SpeculatorModel
+    model: sections.DraftModel
 
 
 @dataclass(frozen=True, kw_only=True)

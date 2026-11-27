@@ -22,9 +22,9 @@ from torch import nn
 
 from marinskyrl.resource_locator import join_resource_path
 from marinskyrl.speculative_decoding import (
-    SpeculatorModelConfig,
-    SpeculatorModelSourceKind,
-    SpeculatorTrainingConfig,
+    DraftModelConfig,
+    DraftModelSourceKind,
+    DraftTrainingConfig,
     runai_model_uri,
 )
 from skyrl_train.hf_model_io import HF_WEIGHT_FILENAME
@@ -59,13 +59,13 @@ class OnlineEagleTrainingJob:
 
     step: int
     capture_dir: str
-    initial_draft_model: SpeculatorModelConfig
+    initial_draft_model: DraftModelConfig
     parent_draft_revision: str
     target_revision: str
     output_dir: str
     num_speculative_tokens: int
     seed: int
-    training: SpeculatorTrainingConfig
+    training: DraftTrainingConfig
 
 
 @dataclass(frozen=True)
@@ -318,7 +318,7 @@ def merge_online_eagle_captures(
 
 
 def _prepare_model(
-    draft_model: SpeculatorModelConfig,
+    draft_model: DraftModelConfig,
     capture_dir: Path,
     device: torch.device,
 ):
@@ -330,9 +330,9 @@ def _prepare_model(
 
     pretrained_path = None
     revision = None
-    if draft_model.source_kind is SpeculatorModelSourceKind.LOCAL:
+    if draft_model.source_kind is DraftModelSourceKind.LOCAL:
         pretrained_path = draft_model.local_source_path
-    elif draft_model.source_kind is SpeculatorModelSourceKind.HUGGING_FACE:
+    elif draft_model.source_kind is DraftModelSourceKind.HUGGING_FACE:
         pretrained_path = draft_model.hugging_face_repo_id
         revision = draft_model.source_identity
     if pretrained_path is not None:

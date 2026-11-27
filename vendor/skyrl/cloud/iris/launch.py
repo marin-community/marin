@@ -38,7 +38,7 @@ from marinskyrl.checkpoint_paths import LATEST_CHECKPOINT_FILE, policy_export_pa
 from marinskyrl.hf_model import validate_portable_hf_model_files
 from skyrlrecipe.model_staging import HuggingFaceModelCache
 from marinskyrl.packed_tasks import select_task_references
-from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind
+from marinskyrl.speculative_decoding import DraftModelConfig, DraftModelSourceKind
 from marinskyrl.task_sources import TaskTroveParquetSource, TaskTroveSelectionSnapshot, data_source, data_source_dict
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import launch_provenance
@@ -109,13 +109,13 @@ def _prepare_model_caches(config: DictConfig) -> None:
     speculative = config.skyrl.get("generator", {}).get("speculative_decoding") or {}
     draft_mapping = speculative.get("model") if config.run.mode != RunMode.CHECKPOINT_EXPORT else None
     draft = (
-        SpeculatorModelConfig.from_mapping(
+        DraftModelConfig.from_mapping(
             OmegaConf.to_container(draft_mapping, resolve=True), context="generator.speculative_decoding.model"
         )
         if draft_mapping
         else None
     )
-    hub_draft = draft is not None and draft.source_kind is SpeculatorModelSourceKind.HUGGING_FACE
+    hub_draft = draft is not None and draft.source_kind is DraftModelSourceKind.HUGGING_FACE
     if not models and not hub_draft:
         return
     if get_job_info() is None:
@@ -171,7 +171,7 @@ def _prepare_model_caches(config: DictConfig) -> None:
                 draft.hugging_face_repo_id, draft.source_identity, uri, manifest.identity, manifest.revision
             )
             caches.append(cached)
-        config.skyrl.generator.speculative_decoding.model = asdict(SpeculatorModelConfig(cached.uri, cached.identity))
+        config.skyrl.generator.speculative_decoding.model = asdict(DraftModelConfig(cached.uri, cached.identity))
     config.inputs.hugging_face_models = caches
 
 

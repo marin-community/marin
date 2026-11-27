@@ -494,10 +494,10 @@ def test_draft_opt_out_preserves_other_generator_settings_and_inputs(selection, 
     plain = yaml.safe_load(materialized_config(plain_run, str(tmp_path)).launch_config_yaml)
 
     config = draft["skyrl"]["generator"]
-    speculator = config.pop("speculative_decoding")
+    decoding = config.pop("speculative_decoding")
     assert draft_run.name != plain_run.name
-    assert speculator["method"] == "dspark"
-    assert speculator["num_speculative_tokens"] == 4
+    assert decoding["method"] == "dspark"
+    assert decoding["num_speculative_tokens"] == 4
     assert plain["skyrl"]["generator"].pop("speculative_decoding", None) is None
     assert config == plain["skyrl"]["generator"]
     assert draft["inputs"] == plain["inputs"]

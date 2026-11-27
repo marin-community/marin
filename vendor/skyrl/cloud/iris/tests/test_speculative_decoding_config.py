@@ -51,12 +51,12 @@ def _base_config() -> dict:
     }
 
 
-def test_managed_speculator_reaches_hydra_with_immutable_source_unchanged() -> None:
+def test_managed_draft_reaches_hydra_with_immutable_source_unchanged() -> None:
     parsed = parse_rl_config(_base_config())
-    speculator = parsed.generator["speculative_decoding"]
+    decoding = parsed.generator["speculative_decoding"]
 
-    assert speculator["model"]["source_uri"] == "hf://laion/snowball-64k-eagle3-draft-r2egym"
-    assert speculator["model"]["source_identity"] == _DRAFT_REVISION
+    assert decoding["model"]["source_uri"] == "hf://laion/snowball-64k-eagle3-draft-r2egym"
+    assert decoding["model"]["source_identity"] == _DRAFT_REVISION
 
     cfg = compose_skyrl_config(parsed, {"num_nodes": 2}, SimpleNamespace(gpus_per_node=8)).config
 
@@ -79,7 +79,7 @@ def test_managed_speculator_reaches_hydra_with_immutable_source_unchanged() -> N
     assert resolved.training.reserved_gpu_memory_gib == 8
 
 
-def test_local_speculator_uses_model_without_hub_resolution() -> None:
+def test_local_draft_uses_model_without_hub_resolution() -> None:
     value = _base_config()["generator"]["speculative_decoding"]
     value["model"]["source_uri"] = "/tmp/draft-model"
 
@@ -106,7 +106,7 @@ def test_local_speculator_uses_model_without_hub_resolution() -> None:
         ("dspark", {"draft_sample_method": "probabilistic", "rejection_sample_method": "standard"}),
     ),
 )
-def test_frozen_object_store_speculator_is_supported(method: str, vllm_sampling: dict[str, str]) -> None:
+def test_frozen_object_store_draft_is_supported(method: str, vllm_sampling: dict[str, str]) -> None:
     config = _base_config()
     draft = config["generator"]["speculative_decoding"]
     draft["method"] = method
@@ -164,7 +164,7 @@ def test_gcs_alias_is_normalized_for_vllm_runai_loading() -> None:
     assert resolved.vllm_speculative_config()["model"] == "gs://models/snowball/eagle3"
 
 
-def test_speculator_rejects_a_mutable_hub_revision() -> None:
+def test_draft_rejects_a_mutable_hub_revision() -> None:
     """A branch name such as ``main`` can move, so the run would not be replayable."""
     config = _base_config()
     config["generator"]["speculative_decoding"]["model"]["source_identity"] = "main"

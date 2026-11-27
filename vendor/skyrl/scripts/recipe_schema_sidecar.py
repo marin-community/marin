@@ -243,7 +243,7 @@ UNDECLARED = MappingProxyType(
         "generator.speculative_decoding.model.source_uri": ("str", Ellipsis),
         "generator.speculative_decoding.model.source_identity": ("str", Ellipsis),
         "generator.speculative_decoding.num_speculative_tokens": ("PositiveInt", Ellipsis),
-        "generator.speculative_decoding.training": ("SpeculatorTraining | None", None),
+        "generator.speculative_decoding.training": ("DraftTraining | None", None),
         "generator.speculative_decoding.training.interval_steps": ("PositiveInt", Ellipsis),
         "generator.speculative_decoding.training.max_tokens_per_update": ("PositiveInt", Ellipsis),
         "generator.speculative_decoding.training.max_window_tokens": ("PositiveInt", Ellipsis),
@@ -277,7 +277,7 @@ NAMES = MappingProxyType(
         "trainer.ref.megatron_config.torch_profiler_config": "RefTorchProfilerConfig",
         "trainer.policy.megatron_config.optimizer_config_kwargs": "OptimizerConfigKwargs",
         "trainer.ref.megatron_config.optimizer_config_kwargs": "RefOptimizerConfigKwargs",
-        "generator.speculative_decoding.model": "SpeculatorModel",
-        "generator.speculative_decoding.training": "SpeculatorTraining",
+        "generator.speculative_decoding.model": "DraftModel",
+        "generator.speculative_decoding.training": "DraftTraining",
     }
 )
