@@ -25,6 +25,7 @@ AGENTIC_LINT_FEDERATION = "agentic-lint"
 CODEHEALTH_REFINEMENT_FEDERATION = "codehealth-refinement"
 FORK_FERRY_FEDERATION = "fork-ferry"
 GITHUB_AUTOMATION_FEDERATION = "ops-loom-github"
+LOGBOOK_ADVISORY_FEDERATION = "logbook-advisory"
 PR_HOLISTIC_REVIEW_FEDERATION = "pr-holistic-review"
 PR_REVIEW_FEDERATION = "pr-review"
 PROSE_CLEANUP_FEDERATION = "agent-prose-cleanup"
@@ -58,6 +59,7 @@ def main() -> None:
         ),
         "fork-ferry-profile": ("LOOM_FORK_FERRY_PROFILE", FORK_FERRY_FEDERATION),
         "github-automation-profile": ("LOOM_GITHUB_AUTOMATION_PROFILE", GITHUB_AUTOMATION_FEDERATION),
+        "logbook-advisory-profile": ("LOOM_LOGBOOK_ADVISORY_PROFILE", LOGBOOK_ADVISORY_FEDERATION),
         "pr-holistic-review-profile": (
             "LOOM_PR_HOLISTIC_REVIEW_PROFILE",
             PR_HOLISTIC_REVIEW_FEDERATION,
