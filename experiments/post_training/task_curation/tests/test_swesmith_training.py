@@ -94,7 +94,7 @@ def test_native_selection_keeps_membership_and_binds_the_package_verifier(task, 
     parent = tmp_path / "parent"
     parent.mkdir()
     strata = TaskStrata(family="agentic", source=SWESMITH_DATASET, agentic=True)
-    row = _selection_row(task, strata, state=MembershipState.ACTIVE)
+    row = _selection_row(task, task.model_dump_json(), strata, state=MembershipState.ACTIVE)
     pq.write_table(
         pa.Table.from_pylist(list(task_records(iter([task]), {task.id: strata})), TASK_SCHEMA), parent / TRAIN_FILENAME
     )
