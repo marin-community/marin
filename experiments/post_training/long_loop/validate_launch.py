@@ -13,6 +13,7 @@ import sys
 from contextlib import redirect_stdout
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 from cloud.iris.iris_backend import config_task_environment
 from cloud.iris.launch_config import load_launch_config
@@ -20,6 +21,7 @@ from cloud.iris.rl_config_translation import RL_ENTRYPOINTS, RLEntrypoint
 from cloud.iris.role_plan import ModelRoleKind, RoleExecution, derive_role_plan
 from cloud.iris.runtime_environment import IRIS_TASK_IMAGE, local_disk_setup_script
 from cloud.iris.task_runtime import bind_policy_tokenizer_metadata, prepare_policy_model, prepare_policy_tokenizer
+from datasets import Dataset
 from marinskyrl.resource_locator import RolloutModelLoading
 from omegaconf import OmegaConf
 from rigging.filesystem.buckets import filesystem_for
@@ -28,6 +30,7 @@ from rigging.filesystem.storage_path import prefix_join
 from rolloutengine.models import TaskRolloutSpec
 from skyrl_train import objective  # noqa: F401 - populate the runtime policy-loss registry
 from skyrl_train.config.driver_validation import validate_cfg, validate_generator_cfg
+from skyrl_train.dataset.dataset import concatenate_prompt_datasets
 from skyrl_train.dataset.tasks import TASK_ROLLOUT_COLUMN, TASK_SPEC_COLUMN, canonical_task_spec
 from skyrl_train.domain_sampling import ROUTE_COLUMN, consumed_prompt_routes
 from skyrl_train.models.grug_context_parallel import grug_cp_communication, validate_cp_attention
@@ -99,10 +102,11 @@ def judge_route_verdict(task: TaskSpec, worker: TaskRolloutWorkerSpec) -> str:
 
 
 def validate_source_tasks(launch, worker) -> list[dict]:
-    """Check one task per training input and per validation source without allocating machines."""
+    """Check combined input schemas and source bindings without allocating machines."""
     receipts = []
     for phase, inputs in (("train", launch.inputs.train_data), ("eval", launch.inputs.validation_data)):
         seen = set()
+        samples = []
         for data in inputs:
             uri = prefix_join(str(data.uri), str(data.relative_path))
             fs, key = filesystem_for(uri)
@@ -110,6 +114,10 @@ def validate_source_tasks(launch, worker) -> list[dict]:
                 parquet = pq.ParquetFile(stream)
                 if parquet.metadata.num_rows == 0:
                     raise ValueError(f"No task to admit from {uri}")
+                # Keep every column: metadata widths can break the production
+                # concatenation even when the selected task itself parses.
+                sample = Dataset(pa.Table.from_batches([next(parquet.iter_batches(batch_size=1))]))
+                samples.append(sample)
                 # SourceTaskDataset consumes the prepared rollout when both columns
                 # exist. Admit that same task, including its selected machines.
                 column = TASK_ROLLOUT_COLUMN if TASK_ROLLOUT_COLUMN in parquet.schema.names else TASK_SPEC_COLUMN
@@ -137,6 +145,7 @@ def validate_source_tasks(launch, worker) -> list[dict]:
                                 "source": source,
                                 "task_id": lowered.task.id,
                                 "uri": uri,
+                                "input_features": sample.features.to_dict(),
                                 "judge_route": judge_route_verdict(lowered.task, worker),
                                 "task_machine": (
                                     None
@@ -153,6 +162,11 @@ def validate_source_tasks(launch, worker) -> list[dict]:
                         seen.add(source)
                     if phase == "train":
                         break
+        if samples:
+            combined_features = concatenate_prompt_datasets(samples).features.to_dict()
+            for receipt in receipts:
+                if receipt["phase"] == phase:
+                    receipt["combined_input_features"] = combined_features
     return receipts
 
 

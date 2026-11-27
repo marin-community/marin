@@ -1416,6 +1416,11 @@ API URL remain nonsecret environment settings so native clients read the
 configured route. CPU worker construction applies the same resolved task
 environment as the GPU launcher, including the declared judge model; it does
 not select another judge. The receipt records the model and environment names.
+It also combines one complete row from each input through the production dataset
+concatenation path. Compatible Arrow `string` and `large_string` columns widen to
+`large_string` without changing their values; incompatible metadata types fail
+before GPU allocation. Receipts retain each input's features and the combined
+features. This checks schema compatibility, not full-cohort task execution.
 
 Named backend credentials resolve file-first through Rigging in the launcher,
 remote judge, installed-agent connections and both task-machine phases. The CPU

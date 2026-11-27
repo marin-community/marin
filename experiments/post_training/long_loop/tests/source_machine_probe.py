@@ -148,12 +148,30 @@ def main(tmp_path: Path) -> None:
     for task, label in ((plain, "curriculum-plain"), (actor, "curriculum-actor")):
         path = tmp_path / f"{task.id}.parquet"
         table = pq.read_table(path)
+        if task is actor:
+            column = table.schema.get_field_index("task_spec")
+            table = table.set_column(column, "task_spec", table["task_spec"].cast(pa.large_string()))
         pq.write_table(table.append_column("teacher_route", pa.array([label])), path)
     receipts = validate_source_tasks(launch, worker)
     assert [row["task_id"] for row in receipts] == ["plain", "thin-actor"]
     assert receipts[0]["task_machine"] is None
     assert receipts[1]["task_machine"]["backend"] == "daytona"
     assert receipts[1]["task_machine"]["network"] == "deny"
+    assert receipts[0]["combined_input_features"]["task_spec"]["dtype"] == "large_string"
+
+    # Metadata not inspected by task admission still participates in the real reader.
+    for task, value in ((plain, 0.5), (actor, "not-a-weight")):
+        path = tmp_path / f"{task.id}.parquet"
+        pq.write_table(pq.read_table(path).append_column("weight", pa.array([value])), path)
+    try:
+        validate_source_tasks(launch, worker)
+    except ValueError:
+        incompatible_schema_rejected = True
+    else:
+        raise AssertionError("CPU admission accepted incompatible consumed metadata schemas")
+    for task in (plain, actor):
+        path = tmp_path / f"{task.id}.parquet"
+        pq.write_table(pq.read_table(path).drop_columns("weight"), path)
 
     launch.skyrl.trainer.rollout_buffer.source_routes.pop("curriculum-actor")
     try:
@@ -162,7 +180,15 @@ def main(tmp_path: Path) -> None:
         assert "curriculum-actor" in str(error)
     else:
         raise AssertionError("CPU admission accepted a missing curriculum population route")
-    print(json.dumps({"unbound_error": failure, "receipts": receipts}))
+    print(
+        json.dumps(
+            {
+                "unbound_error": failure,
+                "receipts": receipts,
+                "incompatible_schema_rejected": incompatible_schema_rejected,
+            }
+        )
+    )
 
 
 if __name__ == "__main__":
