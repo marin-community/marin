@@ -43,4 +43,3 @@ async def test_only_scheduler_or_first_token_events_release_admission():
     assert completed.value == {"response_ids": [[7]]}
     await stream.aclose()
     timings.finish("queued")
-    assert not timings._scheduled

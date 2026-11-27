@@ -11,6 +11,17 @@ from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 
+INFERENCE_QUEUE_WAIT_METRIC = "timing/inference_queue_wait"
+INFERENCE_GENERATION_METRIC = "timing/inference_generation"
+INFERENCE_QUEUE_TIMEOUTS_METRIC = "inference/queue_timeouts"
+INFERENCE_SCHEDULED_REQUESTS_METRIC = "inference/scheduled_requests"
+INFERENCE_METRIC_KEYS = (
+    INFERENCE_QUEUE_WAIT_METRIC,
+    INFERENCE_GENERATION_METRIC,
+    INFERENCE_QUEUE_TIMEOUTS_METRIC,
+    INFERENCE_SCHEDULED_REQUESTS_METRIC,
+)
+
 
 class InferenceAdmissionTimeout(TimeoutError):
     """The separate inference queue allowance expired before slot ownership."""
@@ -32,7 +43,7 @@ class InferenceClock:
 
     The pre-inference attempt deadline still bounds setup. On first scheduling,
     registered execution budgets start afresh. Later queue waits pause their
-    remaining budgets. Queue allowance is cumulative across requests and retries.
+    remaining budgets. Queue allowance is cumulative across requests in this attempt.
     """
 
     def __init__(self, queue_timeout: float | None):
@@ -100,7 +111,7 @@ class InferenceClock:
             timer.timeout.reschedule(None if budget is None else loop.time() + budget)
 
     def scheduled(self) -> None:
-        """Accept only a real engine SCHEDULED/first-token notification."""
+        """Release pending admission after the caller observes engine scheduling."""
         if not self.waiting:
             raise RuntimeError("Inference scheduling notification has no pending admission")
         self.scheduled_requests += 1
@@ -115,10 +126,10 @@ class InferenceClock:
 
     def metrics(self) -> dict[str, float]:
         return {
-            "timing/inference_queue_wait": self.queue_wait,
-            "timing/inference_generation": self.generation,
-            "inference/queue_timeouts": float(self.queue_timeouts),
-            "inference/scheduled_requests": float(self.scheduled_requests),
+            INFERENCE_QUEUE_WAIT_METRIC: self.queue_wait,
+            INFERENCE_GENERATION_METRIC: self.generation,
+            INFERENCE_QUEUE_TIMEOUTS_METRIC: float(self.queue_timeouts),
+            INFERENCE_SCHEDULED_REQUESTS_METRIC: float(self.scheduled_requests),
         }
 
 

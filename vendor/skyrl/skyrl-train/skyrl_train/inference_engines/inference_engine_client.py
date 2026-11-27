@@ -1,5 +1,6 @@
 from skyrl_train.inference_engines.base import (
     CHOICE_POLICY_STEPS_KEY,
+    ABORT_FINISH_REASON,
     SESSION_ID_HEADER,
     InferenceEngineInterface,
     InferenceEngineInput,
@@ -45,9 +46,6 @@ from skyrl_train.trajectory_runners.routed_experts import decode_routed_experts
 import base64
 import io
 import numpy as np
-
-ABORT_FINISH_REASON = "abort"
-
 
 def _route_rows(rows: Any, response_length: int) -> np.ndarray:
     """Keep prediction-position routes aligned with the response token they produced."""

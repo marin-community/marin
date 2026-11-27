@@ -29,7 +29,7 @@ from skyrl_train.evaluate import evaluation_dump_dir
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, source_row_task, write_tasks
 from examples.cat_count.cpu_canary import PROMPT
 from skyrl_gym.envs.cat_count.reward import TARGET_WORD
-from skyrl_train.metric_names import CORRECTION_WEIGHT_MEAN_METRIC, TASK_TIMING_KEYS
+from skyrl_train.metric_names import CORRECTION_WEIGHT_MEAN_METRIC, TASK_METRIC_KEYS
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
@@ -482,7 +482,7 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         assert evaluations and timed_training
         for rows, prefix in ((timed_training, ""), (evaluations, "eval/all/")):
             for row in rows:
-                for raw in TASK_TIMING_KEYS:
+                for raw in TASK_METRIC_KEYS:
                     values = [row[f"{prefix}{raw}/{stat}"] for stat in ("mean", "p50", "p95", "max")]
                     assert all(math.isfinite(value) and value >= 0 for value in values)
                     assert values[1] <= values[2] <= values[3]
@@ -705,7 +705,7 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
         "unavailable": 2,
     }
     assert metrics["eval/all/outcome/rollout_failure"] == 2
-    for raw in TASK_TIMING_KEYS:
+    for raw in TASK_METRIC_KEYS:
         assert all(math.isfinite(metrics[f"eval/all/{raw}/{stat}"]) for stat in ("mean", "p50", "p95", "max"))
     assert metrics["eval/all/timing/grading/mean"] > 0
     assert metrics["eval/all/timing/setup/max"] == 0

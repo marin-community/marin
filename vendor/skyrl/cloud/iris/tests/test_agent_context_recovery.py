@@ -177,7 +177,8 @@ async def test_native_worker_keeps_a_workspace_verdict_without_sampled_tokens(ag
         async def generate(self, _request):
             clock = current_inference_clock()
             assert clock is not None
-            clock.scheduled()
+            async with clock.queue():
+                clock.scheduled()
             await asyncio.Future()
 
     async def agent(context, complete):

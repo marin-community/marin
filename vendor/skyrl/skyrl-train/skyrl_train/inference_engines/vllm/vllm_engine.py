@@ -55,6 +55,7 @@ from contextvars import ContextVar
 
 
 from skyrl_train.inference_engines.base import (
+    ABORT_FINISH_REASON,
     CHOICE_POLICY_STEPS_KEY,
     InferenceEngineInterface,
     InferenceEngineInput,
@@ -63,6 +64,7 @@ from skyrl_train.inference_engines.base import (
     LORA_DISK_LOAD_NAME,
     LORA_DISK_PATH_KEY,
     SESSION_ID_HEADER,
+    REQUEST_ID_HEADER,
     request_id_for_session,
 )
 from skyrl_train.inference_engines.response_topk import select_response_topk
@@ -1302,8 +1304,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
             _engine_arg_fields = {f.name for f in _dataclass_fields(vllm.AsyncEngineArgs)}
         except TypeError:
             _engine_arg_fields = set()
-        # The custom interval logger keeps vLLM stats enabled. This flag only
-        # omits vLLM's duplicate console logger; its Prometheus logger remains.
+        # Keep vLLM's request timing stats enabled alongside the interval logger.
         if "disable_log_stats" in _engine_arg_fields:
             kwargs["disable_log_stats"] = False
         if "enable_log_requests" in _engine_arg_fields:
@@ -1389,18 +1390,19 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
 
     async def generate_with_scheduling(self, input_batch: InferenceEngineInput):
         request_id = input_batch["request_ids"][0]
-        scheduled = self._request_timings.scheduled_event(request_id)
-        try:
-            async for item in scheduled_results(self.generate(input_batch), scheduled):
-                yield item
-        finally:
-            self._request_timings.forget_schedule(request_id)
+        async for item in self._scheduled_request(request_id, self.generate(input_batch)):
+            yield item
 
     async def chat_completion_with_scheduling(self, request_payload: Dict[str, Any]):
-        request_id = request_payload["headers"]["x-request-id"]
+        request_id = request_payload["headers"][REQUEST_ID_HEADER]
+        async for item in self._scheduled_request(request_id, self.chat_completion(request_payload)):
+            yield item
+
+    async def _scheduled_request(self, request_id: str, pending):
+        """Pair one engine result with its scheduler notice on the Ray stream."""
         scheduled = self._request_timings.scheduled_event(request_id)
         try:
-            async for item in scheduled_results(self.chat_completion(request_payload), scheduled):
+            async for item in scheduled_results(pending, scheduled):
                 yield item
         finally:
             self._request_timings.forget_schedule(request_id)
@@ -1456,7 +1458,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                 collect(), self._request_timeout, lambda: self.abort_active_partial_request(request_id),
                 scheduled=self._request_timings.scheduled_event(request_id)
             )
-            if deadline_finished and final_output.outputs[0].finish_reason == "abort":
+            if deadline_finished and final_output.outputs[0].finish_reason == ABORT_FINISH_REASON:
                 final_output.outputs[0].finish_reason = TOTAL_TURN_TIMEOUT_STOP_REASON
             return final_output, self._policy_steps.finish(request_id, len(final_output.outputs[0].token_ids))
         finally:
@@ -1655,7 +1657,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
 
         body = request_payload.get("json", {})
         headers = request_payload.get("headers", {})
-        request_id = headers.get("x-request-id") or uuid4().hex
+        request_id = headers.get(REQUEST_ID_HEADER) or uuid4().hex
         self._request_timings.start(request_id, headers.get(SESSION_ID_HEADER))
 
         # Explicit request sampling takes precedence for both training and evaluation.
@@ -1705,7 +1707,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                 return response
             if deadline_finished:
                 for item in response["choices"]:
-                    if item["finish_reason"] == "abort":
+                    if item["finish_reason"] == ABORT_FINISH_REASON:
                         item["finish_reason"] = TOTAL_TURN_TIMEOUT_STOP_REASON
             choice = response["choices"][0]
             # vLLM generates a chat completion under its response id, which parallel samples share.

@@ -115,7 +115,7 @@ class RequestCompleted[T]:
 async def scheduled_results[T](
     pending: Awaitable[T], scheduled: asyncio.Event
 ) -> AsyncIterator[RequestScheduled | RequestCompleted[T]]:
-    """Stream one admission notice and one result on the same cancellable RPC."""
+    """Stream a result and any observed admission notice on one cancellable RPC."""
     task = asyncio.ensure_future(pending)
     admission = asyncio.create_task(scheduled.wait())
     try:

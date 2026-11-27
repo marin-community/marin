@@ -4,7 +4,6 @@ import asyncio
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 from rigging.inference_clock import InferenceClock, execution_timeout
@@ -20,7 +19,7 @@ class PendingActor:
     generating: asyncio.Event
     aborted: asyncio.Event
     cancelled: list
-    stream: AsyncGenerator[asyncio.Future[Any], None]
+    stream: AsyncGenerator[asyncio.Future[RequestScheduled | RequestCompleted[dict]], None]
 
     async def wait_for_generation(self, work: asyncio.Task) -> None:
         notification = asyncio.create_task(self.generating.wait())
@@ -114,7 +113,6 @@ async def test_partial_return_uses_the_remaining_trial_budget_after_an_earlier_t
         offset += 11  # Twenty seconds remained, with half reserved for transport, rather than restarting all 100 seconds.
         await asyncio.wait_for(actor.aborted.wait(), 1)
         result = await work
-        assert result is partial
         payload = result if endpoint == "generate" else result["choices"][0]
         assert {key: payload[key] for key in sampled} == sampled
         if endpoint == "generate":

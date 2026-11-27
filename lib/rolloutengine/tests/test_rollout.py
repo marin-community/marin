@@ -84,6 +84,7 @@ from rolloutengine.harness.step import StepHarness
 from rolloutengine.machines import MachineSetupError, _machine_spec, task_machine
 from rolloutengine.models import (
     LENGTH_STOP_REASON,
+    TOTAL_TURN_TIMEOUT_STOP_REASON,
     AttemptEnded,
     AttemptStarted,
     ContextRecovery,
@@ -2125,7 +2126,7 @@ async def test_a_transport_deadline_keeps_partial_tokens_for_grading_and_refuses
         async def complete(self, request):
             turn = await super().complete(request)
             if len(self.requests) == 1:
-                return replace(turn, stop_reason="total_turn_timeout", metadata={"routes": [[1, 2]]})
+                return replace(turn, stop_reason=TOTAL_TURN_TIMEOUT_STOP_REASON, metadata={"routes": [[1, 2]]})
             return turn
 
     class AsksAgain:
@@ -2143,7 +2144,7 @@ async def test_a_transport_deadline_keeps_partial_tokens_for_grading_and_refuses
         rollout_spec(arithmetic_task(), harness="fixture", total_turn_timeout=5)
     )
     assert (record.rollout.stop_reason, record.grade.status, record.grade.reward) == (
-        "total_turn_timeout",
+        TOTAL_TURN_TIMEOUT_STOP_REASON,
         Outcome.GRADED,
         reward,
     )

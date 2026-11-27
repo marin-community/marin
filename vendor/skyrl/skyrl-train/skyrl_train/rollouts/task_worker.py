@@ -176,10 +176,7 @@ async def _model_turn(
                     max_context_length=max_context_length,
                     max_prompt_length=max_prompt_length,
                 )
-            clock = current_inference_clock()
-            admission = nullcontext() if clock is None else clock.queue()
-            async with admission:
-                output = await client.generate(model_input)
+            output = await client.generate(model_input)
     except GenerationBudgetExceededError as error:
         raise GenerationLimitReached(error.prompt_token_ids) from error
     if output["token_provenance"] != TokenProvenance.ENGINE:

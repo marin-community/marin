@@ -24,10 +24,12 @@ from iris.cluster.worker.port_allocator import DEFAULT_TASK_PORT_RANGE
 from marinskyrl.inference_placement import COLOCATED_EXPERT_BLOCK_GPU_COUNT, InferenceReplicaPlacement
 from marinskyrl.inference_startup_diagnostics import capture_startup_timeout
 from skyrl_train.inference_engines.base import (
+    ABORT_FINISH_REASON,
     InferenceEngineInterface,
     InferenceEngineInput,
     InferenceEngineOutput,
     request_id_for_session,
+    REQUEST_ID_HEADER,
     NamedWeightsUpdateRequest,
 )
 from skyrl_train.config.weight_sync_pause import (
@@ -376,13 +378,15 @@ class RayWrappedInferenceEngine(InferenceEngineInterface):
             )
             if deadline_finished:
                 output["stop_reasons"] = [
-                    TOTAL_TURN_TIMEOUT_STOP_REASON if reason == "abort" else reason for reason in output["stop_reasons"]
+                    TOTAL_TURN_TIMEOUT_STOP_REASON if reason == ABORT_FINISH_REASON else reason
+                    for reason in output["stop_reasons"]
                 ]
             return output
         actor_task = await _submit_actor_task(self.inference_engine_actor.generate, input_batch=input_batch)
         return await _await_actor_task(actor_task)
 
     async def _scheduled_call(self, method: ActorMethod, payload: dict, request_id: str):
+        """Await slot ownership and the result; report whether this deadline issued a partial abort."""
         clock = current_inference_clock()
         assert clock is not None
         stream = None
@@ -396,8 +400,8 @@ class RayWrappedInferenceEngine(InferenceEngineInterface):
                 if isinstance(first, RequestCompleted):
                     if (
                         "error" in first.value
-                        or first.value.get("stop_reasons") == ["abort"]
-                        or (first.value.get("choices") and first.value["choices"][0]["finish_reason"] == "abort")
+                        or first.value.get("stop_reasons") == [ABORT_FINISH_REASON]
+                        or (first.value.get("choices") and first.value["choices"][0]["finish_reason"] == ABORT_FINISH_REASON)
                     ):
                         return first.value, False
                     raise RuntimeError("Completed inference did not report engine-slot ownership")
@@ -461,11 +465,11 @@ class RayWrappedInferenceEngine(InferenceEngineInterface):
             output, deadline_finished = await self._scheduled_call(
                 self.inference_engine_actor.chat_completion_with_scheduling,
                 request_payload,
-                request_payload["headers"]["x-request-id"],
+                request_payload["headers"][REQUEST_ID_HEADER],
             )
             if deadline_finished:
                 for choice in output["choices"]:
-                    if choice["finish_reason"] == "abort":
+                    if choice["finish_reason"] == ABORT_FINISH_REASON:
                         choice["finish_reason"] = TOTAL_TURN_TIMEOUT_STOP_REASON
             return output
         actor_task = await _submit_actor_task(self.inference_engine_actor.chat_completion, request_payload)
