@@ -896,6 +896,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     takes ``scale_by_row_sphere_adam`` at the Adam LR (each row held at its norm, rows absent from the batch untouched,
     no decay). The MoE router weights keep the ``adamc_adam`` decay; everything else keeps ``muonc_anneal_adamc``'s
     rules."""
+    muonc_anneal_embed_row_adamh_lr_div: float = 0.0
+    """With ``muonc_anneal_embed_row_adamh``: the row-wise AdamH step on ``token_embed`` takes ``adam_lr_t /
+    muonc_anneal_embed_row_adamh_lr_div``, every row still held at its norm. 0: off."""
     muonh_law_cap_ball: bool = False
     """Law-cap ball (``scale_with_grug_muon_law_cap``) in place of the MuonH sphere for the ``muonh`` and ``kda_beta``
     groups, ``s(t) = lr_t / lr_max`` of the MuonH schedule: a plain Muon step at the matrix LR ``lr_m = lr_t`` until
@@ -1207,7 +1210,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         _match_named_update_sharding(),
                     )
             if self.muonc_anneal_embed_row_adamh:
-                transforms["embed"] = scale_by_row_sphere_adam(self.beta1, self.beta2, self.epsilon, adam_lr)
+                embed_lr = adam_lr
+                if self.muonc_anneal_embed_row_adamh_lr_div:
+                    embed_lr = adam_lr / self.muonc_anneal_embed_row_adamh_lr_div
+                transforms["embed"] = scale_by_row_sphere_adam(self.beta1, self.beta2, self.epsilon, embed_lr)
             if self.muonc_anneal_law_cap_ball:
                 transforms["muonh"] = muon_law_cap_at(matrix_lr)
                 transforms["kda_beta"] = muon_law_cap_at(matrix_lr * KDA_BETA_LR_MULT)
@@ -1296,6 +1302,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             raise ValueError("muonc_anneal_embed_no_decay needs muonc_anneal_adamc and excludes embed_row_hyperball")
         if self.muonc_anneal_embed_row_adamh and (not self.muonc_anneal_adamc or self.embed_row_hyperball):
             raise ValueError("muonc_anneal_embed_row_adamh needs muonc_anneal_adamc and excludes embed_row_hyperball")
+        if self.muonc_anneal_embed_row_adamh_lr_div < 0 or (
+            self.muonc_anneal_embed_row_adamh_lr_div and not self.muonc_anneal_embed_row_adamh
+        ):
+            raise ValueError(
+                "muonc_anneal_embed_row_adamh_lr_div must be non-negative and needs muonc_anneal_embed_row_adamh"
+            )
         if self.muonc_matrix_lr_mult < 0 or (
             self.muonc_matrix_lr_mult and (not self.muonc_anneal_decay or self.muonc_anneal_law_cap_ball)
         ):
