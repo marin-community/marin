@@ -3,6 +3,8 @@
 
 import asyncio
 import json
+import math
+import re
 import threading
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -42,7 +44,7 @@ from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
 from rolloutengine.harness.external import AgentHarness
 from rolloutengine.harness.shell import ShellHarness
-from rolloutengine.likelihood import VllmLikelihood
+from rolloutengine.likelihood import LikelihoodScore, VllmLikelihood
 from rolloutengine.models import ModelRequest, ModelTurn, Prompt, RolloutLimits, TokenUsage
 from rolloutengine.test_support import machine_runtime
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -60,6 +62,7 @@ from taskcompendium.evaluation.spec import (
     EpisodeLimits,
     EvaluationItem,
     EvaluationProtocol,
+    LikelihoodContext,
     LikelihoodMetric,
     LikelihoodNormalization,
     LikelihoodRequest,
@@ -2049,3 +2052,194 @@ async def test_a_write_whose_caller_is_cancelled_is_committed_before_the_store_c
         release()
 
     assert ReadView(root).read_blob("evidence/terminal.json") == b"graded"
+
+
+class UserTurnTokenizer(CharacterTokenizer):
+    def __init__(self):
+        self.template_kwargs = []
+
+    def encode(self, text, *, add_special_tokens=False):
+        # Like a byte-level BPE vocabulary, a space before a letter joins it as one token, alone or in context.
+        return [ord(piece[-1]) + 1000 if len(piece) == 2 else ord(piece) for piece in re.findall(r" [A-Za-z]|.", text)]
+
+    def apply_chat_template(self, conversation, *, tokenize, add_generation_prompt, **kwargs):
+        assert not tokenize and add_generation_prompt
+        self.template_kwargs.append(kwargs)
+        (message,) = conversation
+        return f"<{message['role']}>{message['content']}<assistant>"
+
+
+@dataclass
+class TableScorer:
+    """Score each rendered (context, continuation) pair from a fixed probability table."""
+
+    probabilities: dict[tuple[str, str], float]
+    calls: list[tuple[str, str]] = field(default_factory=list)
+
+    async def __call__(self, context, continuation, *, seed):
+        self.calls.append((context, continuation))
+        return LikelihoodScore(math.log(self.probabilities[context, continuation]), False, 1)
+
+
+def rotated_choice_item(task):
+    # Two option orders; the first pools the "A" and " A" spellings of option 0.
+    requests = (("x", "A"), ("x", " A"), ("y", "B"), ("x", "B"), ("y", "A"))
+    return EvaluationItem(
+        task_id=task.id,
+        source_row=task.source.row,
+        operation=ChoiceLikelihood(
+            choices=("first", "second"),
+            requests=tuple(LikelihoodRequest(context=context, continuation=letter) for context, letter in requests),
+            gold=(0,),
+            context_format=LikelihoodContext.USER_TURN,
+            terms=(((0, 1), (2,)), ((3,), (4,))),
+        ),
+    )
+
+
+@pytest.fixture
+def rotated_corpus(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "rows.jsonl").write_text(json.dumps({"question": "x"}) + "\n")
+    recipe = SourceRecipe(
+        name="rotated",
+        version="1",
+        source=SourceFiles("rotated", "pinned", ("rows.jsonl",), SourceFormat.JSONL),
+        convert=convert,
+        rubric=None,
+        controls=None,
+        intended_use=IntendedUse.EVAL,
+    )
+    protocol = EvaluationProtocol(
+        benchmark="rotated",
+        version="1",
+        operation="choice_likelihood",
+        sampling=None,
+        trials=TrialPolicy(count=1, seed=None),
+        metrics=(Metric(name="acc", kind=MetricKind.BINARY, higher_is_better=True),),
+        primary_metric="acc",
+        summary=SummaryKind.MEAN,
+        expected_population=1,
+        likelihood_metrics=(LikelihoodMetric(name="acc", normalization=LikelihoodNormalization.RAW),),
+    )
+    corpus = str(tmp_path / "corpus")
+    client = LocalClient()
+    try:
+        with ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+            publish_evaluation_corpus(recipe, protocol, rotated_choice_item, context, str(source), corpus)
+    finally:
+        client.shutdown()
+    return corpus
+
+
+async def run_rotated(corpus, output, run_config, tokenizer, scorer, chat_template=None):
+    model = run_config.model.model_copy(update={"chat_template": chat_template})
+    config = run_config.model_copy(update={"chat_template_kwargs": {"enable_thinking": False}, "model": model})
+    async with openai.AsyncOpenAI(api_key="test", base_url="http://fixture.test/v1") as unused:
+        await run_evaluation(
+            (corpus,),
+            output,
+            config,
+            ChatModel(unused, "fixture", 16),
+            machine_factories={},
+            tokenizer=tokenizer,
+            likelihood=scorer,
+        )
+
+
+@pytest.mark.asyncio
+async def test_user_turn_choice_terms_score_rendered_contexts_and_record_folded_choices(
+    tmp_path, run_config, rotated_corpus
+):
+    tokenizer = UserTurnTokenizer()
+    scorer = TableScorer(
+        {
+            ("<user>x<assistant>", "A"): 0.2,
+            ("<user>x<assistant>", " A"): 0.1,
+            ("<user>y<assistant>", "B"): 0.3,
+            ("<user>x<assistant>", "B"): 0.4,
+            ("<user>y<assistant>", "A"): 0.2,
+        }
+    )
+    output = str(tmp_path / "results")
+    await run_rotated(rotated_corpus, output, run_config, tokenizer, scorer)
+
+    assert {context for context, _ in scorer.calls} == {"<user>x<assistant>", "<user>y<assistant>"}
+    assert tokenizer.template_kwargs == [{"enable_thinking": False}] * 5
+    (sample,) = [sample_from_archive_row(row) for row in ReadView(output).iter_rows(ARCHIVE_SAMPLES_TABLE)]
+    # Pooling spellings lets option 0 win (0.3 * 0.3 > 0.4 * 0.2); unpooled it would lose (0.2 * 0.3).
+    assert sample.metrics == {"acc": 1}
+    assert sample.model_choice == 0
+    assert [choice.loglikelihood for choice in sample.choices] == pytest.approx([math.log(0.09), math.log(0.08)])
+    assert sample.prompt_text == "<user>x<assistant>"
+
+
+class DummyPrefixTokenizer(UserTurnTokenizer):
+    def encode(self, text, *, add_special_tokens=False):
+        # Like SentencePiece, standalone text gains a dummy-prefix token that the same text after a context lacks.
+        if len(text) == 1 and text.isalpha():
+            return [ord(text) + 2000]
+        return super().encode(text, add_special_tokens=add_special_tokens)
+
+
+class ServedTemplateTokenizer(UserTurnTokenizer):
+    def apply_chat_template(self, conversation, *, tokenize, add_generation_prompt, chat_template=None, **kwargs):
+        assert chat_template is not None
+        (message,) = conversation
+        return chat_template.replace("{content}", message["content"])
+
+
+class SplitSpellingTokenizer(UserTurnTokenizer):
+    def encode(self, text, *, add_special_tokens=False):
+        # Every letter spelling takes two tokens, so no pooled alternative can be scored.
+        return [0, *super().encode(text, add_special_tokens=add_special_tokens)]
+
+
+@pytest.mark.asyncio
+async def test_pooled_terms_without_a_single_token_spelling_are_invalid_and_send_no_requests(
+    tmp_path, run_config, rotated_corpus
+):
+    scorer = TableScorer({})
+    output = str(tmp_path / "results")
+
+    await run_rotated(rotated_corpus, output, run_config, SplitSpellingTokenizer(), scorer)
+
+    assert scorer.calls == []
+    (attempt,) = [row for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert attempt["outcome"] == "invalid_task"
+    assert "encodes as one token" in attempt["error"]
+
+
+@pytest.mark.asyncio
+async def test_pooled_spellings_that_tokenize_differently_in_context_are_invalid(tmp_path, run_config, rotated_corpus):
+    scorer = TableScorer({})
+    output = str(tmp_path / "results")
+
+    await run_rotated(rotated_corpus, output, run_config, DummyPrefixTokenizer(), scorer)
+
+    assert scorer.calls == []
+    (attempt,) = [row for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert attempt["outcome"] == "invalid_task"
+    assert "tokenizes differently after its context" in attempt["error"]
+
+
+@pytest.mark.asyncio
+async def test_user_turns_render_with_the_serving_chat_template_override(tmp_path, run_config, rotated_corpus):
+    contexts = {"x": "[served]x[reply]", "y": "[served]y[reply]"}
+    scorer = TableScorer(
+        {
+            (contexts["x"], "A"): 0.2,
+            (contexts["x"], " A"): 0.1,
+            (contexts["y"], "B"): 0.3,
+            (contexts["x"], "B"): 0.4,
+            (contexts["y"], "A"): 0.2,
+        }
+    )
+    output = str(tmp_path / "results")
+
+    await run_rotated(
+        rotated_corpus, output, run_config, ServedTemplateTokenizer(), scorer, chat_template="[served]{content}[reply]"
+    )
+
+    assert {context for context, _ in scorer.calls} == set(contexts.values())

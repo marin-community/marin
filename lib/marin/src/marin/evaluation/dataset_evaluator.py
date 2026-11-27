@@ -94,6 +94,7 @@ def runtime_config(
             tokenizer_revision=model.effective_tokenizer_revision,
             context_window=context,
             serving={"max_model_len": str(context)},
+            chat_template=model.serve.chat_template,
         ),
         max_tokens=run_max_tokens(context, settings, model),
         generation_extra_body={key: json.loads(value) for key, value in model.generation.extra_gen_kwargs.items()},

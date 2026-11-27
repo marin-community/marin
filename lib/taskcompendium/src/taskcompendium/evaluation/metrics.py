@@ -15,8 +15,15 @@ def likelihood_metrics(
     protocol: EvaluationProtocol,
     *,
     is_greedy: tuple[bool, ...] = (),
+    single_token: tuple[bool, ...] | None = None,
 ) -> dict[str, float]:
-    """Grade saved model likelihoods using the shared native harness comparison policy."""
+    """Grade saved per-request model likelihoods using the shared native harness comparison policy.
+
+    ``single_token`` flags, per request, whether the run's tokenizer encodes its continuation as one token; it is
+    required for choices whose terms pool several alternatives.
+    """
+    if isinstance(operation, ChoiceLikelihood):
+        scores = operation.choice_scores(scores, single_token)
     metrics = {}
     for metric in protocol.likelihood_metrics:
         if metric.scoring == "log_likelihood":

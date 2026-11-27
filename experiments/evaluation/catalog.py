@@ -41,6 +41,7 @@ from experiments.evaluation.benchmarks import (
     question_answering,
     reasoning,
     simpleqa,
+    spp,
     supergpqa,
     swebench_science,
     truthfulqa,
@@ -96,6 +97,7 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             swebench_science,
             physics_verified,
             arc_agi,
+            spp,
             truthfulqa,
         )
         for benchmark in family.benchmarks()

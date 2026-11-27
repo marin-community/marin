@@ -198,6 +198,7 @@ class SourceOrigin(StrEnum):
     MIROVERSE = "MiroVerse"
     OPENGCUA = "OpenGCUA"
     PAFITIS = "pafitis"
+    DLAB_SPP = "dlab-spp"
 
 
 def huggingface_dataset_url(repo: str, revision: str) -> str:

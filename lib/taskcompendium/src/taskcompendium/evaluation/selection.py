@@ -16,6 +16,7 @@ from taskcompendium.evaluation.corpus import EvaluationCase, EvaluationCorpus, T
 from taskcompendium.evaluation.spec import (
     AgentEpisode,
     ChatGeneration,
+    ChoiceLikelihood,
     CohortOrder,
     CohortPolicy,
     ContextPolicy,
@@ -35,7 +36,43 @@ class EvaluationTokenizer(Protocol):
 
     def apply_chat_template(
         self, conversation: list[dict[str, Any]], *, tokenize: bool, add_generation_prompt: bool, **kwargs: Any
-    ) -> list[int]: ...
+    ) -> str | list[int]: ...
+
+
+def user_turn_context(
+    tokenizer: EvaluationTokenizer,
+    text: str,
+    chat_template_kwargs: Mapping[str, bool | str],
+    chat_template: str | None = None,
+) -> str:
+    """Render ``text`` as one user message followed by the served model's generation prompt.
+
+    ``chat_template`` is the serving-side override; without one the tokenizer's own template renders.
+    """
+    override = {"chat_template": chat_template} if chat_template is not None else {}
+    rendered = tokenizer.apply_chat_template(
+        [{"role": "user", "content": text}],
+        tokenize=False,
+        add_generation_prompt=True,
+        **override,
+        **chat_template_kwargs,
+    )
+    if not isinstance(rendered, str):
+        raise TypeError("The tokenizer returned token ids for an untokenized chat template")
+    return rendered
+
+
+def single_token_flags(operation: ChoiceLikelihood, tokenizer: EvaluationTokenizer | None) -> tuple[bool, ...] | None:
+    """Whether each pooled request's continuation encodes, by itself, as one token; ``None`` when nothing pools."""
+    pooled = operation.pooled_requests()
+    if not pooled:
+        return None
+    if tokenizer is None:
+        raise ValueError("Pooled choice terms require the run's pinned tokenizer")
+    return tuple(
+        index not in pooled or len(tokenizer.encode(request.continuation, add_special_tokens=False)) == 1
+        for index, request in enumerate(operation.requests)
+    )
 
 
 class SelectionStatus(StrEnum):

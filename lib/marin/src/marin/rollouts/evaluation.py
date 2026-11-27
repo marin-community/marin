@@ -47,7 +47,13 @@ from rolloutengine.agents.terminus.tmux_session import TmuxBatchProtocolError, T
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.core import Harness
 from rolloutengine.harness.exact_chat import EXACT_CHAT_HARNESS, ExactChatHarness
-from rolloutengine.likelihood import InvalidLikelihoodRequest, LikelihoodScorer, LikelihoodTransportError
+from rolloutengine.likelihood import (
+    InvalidLikelihoodRequest,
+    LikelihoodScore,
+    LikelihoodScorer,
+    LikelihoodTransportError,
+    encode_pair,
+)
 from rolloutengine.models import (
     GradedRolloutInterrupted,
     MachineRuntimeSpec,
@@ -72,6 +78,8 @@ from taskcompendium.evaluation.selection import (
     EvaluationTokenizer,
     Selection,
     select_cases,
+    single_token_flags,
+    user_turn_context,
     wire_messages,
 )
 from taskcompendium.evaluation.spec import (
@@ -83,11 +91,14 @@ from taskcompendium.evaluation.spec import (
     EpisodeAgent,
     EpisodeInputs,
     EvaluationProtocol,
+    LikelihoodContext,
+    LikelihoodRequest,
     MetricKind,
     MiniSweAgent,
     OperationKind,
     PiAgent,
     TextGeneration,
+    UnscorableChoice,
 )
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.identity import canonical_sha256
@@ -178,6 +189,8 @@ class ModelIdentity(RunModel):
     tokenizer_revision: str
     context_window: int = Field(gt=0)
     serving: dict[str, str]
+    chat_template: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    """The serving-side chat template override, which user-turn likelihood contexts render with."""
 
 
 class EvaluationRunConfig(RunModel):
@@ -642,20 +655,30 @@ async def _score_likelihood(
     attempt: Attempt,
     timeout: float | None,
     evidence: TaskEvidence,
+    tokenizer: EvaluationTokenizer | None,
+    chat_template_kwargs: Mapping[str, bool | str],
+    chat_template: str | None,
 ) -> Outcome:
     operation = case.item.operation
     assert isinstance(operation, ChoiceLikelihood | ContinuationLikelihood)
     requests = operation.requests if isinstance(operation, ChoiceLikelihood) else (operation.request,)
+    user_turn = isinstance(operation, ChoiceLikelihood) and operation.context_format is LikelihoodContext.USER_TURN
+    contexts = _likelihood_contexts(requests, user_turn, tokenizer, chat_template_kwargs, chat_template)
+    single_token = single_token_flags(operation, tokenizer) if isinstance(operation, ChoiceLikelihood) else None
     results = []
     failure_evidence = None
     permanent_error = None
     outcome = Outcome.GRADED
     error = None
     try:
+        if isinstance(operation, ChoiceLikelihood):
+            # Reject an unscorable pooled group before sending any request.
+            operation.scored_terms(single_token)
+            _check_pooled_tokens(operation, contexts, tokenizer, single_token)
         async with asyncio.timeout(timeout):
-            for request in requests:
-                results.append(await scorer(request.context, request.continuation, seed=attempt.seed))
-    except InvalidLikelihoodRequest as failure:
+            for context, request in zip(contexts, requests, strict=True):
+                results.append(await scorer(context, request.continuation, seed=attempt.seed))
+    except (InvalidLikelihoodRequest, UnscorableChoice) as failure:
         outcome = Outcome.INVALID_TASK
         error = str(failure)
     except (APIError, LikelihoodTransportError, TimeoutError) as failure:
@@ -674,15 +697,24 @@ async def _score_likelihood(
             tuple(result.loglikelihood for result in results),
             protocol,
             is_greedy=tuple(result.is_greedy for result in results),
+            single_token=single_token,
         )
         if outcome is Outcome.GRADED
         else {}
     )
     primary = metrics.get(protocol.primary_metric)
+    complete = outcome is Outcome.GRADED and len(results) == len(requests)
+    choice_scores = (
+        operation.choice_scores(tuple(result.loglikelihood for result in results), single_token)
+        if isinstance(operation, ChoiceLikelihood) and complete
+        else None
+    )
     raw = {
         **saved_task_fields(case.task, evidence),
         "item": case.item.model_dump(mode="json"),
         "scores": [dataclasses.asdict(result) for result in results],
+        "choice_scores": choice_scores,
+        "rendered_contexts": list(contexts) if user_turn else None,
         "outcome": outcome,
         "error": error,
         "failure_evidence": failure_evidence,
@@ -691,14 +723,14 @@ async def _score_likelihood(
         task=protocol.benchmark,
         doc_id=case.task.id,
         kind=SampleKind.MULTIPLE_CHOICE if isinstance(operation, ChoiceLikelihood) else SampleKind.GENERATION,
-        prompt_text=requests[0].context,
+        prompt_text=contexts[0],
         choices=(
             [
                 Choice(
                     label=str(index),
                     text=choice,
-                    loglikelihood=results[index].loglikelihood if index < len(results) else None,
-                    is_greedy=results[index].is_greedy if index < len(results) else None,
+                    loglikelihood=_choice_loglikelihood(operation, results, choice_scores, index),
+                    is_greedy=(results[index].is_greedy if not operation.terms and index < len(results) else None),
                 )
                 for index, choice in enumerate(operation.choices)
             ]
@@ -706,9 +738,7 @@ async def _score_likelihood(
             else None
         ),
         model_choice=(
-            max(range(len(results)), key=lambda index: results[index].loglikelihood)
-            if outcome is Outcome.GRADED and results and isinstance(operation, ChoiceLikelihood)
-            else None
+            max(range(len(choice_scores)), key=choice_scores.__getitem__) if choice_scores is not None else None
         ),
         target_choice=operation.gold[0] if isinstance(operation, ChoiceLikelihood) else None,
         target_text=operation.request.continuation if isinstance(operation, ContinuationLikelihood) else None,
@@ -736,6 +766,64 @@ async def _score_likelihood(
     if permanent_error is not None:
         raise permanent_error
     return outcome
+
+
+def _likelihood_contexts(
+    requests: tuple[LikelihoodRequest, ...],
+    user_turn: bool,
+    tokenizer: EvaluationTokenizer | None,
+    chat_template_kwargs: Mapping[str, bool | str],
+    chat_template: str | None,
+) -> tuple[str, ...]:
+    """The contexts sent to the scorer: verbatim, or each rendered as a user turn with the served chat template."""
+    if not user_turn:
+        return tuple(request.context for request in requests)
+    if tokenizer is None:
+        raise ValueError("User-turn likelihood contexts require the run's pinned tokenizer")
+    return tuple(
+        user_turn_context(tokenizer, request.context, chat_template_kwargs, chat_template) for request in requests
+    )
+
+
+def _check_pooled_tokens(
+    operation: ChoiceLikelihood,
+    contexts: tuple[str, ...],
+    tokenizer: EvaluationTokenizer | None,
+    single_token: tuple[bool, ...] | None,
+) -> None:
+    """Require each pooled single-token alternative to end its scored continuation with that same token.
+
+    A tokenizer that normalizes standalone text, such as SentencePiece's dummy prefix, can encode a spelling
+    alone as one token and differently after the context, so the scorer would compare another token.
+    """
+    if single_token is None:
+        return
+    assert tokenizer is not None
+    for index in operation.pooled_requests():
+        if not single_token[index]:
+            continue
+        request = operation.requests[index]
+        (alone,) = tokenizer.encode(request.continuation, add_special_tokens=False)
+        # The prefix token only fills an empty context, which a pooled request never scores without.
+        _, scored = encode_pair(tokenizer, contexts[index], request.continuation, prefix_token_id=0)
+        if not scored or scored[-1] != alone:
+            raise UnscorableChoice(
+                f"Pooled continuation {request.continuation!r} tokenizes differently after its context"
+            )
+
+
+def _choice_loglikelihood(
+    operation: ChoiceLikelihood,
+    results: list[LikelihoodScore],
+    choice_scores: tuple[float, ...] | None,
+    index: int,
+) -> float | None:
+    """A choice's folded score, or its own request's score while an untermed attempt is partial."""
+    if choice_scores is not None:
+        return choice_scores[index]
+    if operation.terms or index >= len(results):
+        return None
+    return results[index].loglikelihood
 
 
 async def _score_rollout(
@@ -1129,7 +1217,16 @@ async def run_evaluation(
                 if isinstance(case.item.operation, ChoiceLikelihood | ContinuationLikelihood):
                     assert likelihood is not None
                     outcome = await _score_likelihood(
-                        case, protocol, likelihood, writer, attempt, config.limits.attempt_timeout, config.task_evidence
+                        case,
+                        protocol,
+                        likelihood,
+                        writer,
+                        attempt,
+                        config.limits.attempt_timeout,
+                        config.task_evidence,
+                        tokenizer,
+                        config.chat_template_kwargs,
+                        config.model.chat_template,
                     )
                     failures += outcome is Outcome.INFRA_ERROR
                     continue
