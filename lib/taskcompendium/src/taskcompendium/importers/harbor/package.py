@@ -19,7 +19,7 @@ from typing import Annotated, Literal
 from pydantic import Field
 from shellbox.machine import NetworkPolicy
 
-from taskcompendium.evaluation.spec import EpisodeInputs
+from taskcompendium.evaluation.spec import EpisodeInputs, MachineResources
 from taskcompendium.importers.harbor.compose import (
     ComposeGroup,
     lower_sidecars,
@@ -397,7 +397,8 @@ def lower_package(
     if job.agent_install is not None:
         main = extend_source(main, job.agent_install)
     agent = _agent_environment(config, main, sources, pin)
-    grader = package_grader(config, rule, agent, _verifier_environment(config, directory, pin))
+    verifier = _verifier_environment(config, directory, pin)
+    grader = package_grader(config, rule, agent, verifier)
     task = TaskSpec(
         id=task_id,
         context=ConversationInput(events=(TextMessage(role="user", content=(directory / INSTRUCTION).read_text()),)),
@@ -425,5 +426,10 @@ def lower_package(
         memory_mb=environment.memory_mb,
         storage_mb=environment.storage_mb,
         network=NetworkPolicy.ALLOW if _agent_internet(config, sources) else NetworkPolicy.DENY,
+        verifier_resources=None if verifier is None else _verifier_resources(config.verifier_environment),
     )
     return HarborTask(task, episode)
+
+
+def _verifier_resources(environment: EnvironmentConfig) -> MachineResources:
+    return MachineResources(cpus=environment.cpus, memory_mb=environment.memory_mb, storage_mb=environment.storage_mb)
