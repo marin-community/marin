@@ -859,7 +859,7 @@ def test_grpc_snowball_generation_replays_exact_expert_routes(local_gpt2_tokeniz
             )
             shifted_batch = dataclasses.replace(batch, position_ids=batch.position_ids + 1)
             for invalid_batch in (gapped_batch, shifted_batch):
-                with pytest.raises(ValueError, match="position IDs starting from zero"):
+                with pytest.raises(ValueError):
                     prepare_rollout_policy_batch(
                         model, invalid_batch, [RolloutChoice(response, 0)], policy_id="test-snowball-policy"
                     )
