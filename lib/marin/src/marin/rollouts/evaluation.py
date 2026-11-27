@@ -107,7 +107,7 @@ logger = logging.getLogger(__name__)
 
 # Raw evidence and turn metadata key naming the root, run identity and evidence blob of a reused model response.
 REUSED_FROM_RUN = "reused_response_from_run"
-# Run descriptor key listing, for each run whose responses this root reused, its root, run identity and driver revision.
+# Run descriptor key listing, for each run whose responses this root reused, its root and run identity.
 RESPONSE_SOURCES = "response_sources"
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
 EVALUATION_EXECUTION_REVISION = "2026.11.27.1"
