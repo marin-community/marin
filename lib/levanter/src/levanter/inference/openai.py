@@ -308,7 +308,7 @@ class InferenceContext:
             on_tokens=on_tokens,
         )
 
-        logger.info("Enqueuing request %s", request)
+        logger.debug("Enqueuing request %s with %d prompt tokens", request_id, len(prompt_tokens))
         self.request_queue.put(request)
         return request_id
 
@@ -324,7 +324,7 @@ class InferenceContext:
             batch = InferenceBatch()
             max_tokens_per_seq = self.engine.config.max_seq_len
             max_tokens_per_batch = self.engine.config.page_size * self.engine.config.max_pages  # type: ignore
-            logger.info(f"Max tokens per seq: {max_tokens_per_seq}, per batch: {max_tokens_per_batch}")
+            logger.debug("Max tokens per sequence %d and batch %d", max_tokens_per_seq, max_tokens_per_batch)
 
             for r in requests:
                 if len(r.prompt_tokens) > max_tokens_per_seq:

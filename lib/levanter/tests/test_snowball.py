@@ -1586,3 +1586,55 @@ def test_snowball_tpu_rmsnorm_matches_shared_reference():
         actual = forward(model.with_batch_invariant_rmsnorm("pallas_tpu"), tokens)
 
     np.testing.assert_allclose(actual.array, reference.array, atol=2e-6, rtol=2e-6)
+
+
+@pytest.mark.tpu
+def test_snowball_v5p_sparse_expert_tiles_match_reference_decode():
+    if jax.device_count() != 4 or jax.devices()[0].device_kind != "TPU v5":
+        pytest.skip("The Snowball sparse expert tiles require one v5p-8")
+    cfg = _tiny_config(
+        hidden_dim=2560,
+        intermediate_dim=1280,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=1,
+        head_dim=128,
+        max_seq_len=256,
+    )
+    config = InferenceEngineConfig(
+        max_seq_len=256,
+        max_pages=12,
+        max_seqs=4,
+        max_seqs_in_prefill=4,
+        max_prefill_size=256,
+        max_queued_tokens=8,
+        max_rounds=2,
+        logprob_mode=LogprobMode.POLICY,
+    )
+    prompts = [[3, 5, 7, 12, 18], [2, 14, 9, 11, 4], [7, 8, 2, 13, 10]]
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=4)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(30))
+        model = jmp.get_policy("p=bf16,c=bf16").cast_to_compute(model).with_packed_experts().with_expert_sharded_kv()
+        requests = [
+            Request(
+                prompt,
+                request_id=row,
+                decode_params=replace(
+                    SeqDecodingParams.default(), temperature=jnp.float32(0), max_num_tokens=jnp.int32(len(prompt) + 2)
+                ),
+                n_generations=1,
+            )
+            for row, prompt in enumerate(prompts)
+        ]
+        reference = InferenceEngine.from_model_with_config(
+            model.with_paged_attention("reference"), None, config
+        ).generate(requests, capture_routes=True)
+        actual = InferenceEngine.from_model_with_config(model.with_paged_attention("tpu_v3"), None, config).generate(
+            requests, capture_routes=True
+        )
+    assert actual.tokens == reference.tokens
+    np.testing.assert_allclose(actual.logprobs, reference.logprobs, rtol=0, atol=2e-2)
+    assert actual.expert_routes is not None and reference.expert_routes is not None
+    for left, right in zip(actual.expert_routes, reference.expert_routes, strict=True):
+        np.testing.assert_array_equal(left.expert_ids, right.expert_ids)
+        np.testing.assert_array_equal(left.valid, right.valid)

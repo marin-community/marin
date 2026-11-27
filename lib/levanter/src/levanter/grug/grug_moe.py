@@ -566,6 +566,7 @@ class MoEExpertMlp(eqx.Module):
     expert_chunks: int = eqx.field(static=True, default=1)
     num_expert_waves: int = eqx.field(static=True, default=1)
     combine_in_fp32: bool = eqx.field(static=True, default=False)
+    megablox_tiles: tuple[int, int | None] | None = eqx.field(static=True, default=None)
 
     @staticmethod
     def init(
@@ -647,6 +648,7 @@ class MoEExpertMlp(eqx.Module):
             expert_chunks=self.expert_chunks,
             num_expert_waves=self.num_expert_waves,
             combine_in_fp32=self.combine_in_fp32,
+            megablox_tiles=self.megablox_tiles,
         )
 
     @named_call
@@ -709,6 +711,7 @@ def moe_mlp(
     expert_chunks: int = 1,
     num_expert_waves: int = 1,
     combine_in_fp32: bool = False,
+    megablox_tiles: tuple[int, int | None] | None = None,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -859,12 +862,14 @@ def moe_mlp(
                 _moe_mlp_ep_ring_local,
                 make_dispatch_combine=_scatter_add_dispatch_combine,
                 combine_in_fp32=combine_in_fp32,
+                megablox_tiles=megablox_tiles,
             )
         elif resolved_implementation == "ring_gather_combine":
             shard_local_fn = partial(
                 _moe_mlp_ep_ring_local,
                 make_dispatch_combine=_gather_dispatch_combine,
                 combine_in_fp32=combine_in_fp32,
+                megablox_tiles=megablox_tiles,
             )
         elif resolved_implementation == "ring_filtered":
             shard_local_fn = partial(

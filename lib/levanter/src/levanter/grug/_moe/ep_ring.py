@@ -196,6 +196,7 @@ def _moe_mlp_ep_ring_local(
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
     combine_in_fp32: bool = False,
+    megablox_tiles: tuple[int, int | None] | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect.
 
@@ -257,12 +258,16 @@ def _moe_mlp_ep_ring_local(
         x_dispatch = tree_checkpoint_name(dispatch_combine.dispatch(x_global), _CHECKPOINT_DISPATCH_INPUT)
         weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
 
+    dot = ragged_dot if megablox_tiles is None else partial(ragged_dot, megablox_tiles=megablox_tiles)
     with jax.named_scope("moe_up_down"):
-        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
+        w13_out = tree_checkpoint_name(
+            dot(x_dispatch, moe_w13_local, group_sizes),
+            _CHECKPOINT_EXPERT_HIDDEN,
+        )
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = tree_checkpoint_name(
-            ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes),
+            dot(activation_fn(gate) * up, moe_w2_local, group_sizes),
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
 

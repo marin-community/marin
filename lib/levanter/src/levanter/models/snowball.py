@@ -2049,7 +2049,17 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             return block
         # A receiver can get every sender's assignments. Reserve that worst-case
         # capacity so expert dispatch cannot drop tokens at serving time.
-        experts = dataclasses.replace(block.mlp.expert_mlp, implementation="ring", capacity_factor=float(expert_size))
+        experts = block.mlp.expert_mlp
+        megablox_tiles = None
+        if self._paged_attention == "tpu_v3" and experts.w_down.shape[1:] == (1280, 2560):
+            if jax.devices()[0].device_kind == "TPU v5":
+                if token_rows <= 2048:
+                    megablox_tiles = (32 if token_rows <= 512 else 64, 1280)
+                else:
+                    megablox_tiles = (128 if token_rows <= 8192 else 256, None)
+        experts = dataclasses.replace(
+            experts, implementation="ring", capacity_factor=float(expert_size), megablox_tiles=megablox_tiles
+        )
         selected = (
             self._selected_ep_decode
             and token_rows == expert_size
