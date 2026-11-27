@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import jax
@@ -57,6 +58,12 @@ def test_trainer_initialize_reports_missing_accelerator_before_invalid_mesh(monk
 
     with pytest.raises(RuntimeError):
         config.initialize()
+
+
+@pytest.mark.parametrize("log_dir", ["s3://bucket/run/logs", "gs://bucket/run/logs"])
+def test_trainer_config_rejects_remote_log_dir(log_dir):
+    with pytest.raises(ValueError, match="log_dir must be a local directory"):
+        TrainerConfig(log_dir=Path(log_dir))
 
 
 def test_tpu_topology_shape_uses_device_coordinate_extents():

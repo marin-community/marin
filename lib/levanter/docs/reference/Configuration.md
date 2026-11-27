@@ -109,7 +109,7 @@ The following table lists some of the parameters that you might want to change.
 
 | Parameter      | Description                                                                   | Default |
 |----------------|-------------------------------------------------------------------------------|---------|
-| `log_dir`      | Where to save logs (python logger). `$run_id` will be appended                | `logs/` |
+| `log_dir`      | Local directory for logs and artifacts (no URLs). `$run_id` will be appended  | `logs/` |
 
 
 

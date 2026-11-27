@@ -27,7 +27,7 @@ def grug_state_sharding_dict(state: GrugStateWithSharding) -> dict[str, dict[str
     }
 
 
-def dump_grug_state_sharding(state: GrugStateWithSharding, path: Path) -> None:
+def dump_grug_state_sharding(state: GrugStateWithSharding, path: str | Path) -> None:
     """Write Grug parameter and optimizer-state sharding specs as JSON."""
     output = grug_state_sharding_dict(state)
     serialized = json.dumps(output, indent=2, sort_keys=True)
@@ -48,8 +48,10 @@ def dump_grug_state_sharding_run_artifact(
     run_id: str,
     path_override: str | None,
 ) -> None:
-    path = Path(path_override) if path_override is not None else default_grug_sharding_dump_path(log_dir, run_id)
-    dump_grug_state_sharding_artifact(state, path)
+    """Write the sharding specs under ``log_dir``, log them to the tracker, and copy them to ``path_override``."""
+    dump_grug_state_sharding_artifact(state, default_grug_sharding_dump_path(log_dir, run_id))
+    if path_override is not None:
+        dump_grug_state_sharding(state, path_override)
 
 
 def default_grug_sharding_dump_path(log_dir: Path, run_id: str) -> Path:
@@ -77,7 +79,7 @@ def _sharding_spec(value: Any) -> str:
     return repr(sharding)
 
 
-def _ensure_parent_dir(path: Path) -> None:
+def _ensure_parent_dir(path: str | Path) -> None:
     parent = StoragePath(str(path)).parent
     if parent.key:
         parent.mkdirs()
