@@ -165,7 +165,7 @@ def test_worker_exits_zero_after_current_head_succeeds(tmp_path, monkeypatch, ir
     _isolate_worker_runtime(tmp_path, monkeypatch, payload)
     write_head_result(str(tmp_path), payload.gang_epoch)
 
-    assert task_runtime.run_worker(_worker_args(tmp_path)) == 0
+    assert task_runtime.run_worker(_worker_args(tmp_path), ports=iris_ray_ports) == 0
 
 
 def test_worker_termination_without_current_head_success_is_nonzero(tmp_path, monkeypatch, iris_ray_ports):
@@ -179,4 +179,4 @@ def test_worker_termination_without_current_head_success_is_nonzero(tmp_path, mo
         lambda _duration: handlers[signal.SIGTERM](signal.SIGTERM, None),
     )
 
-    assert task_runtime.run_worker(_worker_args(tmp_path)) == 128 + signal.SIGTERM
+    assert task_runtime.run_worker(_worker_args(tmp_path), ports=iris_ray_ports) == 128 + signal.SIGTERM

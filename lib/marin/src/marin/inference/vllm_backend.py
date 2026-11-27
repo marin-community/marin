@@ -9,6 +9,8 @@ import tempfile
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 
+from rigging.port_lease import lease_tcp_port
+
 from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
 from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
 from marin.inference.config import (
@@ -19,7 +21,6 @@ from marin.inference.config import (
     VllmSource,
 )
 from marin.inference.model_preparation import read_tool_chat_template
-from marin.inference.vllm_router import available_port
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
     IsolatedTpuVllm,
@@ -131,28 +132,30 @@ class VllmBackend:
     ) -> Iterator[VllmEnvironment]:
         """Yield a VllmEnvironment; call ``wait_until_ready()`` before using its endpoint."""
         chat_template_content = _resolved_chat_template(spec)
-        resolved_port = available_port(self.host) if self.port is None or self.config.router is not None else self.port
-        model = self._model_config(spec)
-        launcher = _with_subprocess_env(
-            vllm_launcher(self.config),
-            subprocess_env,
-            self.config.startup_timeout_seconds,
-        )
-        with _chat_template_argument(chat_template_content) as chat_template_args:
-            with VllmEnvironment(
-                model=model,
-                host=self.host,
-                port=resolved_port,
-                timeout_seconds=self.config.startup_timeout_seconds,
-                extra_args=self._serve_args(spec, chat_template_args, extra_args),
-                launcher=launcher,
-                compilation_cache_mode=self.config.compilation_cache,
-                extra_metric_families=self.config.extra_metric_families,
-                router=self.config.router,
-                router_port=self.port,
-                wait_for_ready=False,
-            ) as environment:
-                yield environment
+        worker_port = 0 if self.config.router is not None else self.port or 0
+        excluded = {self.port} if self.port is not None else ()
+        with lease_tcp_port(worker_port, excluded=excluded) as resolved_port:
+            model = self._model_config(spec)
+            launcher = _with_subprocess_env(
+                vllm_launcher(self.config),
+                subprocess_env,
+                self.config.startup_timeout_seconds,
+            )
+            with _chat_template_argument(chat_template_content) as chat_template_args:
+                with VllmEnvironment(
+                    model=model,
+                    host=self.host,
+                    port=resolved_port,
+                    timeout_seconds=self.config.startup_timeout_seconds,
+                    extra_args=self._serve_args(spec, chat_template_args, extra_args),
+                    launcher=launcher,
+                    compilation_cache_mode=self.config.compilation_cache,
+                    extra_metric_families=self.config.extra_metric_families,
+                    router=self.config.router,
+                    router_port=self.port,
+                    wait_for_ready=False,
+                ) as environment:
+                    yield environment
 
     def _serve_args(
         self,

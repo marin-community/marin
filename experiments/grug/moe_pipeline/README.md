@@ -80,7 +80,7 @@ uv run iris --cluster=marin job run --no-wait \
   --enable-extra-resources --target-cluster cw-rno2a --priority batch \
   --gpu H100x8 --replicas 4 --cpu 32 --memory 256GB --disk 64GB \
   --timeout 3600 --extra pipeline --job-name <unique-save-job> \
-  -e IRIS_PORT_JAX 32761 -e XLA_PYTHON_CLIENT_PREALLOCATE false \
+  -e PORT_JAX 32761 -e XLA_PYTHON_CLIENT_PREALLOCATE false \
   -e XLA_FLAGS '--xla_gpu_executable_terminate_timeout=300 --xla_gpu_enable_command_buffer=' \
   -- python -m experiments.grug.moe_pipeline.checkpoint_smoke \
   --checkpoint-root <shared-regional-root> --schedule zero_bubble --phase save
@@ -88,7 +88,7 @@ uv run iris --cluster=marin job run --no-wait \
 
 After that job succeeds, repeat with a new job name and `--phase resume`, keeping
 the checkpoint root and schedule unchanged. Use a distinct root for the
-`dualpipe_v` pair. Concurrent gangs need distinct `IRIS_PORT_JAX` values. A
+`dualpipe_v` pair. Concurrent gangs need distinct `PORT_JAX` values. A
 successful resume emits `CHECKPOINT_SMOKE_PASSED` with the maximum per-leaf error.
 
 The best validated Snowball 67B-A2B throughput point uses eight H100x8 replicas,

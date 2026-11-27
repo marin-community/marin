@@ -50,6 +50,7 @@ import socket
 import subprocess
 import sys
 import time
+from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
@@ -58,11 +59,12 @@ from typing import IO, Literal
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.actor.resolver import Resolver
-from iris.client.client import iris_ctx
+from iris.client.client import NamespacedEndpointRegistry, iris_ctx
 from iris.cluster.client.job_info import JobInfo, get_job_info
 from iris.cluster.types import EndpointAccess
 from rigging.filesystem.factory import open_url
 from rigging.network import interface_for_ipv4
+from rigging.port_lease import lease_tcp_port_block
 
 logger = logging.getLogger("nccl_transport_probe")
 
@@ -194,21 +196,20 @@ def parse_nccl_census(lines: list[str]) -> NcclCensus:
     return NcclCensus(version, transports, ib_device_lines, sorted(nvls_rank_counts), sorted(mnnvl_channels))
 
 
-def allocate_port_block(count: int) -> int:
-    """Find a base port where the next ``count`` ports are all free."""
-    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    probe.bind(("0.0.0.0", 0))
-    base = probe.getsockname()[1]
-    probe.close()
-    for offset in range(count):
-        check = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            check.bind(("0.0.0.0", base + offset))
-        except OSError:
-            check.close()
-            return allocate_port_block(count)
-        check.close()
-    return base
+def _publish_rendezvous(
+    leases: ExitStack,
+    registry: NamespacedEndpointRegistry,
+    endpoint_name: str,
+    host: str,
+    port_count: int,
+    access: EndpointAccess = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
+) -> int:
+    """Register the rendezvous and return the first port of its leased block."""
+    port = leases.enter_context(lease_tcp_port_block(port_count))
+    endpoint_id = registry.register(endpoint_name, f"{host}:{port}", access=access)
+    leases.callback(registry.unregister, endpoint_id)
+    logger.info("Registered rendezvous %s at %s:%d", endpoint_name, host, port)
+    return port
 
 
 def wait_for_rendezvous(
@@ -517,35 +518,36 @@ def run_launcher(args: argparse.Namespace) -> None:
         endpoint_name = rendezvous_endpoint_name(job_info, mode="launcher")
         coordinator = task_index == 0
     variants = build_variants(extra_env=args.env_pairs)
-    if coordinator:
-        base_port = allocate_port_block(len(variants) + 1)
-        master_host = job_info.advertise_host
-        access = EndpointAccess.ENDPOINT_ACCESS_LINK if args.endpoint_name else EndpointAccess.ENDPOINT_ACCESS_PRIVATE
-        endpoint_id = ctx.registry.register(endpoint_name, f"{master_host}:{base_port}", access=access)
-        logger.info("Registered rendezvous %s at %s:%d", endpoint_name, master_host, base_port)
-    else:
-        rendezvous_timeout = (
-            args.rendezvous_timeout_seconds
-            if args.rendezvous_timeout_seconds
-            else (args.init_timeout_seconds or RENDEZVOUS_TIMEOUT_SECONDS)
-        )
-        master_host, base_port = wait_for_rendezvous(ctx.resolver, endpoint_name, timeout=rendezvous_timeout)
-        logger.info("Resolved rendezvous at %s:%d", master_host, base_port)
+    with ExitStack() as leases:
+        if coordinator:
+            master_host = job_info.advertise_host
+            access = (
+                EndpointAccess.ENDPOINT_ACCESS_LINK if args.endpoint_name else EndpointAccess.ENDPOINT_ACCESS_PRIVATE
+            )
+            base_port = _publish_rendezvous(leases, ctx.registry, endpoint_name, master_host, len(variants) + 1, access)
+        else:
+            rendezvous_timeout = (
+                args.rendezvous_timeout_seconds
+                if args.rendezvous_timeout_seconds
+                else (args.init_timeout_seconds or RENDEZVOUS_TIMEOUT_SECONDS)
+            )
+            master_host, base_port = wait_for_rendezvous(ctx.resolver, endpoint_name, timeout=rendezvous_timeout)
+            logger.info("Resolved rendezvous at %s:%d", master_host, base_port)
 
-    log_dir = RESULT_DIR / f"task{task_index}"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    selected = set(args.variants.split(",")) if args.variants else None
-    results = []
-    run = partial(run_variant, pynccl_init=args.pynccl_init)
-    for offset, variant in enumerate(variants):
-        if selected is not None and variant.name not in selected:
-            continue
-        logger.info("[task %s] variant %s starting", task_index, variant.name)
-        results.append(run(variant, rank_offset, local_gpus, world_size, master_host, base_port + 1 + offset, log_dir))
-        logger.info("[task %s] variant %s finished pass=%s", task_index, variant.name, results[-1]["pass"])
+        log_dir = RESULT_DIR / f"task{task_index}"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        selected = set(args.variants.split(",")) if args.variants else None
+        results = []
+        run = partial(run_variant, pynccl_init=args.pynccl_init)
+        for offset, variant in enumerate(variants):
+            if selected is not None and variant.name not in selected:
+                continue
+            logger.info("[task %s] variant %s starting", task_index, variant.name)
+            results.append(
+                run(variant, rank_offset, local_gpus, world_size, master_host, base_port + 1 + offset, log_dir)
+            )
+            logger.info("[task %s] variant %s finished pass=%s", task_index, variant.name, results[-1]["pass"])
 
-    if coordinator:
-        ctx.registry.unregister(endpoint_id)
     report = {
         "job": {
             "task_index": task_index,
@@ -610,24 +612,21 @@ def run_gate(args: argparse.Namespace) -> None:
         for variant in build_variants(extra_env=args.env_pairs or None)
         if variant.name in ("baseline_default_env", "env_overlay")
     ]
-    if task_index == 0:
-        base_port = allocate_port_block(len(gate_variants))
-        master_host = job_info.advertise_host
-        endpoint_id = ctx.registry.register(endpoint_name, f"{master_host}:{base_port}")
-        logger.info("gate: registered rendezvous %s at %s:%d", endpoint_name, master_host, base_port)
-    else:
-        master_host, base_port = wait_for_rendezvous(ctx.resolver, endpoint_name)
-        logger.info("gate: resolved rendezvous at %s:%d", master_host, base_port)
+    with ExitStack() as leases:
+        if task_index == 0:
+            master_host = job_info.advertise_host
+            base_port = _publish_rendezvous(leases, ctx.registry, endpoint_name, master_host, len(gate_variants))
+        else:
+            master_host, base_port = wait_for_rendezvous(ctx.resolver, endpoint_name)
+            logger.info("gate: resolved rendezvous at %s:%d", master_host, base_port)
 
-    log_dir = RESULT_DIR / f"gate-task{task_index}"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    rank_offset = task_index if args.gate_coverage == "first-pair" else task_index * local_gpus
-    results = []
-    run = partial(run_variant, pynccl_init=args.pynccl_init, allow_interhost_nvlink=args.gate_single_nvlink_domain)
-    for offset, variant in enumerate(gate_variants):
-        results.append(run(variant, rank_offset, local_gpus, world_size, master_host, base_port + offset, log_dir))
-    if task_index == 0:
-        ctx.registry.unregister(endpoint_id)
+        log_dir = RESULT_DIR / f"gate-task{task_index}"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        rank_offset = task_index if args.gate_coverage == "first-pair" else task_index * local_gpus
+        results = []
+        run = partial(run_variant, pynccl_init=args.pynccl_init, allow_interhost_nvlink=args.gate_single_nvlink_domain)
+        for offset, variant in enumerate(gate_variants):
+            results.append(run(variant, rank_offset, local_gpus, world_size, master_host, base_port + offset, log_dir))
     verdicts = [result["interconnect_verdict"] for result in results]
     verdict = next((item for item in verdicts if item != "pass"), "pass")
     report = {

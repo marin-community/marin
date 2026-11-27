@@ -55,7 +55,7 @@ class ServiceSpec:
     """Region pin (required — a service is never scheduled "anywhere")."""
 
     port: str
-    """Named Iris port the service binds (workers inject ``IRIS_PORT_<NAME>``)."""
+    """Named Iris port the service binds (workers inject ``PORT_<NAME>``)."""
 
     endpoint: str
     """Cluster-global endpoint the service registers (leading slash, e.g. ``/ducky``);

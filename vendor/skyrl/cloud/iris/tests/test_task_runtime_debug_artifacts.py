@@ -23,9 +23,6 @@ from marinskyrl.environment_contract import (
     write_process_manifest,
 )
 
-pytestmark = pytest.mark.usefixtures("iris_ray_ports")
-
-
 @pytest.mark.parametrize("rank", [0, 1])
 @pytest.mark.parametrize(
     ("mode", "explicit_root"),
@@ -68,9 +65,9 @@ def test_supervisors_share_worker_diagnostics_with_uploader(
         options = {"debug_mode": mode} if mode is DebugMode.OFF else {}
         with pytest.raises(subprocess.CalledProcessError):
             if rank == 0:
-                task_runtime.run_head(args, tmp_path / "config.yaml", **options)
+                task_runtime.run_head(args, tmp_path / "config.yaml", ports=iris_ray_ports, **options)
             else:
-                task_runtime.run_worker(args, **options)
+                task_runtime.run_worker(args, ports=iris_ray_ports, **options)
         trainer = dict(debug_mode=mode.value, ckpt_path=str(tmp_path / "ckpt"), collective_phase_diagnostics=False)
         worker_environment = dict(os.environ)
         EnvVarManager.from_config({"trainer": trainer}).apply_to_process(

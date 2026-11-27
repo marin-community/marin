@@ -65,22 +65,16 @@ def test_bootstrap_renders_versioned_runsc_url() -> None:
         assert re.match(r"https://storage\.googleapis\.com/gvisor/releases/release/\d{8}\.\d+/", url), url
 
 
-def test_bootstrap_keeps_task_port_range_below_ephemeral_floor() -> None:
-    """Task named ports must be excluded from kernel ephemeral assignment: a
-    task binds its allocated port only after container setup, and an outbound
-    socket handed that port in the window kills the task with EADDRINUSE
-    (#7392). The default range sits below the ephemeral floor, and the
-    reservation list pins it as defense-in-depth."""
-    script = build_worker_bootstrap_script(_worker_config())
-    assert 'sysctl -w net.ipv4.ip_local_port_range="14000 65535"' in script
-    assert 'sysctl -w net.ipv4.ip_local_reserved_ports="8081,8431,8470-8482,12000-13999"' in script
-
-
-def test_bootstrap_reserves_configured_task_port_range() -> None:
-    """A cluster overriding port_range into the ephemeral span is still
-    protected by the reservation (end bound exclusive, like PortAllocator)."""
-    script = build_worker_bootstrap_script(_worker_config(port_range="20000-25000"))
-    assert 'sysctl -w net.ipv4.ip_local_reserved_ports="8081,8431,8470-8482,20000-24999"' in script
+@pytest.mark.parametrize("custom_task_range", [False, True])
+def test_bootstrap_reserves_shared_and_configured_port_ranges(custom_task_range: bool) -> None:
+    overrides = {"port_range": "25000-26000"} if custom_task_range else {}
+    script = build_worker_bootstrap_script(_worker_config(**overrides))
+    reservation = re.search(r'sysctl -w net\.ipv4\.ip_local_reserved_ports="([^"]+)"', script)
+    assert reservation is not None
+    reserved = set(reservation[1].split(","))
+    assert {"20000-23999", "10000-10001", "8081", "8431", "8470-8482"} <= reserved
+    if custom_task_range:
+        assert "25000-25999" in reserved
 
 
 def test_bootstrap_rejects_malformed_task_port_range() -> None:

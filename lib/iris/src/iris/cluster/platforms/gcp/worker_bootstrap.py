@@ -329,20 +329,9 @@ if command -v snap &> /dev/null; then
 fi
 export PATH="$PATH:/snap/bin"
 
-# Tune network stack for high-connection workloads (#3066).
-# Expands ephemeral port range, allows reuse of TIME_WAIT sockets,
-# and raises listen backlog for actor servers handling 1000s of workers.
-# The ephemeral floor stays above every port the cluster statically allocates:
-# the fixed service ports (TPU/JAX 8081/8431/8470-8482, iris 10000/10001) and
-# the task named-port range (default 12000-13999). A statically allocated port
-# inside the ephemeral range gets squatted by outbound connections — the TPU
-# trainer crash-looping on "[::]:8431 ... Address already in use" when the
-# floor was 1024, and task binds dying with EADDRINUSE in the window between
-# port allocation and container setup finishing when the task range lived at
-# 30000-40000 (#7392). Host-network task containers share this netns, so this
-# covers them. ip_local_reserved_ports pins the same ports as defense-in-depth
-# for clusters that override the task range back into the ephemeral span; it
-# only exempts ports from automatic assignment, explicit binds are unaffected.
+# Widen the ephemeral range for high-connection workloads (#3066). The
+# reservation keeps outbound connections from taking a task port while the
+# host-network container starts (#7392).
 sudo sysctl -w net.ipv4.ip_local_port_range="{{ port_range }}"
 sudo sysctl -w net.ipv4.ip_local_reserved_ports="{{ reserved_ports }}"
 sudo sysctl -w net.ipv4.tcp_tw_reuse=1
@@ -498,12 +487,9 @@ def build_worker_bootstrap_script(
         indent=2,
     )
 
-    # Reserve the task named-port range from kernel ephemeral assignment (see
-    # the sysctl comment in the template). The range's end bound is exclusive
-    # (PortAllocator scans range(start, end)), so the last reserved port is
-    # end - 1. Parsing validates the configured range and fails the deploy on
-    # a malformed value.
     task_port_start, task_port_end = map(int, worker_config.port_range.split("-"))
+    task_ports = f"{task_port_start}-{task_port_end - 1}"
+    reserved_ports = dict.fromkeys((*RESERVED_HOST_PORTS, task_ports))
 
     return render_template(
         WORKER_BOOTSTRAP_SCRIPT,
@@ -514,7 +500,7 @@ def build_worker_bootstrap_script(
         worker_stop_timeout=WORKER_CONTAINER_STOP_TIMEOUT_SECONDS,
         worker_config_json=worker_config_json,
         port_range=EPHEMERAL_PORT_RANGE,
-        reserved_ports=f"{RESERVED_HOST_PORTS},{task_port_start}-{task_port_end - 1}",
+        reserved_ports=",".join(reserved_ports),
         runsc_version=RUNSC_VERSION,
         egress_network=EGRESS_NETWORK,
         egress_bridge=EGRESS_BRIDGE,

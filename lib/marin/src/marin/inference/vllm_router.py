@@ -7,7 +7,6 @@ import contextlib
 import logging
 import os
 import signal
-import socket
 import subprocess
 import tempfile
 from collections.abc import Callable, Iterator
@@ -15,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import requests
+from rigging.port_lease import lease_tcp_ports
 from rigging.timing import Duration, ExponentialBackoff
 
 from marin.inference.backend import OPENAI_API_SUFFIX
@@ -24,12 +24,6 @@ logger = logging.getLogger(__name__)
 VLLM_ROUTER_VERSION = "0.1.16"
 _ROUTER_SHUTDOWN_TIMEOUT = 10
 _ROUTER_PROBE_TIMEOUT = 5
-
-
-def available_port(host: str) -> int:
-    with socket.socket() as sock:
-        sock.bind((host, 0))
-        return int(sock.getsockname()[1])
 
 
 @dataclass(frozen=True)
@@ -67,83 +61,87 @@ def vllm_router(
     """
     if data_parallel_size < 1:
         raise ValueError("router data parallel size must be positive")
-    port = available_port(host) if port is None else port
-    log_dir = Path(tempfile.mkdtemp(prefix="vllm_router_"))
-    command = (
-        "uvx",
-        "--python",
-        WORKER_PYTHON_VERSION,
-        "--from",
-        f"vllm-router=={VLLM_ROUTER_VERSION}",
-        "vllm-router",
-        "--host",
-        host,
-        "--port",
-        str(port),
-        "--worker-urls",
-        worker_url,
-        "--policy",
-        "consistent_hash",
-        "--intra-node-data-parallel-size",
-        str(data_parallel_size),
-        "--request-timeout-secs",
-        str(config.request_timeout_seconds),
-        "--disable-retries",
-        "--worker-startup-timeout-secs",
-        str(max(1, int(startup_timeout_seconds))),
-        "--worker-startup-check-interval",
-        "1",
-        # Router metrics are separate from vLLM worker metrics. Avoid the upstream
-        # fixed default port so simultaneous local services cannot collide.
-        "--prometheus-port",
-        str(available_port(host)),
-        "--prometheus-host",
-        host,
-        "--log-dir",
-        str(log_dir),
-    )
-    logger.info("Starting vLLM Router %s: %s; logs: %s", VLLM_ROUTER_VERSION, command, log_dir)
-    environment = dict(os.environ)
-    # A caller's vLLM/plugin constraints must not enter the router's environment.
-    environment.pop("UV_CONSTRAINT", None)
-    environment.pop("UV_OVERRIDE", None)
-    process = subprocess.Popen(command, env=environment, start_new_session=True)
-    router = RunningVllmRouter(f"http://{host}:{port}{OPENAI_API_SUFFIX}", process, log_dir, command)
-    try:
+    dynamic_count = 2 if port is None else 1
+    excluded = {port} if port is not None else ()
+    with lease_tcp_ports(dynamic_count, excluded=excluded) as ports:
+        port = ports[0] if port is None else port
+        metrics_port = ports[-1]
+        log_dir = Path(tempfile.mkdtemp(prefix="vllm_router_"))
+        command = (
+            "uvx",
+            "--python",
+            WORKER_PYTHON_VERSION,
+            "--from",
+            f"vllm-router=={VLLM_ROUTER_VERSION}",
+            "vllm-router",
+            "--host",
+            host,
+            "--port",
+            str(port),
+            "--worker-urls",
+            worker_url,
+            "--policy",
+            "consistent_hash",
+            "--intra-node-data-parallel-size",
+            str(data_parallel_size),
+            "--request-timeout-secs",
+            str(config.request_timeout_seconds),
+            "--disable-retries",
+            "--worker-startup-timeout-secs",
+            str(max(1, int(startup_timeout_seconds))),
+            "--worker-startup-check-interval",
+            "1",
+            # Router metrics are separate from vLLM worker metrics. Avoid the upstream
+            # fixed default port so simultaneous local services cannot collide.
+            "--prometheus-port",
+            str(metrics_port),
+            "--prometheus-host",
+            host,
+            "--log-dir",
+            str(log_dir),
+        )
+        logger.info("Starting vLLM Router %s: %s; logs: %s", VLLM_ROUTER_VERSION, command, log_dir)
+        environment = dict(os.environ)
+        # A caller's vLLM/plugin constraints must not enter the router's environment.
+        environment.pop("UV_CONSTRAINT", None)
+        environment.pop("UV_OVERRIDE", None)
+        process = subprocess.Popen(command, env=environment, start_new_session=True)
+        router = RunningVllmRouter(f"http://{host}:{port}{OPENAI_API_SUFFIX}", process, log_dir, command)
+        try:
 
-        def ready() -> bool:
-            check_dependencies()
-            router.check_alive()
+            def ready() -> bool:
+                check_dependencies()
+                router.check_alive()
+                try:
+                    root = router.server_url.removesuffix(OPENAI_API_SUFFIX)
+                    return (
+                        requests.get(f"{worker_url}/health", timeout=_ROUTER_PROBE_TIMEOUT).status_code == 200
+                        and requests.get(f"{root}/health", timeout=_ROUTER_PROBE_TIMEOUT).status_code == 200
+                        and requests.get(f"{router.server_url}/models", timeout=_ROUTER_PROBE_TIMEOUT).status_code == 200
+                    )
+                except (requests.ConnectionError, requests.Timeout):
+                    return False
+
             try:
-                root = router.server_url.removesuffix(OPENAI_API_SUFFIX)
-                return (
-                    requests.get(f"{worker_url}/health", timeout=_ROUTER_PROBE_TIMEOUT).status_code == 200
-                    and requests.get(f"{root}/health", timeout=_ROUTER_PROBE_TIMEOUT).status_code == 200
-                    and requests.get(f"{router.server_url}/models", timeout=_ROUTER_PROBE_TIMEOUT).status_code == 200
+                ExponentialBackoff(initial=0.1, maximum=2).wait_until_or_raise(
+                    ready,
+                    timeout=Duration.from_seconds(startup_timeout_seconds),
+                    error_message=f"vLLM Router did not become ready; logs: {log_dir}",
                 )
-            except (requests.ConnectionError, requests.Timeout):
-                return False
-
-        try:
-            ExponentialBackoff(initial=0.1, maximum=2).wait_until_or_raise(
-                ready,
-                timeout=Duration.from_seconds(startup_timeout_seconds),
-                error_message=f"vLLM Router did not become ready; logs: {log_dir}",
-            )
-        except Exception:
-            logger.error("vLLM Router startup failed; logs: %s\n%s", log_dir, router.logs_tail())
-            raise
-        yield router
-    finally:
-        # Signal the session even if uvx's parent already exited. A surviving
-        # Python/Rust child must not retain the listener after a failed launch.
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGTERM)
-        try:
-            process.wait(timeout=_ROUTER_SHUTDOWN_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            logger.warning("vLLM Router did not stop gracefully; killing its process group")
+            except Exception:
+                logger.error("vLLM Router startup failed; logs: %s\n%s", log_dir, router.logs_tail())
+                raise
+            yield router
         finally:
+            # Signal the session even if uvx's parent already exited. A surviving
+            # Python/Rust child must not retain the listener after a failed launch.
             with contextlib.suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
-            process.wait(timeout=_ROUTER_SHUTDOWN_TIMEOUT)
+                os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=_ROUTER_SHUTDOWN_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                logger.warning("vLLM Router did not stop gracefully; killing its process group")
+            finally:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=_ROUTER_SHUTDOWN_TIMEOUT)

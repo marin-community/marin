@@ -278,8 +278,8 @@ def test_empty_user_env_omitted():
 
 def test_ports_set_to_zero():
     env = _common_env(_make_req(ports=["coordinator", "debug"]))
-    assert env["IRIS_PORT_COORDINATOR"] == "0"
-    assert env["IRIS_PORT_DEBUG"] == "0"
+    assert env["PORT_COORDINATOR"] == "0"
+    assert env["PORT_DEBUG"] == "0"
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,9 @@ import socket
 from typing import Dict, Optional, Type, List, Any, Callable
 from skyrl_train.utils.progress import configure_progress, tqdm
 from marinskyrl.runtime_options import R3Transport
+from rigging.port_lease import lease_tcp_port
 from collections import defaultdict
+from contextlib import ExitStack
 
 import ray
 import torch
@@ -124,7 +126,8 @@ class DistributedTorchRayActor:
         self._rank = rank
         self._local_rank = local_rank
         self._master_addr = self._get_current_node_ip() if rank == 0 else None
-        self._master_port = self._get_free_port() if rank == 0 else None
+        self._master_port_lease = ExitStack()
+        self._master_port = self._master_port_lease.enter_context(lease_tcp_port()) if rank == 0 else None
         os.environ["WORLD_SIZE"] = str(self._world_size)
         os.environ["RANK"] = str(self._rank)
         # Device pinning. `LOCAL_RANK` is consumed by every strategy's
@@ -263,14 +266,11 @@ class DistributedTorchRayActor:
     def get_ray_node_id(self):
         return ray.get_runtime_context().get_node_id()
 
-    @staticmethod
-    def _get_free_port():
-        with socket.socket() as sock:
-            sock.bind(("", 0))
-            return sock.getsockname()[1]
-
     def get_master_addr_port(self):
         return self._master_addr, self._master_port
+
+    def release_master_port(self):
+        self._master_port_lease.close()
 
 
 def log_r3_resident_set(rank: int, data: TrainingInputBatch) -> None:
@@ -380,9 +380,7 @@ class Worker(DistributedTorchRayActor):
 
         if torch.distributed.get_rank() == 0:
             # Debug: understand where master_addr comes from
-            import socket as sock_module
-
-            hostname = sock_module.gethostname()
+            hostname = socket.gethostname()
             global_node = ray._private.worker._global_node
             global_node_ip = global_node.node_ip_address if global_node else "None"
 
@@ -392,51 +390,49 @@ class Worker(DistributedTorchRayActor):
             logging.info(f"[weight-sync] _global_node.node_ip_address={global_node_ip}")
             logging.info(f"[weight-sync] get_node_ip_address()={master_addr}")
 
-            with socket.socket() as sock:
-                sock.bind(("", 0))
-                master_port = sock.getsockname()[1]
-            logging.info(f"[weight-sync] Using master_addr={master_addr}, master_port={master_port}")
+            with lease_tcp_port() as master_port:
+                logging.info(f"[weight-sync] Using master_addr={master_addr}, master_port={master_port}")
 
-            num_inference_engines, tensor_parallel_size, pipeline_parallel_size, data_parallel_size = (
-                self.cfg.generator.num_inference_engines,
-                self.cfg.generator.inference_engine_tensor_parallel_size,
-                self.cfg.generator.inference_engine_pipeline_parallel_size,
-                self.cfg.generator.inference_engine_data_parallel_size,
-            )
-            world_size = num_inference_engines * tensor_parallel_size * pipeline_parallel_size * data_parallel_size + 1
-
-            backend = self.cfg.generator.weight_sync_backend
-
-            override_existing = False if self.cfg.generator.override_existing_update_group == "disable" else True
-            group_name = "skyrl"
-            self._model_update_group_name = group_name
-
-            tasks = []
-            tasks.append(
-                inference_engine_client.init_weight_update_communicator(
-                    master_addr=master_addr,
-                    master_port=master_port,
-                    rank_offset=1,
-                    world_size=world_size,
-                    group_name=group_name,
-                    backend=backend,
-                    override_existing=override_existing,
+                num_inference_engines, tensor_parallel_size, pipeline_parallel_size, data_parallel_size = (
+                    self.cfg.generator.num_inference_engines,
+                    self.cfg.generator.inference_engine_tensor_parallel_size,
+                    self.cfg.generator.inference_engine_pipeline_parallel_size,
+                    self.cfg.generator.inference_engine_data_parallel_size,
                 )
-            )
+                world_size = num_inference_engines * tensor_parallel_size * pipeline_parallel_size * data_parallel_size + 1
 
-            tasks.append(
-                asyncio.to_thread(
-                    init_custom_process_group,
-                    backend=backend,
-                    init_method=get_tcp_url(master_addr, master_port),
-                    world_size=world_size,
-                    rank=0,
-                    group_name=group_name,
-                    pg_options=self._weight_sync_pg_options,
+                backend = self.cfg.generator.weight_sync_backend
+
+                override_existing = False if self.cfg.generator.override_existing_update_group == "disable" else True
+                group_name = "skyrl"
+                self._model_update_group_name = group_name
+
+                tasks = []
+                tasks.append(
+                    inference_engine_client.init_weight_update_communicator(
+                        master_addr=master_addr,
+                        master_port=master_port,
+                        rank_offset=1,
+                        world_size=world_size,
+                        group_name=group_name,
+                        backend=backend,
+                        override_existing=override_existing,
+                    )
                 )
-            )
-            results = await asyncio.gather(*tasks)
-            self._model_update_group = results[-1]
+
+                tasks.append(
+                    asyncio.to_thread(
+                        init_custom_process_group,
+                        backend=backend,
+                        init_method=get_tcp_url(master_addr, master_port),
+                        world_size=world_size,
+                        rank=0,
+                        group_name=group_name,
+                        pg_options=self._weight_sync_pg_options,
+                    )
+                )
+                results = await asyncio.gather(*tasks)
+                self._model_update_group = results[-1]
 
             # # Register signal handlers for termination only on rank 0
             # NOTE (sumanthrh): This doesn't work yet, and is thus commented out.
@@ -686,6 +682,7 @@ class PPORayActorGroup:
         # Initialize process group
         logger.info("Initializing process group for RayActorGroup")
         ray.get([actor.init_worker_process_group.remote(master_addr, master_port) for actor in self._actor_handlers])
+        ray.get(master_actor.release_master_port.remote())
         logger.info("Initialized process group for RayActorGroup")
         self.actor_infos = [ActorInfo(actor, ray.get(actor.get_mesh_rank.remote())) for actor in self._actor_handlers]
         logger.info(f"Mesh Ranks: {[actor_info.rank for actor_info in self.actor_infos]}")

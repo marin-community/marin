@@ -8,11 +8,8 @@ from cloud.iris.ray_ports import RayPort
 
 
 @pytest.fixture
-def iris_ray_ports(monkeypatch):
-    ports = {port: 12000 + index for index, port in enumerate(RayPort)}
-    for port, value in ports.items():
-        monkeypatch.setenv(f"IRIS_PORT_{port.value.upper()}", str(value))
-    return ports
+def iris_ray_ports():
+    return {port: 12000 + index for index, port in enumerate(RayPort)}
 
 
 @pytest.fixture

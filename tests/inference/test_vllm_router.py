@@ -32,10 +32,11 @@ from marin.inference.config import (
 from marin.inference.dashboard_server import bind_serving_socket, serve_app_background
 from marin.inference.iris import IrisServiceConfig, run_iris_service
 from marin.inference.serve import local_inference
-from marin.inference.vllm_router import available_port, vllm_router
+from marin.inference.vllm_router import vllm_router
 from marin.inference.vllm_server import VllmEnvironment
 from marin.testing.inference.fake_vllm_server import FakeVllmLauncher
 from rigging.filesystem.storage_path import StoragePath
+from rigging.port_lease import lease_tcp_port
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
@@ -124,8 +125,14 @@ def _assert_native_rank_affinity(url, rank_count):
     assert ranks == set(range(rank_count))
 
 
-def test_router_later_turns_reach_the_same_dp_rank(router_worker):
-    port = available_port("127.0.0.1")
+@pytest.fixture
+def router_port():
+    with lease_tcp_port() as port:
+        yield port
+
+
+def test_router_later_turns_reach_the_same_dp_rank(router_worker, router_port):
+    port = router_port
     with vllm_router(
         VllmRouterConfig(), router_worker.url, data_parallel_size=4, port=port, startup_timeout_seconds=30
     ) as router:
@@ -152,10 +159,10 @@ def test_router_does_not_retry_a_failed_generation(router_worker):
 
 @pytest.mark.parametrize("workload_error", [False, True])
 def test_router_forced_shutdown_reaps_the_process_and_preserves_caller_errors(
-    router_worker, monkeypatch, workload_error
+    router_worker, monkeypatch, workload_error, router_port
 ):
     monkeypatch.setattr("marin.inference.vllm_router._ROUTER_SHUTDOWN_TIMEOUT", 1)
-    port = available_port("127.0.0.1")
+    port = router_port
     expected = pytest.raises(RuntimeError, match="workload failed") if workload_error else nullcontext()
     with expected:
         with vllm_router(
@@ -182,14 +189,15 @@ def test_router_client_disconnect_cancels_the_worker_stream(router_worker):
         )
 
 
-def test_router_never_publishes_an_endpoint_with_an_unavailable_worker():
-    missing = f"http://127.0.0.1:{available_port('127.0.0.1')}"
-    port = available_port("127.0.0.1")
-    with pytest.raises((RuntimeError, TimeoutError)):
-        with vllm_router(VllmRouterConfig(), missing, data_parallel_size=1, port=port, startup_timeout_seconds=2):
-            pytest.fail("published an endpoint with an unavailable worker")
-    with pytest.raises(requests.ConnectionError):
-        requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
+def test_router_never_publishes_an_endpoint_with_an_unavailable_worker(router_port):
+    with lease_tcp_port() as worker_port:
+        missing = f"http://127.0.0.1:{worker_port}"
+        port = router_port
+        with pytest.raises((RuntimeError, TimeoutError)):
+            with vllm_router(VllmRouterConfig(), missing, data_parallel_size=1, port=port, startup_timeout_seconds=2):
+                pytest.fail("published an endpoint with an unavailable worker")
+        with pytest.raises(requests.ConnectionError):
+            requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
 
 
 @pytest.mark.parametrize(
@@ -211,12 +219,12 @@ def test_router_never_publishes_an_endpoint_with_an_unavailable_worker():
     ],
 )
 def test_local_inference_owns_router_and_worker_lifetimes_with_separate_metrics(
-    monkeypatch, tmp_path, native_args, expected_dp
+    monkeypatch, tmp_path, native_args, expected_dp, router_port
 ):
     # The real router must not inherit the serving runtime's dependency constraints.
     monkeypatch.setenv("UV_CONSTRAINT", str(tmp_path / "vllm-only-constraints.txt"))
     monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _: FakeVllmLauncher("serve"))
-    port = available_port("127.0.0.1")
+    port = router_port
     with local_inference(
         ServedModelConfig(weights="fake", chat_template_content="{{ messages }}"),
         VllmEngineConfig(router=VllmRouterConfig(), extra_args=native_args),

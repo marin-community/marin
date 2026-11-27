@@ -35,12 +35,13 @@ import socket
 import threading
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Iterator
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 
 import httpx
 import shellsim
 import uvicorn
+from rigging.port_lease import configured_tcp_port
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -272,18 +273,16 @@ def build_dashboard_app(
     return app
 
 
-def bind_serving_socket(host: str, port: int) -> socket.socket:
-    """Bind a listening socket up front so the port is claimed before serving.
-
-    Iris allocates the task's named port from a range (default 12000-13999)
-    kept below the kernel ephemeral floor so no other socket can be assigned
-    it (marin-community/marin#7392). Binding before the backend starts claims
-    the port ahead of any listener the backend might open.
-    """
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind((host, port))
-    return sock
+def bind_serving_socket(host: str, port: int = 0, *, name: str | None = None) -> socket.socket:
+    """Bind a socket before starting the server, honoring a named allocation."""
+    if name is not None:
+        port = configured_tcp_port(name) or port
+    with ExitStack() as cleanup:
+        sock = cleanup.enter_context(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((host, port))
+        cleanup.pop_all()
+        return sock
 
 
 @dataclass(frozen=True)
@@ -303,6 +302,7 @@ def serve_app_background(
     *,
     name: str = "serve-dashboard",
     start_timeout_seconds: float = 30.0,
+    log_level: str = "info",
 ) -> Iterator[BackgroundServer]:
     """Run ``app`` under uvicorn on an already-bound ``sock`` in a daemon thread.
 
@@ -310,7 +310,7 @@ def serve_app_background(
     be claimed before any competing socket in the process can take the port.
     """
     host, port = sock.getsockname()[:2]
-    config = uvicorn.Config(app, log_level="info", log_config=None, workers=1)
+    config = uvicorn.Config(app, log_level=log_level, log_config=None, workers=1)
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, name=name, daemon=True)
     logger.info("Starting %s on %s:%d", name, host, port)

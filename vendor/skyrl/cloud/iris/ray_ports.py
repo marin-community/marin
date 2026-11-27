@@ -3,10 +3,11 @@
 
 """Ray endpoints allocated by Iris for each task on a shared host."""
 
-import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from enum import StrEnum
 
-from iris.cluster.platforms.types import find_free_port
+from rigging.port_lease import configured_tcp_port, lease_tcp_ports
 
 
 class RayPort(StrEnum):
@@ -21,22 +22,14 @@ class RayPort(StrEnum):
     OBJECT_MANAGER = "ray_object_manager"
 
 
-def allocated_ray_port(port: RayPort) -> int:
-    """Return the task's required scheduler allocation for a Ray endpoint."""
-    return int(os.environ[f"IRIS_PORT_{port.value.upper()}"])
-
-
-def resolve_ray_ports() -> None:
-    """Resolve Iris's task-allocated port placeholders before Ray bootstrap."""
-    ports = {port: allocated_ray_port(port) for port in RayPort}
-    reserved = set(ports.values()) - {0}
-    for port, value in ports.items():
-        if value:
-            continue
-        # Kubernetes supplies zero placeholders; worker-backed tasks supply
-        # concrete allocations. Use the same kernel selection as Iris's JAX launcher.
-        value = find_free_port()
-        while value in reserved:
-            value = find_free_port()
-        reserved.add(value)
-        os.environ[f"IRIS_PORT_{port.value.upper()}"] = str(value)
+@contextmanager
+def resolve_ray_ports() -> Iterator[dict[RayPort, int]]:
+    """Yield the task's Ray endpoint ports and hold leases for unassigned endpoints."""
+    ports = {port: configured_tcp_port(port) for port in RayPort}
+    pending = [port for port, value in ports.items() if not value]
+    if not pending:
+        yield ports
+        return
+    with lease_tcp_ports(len(pending), excluded=set(ports.values())) as values:
+        ports.update(zip(pending, values, strict=True))
+        yield ports

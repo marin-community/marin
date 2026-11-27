@@ -27,7 +27,7 @@ from huggingface_hub.utils import LocalEntryNotFoundError
 from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax import Axis
 from haliax.state_dict import ModuleWithStateDictSerialization, to_torch_compatible_state_dict
-from iris.cluster.platforms.types import find_free_port
+from rigging.port_lease import lease_tcp_port
 from iris.cluster.types import Entrypoint
 from iris.jax.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV, MultiGpuHook
 from jax.experimental import multihost_utils
@@ -433,28 +433,27 @@ def _export_on_cpu_rank(coordinator, destination, expected):
 
 def test_hf_shard_writer_failure_keeps_two_cpu_ranks_matched(tmp_path):
     expected = np.arange(24, dtype=np.float32).reshape(4, 3, 2)
-    entrypoint = Entrypoint.from_callable(
-        _export_on_cpu_rank, f"127.0.0.1:{find_free_port()}", str(tmp_path), expected
-    )
-    for name, contents in entrypoint.workdir_files.items():
-        (tmp_path / name).write_bytes(contents)
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if key.lower() not in ("http_proxy", "https_proxy", "all_proxy")
-    }
-    env.update(
-        JAX_PLATFORMS="cpu",
-        XLA_FLAGS="--xla_force_host_platform_device_count=1",
-        IRIS_PYTHON=sys.executable,
-        IRIS_WORKDIR=str(tmp_path),
-    )
-    command = MultiGpuHook(nproc=2).wrap(entrypoint.command)
-    with subprocess.Popen([sys.executable, *command[1:]], env=env, start_new_session=True) as process:
-        try:
-            assert process.wait(timeout=45) == 0
-        finally:
-            terminate_process_group(process)
+    with lease_tcp_port() as port:
+        entrypoint = Entrypoint.from_callable(_export_on_cpu_rank, f"127.0.0.1:{port}", str(tmp_path), expected)
+        for name, contents in entrypoint.workdir_files.items():
+            (tmp_path / name).write_bytes(contents)
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key.lower() not in ("http_proxy", "https_proxy", "all_proxy")
+        }
+        env.update(
+            JAX_PLATFORMS="cpu",
+            XLA_FLAGS="--xla_force_host_platform_device_count=1",
+            IRIS_PYTHON=sys.executable,
+            IRIS_WORKDIR=str(tmp_path),
+        )
+        command = MultiGpuHook(nproc=2).wrap(entrypoint.command)
+        with subprocess.Popen([sys.executable, *command[1:]], env=env, start_new_session=True) as process:
+            try:
+                assert process.wait(timeout=45) == 0
+            finally:
+                terminate_process_group(process)
     for shard in range(2):
         actual = safetensors.numpy.load_file(tmp_path / f"model-{shard}.safetensors")
         assert set(actual) == {f"expert.{i}" for i in range(4)}

@@ -8,15 +8,17 @@ import shutil
 import signal
 import subprocess
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from http.client import HTTPConnection
 from pathlib import Path
 
 from cheroot import wsgi
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.platforms.types import find_free_port
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.port_lease import lease_tcp_port
 
 from infra.xprof.config import BACKEND_HOST, ENDPOINT_NAME, PORT_NAME, PROXY_TIMEOUT_SECONDS, PUBLIC_PATH
 from infra.xprof.gateway import ProfileCache, ProfileStageManager, XprofGateway
@@ -45,40 +47,54 @@ def _wait_for_backend(process: subprocess.Popen, port: int) -> None:
     raise TimeoutError("xprof-rs did not start")
 
 
+@contextmanager
+def _serve_backend(binary: Path, cache_dir: Path) -> Iterator[int]:
+    """Yield the xprof-rs port after the backend is ready."""
+    with lease_tcp_port() as backend_port:
+        backend = subprocess.Popen(
+            [
+                str(binary),
+                "--logdir",
+                str(cache_dir),
+                "--host",
+                BACKEND_HOST,
+                "--port",
+                str(backend_port),
+                "--hide_capture_profile_button",
+                "--enable_tab_name_label",
+            ]
+        )
+        try:
+            _wait_for_backend(backend, backend_port)
+            yield backend_port
+        finally:
+            backend.terminate()
+            try:
+                backend.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                backend.kill()
+                backend.wait()
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
+    ctx = iris_ctx()
+    job_info = get_job_info()
+    if job_info is None:
+        raise RuntimeError("XProf must run inside an Iris job")
 
     workdir = Path(os.environ["IRIS_WORKDIR"])
     cache_dir = workdir / "xprof-cache"
     cache = ProfileCache(cache_dir)
-    backend_port = find_free_port()
     binary = workdir / "xprof-rs"
     with lzma.open(Path.cwd() / XPROF_RS_COMPRESSED_PATH, "rb") as source, binary.open("wb") as target:
         shutil.copyfileobj(source, target)
     binary.chmod(0o755)
-    backend = subprocess.Popen(
-        [
-            str(binary),
-            "--logdir",
-            str(cache_dir),
-            "--host",
-            BACKEND_HOST,
-            "--port",
-            str(backend_port),
-            "--hide_capture_profile_button",
-            "--enable_tab_name_label",
-        ]
-    )
-    try:
-        _wait_for_backend(backend, backend_port)
+
+    with _serve_backend(binary, cache_dir) as backend_port, lease_tcp_port(name=PORT_NAME) as port:
         app = XprofGateway(RustProxy(backend_port), ProfileStageManager(cache), PUBLIC_PATH)
         try:
-            ctx = iris_ctx()
-            job_info = get_job_info()
-            if job_info is None:
-                raise RuntimeError("No Iris job info available; XProf must run inside an Iris job")
-            port = ctx.get_port(PORT_NAME) or find_free_port()
             address = f"http://{job_info.advertise_host}:{port}"
             endpoint_id = ctx.registry.register(
                 ENDPOINT_NAME,
@@ -99,13 +115,6 @@ def main() -> None:
                 ctx.registry.unregister(endpoint_id)
         finally:
             app.shutdown()
-    finally:
-        backend.terminate()
-        try:
-            backend.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            backend.kill()
-            backend.wait()
 
 
 if __name__ == "__main__":

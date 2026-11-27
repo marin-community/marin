@@ -15,6 +15,7 @@ from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from rigging.port_lease import lease_tcp_port
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from iris.cluster.config import ControllerVmConfig, GcpControllerConfig, IrisClusterConfig, SshConfig
@@ -24,7 +25,6 @@ from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.types import (
     Labels,
     default_stop_all,
-    find_free_port,
     wait_for_port,
 )
 from iris.cluster.platforms.vm_lifecycle import DEFAULT_CONTROLLER_PORT
@@ -277,41 +277,39 @@ def _gcp_tunnel(
     effective_service_account = ssh_impersonate_service_account(ssh_config)
     _check_gcloud_ssh_key()
 
-    if local_port is None:
-        local_port = find_free_port(start=10000)
+    with lease_tcp_port(local_port or 0) as local_port:
+        labels = Labels(label_prefix)
+        vms = gcp_service.vm_list(zones=[], labels={labels.iris_controller: "true"})
+        running = [vm for vm in vms if vm.status == "RUNNING"]
+        if not running:
+            raise RuntimeError(f"No controller VM found (label={labels.iris_controller}=true, project={project})")
+        vm = running[0]
 
-    labels = Labels(label_prefix)
-    vms = gcp_service.vm_list(zones=[], labels={labels.iris_controller: "true"})
-    running = [vm for vm in vms if vm.status == "RUNNING"]
-    if not running:
-        raise RuntimeError(f"No controller VM found (label={labels.iris_controller}=true, project={project})")
-    vm = running[0]
+        logger.info("Establishing SSH tunnel to %s (zone=%s)...", vm.name, vm.zone)
 
-    logger.info("Establishing SSH tunnel to %s (zone=%s)...", vm.name, vm.zone)
+        proc = retry_with_backoff(
+            lambda: _establish_tunnel(
+                project=project,
+                zone=vm.zone,
+                vm_name=vm.name,
+                remote_port=remote_port,
+                local_port=local_port,
+                effective_service_account=effective_service_account,
+                timeout=timeout,
+            ),
+            retryable=lambda e: isinstance(e, RuntimeError) and _is_transient_ssh_error(str(e)),
+            max_attempts=3,
+            backoff=ExponentialBackoff(initial=5.0, maximum=30.0, factor=2.0),
+            operation=f"SSH tunnel to {vm.name}",
+        )
 
-    proc = retry_with_backoff(
-        lambda: _establish_tunnel(
-            project=project,
-            zone=vm.zone,
-            vm_name=vm.name,
-            remote_port=remote_port,
-            local_port=local_port,
-            effective_service_account=effective_service_account,
-            timeout=timeout,
-        ),
-        retryable=lambda e: isinstance(e, RuntimeError) and _is_transient_ssh_error(str(e)),
-        max_attempts=3,
-        backoff=ExponentialBackoff(initial=5.0, maximum=30.0, factor=2.0),
-        operation=f"SSH tunnel to {vm.name}",
-    )
-
-    try:
-        logger.info("Tunnel ready: 127.0.0.1:%d -> %s:%d", local_port, vm.name, remote_port)
-        yield f"http://127.0.0.1:{local_port}"
-    finally:
-        proc.terminate()
         try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+            logger.info("Tunnel ready: 127.0.0.1:%d -> %s:%d", local_port, vm.name, remote_port)
+            yield f"http://127.0.0.1:{local_port}"
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()

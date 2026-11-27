@@ -455,7 +455,7 @@ class WorkerConfig(_Config):
     host: str = "0.0.0.0"
     port: int = 10001
     # Task named-port allocation range (end exclusive); see
-    # DEFAULT_TASK_PORT_RANGE for why it sits below the ephemeral floor.
+    # DEFAULT_TASK_PORT_RANGE for the shared lease range.
     port_range: str = f"{DEFAULT_TASK_PORT_RANGE[0]}-{DEFAULT_TASK_PORT_RANGE[1]}"
     worker_id: str = ""  # auto-generated if empty
     controller_address: str = ""

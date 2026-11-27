@@ -22,6 +22,7 @@ from pathlib import Path
 
 from finelog.client.log_client import Table
 from rigging.credential_store import CredentialRecord, save_credentials
+from rigging.port_lease import lease_tcp_port
 from rigging.timing import Duration
 
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
@@ -49,7 +50,6 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
-from iris.cluster.platforms.types import find_free_port
 from iris.cluster.platforms.vm_lifecycle import ControllerStatus
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import DEFAULT_BACKEND_ID, AcceleratorType
@@ -191,79 +191,79 @@ class LocalCluster:
         state_dir = Path(self._temp_dir.name) / "state"
         state_dir.mkdir()
 
-        port = self._config.controller.local.port or find_free_port()
-        address = f"http://127.0.0.1:{port}"
+        with lease_tcp_port(self._config.controller.local.port) as port:
+            address = f"http://127.0.0.1:{port}"
 
-        db_dir = Path(self._db_dir.name)
-        db = ControllerDB(db_dir=db_dir)
+            db_dir = Path(self._db_dir.name)
+            db = ControllerDB(db_dir=db_dir)
 
-        # Derive auth from config proto so callers never need to wire it manually.
-        # No signing_key_pem: a local cluster mints with an ephemeral in-process
-        # keypair (tokens live only for this process).
-        auth = create_controller_auth(
-            self._config.auth,
-            cluster_name=self._config.name or "iris-local",
-        )
-        if auth.worker_token:
-            self._config.defaults.worker.auth_token = auth.worker_token
+            # Derive auth from config proto so callers never need to wire it manually.
+            # No signing_key_pem: a local cluster mints with an ephemeral in-process
+            # keypair (tokens live only for this process).
+            auth = create_controller_auth(
+                self._config.auth,
+                cluster_name=self._config.name or "iris-local",
+            )
+            if auth.worker_token:
+                self._config.defaults.worker.auth_token = auth.worker_token
 
-        controller_threads = self._threads.create_child("controller") if self._threads else None
-        autoscaler_threads = controller_threads.create_child("autoscaler") if controller_threads else None
+            controller_threads = self._threads.create_child("controller") if self._threads else None
+            autoscaler_threads = controller_threads.create_child("autoscaler") if controller_threads else None
 
-        # The log stack is built before the autoscaler so its provisioning table
-        # is a constructor arg; the Controller owns it and tears it down at stop().
-        log_stack = build_log_stack(
-            log_service_address="",
-            local_log_dir=Path(self._db_dir.name) / "log-server",
-            host="127.0.0.1",
-            worker_token_provider=auth.worker_token_provider,
-        )
+            # The log stack is built before the autoscaler so its provisioning table
+            # is a constructor arg; the Controller owns it and tears it down at stop().
+            log_stack = build_log_stack(
+                log_service_address="",
+                local_log_dir=Path(self._db_dir.name) / "log-server",
+                host="127.0.0.1",
+                worker_token_provider=auth.worker_token_provider,
+            )
 
-        # Autoscaler creates its own temp dirs for worker resources
-        self._autoscaler, self._autoscaler_temp_dir = create_local_autoscaler(
-            self._config,
-            address,
-            threads=autoscaler_threads,
-            provisioning_table=log_stack.provisioning_table,
-        )
+            # Autoscaler creates its own temp dirs for worker resources
+            self._autoscaler, self._autoscaler_temp_dir = create_local_autoscaler(
+                self._config,
+                address,
+                threads=autoscaler_threads,
+                provisioning_table=log_stack.provisioning_table,
+            )
 
-        controller_config = ControllerConfig(
-            host="127.0.0.1",
-            port=port,
-            remote_state_dir=self._config.storage.remote_state_dir or f"file://{state_dir}",
-            cluster_id=self._config.name or DEFAULT_LOCAL_CLUSTER_NAME,
-            local_state_dir=Path(self._db_dir.name),
-            auth_verifier=auth.verifier,
-            auth_provider=auth.provider,
-            auth=auth,
-            autoscaler_evaluation_interval=self._config.defaults.autoscaler.evaluation_interval,
-            # Fast worker-failure detection for local/e2e runs: reaped ~10s
-            # after the last successful reconcile, vs the ~50s production grace.
-            worker_unreachable_grace=Duration.from_seconds(10.0),
-        )
+            controller_config = ControllerConfig(
+                host="127.0.0.1",
+                port=port,
+                remote_state_dir=self._config.storage.remote_state_dir or f"file://{state_dir}",
+                cluster_id=self._config.name or DEFAULT_LOCAL_CLUSTER_NAME,
+                local_state_dir=Path(self._db_dir.name),
+                auth_verifier=auth.verifier,
+                auth_provider=auth.provider,
+                auth=auth,
+                autoscaler_evaluation_interval=self._config.defaults.autoscaler.evaluation_interval,
+                # Fast worker-failure detection for local/e2e runs: reaped ~10s
+                # after the last successful reconcile, vs the ~50s production grace.
+                worker_unreachable_grace=Duration.from_seconds(10.0),
+            )
 
-        # The controller owns liveness and supplies it to the backend's phase
-        # requests; the backend owns only the local provider/autoscaler mechanism.
-        provider = RpcTaskBackend(
-            descriptor=BackendDescriptor(
-                backend_id=DEFAULT_BACKEND_ID,
-                display_name="worker",
-                kind=BackendKind.WORKER,
-                scale_groups=frozenset(self._config.scale_groups),
-                capabilities=frozenset({BackendCapability.WORKER_FLEET, BackendCapability.AUTOSCALER}),
-            ),
-            stub_factory=RpcWorkerStubFactory(),
-            autoscaler=self._autoscaler,
-        )
+            # The controller owns liveness and supplies it to the backend's phase
+            # requests; the backend owns only the local provider/autoscaler mechanism.
+            provider = RpcTaskBackend(
+                descriptor=BackendDescriptor(
+                    backend_id=DEFAULT_BACKEND_ID,
+                    display_name="worker",
+                    kind=BackendKind.WORKER,
+                    scale_groups=frozenset(self._config.scale_groups),
+                    capabilities=frozenset({BackendCapability.WORKER_FLEET, BackendCapability.AUTOSCALER}),
+                ),
+                stub_factory=RpcWorkerStubFactory(),
+                autoscaler=self._autoscaler,
+            )
 
-        self._controller = Controller(
-            config=controller_config,
-            log_stack=log_stack,
-            threads=controller_threads,
-            db=db,
-        )
-        self._controller.register_backend(provider)
-        self._controller.start()
+            self._controller = Controller(
+                config=controller_config,
+                log_stack=log_stack,
+                threads=controller_threads,
+                db=db,
+            )
+            self._controller.register_backend(provider)
+            self._controller.start()
 
         # Auto-login: mint an in-process admin JWT so the local dashboard can open a
         # browser session (the `?session_token=` link). Raw tokens won't work since

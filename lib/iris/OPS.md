@@ -166,11 +166,11 @@ Submit through the federation hub if your CoreWeave token cannot port-forward:
 ```bash
 iris --cluster=marin job run --no-wait --target-cluster=<cw-cluster> \
   --cpu 2 --memory 2GB --disk 32GB --timeout 7200 --job-name my-coordinator \
-  -e IRIS_PORT_JAX 32731 -- python -m experiments.<launcher>
+  -e PORT_JAX 32731 -- python -m experiments.<launcher>
 ```
 
 Size this CPU coordinator separately from the accelerator child jobs launched
-through Fray. Use a unique `IRIS_PORT_JAX` per concurrent gang. The timeout
+through Fray. Use a unique `PORT_JAX` per concurrent gang. The timeout
 includes queueing, and stopping the coordinator stops its children.
 `SchedulingGated` means Kueue has not admitted the gang. See [CoreWeave](docs/coreweave.md).
 

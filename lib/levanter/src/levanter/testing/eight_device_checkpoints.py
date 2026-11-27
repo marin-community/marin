@@ -13,7 +13,6 @@ import contextlib
 import multiprocessing
 import os
 import pathlib
-import socket
 import threading
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
@@ -21,6 +20,7 @@ from tempfile import TemporaryDirectory
 from unittest import mock
 
 import jax
+from rigging.port_lease import lease_tcp_port
 import jax.numpy as jnp
 import numpy as np
 import tensorstore as ts
@@ -108,20 +108,18 @@ def _distributed_process(process_id: int, coordinator: str):
 
 def _run_on_distributed_processes(scenario, *args) -> list:
     """Run ``scenario(process_id, coordinator, *args)`` in one spawned one-CPU-device process per rank."""
-    with socket.socket() as listener:
-        listener.bind((_LOOPBACK_ADDRESS, 0))
-        port = listener.getsockname()[1]
-    coordinator = f"{_LOOPBACK_ADDRESS}:{port}"
+    with lease_tcp_port() as port:
+        coordinator = f"{_LOOPBACK_ADDRESS}:{port}"
 
-    with mock.patch.dict(os.environ, _cpu_device_environment(DISTRIBUTED_PROCESS_COUNT)):
-        with ProcessPoolExecutor(
-            max_workers=DISTRIBUTED_PROCESS_COUNT, mp_context=multiprocessing.get_context("spawn")
-        ) as pool:
-            futures = [
-                pool.submit(scenario, process_id, coordinator, *args)
-                for process_id in range(DISTRIBUTED_PROCESS_COUNT)
-            ]
-            return [future.result() for future in futures]
+        with mock.patch.dict(os.environ, _cpu_device_environment(DISTRIBUTED_PROCESS_COUNT)):
+            with ProcessPoolExecutor(
+                max_workers=DISTRIBUTED_PROCESS_COUNT, mp_context=multiprocessing.get_context("spawn")
+            ) as pool:
+                futures = [
+                    pool.submit(scenario, process_id, coordinator, *args)
+                    for process_id in range(DISTRIBUTED_PROCESS_COUNT)
+                ]
+                return [future.result() for future in futures]
 
 
 def _distributed_restore(process_id: int, coordinator: str, checkpoint_path: str) -> _DistributedRestoreResult:

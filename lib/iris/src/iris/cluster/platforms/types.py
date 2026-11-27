@@ -9,7 +9,6 @@ module without pulling in the full provider protocols or any concrete implementa
 
 import datetime
 import logging
-import os
 import socket
 import threading
 import time
@@ -19,7 +18,6 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from pathlib import Path
 from typing import Protocol
 
 from rigging.timing import Deadline, Duration, Timestamp
@@ -67,36 +65,6 @@ class Labels:
         # The autoscaler ignores these: they don't count toward demand, don't
         # participate in scale-down, and survive `iris cluster stop`.
         self.iris_manual = f"iris-{prefix}-manual"
-
-
-def find_free_port(start: int = -1) -> int:
-    """Find an available port.
-
-    Args:
-        start: Starting port for sequential scan. Default of -1 lets the kernel
-            pick a random ephemeral port, which avoids collisions when multiple
-            processes search for ports concurrently (e.g. pytest-xdist).
-    """
-    if start == -1:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("", 0))
-            return s.getsockname()[1]
-    for port in range(start, start + 1000):
-        lock = Path(f"/tmp/iris/port_{port}")
-        try:
-            os.kill(int(lock.read_text()), 0)
-            continue  # port locked by a live process
-        except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
-            pass
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind(("", port))
-                lock.parent.mkdir(parents=True, exist_ok=True)
-                lock.write_text(str(os.getpid()))
-                return port
-            except OSError:
-                continue
-    raise RuntimeError(f"No free port found in range {start}-{start + 1000}")
 
 
 def probe_outbound_ip() -> str:
