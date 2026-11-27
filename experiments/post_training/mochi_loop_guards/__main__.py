@@ -47,6 +47,7 @@ ANALYSIS_MODULES = {
     "conservation-check": ("conservation", "main"),
     "counterfactual": ("counterfactual", "main"),
     "cpu-submit": ("cpu_submit", "main"),
+    "i3-verdict": ("i3_verdict", "main"),
     "observation-census": ("observation_census", "main"),
     "postprocess": ("postprocess", "postprocess"),
     "publish-user-overrides": ("user_overrides", "publish_receipts"),
