@@ -1,5 +1,5 @@
 {
-  "revision": "03434a0bb03efa04c66bc5f435b9188d993fd17c",
+  "revision": "a2447b12e4fc8c1ccb38acbbca8322b529ae8c25",
   "sources": {
     "AI-MO:numina_math": {
       "input_sha256": "56b745a538dad1c11afd3f5f954f73c43605435b08d296a75836ae5b8a0b1849",
@@ -1343,13 +1343,13 @@
     },
     "TaskTrove:laion__exp_rpt_crosscodeeval-csharp-v4": {
       "input_sha256": "6cfed68ea02650895ebb84b8b8a7bf181844a283d3daa8db3551fe112ba71797",
-      "sha256": "82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261115/settled-code-puzzles-v1/source-identities-82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8.json"
+      "sha256": "39b75240e04f3dc0ca54805b7b4e99107600e38071cbec6f2fe39e943e2af709",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261127-v1/crosscode-refresh-v1/source-identity-v2/source-identities-content-nn-v4.json"
     },
     "TaskTrove:laion__exp_rpt_crosscodeeval-java-v3": {
       "input_sha256": "654c2d89ad8a648330cfb4dce4dc2726870133ac5364be080909c3ef2b95cda1",
-      "sha256": "82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261115/settled-code-puzzles-v1/source-identities-82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8.json"
+      "sha256": "39b75240e04f3dc0ca54805b7b4e99107600e38071cbec6f2fe39e943e2af709",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261127-v1/crosscode-refresh-v1/source-identity-v2/source-identities-content-nn-v4.json"
     },
     "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2": {
       "input_sha256": "1c3e8d07809e008be9996a9ad8f47b89608b9d4ac4b7b318a55bb4b82c521a2e",
