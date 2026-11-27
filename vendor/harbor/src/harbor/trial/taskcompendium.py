@@ -26,7 +26,6 @@ from shellbox.backends.daytona.machine import DaytonaDeclarativeMachineFactory
 from shellbox.backends.daytona.provider import ProviderWaitPolicy
 from shellbox.backends.local.machine import SYSTEM_DIRECTORIES
 from shellbox.image import DockerfileSource, RegistryImage
-from shellbox.http_service import serve_http
 from shellbox.machine import (
     ExitReason,
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
@@ -95,7 +94,7 @@ from harbor.environments.local import local_disk_pool, local_machine_factory
 from harbor.environments.daytona_admission import admit_create
 from harbor.environments.resource_policies import validate_local_resources
 from harbor.host_capabilities import MODEL_CREDENTIALS, MODEL_RELAY_PORT
-from harbor.environments.model_relay import ModelRelay, start_model_relays
+from harbor.environments.model_relay import ModelRelay, start_model_relay, start_model_relays
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.result import TimingInfo
 from harbor.models.verifier.result import VerifierResult
@@ -848,12 +847,7 @@ class TaskSpecTrial(Trial):
                 assert connection is not None and self._service_tasks is not None
                 # ALLOW graders share host loopback. Allocate while binding instead
                 # of racing concurrent graders for the fixed actor relay port.
-                try:
-                    endpoint = await stack.enter_async_context(
-                        serve_http(machine, relay.handle, port=0, task_group=self._service_tasks)
-                    )
-                except Exception as error:
-                    raise RuntimeServiceError("Model relay failed to start") from error
+                endpoint = await start_model_relay(machine, stack, self._service_tasks, relay, port=0)
                 env = {
                     BASE_URL_ENV: endpoint + "/v1",
                     API_KEY_ENV: connection.api_key,
