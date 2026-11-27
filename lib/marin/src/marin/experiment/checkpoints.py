@@ -65,7 +65,7 @@ class HfToLevanterConfig:
     model_type: str  # Levanter model-registry key, e.g. "qwen3"
     tokenizer: str  # tokenizer repo id/dir the converter binds to
     tokenizer_revision: str  # commit pin for the tokenizer
-    compute_dtype: str  # dtype the weights are converted in (matches the run's compute precision)
+    compute_dtype: str | None  # dtype to cast weights to, or None to keep stored HF dtypes
     model_config_json: dict  # draccus-encoded resolved LmConfig
     output_path: str
     resources: ResourceConfig
@@ -156,7 +156,7 @@ def hf_to_levanter(
     version: str,
     tokenizer: str | None = None,
     tokenizer_revision: str | None = None,
-    compute_dtype: str = DEFAULT_COMPUTE_DTYPE,
+    compute_dtype: str | None = DEFAULT_COMPUTE_DTYPE,
     resources: ResourceConfig = DEFAULT_CONVERT_RESOURCES,
 ) -> HfToLevanterCheckpoint:
     """Convert ``hf_id@hf_revision`` to a native Levanter model checkpoint as a lazy ``ArtifactStep``.

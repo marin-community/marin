@@ -145,7 +145,17 @@ MIXTURE_SPEC = replace(
     xla_flags=("--xla_gpu_shard_autotuning=false",),
 )
 MIXTURE_262K_32NODE = SFTPreset(_MIXTURE_NAME, MIXTURE_SPEC, MIXTURE_RESOURCES)
-SNOWBALL_SFT = (OPENTHOUGHTS_32K_4NODE, MIXTURE_262K_32NODE)
+VLLM_PARITY_SPEC = replace(
+    OPENTHOUGHTS_SPEC,
+    name="checkpoints/snowball-openthoughts-agent-sft-vllm-parity",
+    model=replace(
+        _BASE_MODEL,
+        model=SnowballConfig(moe_capacity_factor=8.0, router_dot_fp32=True, fp32_activations=True),
+    ),
+    field_dtype_overrides={"router_bias": "float32"},
+)
+VLLM_PARITY_32K_4NODE = SFTPreset("vllm-parity-32k-4node", VLLM_PARITY_SPEC, OPENTHOUGHTS_32K_4NODE.resources)
+SNOWBALL_SFT = (OPENTHOUGHTS_32K_4NODE, MIXTURE_262K_32NODE, VLLM_PARITY_32K_4NODE)
 
 
 if __name__ == "__main__":

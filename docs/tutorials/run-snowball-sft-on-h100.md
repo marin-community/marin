@@ -107,3 +107,9 @@ preset = replace(
 ```
 
 Here `keep` retains a permanent checkpoint every 1,000 steps in addition to the final save; use `keep=None` for final-only retention. `keep_last_temporary_checkpoints` bounds complete rolling recovery checkpoints after a successful save. Native checkpoints contain full training state and can be much larger than HF exports, so size the permanent cadence explicitly. The generic `marin.experiment.train.train_lm` builder also defaults to rolling recovery checkpoints and a final-only permanent save.
+
+## Match the served vLLM forward
+
+Select `--preset vllm-parity-32k-4node` in the commands above to use dropless routing and FP32 router scoring and activations. For Python workflows, import `VLLM_PARITY_SPEC` from `experiments.post_training.snowball_sft`.
+
+See [Serving Numerical Parity](../references/serving-parity.md) for the measured scope and checkpoint conversion settings.

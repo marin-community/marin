@@ -22,6 +22,9 @@ See [launching RL experiments](../references/rl-launching.md)
 for the artifact entry point, launch document, and resource configuration.
 For model-owned preset selection, experiment status and saved results, see the
 [RL experiments recipe](../recipes/rl-experiments.md).
+See [Serving Numerical Parity](../references/serving-parity.md) for SkyRL,
+Megatron, and vLLM numerical-parity knobs (router replay, batch invariance, and
+FP32 LM heads).
 
 The Marin CLI uses SkyRL's `cpu` extra. Set `environment.task_sessions.local: {}`
 to enable the local task backend, which probes Linux bubblewrap before task

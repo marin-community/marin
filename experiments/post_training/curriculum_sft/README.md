@@ -78,6 +78,10 @@ the 39 HF shards again. These recipes keep conversations separate (`pack=False`)
 packed-document attention masks. To enable packing, set `SFTSpec.pack=True` and bump `SFTSpec.version`;
 the launcher selects a separate packed preprocessing cache. The launcher saves a sharded bfloat16
 Hugging Face checkpoint at the final training step under the training artifact's `hf/` directory.
+These trials run Levanter's default Snowball forward and default BF16 `hf_to_levanter` conversion.
+To match the served vLLM forward (including passing `compute_dtype=None` to `hf_to_levanter` so
+`router_bias` stays FP32), see
+[Serving Numerical Parity](../../../docs/references/serving-parity.md).
 
 `math_trial.py` declares a bounded loop: deterministic OlympiadBench and Math500 on the pinned
 September 20 HF model, three algebra capabilities, four Snowball updates, and the same evaluations

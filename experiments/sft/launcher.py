@@ -605,6 +605,7 @@ class SFTSpec:
     num_train_steps: int | None = None
     num_train_epochs: int | None = None
     hf_save_dtype: str | None = None
+    field_dtype_overrides: Mapping[str, str] = field(default_factory=dict)
     wandb_project: str = "marin-sft-launcher"
     prepared_data: PreparedData | None = None
     per_device_parallelism: int = -1
@@ -814,6 +815,7 @@ def _trainer(
         steps_per_eval=500,
         jax_config=jax_config,
         mp=jmp.get_policy(_MARIN_PRECISION),
+        field_dtype_overrides={name: jnp.dtype(dtype) for name, dtype in spec.field_dtype_overrides.items()},
         per_device_parallelism=spec.per_device_parallelism,
         use_explicit_mesh_axes=use_explicit_mesh_axes,
         mesh=spec.mesh if spec.mesh is not None else MeshConfig(),

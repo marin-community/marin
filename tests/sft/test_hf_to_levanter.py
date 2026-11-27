@@ -17,18 +17,29 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import draccus
+import equinox as eqx
+import jax
+import jax.numpy as jnp
+import numpy as np
 from fray.types import ResourceConfig
+from haliax import Axis
+from jax.sharding import AxisType
 from levanter.adaptor import AdaptorExportConfig
+from levanter.checkpoint import load_checkpoint
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
+from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.optim.config import AdamConfig
+from levanter.testing.tokenizer import llama3_style_chat_tokenizer
 from levanter.trainer import Trainer, TrainerHooks
+from levanter.utils.jax_utils import local_cpu_mesh
 from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
 from marin.experiment.checkpoints import (
     HfToLevanterCheckpoint,
     HfToLevanterConfig,
     hf_to_levanter,
+    run_hf_to_levanter,
 )
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import DEFAULT_HF_CHECKPOINTS_PATH, LevanterCheckpoint
@@ -166,6 +177,52 @@ def test_lm_config_draccus_round_trip_selects_subclass_by_model_type():
     )
     decoded = draccus.decode(LmConfig.get_choice_class(config.model_type), config.model_config_json)
     assert decoded == arch
+
+
+def test_hf_conversion_preserves_mixed_dtypes_when_requested(tmp_path):
+    hf_path = tmp_path / "hf"
+    tokenizer = llama3_style_chat_tokenizer()
+    arch = SnowballConfig(
+        vocab_size=len(tokenizer),
+        hidden_dim=32,
+        intermediate_dim=32,
+        shared_expert_intermediate_dim=32,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=2,
+        head_dim=8,
+        num_experts=4,
+        num_experts_per_token=2,
+        max_seq_len=16,
+        sliding_window=8,
+    )
+    with local_cpu_mesh(AxisType.Explicit):
+        model = SnowballLMHeadModel.init(Axis("vocab", len(tokenizer)), arch, key=jax.random.key(0))
+        bias = jnp.array([1.001, -1.003, 0.125, 0.117], dtype=jnp.float32)
+        model = eqx.tree_at(lambda m: m.transformer.blocks[0].mlp.router_bias, model, bias)
+        arch.hf_checkpoint_converter().replaced(tokenizer=tokenizer).save_pretrained(
+            model,
+            str(hf_path),
+            save_reference_code=False,
+            dtype=jnp.bfloat16,
+            field_dtype_overrides={"router_bias": jnp.float32},
+        )
+    options = dict(model_type="snowball", hf_revision="local", version="test-dev")
+    preserved = hf_to_levanter(str(hf_path), compute_dtype=None, **options)
+    default = hf_to_levanter(str(hf_path), **options)
+    for conversion, directory in ((preserved, "preserved"), (default, "default")):
+        config = materialized_config(conversion.step, str(tmp_path / directory))
+        run_hf_to_levanter(config)
+        with local_cpu_mesh(AxisType.Explicit) as mesh:
+            restored = load_checkpoint(model, config.output_path, subpath="model", mesh=mesh)
+        expected_bias = bias if directory == "preserved" else bias.astype(jnp.bfloat16)
+        actual_bias = restored.transformer.blocks[0].mlp.router_bias
+        assert actual_bias.dtype == expected_bias.dtype
+        np.testing.assert_array_equal(actual_bias, expected_bias)
+        assert restored.transformer.token_embed.dtype == jnp.bfloat16
+        np.testing.assert_array_equal(
+            restored.transformer.token_embed, model.transformer.token_embed.astype(jnp.bfloat16)
+        )
 
 
 def test_conversion_transports_nested_values_omitted_from_fingerprint(monkeypatch):
