@@ -138,7 +138,8 @@ def backend_admission_review(
     )
 
 
-def _require_declaration_license(declaration: SourceDeclaration) -> None:
+def require_declaration_license(declaration: SourceDeclaration) -> None:
+    """Require exact-pin license permission and clearance of standing source bans."""
     require_unbanned(
         declaration.id,
         declaration.dataset_id,
@@ -159,7 +160,7 @@ def _require_declaration_license(declaration: SourceDeclaration) -> None:
 
 def require_declaration_admission(declaration: SourceDeclaration) -> None:
     """Require license permission before admitting a newly published source revision."""
-    _require_declaration_license(declaration)
+    require_declaration_license(declaration)
     require_population_admission(declaration)
 
 
@@ -302,6 +303,6 @@ def require_catalog_declaration(declaration: SourceDeclaration) -> None:
         and declaration.status == "Excluded"
     ):
         return
-    _require_declaration_license(declaration)
+    require_declaration_license(declaration)
     if declaration.status == "Available":
         require_population_admission(declaration)

@@ -15,16 +15,18 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.curation import QualifiedSourceDeclaration, SourceOrigin, source_identifier
+from finestore.rl.curation import ActorCensusInput, QualifiedSourceDeclaration, SourceOrigin, source_identifier
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.curriculum.coverage import CONFIDENCE_LEVELS
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, AlignmentSource, CurriculumCoverage
 
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
+from experiments.post_training.task_curation.license_resolution import license_evidence
 from experiments.post_training.task_curation.release_stages import curriculum_compose as compose
 from experiments.post_training.task_curation.release_stages import embed as embed_stage
 from experiments.post_training.task_curation.release_stages.graph import _fresh_corpus_expectation
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 from experiments.post_training.task_curation.tests.release_graph_fixtures import fixture_plan
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
@@ -361,6 +363,68 @@ def test_compose_release_carries_lineage_and_totals(tmp_path):
     assert release.lineage["fresh_release_sha256"]
     assert len(release.paths) == 2
     assert compose.compose_coverage_identity(plan, release)["version"] == COVERAGE_VERSION
+
+
+@pytest.mark.parametrize(
+    ("change", "refusal"),
+    [
+        ("review", None),
+        ("stale", "belongs to another source revision"),
+        ("missing", "License evidence is missing"),
+        ("restricted", "blocks ingest and admission"),
+        ("task_count", "changed its census binding or task count"),
+        ("actor_binding", "drifted from"),
+    ],
+)
+def test_compose_license_refresh_preserves_alignment_and_permission_checks(tmp_path, change, refusal):
+    document, expected = _composition(tmp_path)
+    fresh = compose.read_reference(document["fresh_release"])
+    declaration = fresh["inventory"][0]
+    receipt = fixture_license(declaration["id"], declaration["dataset_id"], declaration["dataset_revision"])
+    declaration["license_receipt"] = receipt.model_dump(mode="json")
+    document["fresh_release"] = _seal_json(tmp_path, "fresh-release.json", fresh).model_dump(mode="json")
+    current = compose.read_reference(document["current_target_declarations"])
+    target = current[declaration["id"]]
+    reviewed = receipt.model_copy(update={"resolved_at": "2026-11-26T00:00:00Z"})
+    if change == "stale":
+        reviewed = reviewed.model_copy(update={"revision": "2"})
+    if change == "restricted":
+        reviewed = reviewed.model_copy(
+            update={
+                "evidence": [
+                    license_evidence(
+                        "https://example.test/LICENSE", b"SPDX-License-Identifier: CC-BY-NC-4.0\n", "license_file"
+                    )
+                ]
+            }
+        )
+    target["license_receipt"] = None if change == "missing" else reviewed.model_dump(mode="json")
+    if change == "task_count":
+        target.update(
+            task_count=4,
+            within_source_dedup=deduplication_evidence("fixture", "1", "1", count=4).model_dump(mode="json"),
+        )
+    if change == "actor_binding":
+        target["actor_census_input"] = ActorCensusInput(
+            dataset_id="fixture",
+            dataset_revision="1",
+            converter_version="1",
+            converter_revision="1",
+            measured_tasks=3,
+            task_specs_sha256="a" * 64,
+            evidence_url="https://example.test/census",
+        ).model_dump(mode="json")
+    document["current_target_declarations"] = _seal_json(tmp_path, "targets.json", current).model_dump(mode="json")
+    if refusal is not None:
+        with pytest.raises(ValueError, match=refusal):
+            compose.compose_plan(document, expected, ())
+        return
+    plan = compose.compose_plan(document, expected, ())
+    release = compose.compose_release(plan, document, {"uri": "/inputs.json", "sha256": "a" * 64})
+    adopted = next(row for row in release.inventory if row.id == declaration["id"])
+    assert adopted.license_receipt == reviewed
+    assert release.task_count == 5
+    assert release.paths == [*compose.read_reference(document["old_release"])["paths"], *fresh["paths"]]
 
 
 @pytest.mark.parametrize(

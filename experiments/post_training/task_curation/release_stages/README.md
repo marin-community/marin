@@ -389,6 +389,11 @@ are `{uri, sha256}` references to complete frozen public-input preparation.
 `current_target_declarations` covers the union of these sources and the fresh
 alignment inventory. A source must appear in only one group.
 
+Aligned declarations may adopt updated license receipts without recomputing
+alignment. The current receipt must pass the catalog's exact-pin permission and
+source-ban checks. Task-input fingerprints, actor census bindings and task counts
+must still match the aligned inventory.
+
 Each rebind proves every current public input against its archived population.
 Stable IDs must preserve their public inputs. Changed IDs require unique public
 content or verified immutable upstream rows. A smaller current population may

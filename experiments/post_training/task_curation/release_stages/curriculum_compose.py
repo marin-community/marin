@@ -57,6 +57,7 @@ from experiments.post_training.task_curation.source_duplicate_ci import fingerpr
 from experiments.post_training.task_curation.source_status import pending_stage, receipt_registry_keys
 from infra.marina.apps.rl_data_catalog.confidence import OUTCOMES, confidence_rows
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
+from infra.marina.apps.rl_data_catalog.server.admission import require_declaration_license
 from infra.marina.apps.rl_data_catalog.server.source_identity import original_source_id
 
 COMPOSE_RECEIPT_SUFFIX = "curriculum-composition"
@@ -64,9 +65,9 @@ COMPOSE_WORKERS = 8
 COMPOSE_WORKER_CPU = 4
 COMPOSE_WORKER_MEMORY = "16g"
 # Fields of a target declaration that may differ from the aligned inventory's copy:
-# consumer-gate outcomes recorded after alignment, never a task-content field.
+# Consumer outcomes and reviewed license evidence can arrive after alignment.
 ALLOWED_TARGET_CHANGES = frozenset(
-    {"consumer_receipt", "consumer_requirements", "consumer_findings", "consumer_decision", "notes"}
+    {"consumer_receipt", "consumer_requirements", "consumer_findings", "consumer_decision", "notes", "license_receipt"}
 )
 SAMPLE_PREVIEW_CHARACTERS = 600
 CONFIDENCE_SCHEMA_VERSION = 1
@@ -243,6 +244,8 @@ def compose_plan(document: dict, expected_fresh_task_count: int, removed_sources
         changed = {key for key in before.keys() | after.keys() if before.get(key) != after.get(key)}
         if not changed <= ALLOWED_TARGET_CHANGES:
             raise ValueError(f"current declaration for {sid} changed non-consumer fields: {sorted(changed)}")
+        if "license_receipt" in changed:
+            require_declaration_license(current)
     inventory = [current_inventory[row.id] if row.id in rebound else row for row in retained_inventory]
     inventory += [current_inventory[declaration.id] for declaration in fresh.inventory]
     sources = list(old_sources.values()) + list(fresh.sources)
