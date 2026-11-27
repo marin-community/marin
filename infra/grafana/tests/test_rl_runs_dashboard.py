@@ -835,6 +835,39 @@ def test_engine_growth_counts_resets_inside_its_bucket(values, growth) -> None:
     assert row["generation"] == pytest.approx(growth / 300)
 
 
+def test_engine_rates_keep_identical_series_in_different_clusters_apart() -> None:
+    database = _fresh_store()
+    rows = []
+    for cluster in (CLUSTER, "other-cluster"):
+        for index, value in enumerate((0.0, 100.0)):
+            row = _row(
+                service="vllm",
+                name="generation_tokens_total",
+                value=value,
+                moment=WINDOW_START + timedelta(seconds=10 * index),
+                seq=index,
+                run_id=RUN_ID,
+                node_name=NODES[0],
+                role="inference",
+                attributes={"engine": "0"},
+            )
+            rows.append((cluster, *row[1:]))
+    _seed_rows(database, rows)
+    (row,) = _request_rows(
+        database,
+        "/v1/rl/overview",
+        {
+            "clusters": f"{CLUSTER},other-cluster",
+            "run": RUN_ID,
+            "from": _WINDOW_START_MS,
+            "to": _NOW_MS,
+            "bucket_ms": 300000,
+            "view": "engine_tokens",
+        },
+    )
+    assert row["generation"] == pytest.approx(200 / 300)
+
+
 def test_engine_rates_keep_two_actors_that_differ_only_by_resource() -> None:
     database = _fresh_store()
     _seed_rows(

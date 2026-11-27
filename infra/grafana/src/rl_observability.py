@@ -183,7 +183,8 @@ WITH engine_rows AS (
     -- embedded vLLM rows retain these names. The resource and
     -- attribute hashes stand in for the old query's per-row JSON partition keys
     -- so one engine actor per registry stays its own series.
-    SELECT service, execution_uid, node_name, process_index, name, timestamp_ms, seq, value,
+    SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
+           service, execution_uid, node_name, process_index, name, timestamp_ms, seq, value,
            md5(resource_attributes_json) AS resource_key,
            md5(attributes_json) AS attribute_key,
            json_get(attributes_json, 'finished_reason') AS finished_reason,
@@ -199,7 +200,7 @@ WITH engine_rows AS (
            OR name LIKE '%_seconds_sum' OR name LIKE '%_seconds_count')
 ), deltas AS (
     SELECT *, value - LAG(value) OVER (
-               PARTITION BY service, execution_uid, node_name, process_index,
+               PARTITION BY origin_cluster, service, execution_uid, node_name, process_index,
                             name, resource_key, attribute_key
                ORDER BY timestamp_ms, seq
            ) AS delta
