@@ -374,6 +374,17 @@ def test_nightly_reserves_mochi_racks_and_skips_duplicate_launches(
     multi = "/atqamar/custom-gpu-experiment"
     iris.set_job(multi, JobState.PENDING, device=gb200, nodes=36)
     assert nightly_tick(monkeypatch, tmp_path, "three-slices", "mochi") == 0 and not launcher.requests
+    iris.set_job(multi, JobState.PENDING, device=gb200, nodes=32)
+    list_jobs = iris.list_jobs
+
+    def during_transition(*, state, prefix):
+        return list_jobs(state=JobState.PENDING if state == JobState.BUILDING else state, prefix=prefix)
+
+    with monkeypatch.context() as transition:
+        transition.setattr(iris, "list_jobs", during_transition)
+        assert nightly_tick(transition, tmp_path, "transition", "mochi") == 0
+    assert list(launcher.requests.values()) == [1]
+    launcher.requests.clear()
     iris.set_job(multi, JobState.SUCCEEDED)
     speed = "/runner/checkpoints-mochi-rl-controls-speed-medium-running-coordinator"
     iris.set_job(speed, JobState.RUNNING)
@@ -401,8 +412,6 @@ def test_nightly_reserves_mochi_racks_and_skips_duplicate_launches(
     iris.set_job("/runner/another-experiment/worker", JobState.RUNNING, device=gb200, nodes=17)
     assert nightly_tick(monkeypatch, tmp_path, "both-owners", "mochi") == 0
     assert launcher.requests == {("learning-medium", "limited"): 1}
-
-    list_jobs = iris.list_jobs
 
     def unavailable(*, state, prefix):
         if prefix in {"/runner/", "/atqamar/"}:

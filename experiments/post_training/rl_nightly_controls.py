@@ -45,8 +45,8 @@ def _attempt_cost(model: str, preset: Preset) -> int:
     return 9_960 * preset.recipe.layout.workload.plan.num_nodes + 36 if model == SNOWBALL.model else 1
 
 
-def _active_jobs(client: IrisClient, prefix: str) -> list[JobName]:
-    return [job.job_id for state in _ACTIVE_STATES for job in client.list_jobs(state=state, prefix=prefix)]
+def _active_jobs(client: IrisClient, prefix: str) -> set[JobName]:
+    return {job.job_id for state in _ACTIVE_STATES for job in client.list_jobs(state=state, prefix=prefix)}
 
 
 def select_presets(selection: str) -> list[tuple[str, Preset]]:
