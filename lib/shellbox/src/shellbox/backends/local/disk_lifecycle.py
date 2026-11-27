@@ -3,7 +3,7 @@
 
 """Standard-library-only disk guardian, also executed in an isolated subprocess.
 
-The guardian holds the allocation lease until it has unmounted everything. EOF
+The guardian locks the allocation directory inode through removal. EOF
 on its control pipe means the owner closed or crashed. Loop mounts use util-linux's
 autoclear devices, so destroying the pod's mount namespace also releases them.
 """
@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 COMMAND_TIMEOUT = 30
@@ -57,7 +58,11 @@ def reclaim(directory: Path) -> None:
 
 
 def guard(directory: Path, storage_mb: int) -> None:
-    with (directory / "lease").open("a") as lease:
+    with ExitStack() as resources:
+        # A child lease file can be unlinked and recreated during rmtree, giving
+        # startup recovery a different unlocked inode while this guard is live.
+        lease = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        resources.callback(os.close, lease)
         fcntl.flock(lease, fcntl.LOCK_EX)
         try:
             image = directory / "disk.img"

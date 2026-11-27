@@ -4,6 +4,7 @@
 """Pool verification must not stall concurrent trials or repeat the host probe."""
 
 import asyncio
+import io
 import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -92,3 +93,30 @@ def test_guardian_cleanup_propagates_errors_while_allocation_remains(tmp_path, m
     with pytest.raises(type(error)):
         disk_lifecycle.reclaim(directory)
     assert directory.is_dir()
+
+
+def test_startup_recovery_does_not_reclaim_guardian_during_directory_removal(tmp_path, monkeypatch):
+    directory = tmp_path / "sandbox-guarded"
+    directory.mkdir()
+    remove = shutil.rmtree
+    cleaning = False
+
+    def command(*args, **kwargs):
+        # Exercise real guardian/recovery ownership without privileged mount I/O.
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def remove_during_recovery(path):
+        nonlocal cleaning
+        if path == directory and not cleaning:
+            cleaning = True
+            # Recursive removal may unlink the lease before the other children.
+            (directory / "lease").unlink(missing_ok=True)
+            disk.LocalDiskPool._reclaim(SimpleNamespace(root=tmp_path))
+            assert (directory / "data" / "shm").is_dir()
+        remove(path)
+
+    monkeypatch.setattr(disk_lifecycle.subprocess, "run", command)
+    monkeypatch.setattr(disk_lifecycle.shutil, "rmtree", remove_during_recovery)
+    monkeypatch.setattr(disk_lifecycle.sys, "stdin", SimpleNamespace(buffer=io.BytesIO()))
+    disk_lifecycle.guard(directory, storage_mb=1)
+    assert cleaning and not directory.exists()

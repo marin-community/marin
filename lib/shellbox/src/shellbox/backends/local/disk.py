@@ -170,16 +170,18 @@ class LocalDiskPool:
     def _reclaim(self) -> None:
         for directory in self.root.glob("sandbox-*"):
             try:
-                lease_file = (directory / "lease").open("a")
+                lease = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
             except FileNotFoundError:
                 continue  # A live guardian finished removing its allocation.
-            with lease_file as lease:
+            try:
                 try:
                     fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     continue
                 if directory.exists():
                     disk_lifecycle.reclaim(directory)
+            finally:
+                os.close(lease)
 
     def create(self, storage_mb: int) -> LocalDisk:
         """Allocate exactly storage_mb MiB and wait for the ext4 mount."""
