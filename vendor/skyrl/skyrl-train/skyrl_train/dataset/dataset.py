@@ -14,7 +14,7 @@ def dataset_num_proc(row_count: int, num_workers: int) -> int | None:
 
 
 def concatenate_prompt_datasets(loaded: list[datasets.Dataset]) -> datasets.Dataset:
-    """Combine inputs with compatible Arrow text widths without coercing other types."""
+    """Combine inputs after widening top-level Arrow text columns, without coercing other types."""
     aligned = []
     for data in loaded:
         features = data.features.copy()
