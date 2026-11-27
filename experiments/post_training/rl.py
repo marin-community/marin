@@ -1044,6 +1044,8 @@ def command(
         do_run = context.params["do_run"]
         if plan and do_run:
             raise click.UsageError("Choose either --plan or --run")
+        if control_handoff == "":
+            raise click.BadParameter("provide a nonempty path", param_hint="--control-handoff")
         if control_handoff is not None and not (control and do_run):
             raise click.UsageError("--control-handoff requires --control --run")
         if control is not None and not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,47}", control):

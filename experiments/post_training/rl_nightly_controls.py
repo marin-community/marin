@@ -99,7 +99,7 @@ def _was_interrupted(client: IrisClient, state: str | None, job_id: str | None) 
     job = client.job_status(name)
     if job.task_state_counts.get(TaskState.FAILED):
         return False
-    return bool(job.preemption_count or job.task_state_counts.get(TaskState.PREEMPTED)) or any(
+    return bool(job.task_state_counts.get(TaskState.PREEMPTED)) or any(
         attempt.terminal_reason == POD_DELETED_TERMINAL_REASON
         for task in client.list_tasks(name)
         for attempt in task.attempts
@@ -145,7 +145,7 @@ def _run_controls(batch: str, selected: Sequence[tuple[str, Preset]], state_dir:
                 print(result.model_dump_json(), flush=True)
                 if result.unserved_records:
                     raise RuntimeError(f"Publication remains pending for {submission.job}")
-                check_coordinator = not result.attempts
+                check_coordinator = len(result.attempts) < len(submission.outputs)
                 for attempt in result.ineligible_controls:
                     native = attempt.native.result
                     if native.state.is_terminal:

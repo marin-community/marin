@@ -262,7 +262,9 @@ def test_nightly_retries_publication_and_refills_deficit(
     submissions = iter((("first", "3"), ("refill", "2")))
 
     def observe_submit(job, request):
-        batch, count = next(submissions)
+        expected = next(submissions, None)
+        assert expected is not None, "Unexpected coordinator submission"
+        batch, count = expected
         assert request["entrypoint"].command == [
             "python",
             "-m",
@@ -308,8 +310,8 @@ def test_nightly_retries_publication_and_refills_deficit(
     assert marina.by_attempt("preempted").status == "failed" and len(launcher.requests) == 1
     assert tick("iris-error") == 1
     assert publication.ControlSubmission.model_validate_json(pending.read_text()) == handoff
-    iris.set_job(root + "/training", JobState.WORKER_FAILED, preemptions=1)
-    assert tick("refill") == 0
+    iris.set_job(root + "/training", JobState.WORKER_FAILED, tasks={TaskState.PREEMPTED: 1})
+    assert tick("refill") == 1  # The failed coordinator never prepared the third output.
     assert marina.by_attempt("accepted").status == "succeeded"
     assert launcher.requests == {(preset.name, "first"): 3, (preset.name, "refill"): 2}
     assert publication.ControlSubmission.model_validate_json(pending.read_text()).job != root
@@ -322,16 +324,17 @@ def test_nightly_distinguishes_interruptions_and_failures(
     recorded_runs, monkeypatch, tmp_path, subtests, cache_native_compositions
 ):
     scenarios = (
-        ("preempted-task", JobState.WORKER_FAILED, {TaskState.PREEMPTED: 1}, "", 0),
-        ("deleted-pod", JobState.WORKER_FAILED, {}, POD_DELETED_TERMINAL_REASON, 0),
-        ("unknown-worker-failure", JobState.WORKER_FAILED, {}, "", 1),
-        ("worker-crash", JobState.FAILED, {TaskState.FAILED: 1}, "", 1),
-        ("killed-after-preparing", JobState.KILLED, {}, "", 1),
-        ("unschedulable", JobState.UNSCHEDULABLE, None, "", 1),
-        ("succeeded-without-receipt", JobState.SUCCEEDED, None, "", 1),
-        ("lost-before-preparing", None, None, "", 1),
+        ("preempted-task", JobState.WORKER_FAILED, {TaskState.PREEMPTED: 1}, "", 1, 0),
+        ("deleted-pod", JobState.WORKER_FAILED, {}, POD_DELETED_TERMINAL_REASON, 0, 0),
+        ("unknown-worker-failure", JobState.WORKER_FAILED, {}, "", 1, 1),
+        ("worker-crash", JobState.FAILED, {TaskState.FAILED: 1}, "", 0, 1),
+        ("failed-and-preempted", JobState.WORKER_FAILED, {TaskState.FAILED: 1, TaskState.PREEMPTED: 1}, "", 1, 1),
+        ("killed-after-preparing", JobState.KILLED, {}, "", 0, 1),
+        ("unschedulable", JobState.UNSCHEDULABLE, None, "", 0, 1),
+        ("succeeded-without-receipt", JobState.SUCCEEDED, None, "", 0, 1),
+        ("lost-before-preparing", None, None, "", 0, 1),
     )
-    for scenario, state, tasks, reason, expected in scenarios:
+    for scenario, state, tasks, reason, preemptions, expected in scenarios:
         with subtests.test(scenario=scenario), monkeypatch.context() as patch:
             directory = tmp_path / scenario
             directory.mkdir()
@@ -348,7 +351,7 @@ def test_nightly_distinguishes_interruptions_and_failures(
                     coordinator=root,
                     receipt={"result.iris_job_state": None if state == JobState.KILLED else state},
                 )
-                iris.set_job(root + "/training", state, tasks=tasks, terminal_reason=reason)
+                iris.set_job(root + "/training", state, tasks=tasks, preemptions=preemptions, terminal_reason=reason)
             if state is not None:
                 iris.set_job(root, state if tasks is None or state == JobState.KILLED else JobState.FAILED)
             pending = directory / "snowball-speed-medium.json"
