@@ -15,7 +15,8 @@ from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.inference.engine import InferenceEngineConfig
+from levanter.inference.engine import InferenceEngineConfig, Request
+from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.layers.sampler import LogprobMode
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.policy import ClippedPolicyConfig, clipped_policy_loss
@@ -34,31 +35,71 @@ from levanter.inference.policy_replay import RolloutChoice, prepare_rollout_poli
 
 _POLICY_ID = "frozen-snapshot"
 _NEW_TOKENS = 8
-_SLOTS = 4
 _PAGE_SIZE = 128
 _FIXTURE_CONTEXT = 256
 _PRODUCTION_PROMPT_LENGTHS = (19, 29, 63, 131)
 _PRODUCTION_WINDOW_PROMPT_LENGTHS = (19, 29, 63, 2051)
 _FIXTURE_PROMPT_LENGTHS = (124, 128, 129, 131)
-_WARMUP_ROUNDS = 2
+_WARMUP_ROUNDS = 3
+_MEASURED_ROUNDS = 7
+_TEMPERATURE = 0.7
+_TOP_P = 0.8
+
+
+def _measure_fixed_batch(server, prompts, measured_rounds):
+    requests = [
+        Request(
+            prompt,
+            row,
+            dataclasses.replace(
+                SeqDecodingParams.default(),
+                max_num_tokens=jnp.int32(len(prompt) + _NEW_TOKENS),
+                temperature=jnp.float32(_TEMPERATURE),
+                top_p=jnp.float32(_TOP_P),
+                key=jax.random.PRNGKey(row),
+            ),
+            n_generations=1,
+        )
+        for row, prompt in enumerate(prompts)
+    ]
+    context = server.inference_context
+    rounds = []
+    with context.model_lock, hax.axis_mapping(context.config.trainer.compute_axis_mapping):
+        for _ in range(_WARMUP_ROUNDS + measured_rounds):
+            start = time.perf_counter()
+            result = context.engine.generate(requests, capture_routes=True)
+            rounds.append(time.perf_counter() - start)
+            assert result.total_generated == len(prompts) * _NEW_TOKENS
+    return rounds
+
+
+def _timing(rounds, slots):
+    samples = rounds[_WARMUP_ROUNDS:]
+    return {
+        "warmup_batch_seconds": rounds[:_WARMUP_ROUNDS],
+        "warmed_batch_seconds": samples,
+        "output_tokens_per_second": slots * _NEW_TOKENS / np.median(samples),
+    }
 
 
 def _generate(model, tokenizer, mesh, prompts, measured_rounds):
     length = model.config.max_seq_len
+    slots = len(prompts)
     rpc_timeout = 480 if length > _FIXTURE_CONTEXT or model.config.num_layers == 26 else 240
     server = InferenceServer.create(
         InferenceServerConfig(
             initial_policy_id=_POLICY_ID,
             host="127.0.0.1",
             grpc_port=0,
+            batch_timeout=0.001,
             service=InferenceEngineConfig(
                 max_seq_len=length,
-                max_seqs=_SLOTS,
-                max_pages=_SLOTS * length // _PAGE_SIZE,
-                max_seqs_in_prefill=_SLOTS,
-                max_prefill_size=_SLOTS * length,
-                max_queued_tokens=_SLOTS,
-                max_tokens_per_round=_SLOTS,
+                max_seqs=slots,
+                max_pages=slots * length // _PAGE_SIZE,
+                max_seqs_in_prefill=slots,
+                max_prefill_size=slots * length,
+                max_queued_tokens=slots,
+                max_tokens_per_round=slots,
                 max_rounds=4,
                 page_size=_PAGE_SIZE,
                 compute_dtype=jnp.bfloat16,
@@ -70,45 +111,42 @@ def _generate(model, tokenizer, mesh, prompts, measured_rounds):
         mesh=mesh,
     )
 
-    async def run_rounds():
+    async def generate_responses():
         async with grpc.aio.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel:
             stub = inference_pb2_grpc.InferenceStub(channel)
-            rounds = []
-            for _ in range(_WARMUP_ROUNDS + measured_rounds if measured_rounds else 1):
-                start = time.perf_counter()
-                responses = await asyncio.gather(
-                    *(
-                        stub.Generate(
-                            inference_pb2.GenerateRequest(
-                                prompt_token_ids=prompt,
-                                max_new_tokens=_NEW_TOKENS,
-                                temperature=0.7,
-                                top_p=0.8,
-                                seed=row,
-                                capture_router_replay=True,
-                                expected_policy_id=_POLICY_ID,
-                                expected_logprob_mode=inference_pb2.LOGPROB_MODE_POLICY,
-                            ),
-                            timeout=rpc_timeout,
-                        )
-                        for row, prompt in enumerate(prompts)
+            return await asyncio.gather(
+                *(
+                    stub.Generate(
+                        inference_pb2.GenerateRequest(
+                            prompt_token_ids=prompt,
+                            max_new_tokens=_NEW_TOKENS,
+                            temperature=_TEMPERATURE,
+                            top_p=_TOP_P,
+                            seed=row,
+                            capture_router_replay=True,
+                            expected_policy_id=_POLICY_ID,
+                            expected_logprob_mode=inference_pb2.LOGPROB_MODE_POLICY,
+                        ),
+                        timeout=rpc_timeout,
                     )
+                    for row, prompt in enumerate(prompts)
                 )
-                rounds.append(time.perf_counter() - start)
-            return responses, rounds
+            )
 
     try:
         with TestClient(server.app):
-            return asyncio.run(run_rounds())
+            timings = _measure_fixed_batch(server, prompts, measured_rounds) if measured_rounds else []
+            return asyncio.run(generate_responses()), timings
     finally:
         server.shutdown()
 
 
 def _rollout_batch(model, prompts, generations):
     length = model.config.max_seq_len
-    tokens = np.zeros((_SLOTS, length), dtype=np.int32)
+    slots = len(prompts)
+    tokens = np.zeros((slots, length), dtype=np.int32)
     attended = np.zeros_like(tokens)
-    response = np.zeros((_SLOTS, length - 1), dtype=bool)
+    response = np.zeros((slots, length - 1), dtype=bool)
     rollouts = []
     for row, (prompt, generation) in enumerate(zip(prompts, generations, strict=True)):
         choice = generation.choices[0]
@@ -141,6 +179,11 @@ def _rollout_batch(model, prompts, generations):
     return dataclasses.replace(batch, reference_logprobs=batch.old_logprobs)
 
 
+def _v6e_expert_tiles(token_rows):
+    # Match the AgentX serving profile on the two fixture contexts.
+    return (128 if token_rows <= 8192 else 256, 1280)
+
+
 def _score_error(actual, expected):
     delta = np.abs(actual - expected)
     mismatch = np.flatnonzero(actual.view(np.uint32) != expected.view(np.uint32))
@@ -171,6 +214,14 @@ def _score_error(actual, expected):
         ),
         pytest.param(
             2,
+            8,
+            _FIXTURE_CONTEXT,
+            _PRODUCTION_PROMPT_LENGTHS * 2,
+            id="production-width-expert8",
+            marks=(pytest.mark.manual, pytest.mark.timeout(1200)),
+        ),
+        pytest.param(
+            2,
             4,
             2176,
             _PRODUCTION_WINDOW_PROMPT_LENGTHS,
@@ -190,14 +241,18 @@ def _score_error(actual, expected):
 def test_snowball_strict_zero_kl_replays_all_served_policy_scores(
     tmp_path, layers, expert_axis_size, context_size, prompt_lengths
 ):
-    if jax.default_backend() != "tpu" or jax.device_count() != _SLOTS:
-        pytest.skip("The strict replay gate requires one four-device TPU host")
+    slots = len(prompt_lengths)
+    if jax.default_backend() != "tpu" or jax.local_device_count() != slots or jax.device_count() != slots:
+        pytest.skip(f"The strict replay gate requires one {slots}-device TPU host")
     device_kind = jax.devices()[0].device_kind.lower()
     if device_kind not in ("tpu v4", "tpu v5", "tpu v5p", "tpu v6 lite", "tpu v6e"):
         pytest.skip("The fixture supports TPUv4, v5p, and v6e projections")
+    if slots == 8 and device_kind not in ("tpu v6 lite", "tpu v6e"):
+        pytest.skip("The eight-chip fixture targets v6e")
     if layers == 26 and device_kind not in ("tpu v5", "tpu v5p"):
         pytest.skip("The full-depth FP32 fixture requires the v5p HBM budget")
     production_width = layers > 1
+    compare_native = layers == 2 and device_kind != "tpu v4"
     if production_width:
         base = SnowballConfig(num_layers=layers, max_seq_len=context_size, moe_capacity_factor=float(expert_axis_size))
     else:
@@ -226,6 +281,10 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(
     key = jax.random.key(19)
     with jax.set_mesh(mesh):
         model = SnowballLMHeadModel.init(vocab, cfg, key=key)
+        if compare_native:
+            # Both precision profiles start from the same representable weights.
+            bf16_weights = jax.tree.map(lambda weight: weight.astype(jnp.bfloat16), model)
+            model = jax.tree.map(lambda weight: weight.astype(jnp.float32), bf16_weights)
         if layers == 26:
             # Retain one packed copy of the expert gate/up weights before compiling decode.
             for index in range(layers):
@@ -235,7 +294,7 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(
                 model = dataclasses.replace(model, transformer=dataclasses.replace(transformer, blocks=blocks))
                 del transformer
         generations, strict_rounds = _generate(
-            model, tokenizer, mesh, prompts, measured_rounds=3 if production_width else 0
+            model, tokenizer, mesh, prompts, measured_rounds=_MEASURED_ROUNDS if production_width else 0
         )
         if production_width:
             print(
@@ -243,9 +302,8 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(
                 + json.dumps(
                     {
                         "layers": layers,
-                        "warmup_batch_seconds": strict_rounds[:_WARMUP_ROUNDS],
-                        "warmed_batch_seconds": strict_rounds[_WARMUP_ROUNDS:],
-                        "output_tokens_per_second": _SLOTS * _NEW_TOKENS / np.median(strict_rounds[_WARMUP_ROUNDS:]),
+                        "admission": "fixed_batch",
+                        **_timing(strict_rounds, slots),
                     }
                 ),
                 flush=True,
@@ -253,7 +311,7 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(
         batch = _rollout_batch(model, prompts, generations)
         packing_length = cfg.max_seq_len if production_width else 2 * cfg.max_seq_len
         packed = pack_policy_batch(batch, sequence_length=packing_length, pad_token_id=0)
-        assert packed.tokens.resolve_axis("batch").size < _SLOTS
+        assert packed.tokens.resolve_axis("batch").size < slots
         score = jax.jit(response_logprobs)
 
         @jax.jit
@@ -273,7 +331,7 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(
             current_scores = score(model, learner_batch)
             actual = np.asarray(current_scores.array)[mask]
             expected = np.asarray(learner_batch.old_logprobs.array)[mask]
-            assert actual.size == _SLOTS * _NEW_TOKENS
+            assert actual.size == slots * _NEW_TOKENS
             if production_width:
                 _, metrics = clipped_policy_loss(
                     current_scores,
@@ -295,16 +353,26 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(
             if production_width:
                 print("SNOWBALL_STRICT_PARITY " + json.dumps({name: parity[name]}), flush=True)
 
-        if production_width and layers < 26:
+        if compare_native:
             template = jax.eval_shape(lambda: SnowballLMHeadModel.init(vocab, base, key=key))
-            fast = jax.tree.unflatten(jax.tree.structure(template), jax.tree.leaves(model))
-            fast = fast.with_expert_sharded_kv()
-            generations, fast_rounds = _generate(fast, tokenizer, mesh, prompts, measured_rounds=3)
-            fast_batch = _rollout_batch(model, prompts, generations)
-            mask = np.asarray(fast_batch.response_mask.array)
-            expected = np.asarray(score(model, fast_batch).array)[mask]
-            actual = np.asarray(fast_batch.old_logprobs.array)[mask]
-            assert np.all(np.isfinite(actual)) and np.all(np.isfinite(expected))
+            weights = jax.tree.leaves(bf16_weights)
+            native = jax.tree.unflatten(jax.tree.structure(template), weights).with_expert_sharded_kv()
+            tuned = native.with_unrolled_decode().with_paged_attention("tpu_v3")
+            if device_kind in ("tpu v6 lite", "tpu v6e"):
+                tuned = tuned.with_separate_serving_experts(_v6e_expert_tiles)
+            else:
+                tuned = tuned.with_packed_experts()
+            profiles = {}
+            for name, serving in (("native_bf16", native), ("agentx_bf16", tuned)):
+                generations, rounds = _generate(serving, tokenizer, mesh, prompts, measured_rounds=_MEASURED_ROUNDS)
+                fast_batch = _rollout_batch(model, prompts, generations)
+                mask = np.asarray(fast_batch.response_mask.array)
+                expected = np.asarray(score(model, fast_batch).array)[mask]
+                actual = np.asarray(fast_batch.old_logprobs.array)[mask]
+                assert np.all(np.isfinite(actual)) and np.all(np.isfinite(expected))
+                profiles[name] = {**_timing(rounds, slots), "score_error": _score_error(actual, expected)}
+                print("SNOWBALL_NATIVE_PROFILE " + json.dumps({name: profiles[name]}), flush=True)
+
             print(
                 "SNOWBALL_REPLAY_GATE "
                 + json.dumps(
@@ -318,19 +386,13 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(
                         "experts": cfg.num_experts,
                         "heads": cfg.num_heads,
                         "vocabulary": cfg.vocab_size,
-                        "strict_first_batch_seconds": strict_rounds[0],
-                        "strict_output_tokens_per_second": _SLOTS
-                        * _NEW_TOKENS
-                        / np.median(strict_rounds[_WARMUP_ROUNDS:]),
-                        "fast_kv_layout": "expert_sharded",
-                        "fast_first_batch_seconds": fast_rounds[0],
-                        "fast_output_tokens_per_second": _SLOTS
-                        * _NEW_TOKENS
-                        / np.median(fast_rounds[_WARMUP_ROUNDS:]),
-                        "fast_score_error": _score_error(actual, expected),
+                        "admission": "fixed_batch",
+                        "strict_fp32": _timing(strict_rounds, slots),
+                        **profiles,
                     },
                     sort_keys=True,
-                )
+                ),
+                flush=True,
             )
 
         for name, evidence in parity.items():

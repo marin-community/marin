@@ -157,8 +157,11 @@ uv run --package marin-levanter --extra tpu --extra serve --group test pytest \
     -n 0 -s -m 'tpu and manual' -k production-width lib/levanter/tests/inference/test_snowball_zero_kl_replay.py
 ```
 
-The gate reports first-batch latency and warmed aggregate output tokens per
-second at four concurrent requests. For the fast score comparison it feeds
-the fast rollouts' exact tokens and captured expert IDs into the strict learner.
-This keeps the probability comparison aligned even when sampling choices differ
-between serving modes.
+The gate measures warmed aggregate output tokens per second by admitting the
+same batch through the generation engine. This keeps the timing independent of
+RPC arrival order. Select the eight-expert production-width case on v6e-8.
+The v5p and v6e production-width cases compare native BF16 and the tuned
+AgentX attention and expert paths against strict FP32, using the same
+BF16-rounded weights. The tests separately check scores from the gRPC
+endpoint against strict learner replay on the exact tokens and expert IDs
+returned by each profile.
