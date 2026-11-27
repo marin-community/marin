@@ -39,6 +39,8 @@ A human then decides what happens. Never work around a refusal.
      first command. An item marked `skip:` needs nothing; go on to the next one. An idea's item may carry a
      `MAINTAINER NOTE`: follow it. When it names another command (`B run-finished X####` for runs that already
      finished, say), run that instead of `new-idea`.
+     The list also holds a `[run_finished X####]` item for any run that finished with no recorded result, even when
+     no event names it.
 
 ## 1. new-idea (events `approved` and `work_pending`)
 

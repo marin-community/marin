@@ -24,6 +24,7 @@ from rigging.auth import IapCredentialsUnavailable
 from experiments.belay import __main__ as belay_main
 from experiments.belay import branch, page, submit
 from experiments.belay.__main__ import (
+    awaiting_results,
     carried_ideas,
     idea_step,
     ladder_rungs_left,
@@ -66,6 +67,7 @@ from experiments.belay.code_change import (
 from experiments.belay.config import CONFIG, PROJECTION_BASIS, TRACKS, WEEKLY_BRANCH, NodeCaps, Track
 from experiments.belay.page import (
     Idea,
+    PageRun,
     PageState,
     mark_reviewed,
     publish_thread,
@@ -351,6 +353,25 @@ def test_a_cut_carries_the_specs_of_runs_still_awaiting_results(repo: Path) -> N
     }
 
     assert unrecorded_specs(repo, last_week, entries) == ["experiments/belay/runs/X0002d1024.yaml"]
+
+
+def test_start_records_finished_runs_whose_event_was_lost(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (repo / "experiments/belay/runs").mkdir(parents=True)
+    names = {}
+    for experiment in ("X0001", "X0002", "X0003"):
+        spec = SPEC.replace("X0001", experiment)
+        (repo / f"experiments/belay/runs/{experiment}.yaml").write_text(spec)
+        names[experiment] = [run_id(parse_spec(spec), r) for r in parse_spec(spec).runs.values()]
+    runs = [PageRun(n, f"/loom/{n}-coord", x, None, "succeeded", 1) for x in ("X0001", "X0002") for n in names[x]]
+    runs.append(PageRun(names["X0003"][0], "/loom/j", "X0003", None, "running", 1))
+    entries = {
+        "X0001": {"trials": [{"id": "t001", "wandb": names["X0001"]}]},  # finished, never recorded
+        "X0002": {"trials": [{"id": "t001", "wandb": names["X0002"], "delta": [-0.01]}]},
+        "X0003": {"trials": [{"id": "t001", "wandb": names["X0003"]}]},  # still running
+    }
+    monkeypatch.setattr(belay_main, "load_entry", entries.__getitem__)
+
+    assert awaiting_results(repo, runs) == ["X0001"]
 
 
 def test_a_name_the_recipe_already_defines_brings_nothing(repo: Path) -> None:

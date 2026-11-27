@@ -287,6 +287,27 @@ def idea_step(idea: Idea) -> str:
     return step
 
 
+def awaiting_results(repo: Path, runs: list[PageRun]) -> list[str]:
+    """Experiments on this branch whose runs all succeeded but whose trial has no result: their ``run_finished``
+    event was lost (offered to failed sessions until it ran out, or it came before this week's cut). ``start`` adds
+    them to the work, so a finished run is always recorded."""
+    succeeded = {r.name for r in runs if r.state == "succeeded"}
+    unfinished = {r.name for r in runs if r.state != "succeeded"}
+    pending = []
+    for path in sorted((repo / SPECS).glob("X*.yaml")):
+        text = path.read_text()
+        if is_study(text):
+            continue
+        spec = parse_spec(text)
+        names = {run_id(spec, run) for run in spec.runs.values() if run.shared is None}
+        if not names & succeeded or names & unfinished:
+            continue
+        trials = load_entry(registry_of(spec.experiment)).get("trials") or []
+        if any(names & set(t.get("wandb") or []) and not (t.get("loss_delta") or t.get("delta")) for t in trials):
+            pending.append(spec.experiment)
+    return pending
+
+
 def finished_run_step(experiment: str, runs: list[PageRun]) -> str:
     """What a finished run of ``experiment`` needs: a ``skip:`` line, section 2, or section 3."""
     if not spec_path(experiment).exists():
@@ -382,6 +403,10 @@ def start(events_file: Path, today: datetime.date) -> None:
             continue
         else:
             line = f'[note] section 6: {BELAY} escalate --title "Note for a maintainer" --body "<the note>"'
+        if line not in todo:
+            todo.append(line)
+    for experiment in awaiting_results(repo, state.runs):
+        line = f"[run_finished {experiment}] {finished_run_step(experiment, state.runs)}"
         if line not in todo:
             todo.append(line)
     if not todo:
