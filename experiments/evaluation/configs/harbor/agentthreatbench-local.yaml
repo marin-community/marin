@@ -1,7 +1,6 @@
 n_concurrent_trials: 2
 retry:
   max_retries: 10
-  include_categories: [infrastructure]
   include_exceptions:
     - RuntimeError
     - InternalServerError

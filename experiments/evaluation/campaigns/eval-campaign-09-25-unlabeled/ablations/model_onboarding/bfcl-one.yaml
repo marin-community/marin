@@ -5,7 +5,6 @@ n_concurrent_trials: 1
 release_trial_payloads_in_memory: true
 retry:
   max_retries: 1
-  include_categories: [infrastructure]
   include_exceptions:
   - InternalServerError
   - APIConnectionError

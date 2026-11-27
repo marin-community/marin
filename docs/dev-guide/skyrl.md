@@ -90,60 +90,38 @@ The pinned Ray release has no Intel macOS wheel.
 owns `ErrorCategory`, `RetrySettings` and names shared by task producers and SDKs.
 Each framework owns its remaining categories: Shellbox owns machine and Daytona
 errors, Harbor owns its native errors, and SkyRL owns its rollout errors.
-SkyRL composes the shared, Shellbox and SkyRL maps. Composition rejects names assigned by more than one owner.
+SkyRL composes the shared, Shellbox and SkyRL maps. Composition rejects names
+assigned by more than one owner.
 
 With error classification enabled, `skyrl_train.task_error_handling` maps
 infrastructure failures to masking, agent failures to zero reward, and passthrough
-failures to the available verifier reward. Unknown names use the configured
-fallback and emit an error log. With classification disabled, the rollout
-projection masks all failed rollouts.
+failures to the available verifier reward; without it, the projection masks all
+failed rollouts. Unknown names use the configured fallback and emit an error log.
 
 Add a new persisted exception name to its producer's category map. Put a name
 used by several producers in the shared map once. Per-name training overrides
 belong in `ErrorHandlingConfig`.
 
 The shared `ErrorIdentity` records the task error name, category, provider cause, operation,
-provider status, and retry disposition. Native Harbor exception records extend
-this identity with message and traceback details. TaskCompendium grades preserve
-the identity when a trial supplies one. Consumers use its stored category and
-disposition without loading the producer framework. Evaluation JSONL exports these
-fields under `failure`; diagnostics retain only additional allowlisted metadata.
-Named phase timeouts use the producer's timeout policy. Structured provider status
-and permanent causes take precedence.
+provider status, and retry disposition. Native Harbor exception records extend this identity with
+message and traceback details, TaskCompendium grades preserve it, and evaluation JSONL exports it
+under `failure`. Consumers use its stored category and disposition without loading the producer
+framework; structured provider status and permanent causes take precedence.
 
-Configure task retries at `environment.task_sessions.retry`. The settings apply
-to every task kind. The base budget is zero retries. Mixed-task Snowball and
-Mochi recipes select one retry for every task kind. Checkpoint-evaluation recipes
-also default to one retry; explicit settings take precedence.
-For example:
+Configure task retries at `environment.task_sessions.retry`; the settings apply to every task kind
+with a base budget of zero. Mixed-task Snowball and Mochi recipes select one retry for every task
+kind, and checkpoint-evaluation recipes default to one retry unless a launch sets its own. The budget
+counts retries after the first attempt; backoff starts at `min_wait_sec`, grows by `wait_multiplier`
+to `max_wait_sec`, then applies proportional `jitter`. `exclude_exceptions` names never retry, for
+example `[AgentTimeoutError, VerifierTimeoutError]`.
 
-```yaml
-environment:
-  task_sessions:
-    retry:
-      max_retries: 3
-      min_wait_sec: 1
-      max_wait_sec: 60
-      wait_multiplier: 2
-      jitter: 0.1
-      include_categories: [infrastructure]
-      exclude_exceptions: [AgentTimeoutError, VerifierTimeoutError]
-```
-
-`rigging.task_errors.retry_delay` makes the decision for both the task worker
-and native Harbor's trial queue. Filters match the error name, cause name, or
-category; exclusions win. Permanent failures stop even when included. Failures
-with an unknown retry disposition need an explicit inclusion. The budget counts retries after the first
-attempt. Backoff grows to `max_wait_sec`, then applies proportional jitter.
-
-The worker retries only attempts with no recorded rollout steps and confirmed cleanup. Failures after
-sampled work retain their original retry disposition but do not restart the task.
-SkyRL also keeps passthrough results terminal so that retries do not discard usable
-verifier output. Harbor retries an unconfirmed teardown only when the configured filters select
-`PhaseCancellationError`. The final failed attempt
-for a native trial can seal as an unscored archive row under the
-[Harbor archive rules](../harbor-integration.md#trial-error-taxonomy);
-its reward and partial trajectory remain raw evidence.
+`rigging.task_errors.retry_delay` makes the retry decision for the task worker: only transient
+dispositions retry; permanent and unknown dispositions stay terminal. An authored setup command
+classifies itself at raise time: a timed-out or signal-killed command retries on a fresh machine,
+while a normal non-zero exit is the task's own failure. The worker retries only attempts with no
+recorded rollout steps and confirmed cleanup, and it keeps passthrough results terminal so retries
+do not discard usable verifier output; failures after sampled work retain their original retry
+disposition but do not restart the task.
 
 ## Run records
 

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from rigging.task_errors import RetrySettings, retry_delay
+from rigging.task_errors import RetrySettings
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.trial.config import TrialConfig
 from harbor.models.trial.result import ExceptionInfo, TrialResult
@@ -128,6 +128,35 @@ class TrialQueue:
     def on_trial_cancelled(self, callback: HookCallback) -> "TrialQueue":
         """Register a callback that runs when a queued trial is cancelled."""
         return self.add_hook(TrialEvent.CANCEL, callback)
+
+    def _should_retry_exception(self, exception_type: str) -> bool:
+        if (
+            self._retry_config.exclude_exceptions
+            and exception_type in self._retry_config.exclude_exceptions
+        ):
+            self._logger.debug(
+                "Exception %s is in exclude_exceptions, not retrying",
+                exception_type,
+            )
+            return False
+
+        if (
+            self._retry_config.include_exceptions
+            and exception_type not in self._retry_config.include_exceptions
+        ):
+            self._logger.debug(
+                "Exception %s is not in include_exceptions, not retrying",
+                exception_type,
+            )
+            return False
+
+        return True
+
+    def _calculate_backoff_delay_sec(self, attempt: int) -> float:
+        delay_sec = self._retry_config.min_wait_sec * (
+            self._retry_config.wait_multiplier**attempt
+        )
+        return min(delay_sec, self._retry_config.max_wait_sec)
 
     def _setup_hooks(
         self,
@@ -411,18 +440,25 @@ class TrialQueue:
             with bind_attempt(attempt_context):
                 result = await self._run_admitted_attempt(trial_config, attempt)
 
-            delay = retry_delay(result.exception_info, self._retry_config, attempt)
-            if delay is None:
+            if result.exception_info is None:
+                break
+            # The archive rejects a final attempt whose teardown was not
+            # confirmed, so a failed attempt without completion always retries.
+            if result.completion is not None and not self._should_retry_exception(
+                result.exception_info.exception_type
+            ):
+                break
+            if attempt == self._retry_config.max_retries:
                 break
 
-            assert result.exception_info is not None
+            delay_sec = self._calculate_backoff_delay_sec(attempt)
             self._logger.debug(
                 "Trial %s failed with exception %s. Retrying in %.2f seconds...",
                 trial_config.trial_name,
                 result.exception_info.exception_type,
-                delay,
+                delay_sec,
             )
-            await asyncio.sleep(delay)
+            await asyncio.sleep(delay_sec)
 
         if result is None:
             raise RuntimeError(f"Trial {trial_config.trial_name} produced no result.")

@@ -178,6 +178,35 @@ class TestTrialQueue:
                 await queue.submit(trial_config)
 
     @pytest.mark.unit
+    def test_should_retry_exception(self, queue):
+        """Test retry logic for exceptions."""
+        assert queue._should_retry_exception("SomeError")
+
+        queue._retry_config.exclude_exceptions = {"TimeoutError"}
+        assert not queue._should_retry_exception("TimeoutError")
+        assert queue._should_retry_exception("ValueError")
+
+        queue._retry_config.exclude_exceptions = None
+        queue._retry_config.include_exceptions = {"TimeoutError", "ValueError"}
+        assert queue._should_retry_exception("TimeoutError")
+        assert queue._should_retry_exception("ValueError")
+        assert not queue._should_retry_exception("RuntimeError")
+
+    @pytest.mark.unit
+    def test_calculate_backoff_delay_sec(self, queue):
+        """Test backoff delay calculation."""
+        queue._retry_config.min_wait_sec = 1.0
+        queue._retry_config.wait_multiplier = 2.0
+        queue._retry_config.max_wait_sec = 10.0
+
+        assert queue._calculate_backoff_delay_sec(0) == 1.0
+        assert queue._calculate_backoff_delay_sec(1) == 2.0
+        assert queue._calculate_backoff_delay_sec(2) == 4.0
+        assert queue._calculate_backoff_delay_sec(3) == 8.0
+        assert queue._calculate_backoff_delay_sec(4) == 10.0  # capped at max
+        assert queue._calculate_backoff_delay_sec(5) == 10.0  # capped at max
+
+    @pytest.mark.unit
     async def test_concurrent_execution(self, queue):
         """Test that trials execute concurrently."""
         configs = [

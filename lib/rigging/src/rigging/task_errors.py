@@ -108,7 +108,7 @@ DEFAULT_RETRY_EXCLUSIONS = frozenset(
 
 
 class RetrySettings(BaseModel):
-    """Retry budget and name/category filters shared by task execution paths."""
+    """Retry budget and name filters shared by task execution paths."""
 
     max_retries: int = Field(default=0, ge=0)
     include_exceptions: set[str] | None = Field(default=None, description="No name inclusion filter when None")
@@ -116,8 +116,6 @@ class RetrySettings(BaseModel):
         default_factory=lambda: set(DEFAULT_RETRY_EXCLUSIONS),
         description="Excluded names take precedence over included names",
     )
-    include_categories: set[ErrorCategory] | None = None
-    exclude_categories: set[ErrorCategory] = Field(default_factory=set)
     wait_multiplier: float = Field(default=1.0, ge=1, allow_inf_nan=False)
     min_wait_sec: float = Field(default=1.0, ge=0, allow_inf_nan=False)
     max_wait_sec: float = Field(default=60.0, ge=0, allow_inf_nan=False)
@@ -155,49 +153,16 @@ SHARED_RETRYABLE_ERROR_TYPES = frozenset(
 )
 
 
-# Deterministic infrastructure failures repeat identically on every attempt: a
-# fixed setup command, path, credential, quota, or resource limit decides the
-# outcome, so spending the retry budget cannot change it. Frameworks keep owning
-# these names in their category maps; this set only pins the retry disposition.
-DETERMINISTIC_INFRASTRUCTURE_ERROR_TYPES = frozenset(
-    {
-        "AddTestsDirError",
-        "AgentKilledBySignalError",
-        "ContextBudgetExceededError",
-        "DownloadVerifierDirError",
-        "EnrootMemoryLimitExceededError",
-        "EnvironmentSetupError",
-        "EnvironmentStopError",
-        "HealthcheckError",
-        "MissingExtraError",
-        "ModelAuthenticationError",
-        REWARD_FILE_EMPTY_ERROR,
-        REWARD_FILE_NOT_FOUND_ERROR,
-        "SandboxDiskFullError",
-        "SnapshotQuotaExceeded",
-        VERIFIER_OUTPUT_PARSE_ERROR,
-        VERIFIER_RUNTIME_ERROR,
-    }
-)
-
-
 def record_retry_disposition(
     exception_type: str,
     cause_type: str | None,
     provider_status_code: int | None,
     *,
     retryable_error_types: frozenset[str] = SHARED_RETRYABLE_ERROR_TYPES,
-    deterministic_error_types: frozenset[str] = DETERMINISTIC_INFRASTRUCTURE_ERROR_TYPES,
 ) -> RetryDisposition:
-    """Classify records without a disposition, honoring provider status and cause boundaries.
-
-    Deterministic names are permanent regardless of their cause: retrying the
-    identical setup cannot produce a different outcome.
-    """
+    """Classify records without a disposition, honoring provider status and cause boundaries."""
     if provider_status_code is not None:
         return http_retry_disposition(provider_status_code)
-    if exception_type in deterministic_error_types:
-        return RetryDisposition.PERMANENT
     if cause_type is None and exception_type in retryable_error_types:
         return RetryDisposition.TRANSIENT
     return RetryDisposition.UNKNOWN
@@ -288,6 +253,11 @@ def exception_identity(
             status_code,
             retryable_error_types=retryable_error_types,
         )
+    owned_disposition = getattr(error, "retry_disposition", None)
+    if owned_disposition is not None and status_code is None and disposition is not RetryDisposition.PERMANENT:
+        # The exception's producer owns its disposition; keep it unless provider
+        # status or a permanent cause already decided.
+        disposition = owned_disposition
     return ErrorIdentity(
         exception_type=exception_type,
         category=error_category(exception_type, categories=categories),
@@ -301,25 +271,15 @@ def exception_identity(
 def retry_delay(failure: ErrorIdentity | None, settings: RetrySettings, retries: int) -> float | None:
     """Return the shared retry delay, or None for a terminal attempt.
 
-    Exclusions match the outer name, cause name, or category and always win.
-    Permanent failures cannot be selected for retry. Unknown failures require
-    an explicit name or category inclusion. Transient failures retry by default
-    and must match an inclusion when an include filter is configured.
+    Only transient dispositions retry, within the configured budget and backoff.
+    Excluded names always win, and permanent or unknown failures stay terminal.
     """
     if failure is None or retries >= settings.max_retries:
         return None
+    if failure.retry_disposition is not RetryDisposition.TRANSIENT:
+        return None
     names = {failure.exception_type, failure.cause_type} - {None}
-    category = failure.category
-    if names.intersection(settings.exclude_exceptions or ()) or category in settings.exclude_categories:
-        return None
-    disposition = failure.retry_disposition
-    if disposition is RetryDisposition.PERMANENT:
-        return None
-    selected = bool(names.intersection(settings.include_exceptions or ())) or category in (
-        settings.include_categories or ()
-    )
-    filtered = settings.include_exceptions is not None or settings.include_categories is not None
-    if (filtered and not selected) or (disposition is RetryDisposition.UNKNOWN and not selected):
+    if names.intersection(settings.exclude_exceptions or ()):
         return None
     initial = min(settings.min_wait_sec, settings.max_wait_sec)
     if initial == 0:

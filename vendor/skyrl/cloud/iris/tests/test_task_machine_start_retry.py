@@ -279,6 +279,27 @@ async def test_model_failure_after_sampled_work_does_not_restart(worker_config, 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exit_code", "retries", "disposition"),
+    [(2, 0, RetryDisposition.PERMANENT), (137, 1, RetryDisposition.TRANSIENT)],
+    ids=["task-failure", "signal-exit"],
+)
+async def test_agent_setup_retries_signal_exit(worker_config, exit_code, retries, disposition):
+    environment = SHELL_ENVIRONMENT.model_copy(update={"setup_commands": (f"exit {exit_code}",)})
+    evidence = await rollout_evidence(
+        worker_config,
+        ResettingFactory(failures=0),
+        environment=environment,
+        retry=RetrySettings(max_retries=1, jitter=0),
+    )
+    assert evidence.result.failure is not None
+    assert evidence.result.failure.diagnostics["setup_exit_code"] == exit_code
+    assert evidence.result.failure.retry_disposition is disposition
+    assert evidence.result.metrics["rollout_retries"] == retries
+    assert len(evidence.waits) == retries
+
+
+@pytest.mark.asyncio
 async def test_unconfirmed_cleanup_keeps_a_transient_startup_failure_terminal(worker_config):
     close_error = ConnectionError("cleanup confirmation lost")
 

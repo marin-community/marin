@@ -5,7 +5,6 @@
 n_concurrent_trials: 16
 retry:
   max_retries: 10
-  include_categories: [infrastructure]
   include_exceptions:
     - InternalServerError
     - APIConnectionError

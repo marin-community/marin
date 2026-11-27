@@ -5,7 +5,6 @@ release_trial_payloads_in_memory: true
 retry:
   max_retries: 0
   exclude_exceptions: []
-  include_categories: [infrastructure]
   include_exceptions:
   - ContextManagementInfrastructureError
   wait_multiplier: 2.0

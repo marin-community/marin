@@ -354,16 +354,13 @@ Verifier rewards use `Grading(method="harbor:verifier")`. Samples link trajector
 `trajectory_uri`.
 
 Harbor saves each attempt's result, available trajectory and a record of whether the
-trajectory exists in one transaction. A completion manifest confirms environment cleanup, service
+trajectory exists in one transaction. Completion waits for environment cleanup, service
 shutdown and required artifact writes. Missing required evidence leaves the attempt
 incomplete. At finalization, Harbor selects the final attempt for each trial.
-A finished failed attempt can produce an unscored error row without confirmed
-teardown. Its rewards and partial artifacts remain raw evidence; they do not
-produce normalized rewards, trajectories or steps. An unfinished attempt or an
-incomplete result without an exception prevents sealing. A declared complete trajectory must have its required artifact.
-Resume can recover matching terminal Harbor files and rebuild derived tables. It keeps
-the original artifacts from every attempt. Only selected final attempts contribute
-normalized rows.
+An incomplete selected attempt prevents sealing, which marks the archive complete.
+A later successful retry can complete the run. Resume can recover matching finalized
+Harbor files and rebuild derived tables. It keeps the original artifacts from every
+attempt. Only selected final attempts contribute normalized rows.
 
 ### Trial error taxonomy
 
@@ -371,11 +368,10 @@ Preflight captures the selected Harbor runtime's error categories. Agent failure
 scoreable model outcomes. Passthrough failures need a verifier result to be scored.
 Infrastructure and undecided failures remain unscored. Relay loss, runtime-log collection
 failure and sandbox teardown failure are retryable infrastructure errors. A failed
-attempt with unconfirmed teardown retries only when selected by the shared retry
-settings and within its budget. Exclusions and permanent dispositions stop retries.
-Cancellation clears the reward. Unconfirmed results cannot contribute a score, even
-when the exception name normally denotes an agent failure. Unknown error names fail
-the evaluation. Marin requires the scored fraction to meet `min_completion_rate` (default 0.9), independently of archive sealing.
+attempt with unconfirmed teardown retries within its budget, even when a verifier has
+returned a reward. The archive requires confirmed teardown for the selected attempt.
+Cancellation clears the reward. Unknown error names fail the evaluation. Marin requires
+the scored fraction to meet `min_completion_rate` (default 0.9), independently of archive sealing.
 
 ## Ownership boundary
 

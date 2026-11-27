@@ -814,18 +814,13 @@ def test_missing_declared_terminal_trajectory_still_prevents_retry_archive_seali
     assert not ReadView(root).is_sealed()
 
 
-@pytest.mark.parametrize("state", ["scored", "unfinished", "no-error"])
-def test_incomplete_nonterminal_or_scored_result_remains_raw_evidence(tmp_path, state):
+def test_incomplete_scored_end_result_remains_evidence_without_normalized_sample(
+    tmp_path,
+):
     root = str(tmp_path / "archive")
-    event = _end_event(
-        tmp_path,
-        reward=1.0 if state == "scored" else None,
-        exception_type="RuntimeServiceError" if state == "unfinished" else None,
-    )
+    event = _end_event(tmp_path, reward=1.0)
     assert event.result is not None
     event.result.completion = None
-    if state == "unfinished":
-        event.result.finished_at = None
     archive = _open_archive(root, trials_dir=tmp_path)
     asyncio.run(archive.on_trial_end(event))
     with pytest.raises(ExceptionGroup, match="archive writes failed"):
@@ -840,45 +835,3 @@ def test_incomplete_nonterminal_or_scored_result_remains_raw_evidence(tmp_path, 
     assert native is not None
     assert TrialResult.model_validate_json(native).completion is None
     assert reader.blob_metadata(f"{prefix}/result.json")["trajectory_present"] is None
-
-
-@pytest.mark.parametrize(
-    "exception_type", ["RuntimeServiceError", "AgentTimeoutError", "UnrecognizedError"]
-)
-@pytest.mark.parametrize("resumed", [False, True])
-@pytest.mark.parametrize("reward", [None, 1.0])
-def test_unconfirmed_terminal_failure_seals_without_scoring_partial_evidence(
-    tmp_path, exception_type, resumed, reward
-):
-    root = str(tmp_path / "archive")
-    event = _end_event(tmp_path, reward=reward, exception_type=exception_type)
-    result = event.result
-    assert result is not None
-    result.completion = None
-    trial_dir = result.resolve_trial_path(tmp_path)
-    native = result.model_dump_json(indent=4)
-    (trial_dir / "result.json").write_text(native)
-    partial = b'{"steps": [unfinished'
-    (trial_dir / "agent" / "trajectory.json").write_bytes(partial)
-    archive = _open_archive(root, trials_dir=tmp_path)
-    if not resumed:
-        asyncio.run(archive.on_trial_end(event))
-    asyncio.run(archive.finalize([result.slimmed()]))
-    archive.seal()
-    archive.close()
-
-    reader = ReadView(root)
-    assert reader.is_sealed()
-    (row,) = _sample_rows(root)
-    sample = sample_from_archive_row(row)
-    assert sample.grading.score is None
-    assert sample.correct is None
-    assert sample.metrics == {}
-    assert sample.trajectory_uri is None
-    assert json.loads(sample.grading.detail)["error"]["type"] == exception_type
-    assert json.loads(sample.grading.detail)["rewards"] == {}
-    prefix = f"sources/harbor/t0/attempts/{result.id}"
-    assert reader.read_blob(f"{prefix}/result.json") == native.encode()
-    assert reader.read_blob(f"{prefix}/trajectory.json") == partial
-    assert reader.blob_metadata(f"{prefix}/result.json")["trajectory_present"] is None
-    assert reader.scan(ARCHIVE_STEPS_TABLE) is None

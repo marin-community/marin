@@ -6,13 +6,11 @@ from http import HTTPStatus
 import httpx
 import pytest
 from rigging.task_errors import (
-    DETERMINISTIC_INFRASTRUCTURE_ERROR_TYPES,
     ErrorCategory,
     ErrorIdentity,
     RetryDisposition,
     RetrySettings,
     exception_identity,
-    record_retry_disposition,
     retry_delay,
 )
 
@@ -83,7 +81,6 @@ def test_retry_budget_backoff_and_cause_filter_survive_serialization():
         min_wait_sec=2,
         wait_multiplier=2,
         max_wait_sec=5,
-        include_exceptions={"ConnectionError"},
     )
     policy = RetrySettings.model_validate_json(policy.model_dump_json())
     failure = ErrorIdentity(
@@ -93,20 +90,16 @@ def test_retry_budget_backoff_and_cause_filter_survive_serialization():
         retry_disposition=RetryDisposition.TRANSIENT,
     )
     assert [retry_delay(failure, policy, attempt) for attempt in range(4)] == [2, 4, 5, None]
-    excluded = policy.model_copy(update={"exclude_categories": {ErrorCategory.INFRASTRUCTURE}})
+    excluded = policy.model_copy(update={"exclude_exceptions": {"ConnectionError"}})
     assert retry_delay(failure, excluded, 0) is None
     permanent = failure.model_copy(update={"retry_disposition": RetryDisposition.PERMANENT})
     assert retry_delay(permanent, policy, 0) is None
 
 
-def test_unknown_failure_requires_explicit_category_or_name_inclusion():
+def test_unknown_failure_stays_terminal_without_filters():
     failure = ErrorIdentity(exception_type="NewVerifierError")
     policy = RetrySettings(jitter=0, max_retries=1)
     assert retry_delay(failure, policy, 0) is None
-    selected = policy.model_copy(update={"include_categories": {ErrorCategory.UNKNOWN}})
-    assert retry_delay(failure, selected, 0) == 1
-    excluded = selected.model_copy(update={"exclude_exceptions": {"NewVerifierError"}})
-    assert retry_delay(failure, excluded, 0) is None
 
 
 def test_a_known_wrapper_does_not_override_an_unknown_provider_status():
@@ -114,22 +107,24 @@ def test_a_known_wrapper_does_not_override_an_unknown_provider_status():
     assert retry_delay(failure, RetrySettings(jitter=0, max_retries=1), 0) is None
 
 
-def test_deterministic_infrastructure_names_are_permanent_regardless_of_cause():
-    for name in sorted(DETERMINISTIC_INFRASTRUCTURE_ERROR_TYPES):
-        assert record_retry_disposition(name, None, None) is RetryDisposition.PERMANENT
-        assert record_retry_disposition(name, "ConnectionError", None) is RetryDisposition.PERMANENT
+@pytest.mark.parametrize(
+    "owned, cause, expected",
+    [
+        (RetryDisposition.TRANSIENT, None, RetryDisposition.TRANSIENT),
+        (RetryDisposition.PERMANENT, None, RetryDisposition.PERMANENT),
+        # A permanent cause outranks a producer's transient call.
+        (RetryDisposition.TRANSIENT, PermissionError, RetryDisposition.PERMANENT),
+        # A producer's permanent call outranks a transient transport cause.
+        (RetryDisposition.PERMANENT, ConnectionError, RetryDisposition.PERMANENT),
+    ],
+)
+def test_exception_identity_keeps_a_producer_owned_disposition(owned, cause, expected):
+    class ProducerClassified(RuntimeError):
+        retry_disposition = owned
 
-
-def test_infrastructure_selection_cannot_retry_a_deterministic_setup_failure():
-    failure = ErrorIdentity(exception_type="EnvironmentSetupError", category=ErrorCategory.INFRASTRUCTURE)
-    assert failure.retry_disposition is RetryDisposition.PERMANENT
-    policy = RetrySettings(jitter=0, max_retries=3, include_categories={ErrorCategory.INFRASTRUCTURE})
-    assert retry_delay(failure, policy, 0) is None
-
-
-def test_framework_transient_names_keep_their_disposition_beside_deterministic_names():
-    teardown = "PhaseCancellationError"
-    assert record_retry_disposition(teardown, None, None, retryable_error_types=frozenset({teardown})) is (
-        RetryDisposition.TRANSIENT
-    )
-    assert record_retry_disposition("EnvironmentSetupError", None, None) is RetryDisposition.PERMANENT
+    error = ProducerClassified("producer classified this failure")
+    if cause is not None:
+        error.__cause__ = cause("cause evidence")
+    identity = exception_identity(error)
+    assert identity.retry_disposition is expected
+    assert identity.cause_type == (None if cause is None else cause.__name__)
