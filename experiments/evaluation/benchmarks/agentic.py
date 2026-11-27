@@ -591,6 +591,27 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             for dataset in (SWEBENCH_MULTILINGUAL, SWEBENCH_MULTILINGUAL_100)
         ),
         harbor_source(DS_1000_MINI_200, terminus, max_input_tokens=CAMPAIGN_MAX_INPUT_TOKENS, job=CAMPAIGN_JOB),
+        # Pi beside Terminus 2 at the context Terminus 2 gets, with BixBench's profile for that context, under the
+        # packages' own timeouts.
+        harbor_source(
+            TERMINAL_BENCH_2_1_3TRIAL,
+            BIXBENCH_PI,
+            max_input_tokens=LONG_MAX_INPUT_TOKENS,
+            max_output_tokens=LONG_MAX_OUTPUT_TOKENS,
+            trials=CAMPAIGN_TRIALS,
+            job=JobSettings(agent_install=PYTHON3_INSTALL + pi_install(BIXBENCH_PI)),
+        ),
+        *(
+            harbor_source(
+                dataset,
+                BIXBENCH_PI_32K,
+                max_input_tokens=CAMPAIGN_MAX_INPUT_TOKENS,
+                max_output_tokens=LONG_MAX_OUTPUT_TOKENS,
+                trials=trials,
+                job=JobSettings(agent_install=PYTHON3_INSTALL + pi_install(BIXBENCH_PI_32K)),
+            )
+            for dataset, trials in ((OT_TBLITE_3TRIAL, CAMPAIGN_TRIALS), (DS_1000_MINI_200, 1))
+        ),
         harbor_source(
             BFCL_PARITY_PI,
             CAMPAIGN_PI,
