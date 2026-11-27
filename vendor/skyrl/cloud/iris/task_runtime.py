@@ -100,7 +100,6 @@ from marinskyrl.process_diagnostics import (
 )
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
-from cloud.iris.role_topology import RoleTopology
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     RaySpillTarget,
@@ -2308,6 +2307,25 @@ def _print_env_snapshot() -> None:
         print(f"  {key}={os.environ.get(key, '<unset>')}", flush=True)
 
 
+def initialize_observer_handoff(config: DictConfig, rendezvous_dir: str) -> None:
+    """Publish this physical task's route only for the opt-in observer."""
+    native = config.skyrl.get("trainer", {}).get("policy", {}).get("levanter_config", {})
+    if not native.get("diagnostic_shutdown_observer", False):
+        return
+    from marin.rl.native_shutdown.artifact_handoff import write_route
+
+    root = os.environ.get(DEBUG_ARTIFACT_DIR_ENV) or os.environ.get("IRIS_OUTPUT_DIR")
+    if not root:
+        raise RuntimeError("Observer handoff requires its existing local artifact root")
+    write_route(
+        Path(root),
+        rendezvous_dir,
+        f"rank{_rank()}-{socket.gethostname()}",
+        os.environ["IRIS_TASK_ID"],
+        os.environ["IRIS_ATTEMPT_UID"],
+    )
+
+
 def main() -> None:
     cli_args = parse_args()
     config_path = Path(materialize_launch_config(str(cli_args.config)))
@@ -2336,6 +2354,7 @@ def main() -> None:
     if debug_artifact_root:
         ensure_debug_artifact_directories(debug_artifact_root)
         initialize_process_diagnostics(f"task-runtime-rank{_rank()}")
+    initialize_observer_handoff(launch_config, args.rendezvous_dir)
     # Stage task datasets on THIS node before Ray bootstrap (head + every worker).
     # Without this, only rank-0 has the extracted tasks and the rollout workers die
     # with FileNotFoundError on task.toml. See stage_task_data docstring.
