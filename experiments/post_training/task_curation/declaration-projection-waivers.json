@@ -19,6 +19,7 @@
     "Marin:forge-main-20261117",
     "Nemotron:Nemotron-RL-instruction_following-structured_outputs",
     "Nemotron:Nemotron-RL-knowledge-mcqa",
+    "Nemotron:nemotron_if",
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_reasoning_gym",
