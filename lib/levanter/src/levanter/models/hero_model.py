@@ -190,6 +190,7 @@ class ShortConv(eqx.Module):
         # With segment_ids (packed documents), a tap that reaches into a previous document is
         # zeroed so the conv never mixes across a boundary; the lag-0 (current-token) tap is
         # always kept.
+        x = reshard(x, P(_BATCH_AXES, _sequence_axis_of(x), None))
         weight = reshard(self.weight, P(None, None))
         return short_conv(weight, x, segment_ids, batch_axes=_BATCH_AXES)
 
@@ -312,6 +313,13 @@ class HeroAttention(eqx.Module):
             q = _reshard_sequence(q, seq_axis)
             k = _reshard_sequence(k, None)
             v = _reshard_sequence(v, None)
+        if self.cfg.attention_implementation in ("gpu_fa4_cute", "gpu_fa4_cute_sm100"):
+            # FA4 requires each query shard to carry the matching groups of K/V heads.
+            model_size = _mesh_axis_size(get_abstract_mesh(), "model")
+            head_axis = "model" if k.shape[2] % model_size == 0 else None
+            q = reshard(q, P(_BATCH_AXES, _sequence_axis_of(q), head_axis, None))
+            k = reshard(k, P(_BATCH_AXES, None, head_axis, None))
+            v = reshard(v, P(_BATCH_AXES, None, head_axis, None))
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         if seq_axis is not None:
             attn_out = _reshard_sequence(attn_out, residual_seq_axis)

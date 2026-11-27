@@ -73,13 +73,23 @@ def _score_reference(
 
 
 def _run(engine, model, mesh, requests):
+    choice_slots: dict[tuple[int, int], int] = {}
+
+    def record_slots(_iteration: int) -> None:
+        for slot, choice in engine.local_map.items():
+            assigned = choice_slots.setdefault(choice, slot)
+            if assigned != slot:
+                raise AssertionError(f"Choice {choice} moved from slot {assigned} to {slot}")
+
     start = time.monotonic()
-    result = engine.generate(requests)
+    result = engine.generate(requests, step_callback=record_slots)
     latency = time.monotonic() - start
     if result.logprobs is None:
         raise ValueError("The inference engine omitted generated log probabilities")
     if len(result.tokens) != sum(request.n_generations for request in requests):
         raise ValueError("The engine omitted a generated choice")
+    if engine.local_map or sorted(engine.free_slots) != list(range(engine.config.max_seqs)):
+        raise AssertionError("The engine failed to release all sequence slots")
 
     offset = 0
     comparisons = []
@@ -99,6 +109,8 @@ def _run(engine, model, mesh, requests):
             comparisons.append(
                 {
                     "request_id": request.request_id,
+                    "slot": choice_slots[(request.request_id, choice_index - offset)],
+                    "prompt_tokens": len(request.prompt_tokens),
                     "generated_tokens": choice,
                     "reference_greedy_tokens": expected_tokens.tolist(),
                     "token_agreement": int(np.count_nonzero(expected_tokens == choice)),
@@ -109,6 +121,8 @@ def _run(engine, model, mesh, requests):
                 }
             )
         offset += request.n_generations
+    if jax.process_index() == 0:
+        logger.info("Hero parity case %s", json.dumps({"seconds": latency, "choices": comparisons}))
     return result.tokens, {"seconds": latency, "choices": comparisons}
 
 
@@ -135,7 +149,11 @@ def main() -> None:
     if args.context == 262144 and config.global_query_log_scaling is None:
         raise ValueError("262K qualification requires a checkpoint with global query log scaling")
     config = dataclasses.replace(
-        config, inference_attention_implementation="gpu", moe_implementation="ring", capacity_factor=_EXPERT_AXIS_SIZE
+        config,
+        attention_implementation="gpu_fa4_cute",
+        inference_attention_implementation="gpu",
+        moe_implementation="ring",
+        capacity_factor=_EXPERT_AXIS_SIZE,
     )
     mesh = compact_grug_mesh(replica_axis_size=1, expert_axis_size=_EXPERT_AXIS_SIZE, model_axis_size=_MODEL_AXIS_SIZE)
     with jax.set_mesh(mesh):
@@ -148,6 +166,7 @@ def main() -> None:
             model,
             checkpoint.tokenizer,
             InferenceEngineConfig(
+                page_size=_PAGE_SIZE,
                 max_seq_len=args.context,
                 max_pages=args.context // _PAGE_SIZE + 2,
                 max_seqs=2,
@@ -172,7 +191,12 @@ def main() -> None:
             )
             for layer in engine.gen_state.cache.caches
         )
+        logger.info("Hero BF16 KV allocation per rank: %d bytes", kv_cache_bytes)
         _, short = _run(engine, model, mesh, [first, queued])
+        first_slots = {row["slot"] for row in short["choices"] if row["request_id"] == first.request_id}
+        second_slots = {row["slot"] for row in short["choices"] if row["request_id"] == queued.request_id}
+        if first_slots != second_slots or len(first_slots) != first.n_generations:
+            raise AssertionError(f"Queued requests did not recycle both sequence slots: {first_slots}, {second_slots}")
         first_turn, long = _run(engine, model, mesh, [_request(long_prompt, 2)])
         continuation = long_prompt + first_turn[0] + phrase[:1]
         assert len(continuation) + _OUTPUT_TOKENS == args.context
