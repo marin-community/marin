@@ -277,3 +277,29 @@ for the proposed paired re-score.
 To read a past run's policy, pass the `policy_reference` from its
 `canonical-evaluation.json` to `read_micro210_policy` in the policy module.
 Mini840 keeps its existing judge policy.
+
+### Micro210 choice-order revision
+
+The staged `2026.11.23-choice-shuffle` policy derives a 63-bit seed from the
+policy version and each stable task ID. It records that seed and the source-index
+permutation in each TruthfulQA task's `labels`, then moves the displayed choices,
+verifier labels, likelihood requests, and target index together. The build
+rejects any lettered-choice benchmark for which one letter is accepted on every
+unique task. The previous `2026.11.20-together` policy and prepared table remain
+unchanged.
+
+The new policy is content-pinned at
+`gs://marin-us-east1/evaluation-policies/micro210/2026.11.23-choice-shuffle/d99573b7d8e8801014e01afdcec0d53b7f3e857cf487556045be137392f28e59/policy.json`.
+Its prepared table has SHA-256
+`0cf6f6de9f9b68273b4954e25710cf83a3df522d01883af2e07ed0f03cdc44f3`
+and 440 rows. The code keeps the older Hugging Face reference as its default
+until the new policy and private prepared table receive immutable Hugging Face
+commit pins.
+
+Only `truthfulqa` scores change under this revision. On the 10 selected tasks,
+the shipped grader scores constant `A` at 10/10 under the old table and 3/10
+under the new table; the best constant letter now scores 5/10. GPQA-Diamond
+already has four distinct correct letters and MMLU-Pro has six, so their prompts,
+grader keys, and scores are unchanged. All other Micro210 rows are also unchanged.
+Model scores on TruthfulQA must be rerun under the new policy; old model scores
+cannot be converted from the constant-answer check.
