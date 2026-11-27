@@ -887,6 +887,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     ``u`` the per-element Adam direction (the Adam groups' betas and eps, no whole-matrix normalization),
     ``lr_h = lr_max s(t)^2`` and ``lambda = MUONC_ANNEAL_ADAMW_DECAY``: ``muonc_anneal_decay``'s head. The router and
     embedding keep ``muonc_anneal_adamc``'s AdamC decay; everything else keeps its rules."""
+    muonc_anneal_embed_no_decay: bool = False
+    """With ``muonc_anneal_adamc``: ``token_embed`` moves from the ``adamc_adam`` group to the ``embed`` group, Adam at
+    the Adam LR with no weight decay. The MoE router weights keep the ``adamc_adam`` decay; everything else keeps
+    ``muonc_anneal_adamc``'s rules."""
     muonh_law_cap_ball: bool = False
     """Law-cap ball (``scale_with_grug_muon_law_cap``) in place of the MuonH sphere for the ``muonh`` and ``kda_beta``
     groups, ``s(t) = lr_t / lr_max`` of the MuonH schedule: a plain Muon step at the matrix LR ``lr_m = lr_t`` until
@@ -1281,6 +1285,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             raise ValueError(
                 "muonc_anneal_head_adamw needs muonc_anneal_adamc and excludes muonc_anneal_head_token_norm"
             )
+        if self.muonc_anneal_embed_no_decay and (not self.muonc_anneal_adamc or self.embed_row_hyperball):
+            raise ValueError("muonc_anneal_embed_no_decay needs muonc_anneal_adamc and excludes embed_row_hyperball")
         if self.muonc_matrix_lr_mult < 0 or (
             self.muonc_matrix_lr_mult and (not self.muonc_anneal_decay or self.muonc_anneal_law_cap_ball)
         ):
@@ -1368,6 +1374,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "adam"
             if self.embed_row_hyperball and _TOKEN_EMBED.search(path_lower):
                 return EMBED_ROW_HYPERBALL_GROUP
+            if self.muonc_anneal_embed_no_decay and _TOKEN_EMBED.search(path_lower):
+                return "embed"
             adamc_router_embed = self.adamc_head_router_embed or self.muonc_anneal_adamc
             if adamc_router_embed and (_TOKEN_EMBED.search(path_lower) or _is_router_weight(path_lower)):
                 return ADAMC_ADAM_GROUP
