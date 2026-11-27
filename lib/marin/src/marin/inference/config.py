@@ -399,6 +399,20 @@ DEFAULT_SNOWBALL_AGENTX_PROFILE: LevanterServingProfile = "snowball_agentx_v5p"
 
 
 @dataclass(frozen=True)
+class SeparateExpertTiles:
+    """Grouped matrix-multiply tiles for separate serving projections."""
+
+    small_batch_limit: int
+    small_batch_rows: int
+    large_batch_rows: int
+    columns: int
+
+    def for_rows(self, token_rows: int) -> tuple[int, int]:
+        rows = self.small_batch_rows if token_rows <= self.small_batch_limit else self.large_batch_rows
+        return rows, self.columns
+
+
+@dataclass(frozen=True)
 class SnowballAgentxGeometry:
     """TPU mesh, cache capacity, and decode schedule for native AgentX."""
 
@@ -414,6 +428,7 @@ class SnowballAgentxGeometry:
     max_tokens_per_round: int
     prefill_buckets: tuple[int, ...]
     decode_buckets: tuple[int, ...]
+    separate_expert_tiles: SeparateExpertTiles | None = None
 
     @property
     def libtpu_init_args(self) -> str:
@@ -441,7 +456,7 @@ SNOWBALL_AGENTX_PROFILES: Mapping[LevanterServingProfile, SnowballAgentxGeometry
             device_kind="TPU v6 lite",
             expert_shards=8,
             scoped_vmem_kib=98_304,
-            max_pages=12_288,
+            max_pages=16_384,
             window_pages=2_880,
             retained_spans=1,
             retained_prompts=128,
@@ -449,6 +464,9 @@ SNOWBALL_AGENTX_PROFILES: Mapping[LevanterServingProfile, SnowballAgentxGeometry
             max_tokens_per_round=24,
             prefill_buckets=(256, 512, 2048, 8192, 16384, 32768, 49152),
             decode_buckets=(8, 16),
+            separate_expert_tiles=SeparateExpertTiles(
+                small_batch_limit=8192, small_batch_rows=128, large_batch_rows=256, columns=1280
+            ),
         ),
     }
 )

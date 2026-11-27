@@ -61,6 +61,7 @@ from levanter.grug._moe.ep_ring import (
     _moe_mlp_ep_small_local,
     _scatter_add_dispatch_combine,
 )
+from levanter.grug._moe.ep_serving import _moe_mlp_serving_ring_local
 from levanter.grug._moe.ep_ring_filtered import _moe_mlp_ep_ring_filtered_local
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
@@ -652,6 +653,38 @@ class MoEExpertMlp(eqx.Module):
         )
 
     @named_call
+    def serving_ring(
+        self,
+        x: Float[Array, "T D"],
+        selected_experts: Int[Array, "T K"],
+        combine_weights: Float[Array, "T K"],
+        *,
+        token_valid: Bool[Array, "T"],
+        mesh: jax.sharding.AbstractMesh,
+        megablox_tiles: tuple[int, int] | None,
+    ) -> Float[Array, "T D"]:
+        """Dispatch serving tokens with separate gate and up projections."""
+        token_spec = _token_spec_from_x(x, mesh)
+        token_axes = _axis_names(token_spec[0])
+        if "expert" not in token_axes or self.w_up is None:
+            raise ValueError("Separate serving dispatch requires expert-sharded tokens and separate projections")
+        if self.combine_in_fp32 or combine_weights.dtype != x.dtype:
+            raise ValueError("Separate serving dispatch requires activation-dtype expert combination")
+        return self._run_separate_experts(
+            partial(
+                _moe_mlp_serving_ring_local,
+                num_experts=self.w_gate.shape[0],
+                capacity_factor=self.capacity_factor,
+                megablox_tiles=megablox_tiles,
+            ),
+            x,
+            selected_experts,
+            combine_weights,
+            token_valid,
+            mesh,
+        )
+
+    @named_call
     def decode_small_ep(
         self,
         x: Float[Array, "T D"],
@@ -669,6 +702,19 @@ class MoEExpertMlp(eqx.Module):
             raise ValueError("Small expert decode requires activation-dtype expert combination")
         if _mesh_axis_size(mesh, "model") > 1:
             raise ValueError("Small expert decode requires unpartitioned expert matrix dimensions")
+        return self._run_separate_experts(
+            _moe_mlp_ep_small_local, x, selected_experts, combine_weights, token_valid, mesh
+        )
+
+    def _run_separate_experts(
+        self,
+        local_dispatch: Callable[..., jax.Array],
+        x: jax.Array,
+        selected_experts: jax.Array,
+        combine_weights: jax.Array,
+        token_valid: jax.Array,
+        mesh: jax.sharding.AbstractMesh,
+    ) -> jax.Array:
         activation = (
             self.activation.to_jax_fn() if isinstance(self.activation, ActivationFunctionEnum) else self.activation
         )
@@ -676,7 +722,7 @@ class MoEExpertMlp(eqx.Module):
         expert_spec = P("expert", None, None)
         gate, up = self.split_gate_up()
         run = shard_map(
-            partial(_moe_mlp_ep_small_local, activation=activation),
+            partial(local_dispatch, activation=activation),
             mesh=mesh,
             in_specs=(token_spec, token_spec, token_spec, token_spec, expert_spec, expert_spec, expert_spec),
             out_specs=token_spec,

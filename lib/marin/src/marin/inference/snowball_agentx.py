@@ -56,10 +56,16 @@ def load_agentx_model(
     ref: RepoRef,
     config: SnowballConfig,
     axis_mapping: ResourceMapping,
+    geometry: SnowballAgentxGeometry,
 ) -> SnowballLMHeadModel:
-    """Load packed BF16 experts and configure the TPU paged attention path."""
+    """Load BF16 experts in the layout selected by the AgentX hardware profile."""
+    separate_tiles = geometry.separate_expert_tiles
+    if separate_tiles is not None and config.router_combine_fp32:
+        raise ValueError("The separate expert projection profile requires BF16 expert combination")
     model = load_snowball_serving_model(
-        converter, ref, config, dtype=jnp.bfloat16, axis_mapping=axis_mapping, pack_expert_weights=True
+        converter, ref, config, dtype=jnp.bfloat16, axis_mapping=axis_mapping, pack_expert_weights=separate_tiles is None
     )
-    model = model.with_paged_attention("tpu_v3").with_split_decode_cache()
-    return model.with_expert_sharded_kv()
+    model = model.with_paged_attention("tpu_v3").with_split_decode_cache().with_expert_sharded_kv()
+    if separate_tiles is not None:
+        model = model.with_separate_serving_experts(separate_tiles.for_rows)
+    return model

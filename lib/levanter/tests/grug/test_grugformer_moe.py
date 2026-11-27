@@ -2289,6 +2289,44 @@ def test_moe_mlp_runs_with_ep_axis_when_available():
         assert jnp.isfinite(out_ragged).all()
 
 
+@pytest.mark.multidevice
+def test_separate_expert_serving_processes_skewed_routes_in_chunks():
+    with use_test_devices(4) as devices, jax.set_mesh(Mesh(devices, ("expert",), axis_types=(AxisType.Explicit,))):
+        mesh = jax.sharding.get_abstract_mesh()
+        experts = P("expert", None, None)
+        rows = P("expert", None)
+        identity = jnp.eye(8, 16, dtype=jnp.bfloat16)
+        bank = jnp.broadcast_to(identity, (16, 8, 16))
+        scales = jnp.arange(1, 17, dtype=jnp.bfloat16)
+        mlp = MoEExpertMlp(
+            w_gate=jax.sharding.reshard(scales[:, None, None] * bank, experts),
+            w_up=jax.sharding.reshard(bank, experts),
+            w_down=jax.sharding.reshard(bank.swapaxes(1, 2), experts),
+            implementation="ring",
+            activation=ActivationFunctionEnum.relu,
+            capacity_factor=4.0,
+        )
+        tokens = jax.sharding.reshard(
+            jnp.broadcast_to(jnp.array([1, -1, 2, 0, 0, 0, 0, 0], jnp.bfloat16), (512, 8)), rows
+        )
+        # All four routes belong to the first expert shard. Padding still leaves more
+        # active assignments than the balanced workspace on that shard can hold.
+        indices = jax.sharding.reshard(jnp.broadcast_to(jnp.arange(4, dtype=jnp.int32), (512, 4)), rows)
+        weights = jax.sharding.reshard(jnp.full((512, 4), 0.25, dtype=jnp.bfloat16), rows)
+        valid = jax.sharding.reshard(jnp.arange(512) % 5 != 0, P("expert"))
+
+        @jax.jit
+        def run(x, selected_experts, combine, token_valid):
+            return mlp.serving_ring(
+                x, selected_experts, combine, token_valid=token_valid, mesh=mesh, megablox_tiles=None
+            )
+
+        output = run(tokens, indices, weights, valid)
+    expected = np.broadcast_to([2.5, 0, 10, 0, 0, 0, 0, 0], (512, 8)).copy()
+    expected[::5] = 0
+    np.testing.assert_array_equal(output, expected)
+
+
 def test_functional_moe_mlp_accepts_enum_and_callable_activation():
     tokens = 16
     hidden_dim = 16
