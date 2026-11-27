@@ -373,11 +373,18 @@ uv run marin-serve iris s3://my-bucket/export --gpu H100x8 \
 ```
 
 The tokenizer source supplies the chat template unless `--chat-template` overrides
-it. Pin its revision independently of the weights.
+it. Pin its revision independently of the weights. Use an HF repo id, or a
+repository-relative tokenizer directory included in the uploaded workspace.
+Tokenizer files are resolved on the Iris worker; directories elsewhere on the
+client are not uploaded by this option.
 
 Native vLLM launches with `--model-loader-extra-config '{"distributed":true}'`
 default the [RunAI streamer child environment](https://github.com/run-ai/runai-model-streamer/blob/0.16.1/docs/src/env-vars.md) to concurrency 4 and a 16 GiB
-buffer limit. This includes Iris serving, evaluation and RL launches that select
+CPU read-buffer limit per loading process (rank). Budget container CPU memory
+for the sum across local ranks, plus other allocations. [Distributed GPU broadcast
+staging buffers](https://github.com/run-ai/runai-model-streamer/blob/0.16.1/docs/src/usage.md#distributed-streaming) are separate from this CPU limit.
+
+These defaults apply to Iris serving, evaluation and RL launches that select
 distributed loading. Explicit loader JSON settings take precedence; existing
 `RUNAI_STREAMER_CONCURRENCY` and `RUNAI_STREAMER_MEMORY_LIMIT` environment values
 are preserved. Non-distributed loading is unchanged. Defaults leave launcher

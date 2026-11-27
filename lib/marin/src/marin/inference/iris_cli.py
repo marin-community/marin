@@ -374,7 +374,8 @@ def _wait_and_report_endpoint(
     default=None,
     help=(
         "Tokenizer source when the weights location carries none (e.g. object-store exports): "
-        "an HF repo id or local path. Also drives the tool chat template resolution."
+        "an HF repo id or a repository-relative directory included in the uploaded workspace. "
+        "Also drives the tool chat template resolution."
     ),
 )
 @click.option(
