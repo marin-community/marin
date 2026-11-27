@@ -649,6 +649,20 @@ def test_verifier_change_selects_library_and_dependent_marin_tests(tmp_path: Pat
     assert verifier_leg.extras == "--extra all"
 
 
+def test_verifier_source_change_selects_the_grader_interpreter_sweep(tmp_path: Path) -> None:
+    # The sweep imports every verifyit module at run time; no import edge reaches it from a grading mode.
+    write(tmp_path, "lib/verifyit/src/verifyit/__init__.py")
+    write(tmp_path, "lib/verifyit/src/verifyit/modes/__init__.py")
+    write(tmp_path, "lib/verifyit/src/verifyit/modes/ifeval.py", "PATTERN = 'x'\n")
+    write(tmp_path, "lib/verifyit/tests/test_grader_interpreters.py", "import verifyit\n\ndef test_sweep(): ...\n")
+    write(tmp_path, "lib/verifyit/tests/test_grade.py", "def test_grade(): ...\n")
+
+    matrix = select_matrix(["lib/verifyit/src/verifyit/modes/ifeval.py"], tmp_path)
+
+    assert "verifyit" in scopes_in(matrix)
+    assert leg_paths(matrix, "verifyit") == ["lib/verifyit/tests/test_grader_interpreters.py"]
+
+
 @pytest.mark.parametrize("run_all_tests", [False, True])
 def test_verifier_manifest_and_full_runs_select_entire_library(tmp_path: Path, run_all_tests: bool) -> None:
     write(tmp_path, "lib/verifyit/tests/test_grade.py", "def test_grade(): ...\n")

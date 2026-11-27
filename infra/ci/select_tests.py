@@ -92,17 +92,24 @@ CI_BROAD_TRIGGERS: frozenset[str] = frozenset({"infra/ci/select_tests.py", ".git
 BROAD_TRIGGERS = LOCAL_BROAD_TRIGGERS | CI_BROAD_TRIGGERS
 
 _NATIVE_CONFIG = ("vendor/skyrl/cloud/iris/", "vendor/skyrl/skyrl-train/skyrl_train/config/")
-MARIN_NATIVE_CONFIG_TESTS = {
-    "tests/rl/test_rl_launch_documents.py": ("vendor/skyrl/", "lib/skyrlrecipe/"),
-    "experiments/post_training/curriculum_rl/test_launch.py": _NATIVE_CONFIG,
-    "tests/rl/test_skyrl.py": (
-        *_NATIVE_CONFIG,
-        "vendor/skyrl/marinskyrl/checkpoint_paths.py",
-        "vendor/skyrl/skyrl-train/skyrl_train/utils/tracking.py",
-    ),
-    "experiments/post_training/rl_tests/test_rl.py": ("vendor/skyrl/", "lib/skyrlrecipe/"),
-    "experiments/post_training/rl_tests/test_rl_gate.py": _NATIVE_CONFIG,
-    "experiments/post_training/rl_tests/test_rl_publication.py": _NATIVE_CONFIG,
+# Tests the import graph misses, by scope: a change under one of a test's prefixes runs it.
+# Marin's launch tests read SkyRL's native configuration, which no import names. The grader-interpreter
+# sweep imports every verifyit module at run time, on the Python versions of the grader images; its static
+# imports reach only verifyit.spec and that module's own imports, not the grading modes.
+DIRECT_TEST_TRIGGERS: dict[str, dict[str, tuple[str, ...]]] = {
+    "marin": {
+        "tests/rl/test_rl_launch_documents.py": ("vendor/skyrl/", "lib/skyrlrecipe/"),
+        "experiments/post_training/curriculum_rl/test_launch.py": _NATIVE_CONFIG,
+        "tests/rl/test_skyrl.py": (
+            *_NATIVE_CONFIG,
+            "vendor/skyrl/marinskyrl/checkpoint_paths.py",
+            "vendor/skyrl/skyrl-train/skyrl_train/utils/tracking.py",
+        ),
+        "experiments/post_training/rl_tests/test_rl.py": ("vendor/skyrl/", "lib/skyrlrecipe/"),
+        "experiments/post_training/rl_tests/test_rl_gate.py": _NATIVE_CONFIG,
+        "experiments/post_training/rl_tests/test_rl_publication.py": _NATIVE_CONFIG,
+    },
+    "verifyit": {"lib/verifyit/tests/test_grader_interpreters.py": ("lib/verifyit/src/verifyit/",)},
 }
 
 # uv package names and pytest paths for each workspace scope.
@@ -803,9 +810,10 @@ def classify(
 
         forced.update(scope for scope, inputs in EXTERNAL_TEST_INPUTS.items() if filepath in inputs)
 
-        for owner, prefixes in MARIN_NATIVE_CONFIG_TESTS.items():
-            if filepath.startswith(prefixes) and (repo_root / owner).exists():
-                direct_tests["marin"].append(owner)
+        for scope, owners in DIRECT_TEST_TRIGGERS.items():
+            for owner, prefixes in owners.items():
+                if filepath.startswith(prefixes) and (repo_root / owner).exists():
+                    direct_tests[scope].append(owner)
 
         # A native crate's rust/ tree is not on any import root, so this branch
         # runs before source-root handling. The change is invisible to the Python
