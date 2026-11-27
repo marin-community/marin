@@ -84,7 +84,7 @@ def test_hero_export_load_matches_experiment_logits(rope_fused, expert_layout, s
                     exported.update({f"{stem}{boundary}{i}.{projection}": value[i] for i in range(exp_cfg.num_experts)})
                 else:
                     exported[name] = value
-        hf_config = exp_cfg.to_hf_config(exp_cfg.vocab_size, {"grugmoe_artifact_schema_version": 2})
+        hf_config = exp_cfg.to_hf_config(exp_cfg.vocab_size)
         cfg = HeroConfig.from_hf_config(hf_config)
         cfg = dataclasses.replace(cfg, attention_implementation="reference", moe_implementation="ring")
         native = HeroLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(99))
@@ -94,11 +94,22 @@ def test_hero_export_load_matches_experiment_logits(rope_fused, expert_layout, s
         for name, value in canonical.items():
             np.testing.assert_array_equal(np.asarray(actual_weights[name]), np.asarray(value), err_msg=name)
         tokens = jnp.broadcast_to(jnp.arange(7, dtype=jnp.int32) * 3 + 1, (jax.device_count(), 7))
-        ids = hax.named(tokens, (Axis("batch", jax.device_count()), Axis("position", 7)))
-        segments = jnp.broadcast_to(jnp.array([0, 0, 0, 1, 1, 1, 1]), tokens.shape)
+        Batch = Axis("batch", jax.device_count())
+        Pos = Axis("position", 7)
+        ids = hax.named(tokens, (Batch, Pos)).rearrange((Pos, Batch))
+        segment_ids = jnp.array([0, 0, 0, 1, 1, 1, 1])
+        segments = jnp.broadcast_to(segment_ids, tokens.shape)
         experiment_mask = GrugAttentionMask(is_causal=True, segment_ids=(segments, segments)) if segmented else None
-        native_mask = AttentionMask.causal().with_segment_ids(hax.named(segments, ids.axes)) if segmented else None
+        native_mask = (
+            AttentionMask.causal().with_segment_ids(
+                hax.named(segment_ids, Pos), hax.named(segment_ids, Pos.alias("key_position"))
+            )
+            if segmented
+            else None
+        )
         expected = np.asarray(eqx.filter_jit(lambda m, t: m.logits(t, mask=experiment_mask))(experiment, tokens))
-        actual = np.asarray(hax.named_jit(lambda m, t: m(t, native_mask))(native, ids).array)
+        actual = np.asarray(
+            hax.named_jit(lambda m, t: m(t, native_mask))(native, ids).rearrange((Batch, Pos, ...)).array
+        )
         np.testing.assert_allclose(actual, expected, rtol=1e-4, atol=1e-4)
         np.testing.assert_array_equal(actual.argmax(axis=-1), expected.argmax(axis=-1))

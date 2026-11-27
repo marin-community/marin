@@ -16,6 +16,7 @@ from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.models.hero import HeroConfig
 from levanter.models.hero_model import HeroLMHeadModel
+from levanter.testing.devices import use_test_devices
 
 
 def _assert_mixed_paged_decode_matches_forward(model):
@@ -118,9 +119,12 @@ def test_hero_paged_decode_matches_full_forward(sliding_window, rope_fused):
 
 # The first engine.generate call compiles the generation loop on each CI worker.
 @pytest.mark.timeout(120)
-@pytest.mark.parametrize("prompt_length", [3, 4])
+@pytest.mark.parametrize(
+    "prompt_length, model_axis_size, expert_axis_size",
+    [(3, 1, 1), (4, 1, 1), pytest.param(3, 2, 2, marks=pytest.mark.multidevice)],
+)
 @jax.default_matmul_precision("highest")
-def test_hero_engine_clones_preserve_convolution_history(prompt_length):
+def test_hero_engine_clones_preserve_convolution_history(prompt_length, model_axis_size, expert_axis_size):
     """Cloning partial and complete KV pages preserves all emitted tokens and scores."""
     cfg = HeroConfig(
         vocab_size=32,
@@ -144,8 +148,14 @@ def test_hero_engine_clones_preserve_convolution_history(prompt_length):
         initializer_std=0.2,
         attention_implementation="reference",
         inference_attention_implementation="reference",
+        moe_implementation="ring",
+        capacity_factor=float(expert_axis_size),
     )
-    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+    device_count = model_axis_size * expert_axis_size
+    with (
+        use_test_devices(device_count),
+        jax.set_mesh(compact_grug_mesh(model_axis_size=model_axis_size, expert_axis_size=expert_axis_size)),
+    ):
         model = HeroLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(29))
         blocks = model.transformer.stacked_blocks.stacked
         for site in [lambda b: b.attn.sconv_k.weight, lambda b: b.sconv_attn.weight, lambda b: b.sconv_mlp.weight]:
@@ -167,8 +177,16 @@ def test_hero_engine_clones_preserve_convolution_history(prompt_length):
         engine = InferenceEngine.from_model_with_config(model, None, config)
         params = dataclasses.replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(prompt_length + 4))
         request = Request([2, 7, 9, 3][:prompt_length], 0, params, n_generations=1)
-        reference = engine.generate([request])
         cloned = engine.generate([dataclasses.replace(request, n_generations=2)])
-        assert len(reference.tokens[0]) == 4
-        assert cloned.tokens == reference.tokens * 2
-        np.testing.assert_allclose(cloned.logprobs, reference.logprobs * 2, rtol=1e-4, atol=1e-4)
+        assert cloned.logprobs is not None
+        assert len(cloned.tokens) == 2
+        for choice, logprobs in zip(cloned.tokens, cloned.logprobs, strict=True):
+            assert len(choice) == 4
+            full = jnp.asarray(request.prompt_tokens + choice)
+            batch = jax.device_count() // model_axis_size
+            ids = hax.named(jnp.broadcast_to(full, (batch, full.size)), ("batch", "position"))
+            logits = model(ids).array[0, prompt_length - 1 : -1]
+            expected = jnp.argmax(logits, axis=-1)
+            np.testing.assert_array_equal(choice, expected)
+            scores = jax.nn.log_softmax(logits, axis=-1)
+            np.testing.assert_allclose(logprobs, scores[jnp.arange(len(choice)), expected], rtol=1e-4, atol=1e-4)

@@ -614,7 +614,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
     def _match_converter_config(
         hf_config: HfConfig, candidates: Sequence[type[HFCompatConfig]]
     ) -> type[HFCompatConfig]:
-        """Match legacy recipes by the Transformers class declared by their converter."""
+        """Match remaining recipes by the Transformers class declared by their converter."""
         config_name = type(hf_config).__name__
         for candidate in candidates:
             # Defaults for other architectures can load gated tokenizers.

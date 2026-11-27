@@ -589,7 +589,7 @@ class HeroTransformer(eqx.Module):
 
 
 class HeroLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[HeroConfig]):
-    """Named-tensor boundary around the schema-v2 Hero inference snapshot."""
+    """Named-tensor boundary for native Hero inference."""
 
     transformer: HeroTransformer
     _config: HeroConfig = eqx.field(static=True)
@@ -617,21 +617,32 @@ class HeroLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[HeroConfig])
     ) -> NamedArray:
         if pos_ids is not None:
             raise ValueError("Hero full forward uses contiguous positions; use decode for explicit positions")
-        if isinstance(attn_mask, NamedArray) or (attn_mask is not None and not attn_mask.is_causal):
+        if attn_mask is not None and (
+            not isinstance(attn_mask, LmHeadAttentionMask)
+            or not attn_mask.is_causal
+            or attn_mask.explicit_mask is not None
+            or attn_mask.causal_offset is not None
+            or attn_mask.sliding_window is not None
+            or attn_mask.bidirectional_window is not None
+        ):
             raise ValueError("Hero expects a causal AttentionMask with optional segment IDs")
-        raw = input_ids.array
-        lead, seq_len = raw.shape[:-1], raw.shape[-1]
-        batch = math.prod(lead) if lead else 1
-        tokens = reshard(raw.reshape(batch, seq_len), P(_BATCH_AXES, _seq_axis(get_abstract_mesh())))
-        segments = None
+
+        Pos = input_ids.resolve_axis(self.Pos.name)
+        ordered = input_ids.rearrange((..., Pos))
+        batch = math.prod(ordered.array.shape[:-1])
+        token_spec = P(_BATCH_AXES, _seq_axis(get_abstract_mesh()))
+        tokens = reshard(ordered.array.reshape(batch, Pos.size), token_spec)
+        mask = AttentionMask.causal()
         if attn_mask is not None and attn_mask.segment_ids is not None:
-            segment_array = attn_mask.segment_ids[0].array.reshape(batch, seq_len)
-            segment_array = reshard(segment_array, _batch_spec())
-            segments = (segment_array, segment_array)
-        mask = AttentionMask(is_causal=True, segment_ids=segments)
+            query, keys = attn_mask.segment_ids
+            if self.KeyPos.name in keys.axis_names:
+                keys = keys.rename({self.KeyPos.name: Pos.name})
+            query_ids = reshard(query.broadcast_to(ordered.axes).array.reshape(batch, Pos.size), token_spec)
+            key_ids = reshard(keys.broadcast_to(ordered.axes).array.reshape(batch, Pos.size), token_spec)
+            mask = mask.with_segment_ids(query_ids, key_ids)
         hidden = self.transformer(tokens, mask)
-        hidden = hidden.reshape((*lead, seq_len, self.Embed.size))
-        return hax.named(hidden, (*input_ids.axes, self.Embed))
+        hidden = hidden.reshape((*ordered.array.shape, self.Embed.size))
+        return hax.named(hidden, (*ordered.axes, self.Embed)).rearrange((*input_ids.axes, self.Embed))
 
     def get_lm_head(self) -> NamedArray:
         return hax.named(reshard(self.transformer.output_proj, P(None, "model")), (self.Embed, self.Vocab))

@@ -290,7 +290,10 @@ class SnowballConfig(HFCompatConfig):
     @classmethod
     def matches_hf_config(cls, hf_config: HfConfig) -> bool:
         schema = getattr(hf_config, GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY, GRUG_MOE_ARTIFACT_SCHEMA_VERSION)
-        return hf_config.model_type == GRUG_MOE_MODEL_TYPE and schema == GRUG_MOE_ARTIFACT_SCHEMA_VERSION
+        return hf_config.model_type == GRUG_MOE_MODEL_TYPE and schema in (
+            GRUG_MOE_ARTIFACT_SCHEMA_VERSION,
+            str(GRUG_MOE_ARTIFACT_SCHEMA_VERSION),
+        )
 
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig) -> "SnowballConfig":
@@ -380,8 +383,8 @@ def _assert_snowball_recipe(hf_config: HfConfig) -> None:
             f"snowball pins grugmoe_attention_mode={GRUG_MOE_ATTENTION_MODE!r}, got {mode!r}; "
             "this checkpoint uses a different Grug attention recipe and needs its own named snapshot."
         )
-    schema = getattr(hf_config, GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY, GRUG_MOE_ARTIFACT_SCHEMA_VERSION)
-    if int(schema) != GRUG_MOE_ARTIFACT_SCHEMA_VERSION:
+    if not SnowballConfig.matches_hf_config(hf_config):
+        schema = getattr(hf_config, GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY)
         raise ValueError(f"snowball supports artifact schema {GRUG_MOE_ARTIFACT_SCHEMA_VERSION}, got {schema}.")
     for flag in ("disable_pko", "disable_long_rope"):
         val = getattr(hf_config, flag, True)

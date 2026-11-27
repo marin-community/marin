@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Configuration for the schema-v2 Hero inference snapshot."""
+"""Configuration for native Hero inference."""
 
 import dataclasses
 import math
@@ -23,6 +23,8 @@ from levanter.models.snowball import (
 
 
 _HERO_SCHEMA_VERSION = 2
+_HERO_LOG_SCALING_SCHEMA_VERSION = 3
+_HERO_LOG_SCALING_FIELDS = ("log_scaling_n_floor", "log_scaling_alpha", "log_scaling_power")
 _HERO_HIDDEN_DIM = 6144
 
 
@@ -119,21 +121,24 @@ class HeroConfig(HFCompatConfig):
 
     @classmethod
     def matches_hf_config(cls, hf_config: PretrainedConfig) -> bool:
-        return (
-            hf_config.model_type == GRUG_MOE_MODEL_TYPE
-            and getattr(hf_config, GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY, None) == _HERO_SCHEMA_VERSION
-        )
+        return hf_config.model_type == GRUG_MOE_MODEL_TYPE and getattr(
+            hf_config, GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY, None
+        ) in (_HERO_SCHEMA_VERSION, _HERO_LOG_SCALING_SCHEMA_VERSION)
 
     @classmethod
     def from_hf_config(cls, hf_config: PretrainedConfig) -> "HeroConfig":
         if not cls.matches_hf_config(hf_config):
-            raise ValueError("Hero requires a grug_moe schema-v2 checkpoint")
+            raise ValueError("Hero requires a grug_moe schema-v2 or schema-v3 checkpoint")
+        if any(getattr(hf_config, field, None) is not None for field in _HERO_LOG_SCALING_FIELDS):
+            raise ValueError("Native Hero serving does not support global query log scaling")
         if getattr(hf_config, "grugmoe_attention_mode", None) != GRUG_MOE_ATTENTION_MODE:
             raise ValueError("Hero requires production attention")
+        for flag in ("disable_pko", "disable_long_rope"):
+            if getattr(hf_config, flag, True) is not True:
+                raise ValueError(f"Hero production attention requires {flag}=True")
         if getattr(hf_config, "tie_word_embeddings", False):
             raise ValueError("Hero requires independent embeddings and output weights")
-        # Schema-v2 exports write one canonical name per architecture field. Required fields
-        # are read directly so incomplete artifacts cannot inherit a different model's defaults.
+        # Read required architecture fields directly so incomplete exports fail during loading.
         return cls(
             vocab_size=hf_config.vocab_size,
             hidden_dim=hf_config.hidden_size,

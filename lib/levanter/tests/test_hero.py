@@ -37,14 +37,27 @@ def test_hero_and_snowball_reject_each_others_checkpoint_recipe():
     with pytest.raises(ValueError):
         SnowballConfig.from_hf_config(hero)
 
-    hero.grugmoe_artifact_schema_version = 3
-    with pytest.raises(ValueError):
-        HeroConfig.from_hf_config(hero)
+
+def test_hero_rejects_checkpoint_with_global_query_log_scaling():
+    hf_config = HeroConfig().to_hf_config(
+        128,
+        {
+            "grugmoe_artifact_schema_version": 3,
+            "log_scaling_n_floor": 65536,
+            "log_scaling_alpha": 0.1,
+            "log_scaling_power": 2.0,
+        },
+    )
+    with pytest.raises(ValueError, match="query log scaling"):
+        HeroConfig.from_hf_config(hf_config)
 
 
-@pytest.mark.parametrize("config", [HeroConfig(), SnowballConfig()])
-def test_hf_checkpoint_discovery_distinguishes_grug_recipes(tmp_path, config):
-    config.to_hf_config(4).save_pretrained(tmp_path)
+@pytest.mark.parametrize(
+    "config, schema",
+    [(SnowballConfig(), "1"), (HeroConfig(), 2), (HeroConfig(), 3)],
+)
+def test_hf_checkpoint_discovery_distinguishes_grug_recipes(tmp_path, config, schema):
+    config.to_hf_config(4, {"grugmoe_artifact_schema_version": schema}).save_pretrained(tmp_path)
     _save_tiny_tokenizer(tmp_path)
     converter = HFCheckpointConverter.from_hf(str(tmp_path))
     assert converter.LevConfigClass is type(config)
