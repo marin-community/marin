@@ -4121,7 +4121,55 @@
     },
     "TaskTrove:laion__nemotron-gym-structured-outputs-v4": {
       "status": "Missing",
-      "intended_use": null
+      "intended_use": "train",
+      "pipeline": {
+        "name": "tasktrove-native-structured-nop-qualified-image-pinned",
+        "files": [
+          "tasks.parquet"
+        ],
+        "source": "open-athena/tasktrove-native-structured-nop-qualified-image-pinned-20261127-v1",
+        "version": "2026.11.13.1",
+        "revision": "4ee9e1f30777c7aedbb20536ffa5d2490a70fb07"
+      },
+      "current_release": {
+        "url": "https://huggingface.co/datasets/open-athena/tasktrove-native-structured-nop-qualified-image-pinned-20261127-v1/tree/4ee9e1f30777c7aedbb20536ffa5d2490a70fb07",
+        "repo": "open-athena/tasktrove-native-structured-nop-qualified-image-pinned-20261127-v1",
+        "revision": "4ee9e1f30777c7aedbb20536ffa5d2490a70fb07"
+      },
+      "dataset_id": "open-athena/tasktrove-native-structured-nop-qualified-image-pinned-20261127-v1",
+      "dataset_revision": "4ee9e1f30777c7aedbb20536ffa5d2490a70fb07",
+      "actor_census_input": {
+        "dataset_id": "open-athena/tasktrove-native-structured-nop-qualified-image-pinned-20261127-v1",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/tasktrove-declared/2026.11.24.1/native-structured-qualified-publication-census-v1/census/actor/.artifact.json",
+        "carry_forward": null,
+        "measured_tasks": 53766,
+        "dataset_revision": "4ee9e1f30777c7aedbb20536ffa5d2490a70fb07",
+        "converter_version": "2026.11.13.1",
+        "task_specs_sha256": "3ff9b313340a7d64ac49d180c1ca10aee99207da326b24996a9e5b0a997a4a5a",
+        "converter_revision": "9a85416bb9d03d6a317dc5009925d98e66a4ff87"
+      },
+      "route": "agentic",
+      "route_basis": {
+        "catalog": "converted_spec_census/daytona/roles/agent",
+        "counts": {
+          "unsupported": 53766
+        }
+      },
+      "binding": {
+        "declaration": "experiments/human/long-loop-data-ablation/mix-candidates/rl_sources_on_main.csv (holiday burndown worktree declaration)",
+        "evidence_commit": "90a737e9ac",
+        "served_r40_status": "Missing",
+        "atlas_release": "atlas-2026.11.27 routes this source to R41; unpublished at binding time",
+        "census_note": "Census measured the declared parent release; only the actor and grader image references changed.",
+        "repin": {
+          "parent": {
+            "repo": "open-athena/tasktrove-native-structured-nop-qualified-20261125-b-v1",
+            "revision": "b2ac6f4387cda36e97b0a8b7d74a842deb39673a"
+          },
+          "change": "actor and grader docker_build (one shared context, sha256 3809fc0d...) replaced by its built image ghcr.io/marin-community/rl-data-tasktrove-structured-outputs-v4@sha256:518b2244...; no other field changed",
+          "evidence": "image-lineage.json and identity-inventory.jsonl in the release; jobs /benfeuer/mochi-campaign-structured-v4-build-claude-20261127a and -reseal-claude-20261127a"
+        }
+      }
     },
     "TaskTrove:smartie-calibforge-rebuilt-v1": {
       "status": "Pending",
