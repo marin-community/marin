@@ -1,7 +1,8 @@
 import asyncio
 import json
-from threading import Event
+from contextlib import nullcontext
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +11,7 @@ from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, LATEST_CHECKPO
 
 from skyrl_train.callbacks.base import CallbackHandler, TrainerCallback, TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import create_callbacks_from_config
+from skyrl_train.callbacks.types import CallbackErrorBehavior
 from skyrl_train.checkpoint_listing import ROLLOUT_STATE_FILENAME
 from skyrl_train.hf_export_schema import TRAINER_STATE_FILENAME
 from skyrl_train.rollouts.context import TrainingContextState
@@ -230,7 +232,7 @@ async def test_periodic_checkpoint_can_be_selected_on_write_once_storage(tmp_pat
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [None, "shard_write", "inference_restore"])
+@pytest.mark.parametrize("failure", [None, "shard_write", "inference_restore", "on_save"])
 async def test_checkpoint_publication_waits_for_policy_write(tmp_path, monkeypatch, failure):
     marker = tmp_path / LATEST_CHECKPOINT_FILE
     marker.write_text("1")
@@ -261,8 +263,12 @@ async def test_checkpoint_publication_waits_for_policy_write(tmp_path, monkeypat
             return [None]
 
     class RecordSave(TrainerCallback):
+        error_behavior = CallbackErrorBehavior.RAISE
+
         def on_save(self, state, control, **kwargs):
             saved_steps.append((state.global_step, marker.read_text()))
+            if failure == "on_save":
+                raise OSError("callback failed")
 
     async def rollout_state():
         return TrainingContextState(PromptLoaderState({}, []), [], None)
@@ -307,7 +313,9 @@ async def test_checkpoint_publication_waits_for_policy_write(tmp_path, monkeypat
         assert saved_steps == []
     finally:
         write_done.set()
-        published = await trainer._drain_checkpoint_upload()
+        expected_error = pytest.raises(OSError) if failure == "on_save" else nullcontext()
+        with expected_error:
+            published = await trainer._drain_checkpoint_upload()
 
     checkpoint = tmp_path / "global_step_2"
     if failure == "shard_write":
@@ -317,7 +325,9 @@ async def test_checkpoint_publication_waits_for_policy_write(tmp_path, monkeypat
         assert not (checkpoint / TRAINER_STATE_FILENAME).exists()
         assert trainer.all_metrics["trainer/checkpoint_save_failures"] == 1.0
     else:
-        assert published is True
+        if failure != "on_save":
+            assert published is True
+        assert "trainer/checkpoint_save_failures" not in trainer.all_metrics
         assert marker.read_text() == "2"
         assert saved_steps == [(2, "2")]
         assert (checkpoint / TRAINER_STATE_FILENAME).is_file()

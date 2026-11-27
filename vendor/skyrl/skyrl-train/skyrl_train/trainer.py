@@ -325,7 +325,7 @@ class RayPPOTrainer:
         self._last_saved_step: int | None = None
         self._last_evaluated_step: int | None = None
         self._inference_policy_step: int | None = None
-        self._pending_checkpoint_upload: tuple[asyncio.Task[tuple[float, float]], TrainerState] | None = None
+        self._pending_checkpoint_upload: asyncio.Task[tuple[float, float] | None] | None = None
         raw_speculative_decoding = cfg.generator.get("speculative_decoding")
         if raw_speculative_decoding is not None:
             raw_speculative_decoding = OmegaConf.to_container(raw_speculative_decoding, resolve=True)
@@ -718,16 +718,14 @@ class RayPPOTrainer:
         """Save one requested step checkpoint without terminating training on storage failure."""
         await self._drain_checkpoint_upload()
         with Timer("save_checkpoints", self.all_timings):
-            # Restore inference after handing the staged write to the publisher.
+            # Keep residency restoration outside the checkpoint I/O error handler.
             async with AsyncExitStack() as residency:
                 try:
                     rollout_state = await self._rollout_state()
                     await residency.enter_async_context(self._checkpoint_policy_residency())
                     snapshot = await asyncio.to_thread(self._snapshot_checkpoint, rollout_state)
-                except OSError:
-                    self._record_checkpoint_save_failure(state)
-                except ray.exceptions.RayTaskError as error:
-                    if not isinstance(error.as_instanceof_cause(), OSError):
+                except (OSError, ray.exceptions.RayTaskError) as error:
+                    if isinstance(error, ray.exceptions.RayTaskError) and not isinstance(error.as_instanceof_cause(), OSError):
                         raise
                     self._record_checkpoint_save_failure(state)
                 else:
@@ -737,12 +735,18 @@ class RayPPOTrainer:
         assert getattr(self, "_pending_checkpoint_upload", None) is None
         control = replace(self._control)
 
-        async def publish() -> tuple[float, float]:
-            result = await self._finish_checkpoint_upload(snapshot)
+        async def publish() -> tuple[float, float] | None:
+            try:
+                result = await self._finish_checkpoint_upload(snapshot)
+            except (OSError, ray.exceptions.RayTaskError) as error:
+                if isinstance(error, ray.exceptions.RayTaskError) and not isinstance(error.as_instanceof_cause(), OSError):
+                    raise
+                self._record_checkpoint_save_failure(state)
+                return None
             await self.callback_handler.call_event_async("on_save", state, control, trainer=self)
             return result
 
-        self._pending_checkpoint_upload = (asyncio.create_task(publish()), state)
+        self._pending_checkpoint_upload = asyncio.create_task(publish())
 
     def _finish_policy_checkpoint(self) -> None:
         # An actor can be running an optimizer update. Poll without waiting
@@ -771,19 +775,12 @@ class RayPPOTrainer:
         pending = getattr(self, "_pending_checkpoint_upload", None)
         if pending is None:
             return True
-        task, state = pending
         self._pending_checkpoint_upload = None
-        try:
-            with Timer("checkpoint_upload_blocking", self.all_timings, log_events=False):
-                duration, cleanup_duration = await task
-        except OSError:
-            self._record_checkpoint_save_failure(state)
+        with Timer("checkpoint_upload_blocking", self.all_timings, log_events=False):
+            timings = await pending
+        if timings is None:
             return False
-        except ray.exceptions.RayTaskError as error:
-            if not isinstance(error.as_instanceof_cause(), OSError):
-                raise
-            self._record_checkpoint_save_failure(state)
-            return False
+        duration, cleanup_duration = timings
         self.all_timings["checkpoint_upload"] = self.all_timings.get("checkpoint_upload", 0.0) + duration
         self.all_timings["cleanup_old_checkpoints"] = (
             self.all_timings.get("cleanup_old_checkpoints", 0.0) + cleanup_duration
