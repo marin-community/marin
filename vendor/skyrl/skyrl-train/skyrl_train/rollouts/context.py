@@ -601,11 +601,7 @@ class TrainingContext:
         return metrics
 
     async def state_dict(self) -> TrainingContextState:
-        """Capture every dispatched group that no trained batch has consumed.
-
-        Hold prompt dispatch while reading the loader and buffer. A task that commits meanwhile appears in
-        the buffer and is excluded from the prompts to regenerate.
-        """
+        """Capture each unconsumed dispatch once, as a buffered group or a prompt to regenerate."""
         async with self._uids_released:
             in_flight = dict(self._in_flight)
             loader = self.loader.state_dict()

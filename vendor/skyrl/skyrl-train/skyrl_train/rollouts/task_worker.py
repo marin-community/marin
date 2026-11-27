@@ -68,6 +68,7 @@ from skyrl_train.trajectory_runners.model_clients import (
     DirectModelClient,
     GenerationBudgetExceededError,
     ModelClient,
+    ModelClientOutput,
     ModelServerError,
     chat_row_options,
     generation_token_budget,
@@ -134,6 +135,42 @@ async def _tokenize(
     return result
 
 
+async def _generate_with_usage(
+    client: ModelClient,
+    request: InferenceEngineInput,
+    limit: int,
+    usage: ModelGenerationUsage,
+) -> ModelClientOutput:
+    selected_tokens = 0
+    unresolved = True
+    with measure_engine_generation(limit) as meter:
+        try:
+            output = await client.generate(request)
+            if output["token_provenance"] != TokenProvenance.ENGINE:
+                raise RolloutContractError("The canonical rollout engine requires exact model tokens")
+            selected_tokens = len(output["response_ids"][0])
+            unresolved = False
+            if not meter.calls:
+                usage.turns += 1
+                usage.tokens += selected_tokens
+                usage.length_stops += int(output["stop_reasons"][0] == "length")
+            return output
+        except ContextLengthExceededError:
+            unresolved = False
+            raise
+        finally:
+            if meter.calls:
+                usage.tokens += meter.tokens
+                usage.turns += meter.turns
+                usage.length_stops += meter.length_stops
+                usage.abandoned_retry_tokens += max(0, meter.tokens - selected_tokens)
+                usage.unobserved_calls += meter.unobserved_calls
+                usage.unobserved_token_limit += meter.unobserved_token_limit
+            elif unresolved:
+                usage.unobserved_calls += 1
+                usage.unobserved_token_limit += limit
+
+
 async def _model_turn(
     client: ModelClient,
     request: ModelRequest,
@@ -191,33 +228,7 @@ async def _model_turn(
                 )
                 limit = generation_token_budget(model_input, known_prompt, row)
                 assert limit is not None
-            selected_tokens = 0
-            unresolved = True
-            with measure_engine_generation(limit) as meter:
-                try:
-                    output = await client.generate(model_input)
-                    if output["token_provenance"] != TokenProvenance.ENGINE:
-                        raise RolloutContractError("The canonical rollout engine requires exact model tokens")
-                    selected_tokens = len(output["response_ids"][0])
-                    unresolved = False
-                    if not meter.calls:
-                        usage.turns += 1
-                        usage.tokens += selected_tokens
-                        usage.length_stops += int(output["stop_reasons"][0] == "length")
-                except (GenerationBudgetExceededError, ContextLengthExceededError):
-                    unresolved = False
-                    raise
-                finally:
-                    if meter.calls:
-                        usage.tokens += meter.tokens
-                        usage.turns += meter.turns
-                        usage.length_stops += meter.length_stops
-                        usage.abandoned_retry_tokens += max(0, meter.tokens - selected_tokens)
-                        usage.unobserved_calls += meter.unobserved_calls
-                        usage.unobserved_token_limit += meter.unobserved_token_limit
-                    elif unresolved:
-                        usage.unobserved_calls += 1
-                        usage.unobserved_token_limit += limit
+            output = await _generate_with_usage(client, model_input, limit, usage)
     except GenerationBudgetExceededError as error:
         raise GenerationLimitReached(error.prompt_token_ids) from error
     logprobs = output.get("response_logprobs")

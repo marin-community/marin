@@ -1,5 +1,5 @@
-from skyrl_train.inference_engines.generation_usage import current_generation_usage
 from skyrl_train.inference_engines.base import (
+    ABORT_FINISH_REASON,
     CHOICE_POLICY_STEPS_KEY,
     SESSION_ID_HEADER,
     InferenceEngineInterface,
@@ -9,6 +9,7 @@ from skyrl_train.inference_engines.base import (
     OnlineEagleResult,
     PromptSamplingOverride,
 )
+from skyrl_train.inference_engines.generation_usage import current_generation_usage
 from skyrl_train.inference_engines.vllm.stats import (
     HTTPBridgeStatsAccumulator,
     IntervalReadMode,
@@ -44,9 +45,6 @@ from skyrl_train.trajectory_runners.routed_experts import decode_routed_experts
 import base64
 import io
 import numpy as np
-
-ABORT_FINISH_REASON = "abort"
-
 
 def _route_rows(rows: Any, response_length: int) -> np.ndarray:
     """Keep prediction-position routes aligned with the response token they produced."""

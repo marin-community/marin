@@ -447,12 +447,17 @@ the nightly learning gates to assess learning behavior.
 ### Stop at a rollout token budget
 
 Set `trainer.rollout_token_budget` with
-`trainer.rollout_buffer.max_staleness_steps=0`. SkyRL counts every training
-group's generated response tokens, including groups the admission policy discards.
-After the first optimizer update that reaches the budget, SkyRL evaluates
-`data.val_data` with the updated policy and closes training. Put the full held-out
-panel in `data.val_data`. The evaluation's output tokens are outside the training
-budget. The final total can exceed the budget by up to one update's generation.
+`trainer.rollout_buffer.max_staleness_steps=0`. SkyRL counts observed response
+tokens from completed training groups, including admission rejects and tokens
+discarded during retries. Calls that lose their engine response contribute an
+uncertainty bound in `rollout/unobserved_generation_token_limit`. The stopping
+counter uses observed tokens. Check the bound and reconcile interrupted attempts
+before comparing paid spend.
+
+After the first completed training step that reaches the budget, SkyRL evaluates
+the current policy on `data.val_data` and closes training. Put the full held-out
+panel in `data.val_data`. Evaluation output tokens are outside the training
+budget. The final total can exceed the budget by work observed in the last step.
 Use `rollout/gross_response_tokens` and `rollout/gross_response_tokens_total` to
 check the stopping update and compare actual spend. A run ending below budget
 fails.

@@ -5,6 +5,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 
+from skyrl_train.inference_engines.base import ABORT_FINISH_REASON
+
 
 @dataclass
 class EngineGenerationUsage:
@@ -25,7 +27,7 @@ class EngineGenerationUsage:
 
     def observed(self, upper: int, tokens: int, finish: str | None = None) -> None:
         self.tokens += tokens
-        self.turns += int(finish is not None and finish != "abort")
+        self.turns += int(finish is not None and finish != ABORT_FINISH_REASON)
         self.length_stops += int(finish == "length")
         self.unobserved_calls -= 1
         self.unobserved_token_limit -= upper
@@ -36,7 +38,7 @@ current_generation_usage: ContextVar[EngineGenerationUsage | None] = ContextVar(
 
 @contextmanager
 def measure_engine_generation(limit: int) -> Iterator[EngineGenerationUsage]:
-    """Install the lease's meter across asynchronous chat dispatch and reset it on return."""
+    """Measure returned tokens and bound missing engine responses for one policy turn."""
     usage = EngineGenerationUsage(limit)
     token = current_generation_usage.set(usage)
     try:
