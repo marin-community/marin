@@ -196,7 +196,7 @@ def _forward(y: jax.Array, v: jax.Array, implementation: Implementation) -> jax.
 def xsa_forward(
     y: Float[Array, "... W"], v: Float[Array, "... W"], implementation: Implementation = "reference"
 ) -> jax.Array:
-    """Project each attention row orthogonally away from its aligned value row."""
+    """Subtract the regularized projection onto each aligned value row."""
     return _forward(y, v, implementation)
 
 
