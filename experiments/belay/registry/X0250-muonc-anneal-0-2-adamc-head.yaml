@@ -98,13 +98,6 @@ trials:
   commit: 5ed56b5120
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
-  loss:
-  - 2.3992
-  delta:
-  - -0.0114
-  steps: 39210
-  baseline: s7n-d1024 2.4106 (same commit, seed 0)
-  step_time_change: 0%
 - id: t005
   variant: X0250, matrix decay scaled to hold lambda*lr_max*N
   rung: competitive-d1280
