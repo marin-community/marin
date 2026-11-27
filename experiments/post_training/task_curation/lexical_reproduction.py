@@ -213,6 +213,7 @@ def rows_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "measured_tasks": len(rows),
         "contaminated_tasks": contaminated,
+        "contaminated_fraction": contaminated / len(rows),
         "max_overlap": max(overlaps),
         "mean_max_overlap": float(np.mean(overlaps)),
         "p95_max_overlap": float(np.quantile(overlaps, 0.95)),
