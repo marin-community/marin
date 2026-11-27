@@ -1168,7 +1168,11 @@ class SnowballMoEMLP(eqx.Module):
         if self.cfg.router_dot_fp32:
             router_input = router_input.astype(jnp.float32)
             router_weight = router_weight.astype(jnp.float32)
-        router_logits = jnp.einsum("td,de->te", router_input, router_weight).astype(jnp.float32)
+        if self.cfg.projection_implementation == "fixed_schedule":
+            # Replay uses the same unbiased logits for expert mixture weights at every row count.
+            router_logits = _fixed_projection(router_input, router_weight).astype(jnp.float32)
+        else:
+            router_logits = jnp.einsum("td,de->te", router_input, router_weight).astype(jnp.float32)
         # router_bias is [E]; replicate it (like the norm weights) so the add keeps the expert axis
         # unsharded. A safetensors load auto-shards [E] over `data` when E % data == 0, which would
         # otherwise make router_logits + router_bias illegally sharded on multi-device meshes.
