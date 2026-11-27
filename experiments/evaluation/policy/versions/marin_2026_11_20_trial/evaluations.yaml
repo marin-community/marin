@@ -1,0 +1,106 @@
+# The trial policy's evaluations: October's (campaigns/eval-campaign-09-25-unlabeled/evaluations.yaml) without
+# BixBench, with GSM8K 0-shot and TriviaQA pinned to their chat variants and DS-1000 to its terminus-2 protocol.
+# README.md lists the differences from October's reported runs.
+
+# The Together GPT-OSS-120B judge; October's reported scores used a local MiniMax-M3.
+together_judge: &together_judge
+  deployment: together
+  models:
+    openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
+  default_model: openai/gpt-oss-120b
+
+evaluations:
+  boolq:
+    benchmark: boolq
+  cruxeval:
+    benchmark: cruxeval
+  gpqa-diamond:
+    benchmark: gpqa-diamond
+  humanevalplus:
+    benchmark: humanevalplus
+  ifbench:
+    benchmark: ifbench
+  math500:
+    benchmark: math500
+  mbppplus:
+    benchmark: mbppplus
+  mmlu-pro:
+    benchmark: mmlu-pro
+  mrcr:
+    benchmark: mrcr
+  mrcr-32k:
+    benchmark: mrcr
+    protocol: 32k
+  mrcr-65k:
+    benchmark: mrcr
+    protocol: 65k
+  nupa:
+    benchmark: nupa5k-loose
+  piqa:
+    benchmark: piqa
+  truthfulqa:
+    benchmark: truthfulqa
+  winogrande:
+    benchmark: winogrande
+  # October seeded these two.
+  aime24:
+    benchmark: aime24
+    run:
+      seed: 42
+  olympiadbench:
+    benchmark: olympiadbench
+    run:
+      seed: 42
+      judge: *together_judge
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key: &together_key
+      - env:TOGETHER_API_KEY
+      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+  financebench:
+    benchmark: financebench
+    run:
+      judge: *together_judge
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key: *together_key
+  # October ran the thinking-off chat variants of GSM8K and TriviaQA; these pin them for every model.
+  gsm8k-0shot:
+    benchmark: gsm8k
+    num_fewshot: 0
+    prompt_format: chat
+  triviaqa:
+    benchmark: triviaqa
+    prompt_format: chat
+  # Agent benchmarks, under the names and with the concurrency of October's Harbor runs. Terminal-Bench, TBLite
+  # and SWE-bench have one image per task; snapshots of them all would exceed the Daytona account's quota, so
+  # their machines build images declaratively.
+  tb2-recovery:
+    benchmark: terminal-bench-2.1
+    protocol: campaign-2026-09-25
+    run:
+      concurrency: 16
+      task_machine:
+        image_build: declarative
+  ot-tblite-recovery:
+    benchmark: ot-tblite
+    protocol: campaign-2026-09-25
+    run:
+      concurrency: 16
+      task_machine:
+        image_build: declarative
+  swebench-verified:
+    benchmark: swebench-verified
+    protocol: mini-swe-agent
+    run:
+      concurrency: 16
+      task_machine:
+        image_build: declarative
+  ds-1000-local:
+    benchmark: ds-1000
+    protocol: terminus-2
+    run:
+      concurrency: 32
+  bfclparity-pi:
+    benchmark: bfcl-parity
+    protocol: pi
+    run:
+      concurrency: 32

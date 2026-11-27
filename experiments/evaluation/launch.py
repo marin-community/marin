@@ -15,7 +15,7 @@ import subprocess
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from functools import partial
 from urllib.parse import urlsplit
@@ -28,7 +28,6 @@ from evalrecords.records import (
     EvaluationSelection,
     ModelConfigRef,
     ModelRef,
-    PromptFormat,
     RLAttemptRef,
     RunStatus,
     TaskEvidence,
@@ -54,7 +53,7 @@ from marin.evaluation.harbor.driver_config import (
 )
 from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name, validate_harbor_resume_root
 from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform, supports_request_seed
-from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.model_config import ModelConfig, prompt_format
 from marin.evaluation.runner import (
     EndpointRoute,
     EvalExecutor,
@@ -121,7 +120,8 @@ _EVALCHEMY_THROUGHPUT_FIELDS = frozenset({"num_concurrent"})
 logger = logging.getLogger(__name__)
 
 
-def _model_identity(model: ModelRef) -> dict:
+def model_identity(model: ModelRef) -> dict:
+    """The model fields that define a run: everything recorded except throughput-only serving settings."""
     return model.model_copy(update={"source_config": model.source_config or model.config}).model_dump(
         mode="json",
         exclude={
@@ -144,7 +144,8 @@ def _judge_identity(config: ModelConfigRef | None) -> dict | None:
     return None if config is None else config.model_dump(mode="json", exclude={"evaluation_request_timeout"})
 
 
-def _evaluation_identity(evaluation: EvalRef) -> dict:
+def evaluation_identity(evaluation: EvalRef) -> dict:
+    """The evaluation fields that define a run: everything recorded except throughput-only settings."""
     excluded = {"tasks": {"__all__": {"benchmark"}}}
     if evaluation.evalchemy is not None:
         excluded.update({"source_digest": True, "evalchemy": _EVALCHEMY_THROUGHPUT_FIELDS})
@@ -155,7 +156,7 @@ def _evaluation_identity(evaluation: EvalRef) -> dict:
 
 
 def _same_evaluation(prior: EvalRef, current: EvalRef) -> bool:
-    before, after = _evaluation_identity(prior), _evaluation_identity(current)
+    before, after = evaluation_identity(prior), evaluation_identity(current)
     if (
         current.evalchemy is not None
         and current.source_digest is not None
@@ -186,6 +187,8 @@ class LaunchSpec:
     judge_model: ModelConfig | None = None
     judge_accelerator: str | None = None
     seed: int | None = None
+    default_seed: int | None = DEFAULT_RUN_SEED
+    """The seed of curated runs that set none where the server accepts seeds; None leaves it to each protocol."""
     task_evidence: TaskEvidence | None = None
     retry_unscored_harbor_trials: bool = False
     version: str | None = None
@@ -193,6 +196,8 @@ class LaunchSpec:
     resume_results_path: str | None = None
     cache_key: str | None = None
     """Reuse evaluation records for this key and the same resolved configuration."""
+    run_suffixes: Mapping[str, str] = field(default_factory=dict)
+    """Appended to the run IDs of the named evaluations, as ``<run ID>-<suffix>``; with ``cache_key`` only."""
     run_id: str | None = None
     policy_finalization: PolicyFinalization | None = None
     rl_attempt: RLAttemptRef | None = None
@@ -310,9 +315,7 @@ def _resolve_definitions(
     resolved: list[tuple[str, _ResolvedDefinition]] = []
     for name, definition in definitions:
         if isinstance(definition, EvaluationSelection):
-            protocol = resolve_selection(
-                definition, PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
-            )
+            protocol = resolve_selection(definition, prompt_format(model))
             settings = settings_for(
                 definition, protocol, model, limit, seed, default_seed, task_machine_backend, task_evidence
             )
@@ -415,6 +418,8 @@ def build_evaluation_batch(
             raise ValueError("--run-id must contain only letters, digits, dots, underscores, and hyphens")
         if spec.cache_key is not None:
             raise ValueError("--run-id and pipeline cache_key cannot be combined")
+    if spec.run_suffixes and spec.cache_key is None:
+        raise ValueError("run suffixes extend pipeline run IDs, which need a cache_key")
     if spec.max_concurrent < 1:
         raise ValueError("max_concurrent must be at least 1")
     if spec.instances < 1:
@@ -439,7 +444,7 @@ def build_evaluation_batch(
             raise ValueError("--federated_cluster requires a GPU accelerator")
         accelerator = replace(accelerator, target_cluster=spec.federated_cluster)
     judge = _resolve_hosted_judge(spec, accelerator)
-    model_format = PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
+    model_format = prompt_format(model)
     # An agent's token budgets and run identity come from the window the server runs, which the checkpoint can clamp.
     if model.serve.max_model_len is not None and any(
         isinstance(definition, HarborDefinition)
@@ -455,7 +460,7 @@ def build_evaluation_batch(
         model,
         spec.limit,
         spec.seed,
-        DEFAULT_RUN_SEED if seeded else None,
+        spec.default_seed if seeded else None,
         spec.task_evidence,
         spec.retry_unscored_harbor_trials,
         judge.model if judge is not None else None,
@@ -550,8 +555,8 @@ def build_evaluation_batch(
         cache_key = json.dumps(
             {
                 "pipeline": spec.cache_key or group_id,
-                "model": _model_identity(model_ref),
-                "evaluation": _evaluation_identity(definition.record_ref),
+                "model": model_identity(model_ref),
+                "evaluation": evaluation_identity(definition.record_ref),
                 **(
                     {"runtime": definition.cache_runtime_descriptor}
                     if definition.cache_runtime_descriptor is not None
@@ -560,11 +565,20 @@ def build_evaluation_batch(
                 "judge": (
                     _judge_identity(ModelConfigRef.model_validate(asdict(judge.model))) if judge is not None else None
                 ),
+                # An agent's attempts share its wall-clock budget with the model's load-dependent latency, so how
+                # many run at once, the smaller of the evaluation's and the model's bounds, can change its results.
+                **(
+                    {"agent_concurrency": reference.curated.settings.concurrency}
+                    if reference.curated is not None and reference.curated.agent is not None
+                    else {}
+                ),
                 "policy": spec.version,
             },
             sort_keys=True,
         )
         run_id = _run_id(model.name, eval_key, cache_key, group_id if spec.cache_key is None else None)
+        if (suffix := spec.run_suffixes.get(eval_key)) is not None:
+            run_id = f"{run_id}-{suffix}"
         output_dir = spec.resume_results_path or prefix_join(records_prefix, f"{run_id}/results")
         evaluations.append(
             Evaluation(
@@ -620,6 +634,17 @@ def build_evaluation_steps(batch: EvaluationBatch, execute: EvaluationStep) -> t
     )
 
 
+def batch_model_ref(batch: EvaluationBatch) -> ModelRef:
+    """The model reference a batch's records carry."""
+    return ModelRef(
+        name=batch.model.name,
+        location=batch.model.location,
+        backend=batch.model.serve.backend.value,
+        config=ModelConfigRef.model_validate(asdict(batch.model)),
+        source_config=batch.source_model_config,
+    )
+
+
 def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
     """Resolve one launch before an Iris client is opened."""
     provenance = LaunchProvenance(
@@ -631,15 +656,7 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
         return batch
     if batch.records_prefix.startswith("s3://"):
         configure_coreweave_s3()
-    model = _model_identity(
-        ModelRef(
-            name=batch.model.name,
-            location=batch.model.location,
-            backend=batch.model.serve.backend.value,
-            config=ModelConfigRef.model_validate(asdict(batch.model)),
-            source_config=batch.source_model_config,
-        )
-    )
+    model = model_identity(batch_model_ref(batch))
     judge = _judge_identity(None if batch.judge is None else ModelConfigRef.model_validate(asdict(batch.judge.model)))
     records = sorted(
         (
@@ -647,7 +664,7 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
             for record in list_records(batch.records_prefix)
             if record.group_id == batch.group_id
             and record.version == batch.version
-            and _model_identity(record.model) == model
+            and model_identity(record.model) == model
             and _judge_identity(
                 record.judge.model.source_config or record.judge.model.config if record.judge is not None else None
             )

@@ -1,110 +1,97 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed declarations of Marin's eval policy: which candidates run which evaluations, with which exceptions.
-
-Candidates wrap model catalog entries and evaluations hold benchmark catalog selections.
-"""
+"""An eval policy: which baseline models run which named evaluations, at which window, with which exclusions."""
 
 import re
 from collections import Counter
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
 
+from evalrecords.policy_release import RELEASE_TAG_PREFIX
 from evalrecords.records import EvaluationSelection
 from marin.evaluation.model_config import ModelConfig
+
+from experiments.evaluation.catalog import evaluation_benchmarks
+from experiments.evaluation.curated import requires_judge
+from experiments.evaluation.models import models
 
 HF_COMMIT = re.compile(r"[0-9a-f]{40}")
 
 
-@dataclass(frozen=True, kw_only=True)
-class PolicyCandidate:
-    """A model catalog entry under evaluation.
+@dataclass(frozen=True)
+class Policy:
+    """One version of an eval policy. Every evaluation runs for every baseline unless the pair is excluded.
 
-    ``max_context`` is the largest context window the model supports; no evaluation runs it with more.
-    A Hugging Face model must pin a commit SHA so the policy names one checkpoint.
+    ``baselines`` are model catalog keys whose settings the policy has validated; other models run its
+    evaluations as supplied models.
+
+    ``evaluations`` are named catalog selections, normally ``load_evaluations`` of the version's
+    ``evaluations.yaml``. ``serving_window`` is the context window every model is served at, or the model's own
+    window if smaller. ``exclusions`` maps a (baseline, evaluation) pair to the reason it does not run.
+
+    A patch names the released version it patches as ``base``: each evaluation whose inputs are unchanged apart
+    from the version keeps the base release's run.
     """
-
-    model: ModelConfig
-    max_context: int
-
-    def __post_init__(self) -> None:
-        if "://" not in self.model.location and (
-            self.model.revision is None or HF_COMMIT.fullmatch(self.model.revision) is None
-        ):
-            raise ValueError(f"{self.name}: pin {self.model.location} to a Hugging Face commit SHA")
-
-    @property
-    def name(self) -> str:
-        return self.model.name
-
-
-@dataclass(frozen=True, kw_only=True)
-class PolicyEvaluation:
-    """One catalog selection and the settings the policy runs it with.
-
-    The policy owns ``max_output`` and ``seed``, so a selection may not set them in its run overrides.
-    """
-
-    definition: EvaluationSelection
-    context: int
-    max_output: int | None
-    """None leaves output limited only by the context and the benchmark protocol."""
-    seed: int | None
-    """A base seed for every trial; None leaves sampling seeds to the benchmark protocol."""
-
-    def __post_init__(self) -> None:
-        if self.definition.run.max_tokens is not None or self.definition.run.seed is not None:
-            raise ValueError(f"{self.name}: set max_output and seed on the policy evaluation, not the selection")
-
-    @property
-    def name(self) -> str:
-        return self.definition.name
-
-
-@dataclass(frozen=True, kw_only=True)
-class PolicyExclusion:
-    candidate: PolicyCandidate
-    evaluation: PolicyEvaluation
-    reason: str
-
-
-@dataclass(frozen=True, kw_only=True)
-class PolicyOverride:
-    """Settings for one candidate on one evaluation; unset ones keep the evaluation's value."""
-
-    candidate: PolicyCandidate
-    evaluation: PolicyEvaluation
-    reason: str
-    context: int | None = None
-    max_output: int | None = None
-
-    def __post_init__(self) -> None:
-        if self.context is not None and self.context > self.candidate.max_context:
-            raise ValueError(
-                f"override for {self.candidate.name} on {self.evaluation.name} "
-                "sets a context larger than the candidate's window"
-            )
-
-
-@dataclass(frozen=True, kw_only=True)
-class EvalPolicy:
-    """One version of the eval policy. Every evaluation runs for every candidate unless excluded."""
 
     version: str
-    candidates: tuple[PolicyCandidate, ...]
-    in_distribution: tuple[PolicyEvaluation, ...]
-    exclusions: tuple[PolicyExclusion, ...] = ()
-    overrides: tuple[PolicyOverride, ...] = ()
+    baselines: tuple[str, ...]
+    evaluations: tuple[EvaluationSelection, ...]
+    serving_window: int
+    exclusions: Mapping[tuple[str, str], str] = field(default_factory=lambda: MappingProxyType({}))
+    base: str | None = None
 
     def __post_init__(self) -> None:
-        exceptions = (*self.exclusions, *self.overrides)
-        _require_unique("candidate", [candidate.name for candidate in self.candidates])
-        _require_unique("evaluation", [evaluation.name for evaluation in self.in_distribution])
-        _require_unique("exception for", [f"{item.candidate.name} on {item.evaluation.name}" for item in exceptions])
-        # Full-value comparison rejects exceptions built from stale definitions.
-        for item in exceptions:
-            if item.candidate not in self.candidates or item.evaluation not in self.in_distribution:
-                raise ValueError(f"exception for {item.candidate.name} on {item.evaluation.name} is not in this policy")
+        # The generic launcher also rejects unknown versions with this prefix.
+        if self.version.startswith(RELEASE_TAG_PREFIX):
+            raise ValueError(f"{self.version}: {RELEASE_TAG_PREFIX!r} names policy tags, not versions")
+        if self.base == self.version:
+            raise ValueError(f"{self.version} can't patch itself")
+        _require_unique("baseline", list(self.baselines))
+        _require_unique("evaluation", [evaluation.name for evaluation in self.evaluations])
+        catalog = models()
+        for name in self.baselines:
+            if name not in catalog:
+                raise ValueError(f"{name} is not in the model catalog")
+            _require_pinned(catalog[name])
+        names = {evaluation.name for evaluation in self.evaluations}
+        for model, evaluation in self.exclusions:
+            if model not in self.baselines or evaluation not in names:
+                raise ValueError(f"exclusion of {model} on {evaluation} names no baseline or evaluation of this policy")
+        for evaluation in self.evaluations:
+            _check_evaluation(evaluation)
+
+    def baseline(self, name: str) -> ModelConfig:
+        """The catalog entry of one of the policy's baselines."""
+        if name not in self.baselines:
+            raise ValueError(f"{name} is not a baseline of {self.version}; known: {list(self.baselines)}")
+        return models()[name]
+
+
+def _check_evaluation(evaluation: EvaluationSelection) -> None:
+    """Reject a selection the catalog does not declare, a judge where none is needed or missing, and an item limit."""
+    catalog = evaluation_benchmarks()
+    if evaluation.benchmark not in catalog:
+        raise ValueError(f"{evaluation.name}: no benchmark {evaluation.benchmark!r} in the benchmark catalog")
+    catalog[evaluation.benchmark].resolve(evaluation.protocol, evaluation.num_fewshot, evaluation.prompt_format)
+    if (evaluation.run.judge is not None) != requires_judge(evaluation):
+        needs = "needs a judge" if evaluation.run.judge is None else "takes no judge"
+        raise ValueError(f"{evaluation.name}: the benchmark {needs}")
+    if evaluation.run.limit is not None:
+        raise ValueError(f"{evaluation.name}: a policy evaluation runs every item; --limit makes a smoke run")
+
+
+def _require_pinned(model: ModelConfig) -> None:
+    """A Hugging Face model pins commits for its weights and tokenizer, so the policy names one checkpoint."""
+    if "://" in model.location:
+        return
+    if model.revision is None or HF_COMMIT.fullmatch(model.revision) is None:
+        raise ValueError(f"{model.name}: pin {model.location} to a Hugging Face commit SHA")
+    tokenizer = model.tokenizer or model.location
+    tokenizer_revision = model.effective_tokenizer_revision
+    if "://" not in tokenizer and (tokenizer_revision is None or HF_COMMIT.fullmatch(tokenizer_revision) is None):
+        raise ValueError(f"{model.name}: pin its tokenizer {tokenizer} to a Hugging Face commit SHA")
 
 
 def _require_unique(kind: str, names: list[str]) -> None:

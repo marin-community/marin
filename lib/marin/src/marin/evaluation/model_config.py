@@ -11,6 +11,7 @@ from enum import StrEnum
 from pathlib import Path
 
 import draccus
+from evalrecords.records import PromptFormat
 from rigging.filesystem.storage_path import StoragePath
 
 from marin.evaluation.eval_env import EVALUATION_REQUEST_TIMEOUT_SECONDS
@@ -300,3 +301,8 @@ def scan_model_configs(root: Path) -> dict[str, ModelConfig]:
             raise ValueError(f"duplicate model name {config.name!r} in catalog: {path} and an earlier file")
         configs[config.name] = config
     return configs
+
+
+def prompt_format(model: ModelConfig) -> PromptFormat:
+    """The prompt format a model's evaluations use: chat if it applies a chat template."""
+    return PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION

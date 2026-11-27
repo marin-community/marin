@@ -108,7 +108,7 @@ def resolve_judge_model_config(model_key: str | None, config_path: Path | None) 
     )
 
 
-def _require_coreweave_credentials(batch: EvaluationBatch) -> None:
+def require_coreweave_credentials(batch: EvaluationBatch) -> None:
     """Fail before submission when a CoreWeave target would reject the job for missing storage keys."""
     if batch.accelerator.target_cluster is None:
         return
@@ -381,7 +381,7 @@ def launch(
         else:
             param_hint = "--evaluation-config/--harbor-config" if evaluation_config or harbor_config else "--evals"
         raise click.BadParameter(str(exc), param_hint=param_hint) from exc
-    _require_coreweave_credentials(batch)
+    require_coreweave_credentials(batch)
     if dry_run:
         _print_plan(spec, batch)
         return
