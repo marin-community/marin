@@ -20,11 +20,15 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.curriculum.coverage import CONFIDENCE_LEVELS
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, AlignmentSource, CurriculumCoverage
 
+from experiments.post_training.task_curation.derived_contract_census import DerivedContractReceipt
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
 from experiments.post_training.task_curation.license_resolution import license_evidence
 from experiments.post_training.task_curation.release_stages import curriculum_compose as compose
 from experiments.post_training.task_curation.release_stages import embed as embed_stage
-from experiments.post_training.task_curation.release_stages.graph import _fresh_corpus_expectation
+from experiments.post_training.task_curation.release_stages.graph import (
+    _fresh_corpus_expectation,
+    _seal_compose_manifest,
+)
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 from experiments.post_training.task_curation.tests.release_graph_fixtures import fixture_plan
@@ -425,6 +429,93 @@ def test_compose_license_refresh_preserves_alignment_and_permission_checks(tmp_p
     assert adopted.license_receipt == reviewed
     assert release.task_count == 5
     assert release.paths == [*compose.read_reference(document["old_release"])["paths"], *fresh["paths"]]
+
+
+@pytest.mark.parametrize("evidence", ["current", "missing", "stale", "foreign", "wrong_digest", "contradictory"])
+def test_compose_adopts_only_receipt_verified_contract_fields(tmp_path, evidence):
+    document, expected = _composition(tmp_path)
+    fresh = compose.read_reference(document["fresh_release"])
+    measured = fresh["inventory"][0]
+    binding = ActorCensusInput(
+        dataset_id="fixture",
+        dataset_revision="1",
+        converter_version="1",
+        converter_revision="1",
+        measured_tasks=2,
+        task_specs_sha256="a" * 64,
+        evidence_url="https://example.test/actor-census",
+    )
+    measured.update(
+        task_count=2,
+        actor_census_input=binding.model_dump(mode="json"),
+        within_source_dedup=deduplication_evidence("fixture", "1", "1", count=2).model_dump(mode="json"),
+    )
+    document["fresh_release"] = _seal_json(tmp_path, "fresh-release.json", fresh).model_dump(mode="json")
+    target = {
+        **measured,
+        "grader_type": "script",
+        "grader_type_counts": {"script": 2},
+        "derived_agentic": False,
+        "derived_turns": "single-turn",
+        "derived_reply_only": True,
+        "derived_workspace_graded": True,
+    }
+    receipt = DerivedContractReceipt(
+        source_id=measured["id"],
+        input=binding,
+        population_path="s3://fixture/tasks",
+        scanned_task_specs_sha256="a" * 64,
+        summary={
+            "task_count": 2,
+            "grader_type_counts": {"script": 2},
+            "agentic_count": 0,
+            "single_turn_count": 2,
+            "reply_only_count": 2,
+            "workspace_graded_count": 2,
+            "judge_rubric_counts": {},
+            "judge_reference_count": 0,
+            "judge_no_reference_count": 0,
+        },
+        evidence_url="s3://fixture/contract.json",
+    ).model_dump(mode="json")
+    if evidence == "stale":
+        receipt["input"]["dataset_revision"] = "old"
+    if evidence == "foreign":
+        receipt["source_id"] = "Marin:another-source"
+    if evidence == "wrong_digest":
+        receipt["scanned_task_specs_sha256"] = "b" * 64
+    if evidence == "contradictory":
+        target["derived_workspace_graded"] = False
+    document["current_target_declarations"] = _seal_json(tmp_path, "targets.json", {target["id"]: target}).model_dump(
+        mode="json"
+    )
+    if evidence != "missing":
+        document["target_contracts"] = _seal_json(tmp_path, "contracts.json", {target["id"]: receipt}).model_dump(
+            mode="json"
+        )
+    if evidence != "current":
+        with pytest.raises(ValueError, match="contract"):
+            compose.compose_plan(document, expected, ())
+        return
+    sealed = _seal_compose_manifest(
+        declarations={target["id"]: target},
+        contract_receipts={target["id"]: DerivedContractReceipt.model_validate(receipt)},
+        targets=(target["id"],),
+        prior_release=document["old_release"],
+        prior_coverage=document["old_coverage"],
+        fresh_release=document["fresh_release"],
+        fresh_coverage=document["fresh_coverage"],
+        rebound_source="",
+        rebound_tasks=0,
+        release_root=str(tmp_path / "graph"),
+    )
+    document = compose.read_reference(sealed)
+    plan = compose.compose_plan(document, expected, ())
+    release = compose.compose_release(plan, document, {"uri": "/inputs.json", "sha256": "a" * 64})
+    assert release.inventory[-1].model_dump(mode="json") == target
+    assert release.inventory[0] == plan.old_release.inventory[0]
+    assert release.sources[-1] == plan.fresh_release.sources[0]
+    assert release.paths == [*plan.old_release.paths, *plan.fresh_release.paths]
 
 
 @pytest.mark.parametrize(

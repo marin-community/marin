@@ -394,6 +394,15 @@ alignment. The current receipt must pass the catalog's exact-pin permission and
 source-ban checks. Task-input fingerprints, actor census bindings and task counts
 must still match the aligned inventory.
 
+The graph seals selected derived-contract receipts in `target-contracts.json`
+and includes its digest-bound `target_contracts` reference in the composition
+manifest. A declaration may adopt newly measured contract fields after alignment
+only when its receipt binds the same source, complete actor census input and
+scanned TaskSpec digest. The catalog's contract projection must reproduce every
+current contract field. Missing, stale or contradictory evidence refuses
+composition; retained alignment scores and unrelated declaration fields remain
+subject to the existing checks.
+
 Identity/backend composition takes an explicit `snapshot_id` from the release
 plan. Both output surveys and their receipts bind that publication snapshot;
 input survey references and measurement code revisions remain unchanged. A

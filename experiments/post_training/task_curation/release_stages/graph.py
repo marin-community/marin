@@ -72,6 +72,8 @@ from marin.execution.remote import remote
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.task_curation.datasets.derived_contract_measurements import derived_contract_receipts
+from experiments.post_training.task_curation.derived_contract_census import DerivedContractReceipt
 from experiments.post_training.task_curation.grader_drift import GraderDriftReference
 from experiments.post_training.task_curation.release_stages import (
     admission_check as admission_check_stage,
@@ -528,6 +530,7 @@ def _execute_census_inputs(config: dict) -> dict:
 def _execute_compose_manifest(config: dict) -> dict:
     return _seal_compose_manifest(
         declarations=read_ref(ArtifactRef(**config["declarations"])),
+        contract_receipts=derived_contract_receipts(),
         targets=tuple(config["targets"]),
         prior_release=config["prior_release"],
         prior_coverage=config["prior_coverage"],
@@ -818,6 +821,7 @@ def _seal_census_inputs(
 
 def _seal_compose_manifest(
     declarations: dict,
+    contract_receipts: dict[str, DerivedContractReceipt],
     targets: tuple[str, ...],
     prior_release: dict,
     prior_coverage: dict,
@@ -835,6 +839,14 @@ def _seal_compose_manifest(
         f"{release_root}/compose/target-declarations.json",
         {source_id: declarations[source_id] for source_id in sorted(targets)},
     )
+    target_contracts_ref = _seal_document(
+        f"{release_root}/compose/target-contracts.json",
+        {
+            source_id: contract_receipts[source_id].model_dump(mode="json")
+            for source_id in sorted(targets)
+            if source_id in contract_receipts
+        },
+    )
     rebound = None if not rebound_source else {"source_id": rebound_source, "tasks": rebound_tasks}
     document = {
         "kind": "atlas-curriculum-composition-manifest",
@@ -843,6 +855,7 @@ def _seal_compose_manifest(
         "fresh_release": dict(fresh_release),
         "fresh_coverage": dict(fresh_coverage),
         "current_target_declarations": target_declarations_ref,
+        "target_contracts": target_contracts_ref,
         "rebound": rebound,
     }
     ref = _seal_document(f"{release_root}/compose/composition-manifest.json", document)

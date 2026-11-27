@@ -50,6 +50,7 @@ from experiments.post_training.task_curation.curriculum_projection import (
     verify_retained_statistics,
     write_task_identity_mappings,
 )
+from experiments.post_training.task_curation.derived_contract_census import DerivedContractReceipt
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
 from experiments.post_training.task_curation.local import local_client
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
@@ -58,6 +59,7 @@ from experiments.post_training.task_curation.source_status import pending_stage,
 from infra.marina.apps.rl_data_catalog.confidence import OUTCOMES, confidence_rows
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
 from infra.marina.apps.rl_data_catalog.server.admission import require_declaration_license
+from infra.marina.apps.rl_data_catalog.server.derived_contract import PROFILE_FIELDS, contract_projection
 from infra.marina.apps.rl_data_catalog.server.source_identity import original_source_id
 
 COMPOSE_RECEIPT_SUFFIX = "curriculum-composition"
@@ -69,6 +71,7 @@ COMPOSE_WORKER_MEMORY = "16g"
 ALLOWED_TARGET_CHANGES = frozenset(
     {"consumer_receipt", "consumer_requirements", "consumer_findings", "consumer_decision", "notes", "license_receipt"}
 )
+CONTRACT_FIELDS = frozenset(PROFILE_FIELDS) - {"derived_contract_receipt"}
 SAMPLE_PREVIEW_CHARACTERS = 600
 CONFIDENCE_SCHEMA_VERSION = 1
 
@@ -156,6 +159,25 @@ def read_retained_release(reference: dict) -> AlignmentRelease:
     return AlignmentRelease.model_validate(document)
 
 
+def verify_target_contract(declaration: dict, contracts: dict) -> None:
+    """Require the declaration's contract fields to match its exact-population receipt."""
+    raw = contracts.get(declaration["id"])
+    if raw is None:
+        raise ValueError(f"target contract evidence is missing: {declaration['id']}")
+    receipt = DerivedContractReceipt.model_validate(raw)
+    if (
+        receipt.source_id != declaration["id"]
+        or receipt.input.model_dump(mode="json") != declaration["actor_census_input"]
+        or receipt.input.measured_tasks != declaration["task_count"]
+        or receipt.scanned_task_specs_sha256 != receipt.input.task_specs_sha256
+    ):
+        raise ValueError(f"target contract receipt does not bind the aligned population: {declaration['id']}")
+    projected = contract_projection(declaration, [receipt.model_dump(mode="json")])
+    inconsistent = sorted(key for key in CONTRACT_FIELDS if declaration[key] != projected[key])
+    if inconsistent:
+        raise ValueError(f"target contract fields contradict the receipt for {declaration['id']}: {inconsistent}")
+
+
 def compose_plan(document: dict, expected_fresh_task_count: int, removed_sources: tuple[str, ...]) -> ComposePlan:
     """Verify retained populations and the fresh alignment for additions or replacements.
 
@@ -233,6 +255,7 @@ def compose_plan(document: dict, expected_fresh_task_count: int, removed_sources
     if set(current_inventory) != targets or set(fresh_inventory) != fresh_targets:
         raise ValueError("the current target declarations do not cover exactly the fresh and rebound inventory")
     measured_inventory = {**fresh_inventory, **{sid: row.declaration for sid, row in rebound.items()}}
+    contracts = read_reference(document["target_contracts"]) if "target_contracts" in document else {}
     for sid, original in measured_inventory.items():
         current = current_inventory[sid]
         before = original.model_dump(mode="json")
@@ -242,7 +265,10 @@ def compose_plan(document: dict, expected_fresh_task_count: int, removed_sources
         if before["actor_census_input"] != after["actor_census_input"] or before["task_count"] != after["task_count"]:
             raise ValueError(f"current declaration for {sid} changed its census binding or task count")
         changed = {key for key in before.keys() | after.keys() if before.get(key) != after.get(key)}
-        if not changed <= ALLOWED_TARGET_CHANGES:
+        contract_changes = changed & CONTRACT_FIELDS
+        if contract_changes:
+            verify_target_contract(after, contracts)
+        if not changed - contract_changes <= ALLOWED_TARGET_CHANGES:
             raise ValueError(f"current declaration for {sid} changed non-consumer fields: {sorted(changed)}")
         if "license_receipt" in changed:
             require_declaration_license(current)
