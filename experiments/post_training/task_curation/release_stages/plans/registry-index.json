@@ -1,5 +1,5 @@
 {
-  "revision": "13104e41a10eb230aa21d1632ea1afa61e2bc6d5",
+  "revision": "699339ac74e10834fd0a7e6305889e3fd2b37690",
   "sources": {
     "AI-MO:numina_math": {
       "input_sha256": "56b745a538dad1c11afd3f5f954f73c43605435b08d296a75836ae5b8a0b1849",
@@ -1852,9 +1852,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
     },
     "pafitis:hardmath@rhs": {
-      "input_sha256": "2c4524b0182c79a62fe8a1df321b1ba8c8744933f57d1dc670f4d50d388cdcd7",
-      "sha256": "afd415b55a32f67e028f85260d124140a5dc0405a9b2d3b23c20c736b3466d33",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261118/hardmath-rhs-remediation-v1/source-identities-acknowledged-32a146d85691cdfe75e5c71504f287672bd322461dad6f0ee53717f0da05a944.json"
+      "input_sha256": "9836adda5ca55c7fc148bb3571d7ad0f4bb937bd3f2ffdb78ace799519fa6d1f",
+      "sha256": "bc162481daca718c74eb55ef25864c4504ed378c5a2d8a945d4725c4d4a6263f",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261127-v1/hardmath-v2-refresh-v1/source-identity-v1/source-identities-content-nn-v4.json"
     }
   }
 }
