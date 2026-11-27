@@ -42,8 +42,8 @@ def _sandbox(organization_id: str = ORG_ID, state: SandboxState = SandboxState.S
     )
 
 
-def _snapshot(organization_id: str = ORG_ID, name: str = "snapshot-1") -> SimpleNamespace:
-    return SimpleNamespace(name=name, organization_id=organization_id)
+def _snapshot(organization_id: str = ORG_ID, name: str = "snapshot-1", general: bool = False) -> SimpleNamespace:
+    return SimpleNamespace(name=name, organization_id=organization_id, general=general)
 
 
 def _volume(organization_id: str = ORG_ID) -> SimpleNamespace:
@@ -195,7 +195,12 @@ def test_account_usage_sums_quota_and_counts_sandboxes_by_state(monkeypatch) -> 
 
 
 def test_account_usage_resolves_the_organization_from_snapshots_without_sandboxes(monkeypatch) -> None:
-    client = FakeDaytonaClient(snapshots=[_snapshot(organization_id=ORG_ID)])
+    client = FakeDaytonaClient(
+        snapshots=[
+            _snapshot(organization_id=ORG_ID),
+            _snapshot(organization_id=OTHER_ORG_ID, name="provider-general", general=True),
+        ]
+    )
     _install_fakes(monkeypatch, client)
 
     usage = asyncio.run(account_usage(DaytonaConnection(api_key="x", api_url="u", target="us")))
@@ -205,7 +210,7 @@ def test_account_usage_resolves_the_organization_from_snapshots_without_sandboxe
 
 
 def test_account_usage_resolves_the_organization_from_volumes_without_other_rows(monkeypatch) -> None:
-    client = FakeDaytonaClient(volumes=[_volume(organization_id=OTHER_ORG_ID)])
+    client = FakeDaytonaClient(snapshots=[_snapshot(general=True)], volumes=[_volume(organization_id=OTHER_ORG_ID)])
     _install_fakes(monkeypatch, client)
 
     usage = asyncio.run(account_usage(DaytonaConnection(api_key="x", api_url="u", target="us")))
@@ -213,8 +218,14 @@ def test_account_usage_resolves_the_organization_from_volumes_without_other_rows
     assert usage.organization_id == OTHER_ORG_ID
 
 
-def test_account_usage_fails_when_the_inventory_spans_organizations(monkeypatch) -> None:
-    client = FakeDaytonaClient(sandboxes=[_sandbox(organization_id=ORG_ID), _sandbox(organization_id=OTHER_ORG_ID)])
+@pytest.mark.parametrize("inventory", ["sandboxes", "snapshots"])
+def test_account_usage_fails_when_the_inventory_spans_organizations(monkeypatch, inventory) -> None:
+    rows = (
+        [_sandbox(organization_id=ORG_ID), _sandbox(organization_id=OTHER_ORG_ID)]
+        if inventory == "sandboxes"
+        else [_snapshot(organization_id=ORG_ID), _snapshot(organization_id=OTHER_ORG_ID, name="other-private")]
+    )
+    client = FakeDaytonaClient(**{inventory: rows})
     _install_fakes(monkeypatch, client)
 
     with pytest.raises(RuntimeError):

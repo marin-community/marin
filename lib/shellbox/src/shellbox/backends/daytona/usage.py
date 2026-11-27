@@ -198,7 +198,7 @@ async def _organization_id(client: AsyncDaytona, sandboxes: list[AsyncSandbox]) 
     ids = {row.organization_id for row in sandboxes if row.organization_id}
     if not ids:
         snapshots: list[Snapshot] = await list_snapshots(client)
-        ids = {snapshot.organization_id for snapshot in snapshots if snapshot.organization_id}
+        ids = {snapshot.organization_id for snapshot in snapshots if snapshot.organization_id and not snapshot.general}
     if not ids:
         volumes: list[Volume] = await client.volume.list()
         ids = {volume.organization_id for volume in volumes if volume.organization_id}

@@ -126,7 +126,9 @@ remaining capacity. It lists the account's sandboxes (paginated) and reports
 the usage overview with sandbox counts by state. The `/organizations` endpoint
 rejects API-key credentials with 401, so the command resolves the organization
 ID from the inventory; when the org has no sandboxes, it reads snapshots and
-then volumes instead:
+then volumes instead. Provider-owned `general` snapshots are visible across
+accounts and do not identify the authenticated organization; only private
+snapshot rows are used for that fallback:
 
 ```bash
 uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-usage \
