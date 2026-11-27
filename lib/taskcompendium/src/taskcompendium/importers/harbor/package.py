@@ -426,14 +426,10 @@ def lower_package(
         memory_mb=environment.memory_mb,
         storage_mb=environment.storage_mb,
         network=NetworkPolicy.ALLOW if _agent_internet(config, sources) else NetworkPolicy.DENY,
-        verifier_resources=(
-            None
-            if verifier is None
-            else MachineResources(
-                cpus=config.verifier_environment.cpus,
-                memory_mb=config.verifier_environment.memory_mb,
-                storage_mb=config.verifier_environment.storage_mb,
-            )
-        ),
+        verifier_resources=None if verifier is None else _verifier_resources(config.verifier_environment),
     )
     return HarborTask(task, episode)
+
+
+def _verifier_resources(environment: EnvironmentConfig) -> MachineResources:
+    return MachineResources(cpus=environment.cpus, memory_mb=environment.memory_mb, storage_mb=environment.storage_mb)
