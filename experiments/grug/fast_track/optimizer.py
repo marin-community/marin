@@ -488,6 +488,49 @@ def scale_with_grug_muon_law_cap(
     return optax.GradientTransformation(muon_transform.init, update_fn)
 
 
+class RowHyperballMomentumState(NamedTuple):
+    momentum: optax.Params
+    init_row_norms: optax.Params
+
+
+def scale_by_row_hyperball_momentum(momentum: float, learning_rate) -> optax.GradientTransformation:
+    """Per-row hyperball step for an embedding table ``[rows, D]`` read through a norm.
+
+    ``M <- b M + (1 - b) G`` and ``N = (1 - b) G + b M`` with ``b = momentum``; each row takes
+    ``W_i <- r_i normalize(W_i - lr r_i N_i / (|N_i| + 1e-8))`` with ``r_i`` the row's norm at init, so every row
+    keeps its init norm and turns by about ``lr`` radians per step. No decay. Returns the full parameter delta.
+    """
+
+    def init_fn(params):
+        return RowHyperballMomentumState(
+            momentum=otu.tree_zeros_like(params, dtype=jnp.float32), init_row_norms=jax.tree.map(_row_norms, params)
+        )
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("scale_by_row_hyperball_momentum requires params")
+
+        def momentum_of(g, m):
+            return _pin_sharding(momentum * m + (1 - momentum) * g.astype(jnp.float32), m)
+
+        new_momentum = jax.tree.map(momentum_of, updates, state.momentum)
+
+        def step(p, g, m, r):
+            if p.ndim != 2:
+                raise ValueError(f"the row hyperball step needs a [rows, D] table, got shape {p.shape}")
+            p32 = p.astype(jnp.float32)
+            n = _pin_sharding((1 - momentum) * g.astype(jnp.float32) + momentum * m, p)
+            unit = n / (_row_norms(n) + ROW_HYPERBALL_EPS)
+            stepped = _pin_sharding(p32 - learning_rate * r * unit, p)
+            new_p = r * stepped / jnp.maximum(_row_norms(stepped), 1e-10)
+            return (new_p - p32).astype(p.dtype)
+
+        new_updates = jax.tree.map(step, params, updates, new_momentum, state.init_row_norms)
+        return new_updates, RowHyperballMomentumState(new_momentum, state.init_row_norms)
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 class AdamCState(NamedTuple):
     adam: optax.OptState
     init_radius: optax.Params
@@ -611,6 +654,9 @@ TOKEN_NORM_HEAD_SCALE = 0.02
 TOKEN_NORM_HEAD_EPS = 1e-8
 """``muonc_anneal_head_token_norm``: the head's momentum, its step ``lr_h TOKEN_NORM_HEAD_SCALE sqrt(d) U`` (the
 whole-matrix norm of AdamC's ``lr_h r0`` at init) and the column-norm epsilon."""
+ROW_HYPERBALL_EPS = 1e-8
+"""``embed_row_hyperball``: epsilon of the per-row momentum norm."""
+EMBED_ROW_HYPERBALL_GROUP = "embed_row_hyperball"
 LAW_CAP_TAU = 39.0
 LAW_CAP_LAMBDA = 0.2
 """``muonh_law_cap_ball``: the ball radius is ``kappa |U|`` with
@@ -755,6 +801,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """With ``muonc_anneal_decay``: before the first step, every rank >= 2 leaf of the ``muonh`` and ``kda_beta`` groups
     (the matrices stepped by the MuonC rule) is multiplied by ``muonc_init_mult``, so it starts near its MuonC
     equilibrium norm; every other leaf keeps its init. Applied by ``scale_initial_params``. 0: off."""
+    embed_row_hyperball: float = 0.0
+    """``token_embed`` takes ``scale_by_row_hyperball_momentum`` (one fp32 momentum buffer at ``momentum``, each row
+    held at its init norm) with turn per step ``theta_t = embed_row_hyperball * adam_lr_t / adam_lr``, the Adam
+    schedule, and no decay, in place of its Adam group. Every other leaf is unchanged. 0: off."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -940,6 +990,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "embed": embed_at(adam_lr),
             }
             # Only when on, so the optimizer state of runs without it keeps its groups.
+            if self.embed_row_hyperball:
+                transforms[EMBED_ROW_HYPERBALL_GROUP] = scale_by_row_hyperball_momentum(
+                    self.momentum, self.embed_row_hyperball * adam_lr / self.adam_lr
+                )
             if self.embed_lr_mult is not None:
                 transforms["embed_lr"] = adam_at(adam_lr * self.embed_lr_mult, decay=True)
             if self.adamc_head_router_embed or self.muonc_anneal_adamc:
@@ -1090,6 +1144,14 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "muonc_matrix_lr_mult must be non-negative, needs muonc_anneal_decay and excludes "
                 "muonc_anneal_law_cap_ball"
             )
+        if self.embed_row_hyperball < 0 or (
+            self.embed_row_hyperball
+            and (self.embed_lr_mult is not None or self.embed_optimizer != EmbedOptimizer.ADAM_GROUP)
+        ):
+            raise ValueError(
+                "embed_row_hyperball must be non-negative and excludes embed_lr_mult and embed_optimizer other than "
+                "adam_group"
+            )
         if self.muonc_init_mult < 0 or (self.muonc_init_mult and not self.muonc_anneal_decay):
             raise ValueError("muonc_init_mult must be non-negative and needs muonc_anneal_decay")
         if self.muonh_law_cap_ball and (
@@ -1141,6 +1203,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # and n-gram cache mixtures' weights and the middle-loop controller's W_f / W_g (zero-initialised).
             if ".rel_pos." in path_lower or _ADAM_LEAVES.search(path_lower):
                 return "adam"
+            if self.embed_row_hyperball and _TOKEN_EMBED.search(path_lower):
+                return EMBED_ROW_HYPERBALL_GROUP
             adamc_router_embed = self.adamc_head_router_embed or self.muonc_anneal_adamc
             if adamc_router_embed and (_TOKEN_EMBED.search(path_lower) or _is_router_weight(path_lower)):
                 return ADAMC_ADAM_GROUP
