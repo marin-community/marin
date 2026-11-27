@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Report organization headroom from paginated Daytona inventory, without usage API access."""
+"""Report per-region headroom from paginated Daytona inventory, without usage API access."""
 
 import argparse
 import asyncio
@@ -15,7 +15,8 @@ from typing import TypedDict
 from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.usage import (
     DEFAULT_HEADROOM,
-    OrganizationLimits,
+    AccountLimits,
+    RegionLimits,
     SandboxProfile,
     UsageReport,
     account_usage,
@@ -30,14 +31,28 @@ class Account(StrEnum):
     DATA = "data"
 
 
-# Maintain these presets with the organization quota table in .agents/ops/daytona.md.
-QUOTA_SOURCE = "account-owner limits (2026-11-19), .agents/ops/daytona.md"
+# Single quota source of record. Owner-supplied organization limits (2026-11-19)
+# recorded for the accounts' us region, the one Daytona region Marin launches in
+# (DAYTONA_TARGET). Update these presets when the account owner changes the
+# limits, and add regions when the owner supplies their rows.
+QUOTA_SOURCE = (
+    "account-owner limits (2026-11-19), ACCOUNT_LIMITS in lib/shellbox/src/shellbox/backends/daytona/usage_cli.py"
+)
 PER_SANDBOX_MAXIMUM = SandboxProfile(cpu=4, memory_gib=8, disk_gib=10)
 ACCOUNT_LIMITS = MappingProxyType(
     {
-        Account.EVAL: OrganizationLimits(2500, 7500, 25000, PER_SANDBOX_MAXIMUM),
-        Account.RL: OrganizationLimits(6000, 12000, 20000, PER_SANDBOX_MAXIMUM),
-        Account.DATA: OrganizationLimits(2000, 4000, 10000, PER_SANDBOX_MAXIMUM),
+        Account.EVAL: AccountLimits(
+            regions=MappingProxyType({"us": RegionLimits(2500, 7500, 25000)}),
+            per_sandbox=PER_SANDBOX_MAXIMUM,
+        ),
+        Account.RL: AccountLimits(
+            regions=MappingProxyType({"us": RegionLimits(6000, 12000, 20000)}),
+            per_sandbox=PER_SANDBOX_MAXIMUM,
+        ),
+        Account.DATA: AccountLimits(
+            regions=MappingProxyType({"us": RegionLimits(2000, 4000, 10000)}),
+            per_sandbox=PER_SANDBOX_MAXIMUM,
+        ),
     }
 )
 ACCOUNT_KEY_ENVS = MappingProxyType(
@@ -82,26 +97,29 @@ def _selected_accounts(arguments: argparse.Namespace) -> Mapping[Account, str]:
 
 def _print_report(report: AccountReport) -> None:
     print(f"account {report['account']}  organization {report['organization_id'] or 'empty inventory'}")
-    print(
-        f"  sandboxes {report['sandboxes']['total']}  started {report['sandboxes']['started']}"
-        f"  compute charged {report['sandboxes']['compute_charged']}  disk charged {report['sandboxes']['disk_charged']}"
-    )
-    print("  resource       quota         used          remaining     available")
-    for name, resource in report["resources"].items():
-        print(
-            f"  {name:14} "
-            + " ".join(f"{resource[field]:13.2f}" for field in ("quota", "used", "remaining", "available"))
-        )
-    print(f"  reserve {report['headroom_fraction']:.0%} of total quota; memory and disk in GiB")
-    maximum = report["org_limits"]["per_sandbox"]
+    print(f"  sandboxes {report['sandboxes']['total']}  started {report['sandboxes']['started']}")
+    maximum = report["per_sandbox"]
     print(
         f"  per-sandbox maximum {maximum['cpu']} vCPU / {maximum['memory_gib']} GiB RAM / {maximum['disk_gib']} GiB disk"
     )
-    if "max_concurrency" in report:
-        sizing = report["max_concurrency"]
-        print(f"  additional sandboxes {sizing['limit']}")
-        if sizing["exceeds_per_sandbox_maximum"]:
-            print("  profile exceeds per-sandbox maximum: " + ", ".join(sizing["exceeds_per_sandbox_maximum"]))
+    for name, region in report["regions"].items():
+        counts = region["sandboxes"]
+        print(
+            f"  region {name}  sandboxes {counts['total']}"
+            f"  compute charged {counts['compute_charged']}  disk charged {counts['disk_charged']}"
+        )
+        print("    resource       quota         used          remaining     available")
+        for resource, capacity in region["resources"].items():
+            print(
+                f"    {resource:12} "
+                + " ".join(f"{capacity[field]:13.2f}" for field in ("quota", "used", "remaining", "available"))
+            )
+        if "max_concurrency" in region:
+            sizing = region["max_concurrency"]
+            print(f"    additional sandboxes {sizing['limit']}")
+            if sizing["exceeds_per_sandbox_maximum"]:
+                print("    profile exceeds per-sandbox maximum: " + ", ".join(sizing["exceeds_per_sandbox_maximum"]))
+    print(f"  reserve {report['headroom_fraction']:.0%} of each region's quota; memory and disk in GiB")
 
 
 async def _run(arguments: argparse.Namespace) -> None:
@@ -134,7 +152,7 @@ async def _run(arguments: argparse.Namespace) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="shellbox-daytona-usage",
-        description="Read sandbox inventory and size organization headroom from owner-provided quota limits.",
+        description="Read sandbox inventory and size per-region headroom from owner-provided quota limits.",
     )
     account = parser.add_mutually_exclusive_group(required=True)
     account.add_argument("--api-key-env", help="Environment variable holding the selected account's API key.")

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Check inventory-based capacity reports at SDK and HTTP boundaries."""
+"""Check per-region inventory capacity reports at SDK and HTTP boundaries."""
 
 import asyncio
 import json
@@ -19,13 +19,18 @@ from daytona_api_client_async import SandboxDesiredState, SandboxState
 from shellbox.backends.daytona import usage_cli
 from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.usage import (
-    OrganizationLimits,
+    COMPUTE_CHARGED_STATES,
+    CONDITIONAL_COMPUTE_CHARGED_STATES,
+    DISK_CHARGED_STATES,
+    UNCHARGED_STATES,
+    AccountLimits,
+    RegionLimits,
     SandboxProfile,
     account_usage_from_client,
     usage_report,
 )
 
-LIMITS = OrganizationLimits(100, 100, 100, SandboxProfile(4, 8, 10))
+LIMITS = AccountLimits(regions={"us": RegionLimits(100, 100, 100)}, per_sandbox=SandboxProfile(4, 8, 10))
 
 
 def sandbox(
@@ -33,6 +38,7 @@ def sandbox(
     state=SandboxState.STARTED,
     *,
     organization_id="org",
+    target="us",
     cpu=2,
     memory=4,
     disk=10,
@@ -42,6 +48,7 @@ def sandbox(
         id=identifier,
         state=state,
         organization_id=organization_id,
+        target=target,
         cpu=cpu,
         memory=memory,
         disk=disk,
@@ -88,7 +95,7 @@ def test_usage_reads_every_http_page_and_never_calls_organization_api():
                     "id": f"sandbox-{index}",
                     "organizationId": "org",
                     "name": f"sandbox-{index}",
-                    "target": "us" if index < 2 else "eu",
+                    "target": "us" if index < 4 else "eu",
                     "state": state,
                     "user": "root",
                     "public": False,
@@ -107,93 +114,106 @@ def test_usage_reads_every_http_page_and_never_calls_organization_api():
 
         app = web.Application()
         app.router.add_route("*", "/{path:.*}", endpoint)
+        limits = AccountLimits(
+            regions={"us": RegionLimits(100, 100, 100), "eu": RegionLimits(50, 50, 50)},
+            per_sandbox=SandboxProfile(4, 8, 10),
+        )
         async with TestServer(app) as server:
             async with AsyncDaytona(
                 DaytonaConfig(api_key="fixture", api_url=str(server.make_url("")).rstrip("/"))
             ) as client:
-                usage = await account_usage_from_client(client, LIMITS)
+                usage = await account_usage_from_client(client, limits)
         report = usage_report(usage, SandboxProfile(2, 4, 10))
         assert requests == [("GET", "/sandbox", None), ("GET", "/sandbox", "second")]
         assert report["organization_id"] == "org"
-        assert report["sandboxes"] == {
-            "total": 6,
-            "started": 1,
-            "compute_charged": 3,
-            "disk_charged": 4,
-            "by_state": dict.fromkeys(states, 1),
-        }
-        assert report["resources"]["cpu"] == {"quota": 100, "used": 6, "remaining": 94, "available": 74}
-        assert report["resources"]["memory_gib"]["used"] == 12
-        assert report["resources"]["disk_gib"]["used"] == 40
-        assert report["resources"]["memory_gib"]["quota"] == pytest.approx(100_000_000_000 / 2**30)
-        assert report["max_concurrency"]["limit"] == 3
+        assert report["sandboxes"] == {"total": 6, "started": 1, "by_state": dict.fromkeys(states, 1)}
+        us = report["regions"]["us"]
+        assert us["sandboxes"] == {"total": 4, "compute_charged": 3, "disk_charged": 4}
+        assert us["resources"]["cpu"] == {"quota": 100, "used": 6, "remaining": 94, "available": 74}
+        assert us["resources"]["memory_gib"]["used"] == 12
+        assert us["resources"]["disk_gib"]["used"] == 40
+        assert us["resources"]["memory_gib"]["quota"] == pytest.approx(100_000_000_000 / 2**30)
+        assert us["max_concurrency"]["limit"] == 3
+        # The eu region reports its own quota and usage; usage is never summed across regions.
+        eu = report["regions"]["eu"]
+        assert eu["limits"] == {"cpu": 50, "memory_gb": 50, "disk_gb": 50}
+        assert eu["sandboxes"] == {"total": 2, "compute_charged": 0, "disk_charged": 0}
+        assert eu["resources"]["cpu"]["quota"] == 50
+        assert eu["resources"]["disk_gib"]["used"] == 0
 
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize(
-    ("state", "desired_state", "compute", "disk"),
-    [
-        (SandboxState.CREATING, SandboxDesiredState.STARTED, 2, 10),
-        (SandboxState.RESTORING, SandboxDesiredState.STARTED, 2, 10),
-        (SandboxState.STARTED, SandboxDesiredState.STARTED, 2, 10),
-        (SandboxState.STARTING, SandboxDesiredState.STARTED, 2, 10),
-        (SandboxState.STOPPING, SandboxDesiredState.STOPPED, 2, 10),
-        (SandboxState.PENDING_BUILD, SandboxDesiredState.STARTED, 2, 10),
-        (SandboxState.BUILDING_SNAPSHOT, SandboxDesiredState.STARTED, 2, 10),
-        (SandboxState.UNKNOWN, SandboxDesiredState.STARTED, 2, 10),
-        (SandboxState.PULLING_SNAPSHOT, SandboxDesiredState.STARTED, 2, 10),
-        (SandboxState.FORKING, SandboxDesiredState.STARTED, 2, 10),
-        (SandboxState.PAUSING, SandboxDesiredState.STARTED, 2, 10),
-        (SandboxState.RESUMING, SandboxDesiredState.STARTED, 2, 10),
-        (SandboxState.STOPPED, SandboxDesiredState.STOPPED, 0, 10),
-        (SandboxState.PAUSED, SandboxDesiredState.STOPPED, 0, 10),
-        (SandboxState.ARCHIVING, SandboxDesiredState.STOPPED, 0, 10),
-        (SandboxState.RESIZING, SandboxDesiredState.STARTED, 2, 10),
-        (SandboxState.RESIZING, SandboxDesiredState.STOPPED, 0, 10),
-        (SandboxState.SNAPSHOTTING, SandboxDesiredState.STARTED, 2, 10),
-        (SandboxState.SNAPSHOTTING, SandboxDesiredState.STOPPED, 0, 10),
-        (SandboxState.ARCHIVED, SandboxDesiredState.STOPPED, 0, 0),
-        (SandboxState.DESTROYED, SandboxDesiredState.STOPPED, 0, 0),
-        (SandboxState.ERROR, SandboxDesiredState.STARTED, 0, 0),
-    ],
-)
-def test_provider_transition_and_stopped_state_allocations_reduce_headroom(state, desired_state, compute, disk):
-    row = sandbox("one", state, desired_state=desired_state)
-    report = usage_report(asyncio.run(account_usage_from_client(InventoryClient([row]), LIMITS)))
-    assert report["resources"]["cpu"]["used"] == compute
-    assert report["resources"]["memory_gib"]["used"] == compute * 2
-    assert report["resources"]["disk_gib"]["used"] == disk
+def test_compute_charged_states_charge_cpu_and_memory():
+    row = sandbox("one", SandboxState.STARTED)
+    usage = asyncio.run(account_usage_from_client(InventoryClient([row]), LIMITS))
+    region = usage_report(usage)["regions"]["us"]
+    assert region["resources"]["cpu"]["used"] == 2
+    assert region["resources"]["memory_gib"]["used"] == 4
+    assert region["resources"]["disk_gib"]["used"] == 10
+
+
+def test_conditional_states_charge_compute_only_while_desired_started():
+    charging = sandbox("resize-started", SandboxState.RESIZING, desired_state=SandboxDesiredState.STARTED)
+    idle = sandbox("resize-stopped", SandboxState.RESIZING, desired_state=SandboxDesiredState.STOPPED)
+    usage = asyncio.run(account_usage_from_client(InventoryClient([charging, idle]), LIMITS))
+    region = usage_report(usage)["regions"]["us"]
+    assert region["resources"]["cpu"]["used"] == 2
+    assert region["resources"]["disk_gib"]["used"] == 20
+
+
+def test_disk_only_states_charge_disk_without_compute():
+    row = sandbox("one", SandboxState.STOPPED, desired_state=SandboxDesiredState.STOPPED)
+    usage = asyncio.run(account_usage_from_client(InventoryClient([row]), LIMITS))
+    region = usage_report(usage)["regions"]["us"]
+    assert region["resources"]["cpu"]["used"] == 0
+    assert region["resources"]["memory_gib"]["used"] == 0
+    assert region["resources"]["disk_gib"]["used"] == 10
+
+
+def test_uncharged_states_consume_no_quota():
+    row = sandbox("one", SandboxState.DESTROYED, desired_state=SandboxDesiredState.STOPPED)
+    usage = asyncio.run(account_usage_from_client(InventoryClient([row]), LIMITS))
+    region = usage_report(usage)["regions"]["us"]
+    assert region["sandboxes"] == {"total": 1, "compute_charged": 0, "disk_charged": 0}
+    assert all(resource["used"] == 0 for resource in region["resources"].values())
+
+
+def test_every_sandbox_state_member_is_classified():
+    classified = COMPUTE_CHARGED_STATES | CONDITIONAL_COMPUTE_CHARGED_STATES | DISK_CHARGED_STATES | UNCHARGED_STATES
+    assert classified == set(SandboxState) - {SandboxState.UNKNOWN_DEFAULT_OPEN_API}
 
 
 @pytest.mark.parametrize(
     ("limits", "row", "expected"),
     [
-        (OrganizationLimits(100, 1000, 1000, SandboxProfile(4, 8, 10)), sandbox("cpu", cpu=70), 5),
-        (OrganizationLimits(1000, 100, 1000, SandboxProfile(4, 8, 10)), sandbox("memory", memory=65), 2),
-        (OrganizationLimits(1000, 1000, 100, SandboxProfile(4, 8, 10)), sandbox("disk", disk=70), 0),
+        (RegionLimits(100, 1000, 1000), sandbox("cpu", cpu=70), 5),
+        (RegionLimits(1000, 100, 1000), sandbox("memory", memory=65), 2),
+        (RegionLimits(1000, 1000, 100), sandbox("disk", disk=70), 0),
     ],
 )
-def test_capacity_reserves_total_quota_and_uses_the_binding_resource(limits, row, expected):
-    usage = asyncio.run(account_usage_from_client(InventoryClient([row]), limits))
+def test_capacity_reserves_region_quota_and_uses_the_binding_resource(limits, row, expected):
+    account_limits = AccountLimits(regions={"us": limits}, per_sandbox=SandboxProfile(4, 8, 10))
+    usage = asyncio.run(account_usage_from_client(InventoryClient([row]), account_limits))
     report = usage_report(usage, SandboxProfile(2, 4, 10))
-    assert report["max_concurrency"]["limit"] == expected
+    assert report["regions"]["us"]["max_concurrency"]["limit"] == expected
 
 
 @pytest.mark.parametrize("profile", [SandboxProfile(5, 4, 10), SandboxProfile(2, 9, 10), SandboxProfile(2, 4, 11)])
 def test_oversized_profile_cannot_be_admitted_even_with_free_quota(profile):
     usage = asyncio.run(account_usage_from_client(InventoryClient([]), LIMITS))
     report = usage_report(usage, profile)
-    assert report["max_concurrency"]["limit"] == 0
-    assert len(report["max_concurrency"]["exceeds_per_sandbox_maximum"]) == 1
+    assert report["regions"]["us"]["max_concurrency"]["limit"] == 0
+    assert len(report["regions"]["us"]["max_concurrency"]["exceeds_per_sandbox_maximum"]) == 1
 
 
 def test_empty_inventory_reports_unused_quota_without_other_api_access():
     usage = asyncio.run(account_usage_from_client(InventoryClient([]), LIMITS))
     report = usage_report(usage, SandboxProfile(2, 4, 10), headroom=0)
     assert report["organization_id"] is None
-    assert report["sandboxes"] == {"total": 0, "started": 0, "compute_charged": 0, "disk_charged": 0, "by_state": {}}
-    assert report["max_concurrency"]["limit"] == 9
+    assert report["sandboxes"] == {"total": 0, "started": 0, "by_state": {}}
+    assert report["regions"]["us"]["sandboxes"] == {"total": 0, "compute_charged": 0, "disk_charged": 0}
+    assert report["regions"]["us"]["max_concurrency"]["limit"] == 9
 
 
 @pytest.mark.parametrize(
@@ -201,11 +221,14 @@ def test_empty_inventory_reports_unused_quota_without_other_api_access():
     [
         [sandbox("same"), sandbox("same")],
         [sandbox("one"), sandbox("two", organization_id="other")],
+        [sandbox("no-target", target=None)],
+        [sandbox("unrecorded-region", target="eu")],
         [sandbox("missing-cpu", cpu=None)],
         [sandbox("missing-memory", memory=None)],
         [sandbox("missing-disk", disk=None)],
         [sandbox("stopped-missing-disk", SandboxState.STOPPED, disk=None)],
         [sandbox("unknown-state", state=None)],
+        [sandbox("sentinel-state", SandboxState.UNKNOWN_DEFAULT_OPEN_API)],
         [sandbox("resizing-unknown-desired", SandboxState.RESIZING, desired_state=None)],
     ],
 )
@@ -229,12 +252,16 @@ def test_usage_cli_all_applies_each_org_quota_and_hides_credentials(monkeypatch,
     usage_cli.main()
     output = capsys.readouterr().out
     reports = json.loads(output)
-    assert reports["eval"]["resources"]["cpu"]["quota"] == 2500
-    assert reports["rl"]["resources"]["memory_gib"]["quota"] == pytest.approx(12_000_000_000_000 / 2**30)
-    assert reports["data"]["resources"]["disk_gib"]["quota"] == pytest.approx(10_000_000_000_000 / 2**30)
-    assert reports["data"]["max_concurrency"]["limit"] == 0
-    assert reports["data"]["resources"]["cpu"]["remaining"] == 100
-    assert reports["data"]["resources"]["cpu"]["available"] == 0
+    assert reports["eval"]["regions"]["us"]["resources"]["cpu"]["quota"] == 2500
+    assert reports["rl"]["regions"]["us"]["resources"]["memory_gib"]["quota"] == pytest.approx(
+        12_000_000_000_000 / 2**30
+    )
+    assert reports["data"]["regions"]["us"]["resources"]["disk_gib"]["quota"] == pytest.approx(
+        10_000_000_000_000 / 2**30
+    )
+    assert reports["data"]["regions"]["us"]["max_concurrency"]["limit"] == 0
+    assert reports["data"]["regions"]["us"]["resources"]["cpu"]["remaining"] == 100
+    assert reports["data"]["regions"]["us"]["resources"]["cpu"]["available"] == 0
     assert reports["rl"]["organization_id"] is None
     assert all(secret not in output for secret in clients)
 
@@ -249,8 +276,9 @@ def test_usage_cli_selects_inferred_or_explicit_account_limits(monkeypatch, caps
     usage_cli.main()
     report = json.loads(capsys.readouterr().out)
     assert report["account"] == "data"
-    assert report["resources"]["cpu"]["quota"] == 2000
-    assert report["resources"]["cpu"]["used"] == 2
+    assert report["regions"]["us"]["resources"]["cpu"]["quota"] == 2000
+    assert report["regions"]["us"]["resources"]["cpu"]["used"] == 2
+    assert report["quota_source"].endswith("usage_cli.py")
 
 
 def test_usage_cli_missing_keys_are_explicit_in_all_account_report(monkeypatch, capsys):

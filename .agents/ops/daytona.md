@@ -113,9 +113,12 @@ and live sandbox capacity are separate limits. A successful GPU allocation prove
 neither is available.
 
 `shellbox-daytona-usage` reads every page of the sandbox inventory and reports
-organization headroom. The preset table below is the source of record for the
-limits supplied by the account owner (2026-11-19); it does not call the
-organization-usage endpoint, which rejects API keys with 403.
+headroom per region. It does not call the organization-usage endpoint, which
+rejects API keys with 403. The quota presets are the `ACCOUNT_LIMITS` mapping in
+`lib/shellbox/src/shellbox/backends/daytona/usage_cli.py` — the single source of
+record. They hold the account owner's limits (2026-11-19) for the `us` region,
+the one Daytona region Marin launches in (`DAYTONA_TARGET`); add further regions
+to that mapping when the owner supplies their rows.
 
 ```bash
 uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-usage \
@@ -133,19 +136,13 @@ preset. For another variable, select the limits explicitly, for example
 the intended account's key. The ambient `DAYTONA_API_KEY` never selects an
 account by itself.
 
-The presets are organization totals, across all regions:
-
-| Preset | vCPU | RAM (GB) | Disk (GB) |
-| --- | ---: | ---: | ---: |
-| eval | 2,500 | 7,500 | 25,000 |
-| rl | 6,000 | 12,000 | 20,000 |
-| data | 2,000 | 4,000 | 10,000 |
-
-All three presets limit one sandbox to 4 vCPU, 8 GiB RAM and 10 GiB disk.
-The report converts decimal GB quotas to GiB to match inventory allocations.
-`--memory-gib` and `--disk-gib` take whole GiB. Update the maintained presets
-when the account owner changes these limits; the command does not fetch live
-quotas. `--target` configures the SDK connection and does not filter inventory.
+Daytona enforces quota per region (and per sandbox class) with no organization
+total, so the command groups inventory usage by each sandbox's `target` and
+compares it only with that region's recorded limits; it never sums across
+regions. Each preset also caps one sandbox at 4 vCPU, 8 GiB RAM and 10 GiB
+disk. The report converts decimal GB quotas to GiB to match inventory
+allocations, and `--memory-gib` and `--disk-gib` take whole GiB. The command
+does not fetch live quotas.
 
 The report counts every state. Compute is charged for `creating`, `restoring`,
 `started`, `starting`, `stopping`, `pending_build`, `building_snapshot`,
@@ -153,26 +150,31 @@ The report counts every state. Compute is charged for `creating`, `restoring`,
 `resizing` and `snapshotting` also charge compute when their desired state is
 `started`. Disk is charged for every compute state plus `stopped`, `paused`,
 `archiving`, `resizing` and `snapshotting`, regardless of desired state.
-These rules follow the provider's
+`destroyed`, `destroying`, `error`, `build_failed` and `archived` consume
+nothing. These rules follow the provider's
 [compute](https://github.com/daytonaio/daytona/blob/b5a5d9e/apps/api/src/organization/constants/sandbox-states-consuming-compute.constant.ts)
 and [disk](https://github.com/daytonaio/daytona/blob/b5a5d9e/apps/api/src/organization/constants/sandbox-states-consuming-disk.constant.ts)
 quota state definitions. Unrecognized API states and missing desired states for
 conditional compute fail the reading. For each resource, `remaining` is `max(0, quota - used)`,
 and `available` is `max(0, quota * (1 - headroom) - used)`. The default
-`--headroom 0.2` reserves 20% of the total quota. `max_concurrency.limit` is the
-minimum of `floor(available / per_sandbox_request)` across CPU, RAM and disk.
-A profile above any per-sandbox maximum gets a zero limit.
+`--headroom 0.2` reserves 20% of each region's quota. Each region's
+`max_concurrency.limit` is the minimum of `floor(available / per_sandbox_request)`
+across CPU, RAM and disk. A profile above any per-sandbox maximum gets a zero
+limit.
 
 JSON includes `organization_id`, `observed_at`, `usage_source`, `quota_source`,
-`org_limits`, `headroom_fraction`, `compute_charged_states`,
+`per_sandbox`, `headroom_fraction`, `compute_charged_states`,
 `conditional_compute_charged_states`, `conditional_compute_desired_state`,
-`disk_charged_states`, `resources`, and `sandboxes` (`total`, `started`,
-`compute_charged`, `disk_charged`, `by_state`). A supplied profile adds
-`max_concurrency` (`profile`, `by_resource`, `exceeds_per_sandbox_maximum`,
-`limit`). Resource fields are `quota`, `used`, `remaining` and `available`.
+`disk_charged_states`, `uncharged_states`, account-wide `sandboxes` (`total`,
+`started`, `by_state`), and `regions`. Each `regions` entry is keyed by region
+and carries that region's `limits`, `resources`, and `sandboxes` (`total`,
+`compute_charged`, `disk_charged`). A supplied profile adds `max_concurrency`
+per region (`profile`, `by_resource`, `exceeds_per_sandbox_maximum`, `limit`).
+Resource fields are `quota`, `used`, `remaining` and `available`.
 An empty inventory reports zero usage and a null organization ID, without
-querying snapshots or volumes. Duplicate IDs, mixed organizations or missing
-active allocations fail the reading instead of reporting free capacity.
+querying snapshots or volumes. Duplicate IDs, mixed organizations, regions
+without recorded limits, or missing active allocations fail the reading instead
+of reporting free capacity.
 
 Inventory estimates capacity at read time. It reserves no capacity. Re-read it
 before and during submissions, include the entire simultaneous batch, and
