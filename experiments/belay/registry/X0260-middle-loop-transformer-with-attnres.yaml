@@ -26,3 +26,15 @@ trials:
     middle_loop: cross_x2
   commit: fc3e1252fd
   priority: interactive
+- id: t002
+  variant: 2+2 looped middle+2 layers, middle_loop=cross_x3
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0260
+  date: '2026-11-27'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0260
+  wandb: []
+  settings:
+    middle_loop: cross_x3
+  commit: 8f464e8092
+  priority: interactive
