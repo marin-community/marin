@@ -28,6 +28,8 @@ from experiments.post_training.task_curation.conversion_admission import (
     ConversionAdmissionReceipt,
     bind_conversion_admission,
 )
+from experiments.post_training.task_curation.derived_contract_census import DerivedContractReceipt
+from experiments.post_training.task_curation.derived_contract_tags import bind_derived_contract_tags
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_binding import LexicalMeasurementReceipt
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_cohort
@@ -146,7 +148,7 @@ def _original_source(receipt: ConversionAdmissionReceipt) -> RlDataSource:
         build_path="Task Trove",
         origin=SourceOrigin.TASKTROVE,
         family="competitive-programming",
-        tags=("agentic", "single-turn", "excluded"),
+        tags=("agentic", "multi-turn", "excluded", "fixture-domain"),
         task_format=TaskFormat.TASKSPEC,
         count=0,
         notes="Excluded: the mechanical wave retained zero tasks.",
@@ -241,6 +243,27 @@ def test_conversion_admission_binds_the_release_pin_as_executable_taskspec(tmp_p
     assert bound.info.actor_census_input is not None
     assert bound.info.actor_census_input.dataset_revision == CONVERSION_REV
     assert bound.info.grading_environment is not None
+    contract = DerivedContractReceipt(
+        source_id=receipt.source_id,
+        input=receipt.actor.input,
+        population_path=receipt.population_record,
+        scanned_task_specs_sha256=receipt.actor.input.task_specs_sha256,
+        summary={
+            "task_count": 12,
+            "grader_type_counts": {"script": 12},
+            "agentic_count": 12,
+            "single_turn_count": 12,
+            "reply_only_count": 0,
+            "workspace_graded_count": 12,
+            "judge_rubric_counts": {},
+            "judge_reference_count": 0,
+            "judge_no_reference_count": 0,
+        },
+        evidence_url="s3://fixture/current-contract.json",
+    )
+    current = bind_derived_contract_tags(bound, contract)
+    assert current.info.derived_contract.single_turn_count == 12
+    assert "fixture-domain" in current.info.tags
 
 
 def test_conversion_admission_refuses_another_population():

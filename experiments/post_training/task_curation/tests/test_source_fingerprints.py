@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+import sys
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -38,6 +39,7 @@ from taskcompendium.source_fingerprints import (
     SourceIdentitySurvey,
 )
 
+from experiments.post_training.task_curation import native_source_survey
 from experiments.post_training.task_curation.catalog_identity import canonical_identity_survey, identity_survey_payload
 from experiments.post_training.task_curation.duplicate_review import review_pairs
 from experiments.post_training.task_curation.source_duplicate_ci import changed_source_declarations
@@ -60,6 +62,7 @@ from experiments.post_training.task_curation.source_population_cache import (
     PopulationLocations,
     PreparedPopulation,
     cache_population,
+    population_preflight,
     read_hash_population,
     read_population,
 )
@@ -86,6 +89,84 @@ def task_document(identifier: str, instruction: str) -> dict:
         grader=NoGrader(reason="Fixture has no executable reference", contract={}),
     )
     return task.model_dump(mode="json")
+
+
+def test_native_survey_replaces_stale_prepared_locations_before_neighbor_preflight(tmp_path, monkeypatch):
+    empty = fingerprint_source([], {"old": "old-digest"})
+    measured = {}
+    for source in ("first", "second", "retained"):
+        uri = f"s3://marin-us-east-02a/{source}/specs.parquet"
+        inputs = {uri: source + "-digest"}
+        fingerprint = fingerprint_source([task_document(source, f"Solve {source}.")], inputs)
+        prepared = PreparedPopulation(
+            uri=f"s3://marin-us-east-02a/{source}/prepared.parquet",
+            sha256=source + "-prepared-digest",
+            inputs_sha256=canonical_sha256(inputs),
+            task_count=1,
+        )
+        measured[source] = (fingerprint, inputs, {source + "-digest": uri}, prepared)
+    stale = PreparedPopulation(
+        uri="s3://marin-us-east-02a/old/prepared.parquet",
+        sha256="old-prepared-digest",
+        inputs_sha256=canonical_sha256(empty.inputs),
+        task_count=0,
+    )
+    locations = PopulationLocations(
+        files={"retained-digest": measured["retained"][2]["retained-digest"]},
+        prepared={"first": stale, "second": stale, "retained": measured["retained"][3]},
+    )
+    prior = SourceIdentitySurvey(
+        catalog_root="fixture",
+        snapshot_id="frozen",
+        generated_at="frozen",
+        fingerprints={"first": empty, "second": empty, "retained": measured["retained"][0]},
+        reviews=[],
+        groups=[],
+        judge=None,
+    )
+    prior_path = tmp_path / "prior.json"
+    prior_path.write_text(prior.model_dump_json())
+    monkeypatch.setattr(native_source_survey, "measure_population", lambda source, *args: measured[source])
+    monkeypatch.setattr(native_source_survey, "read_locator_manifest", lambda path: locations)
+
+    def run_neighbors(survey, output, work, workers, sample, only_openqa, cpu, current_locations, **kwargs):
+        result = population_preflight(survey, current_locations, "marin-us-east-02a")
+        assert result["prepared_sources"] == 3
+        assert current_locations.prepared["retained"] == locations.prepared["retained"]
+        assert locations.prepared["first"] == stale
+        return {
+            "survey_uri": str(prior_path),
+            "survey_sha256": "digest",
+            "pairs": 1,
+            "labels": {"distinct": 1},
+            "changed_pairs": 1,
+        }
+
+    monkeypatch.setattr(native_source_survey, "rerun", run_neighbors)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "native-source-survey",
+            "--source",
+            "first=1",
+            "--source",
+            "second=1",
+            "--population-version",
+            "new",
+            "--survey-root",
+            str(tmp_path / "output"),
+            "--work-dir",
+            str(tmp_path / "work"),
+            "--served-survey-uri",
+            str(prior_path),
+            "--served-survey-sha256",
+            hashlib.sha256(prior_path.read_bytes()).hexdigest(),
+            "--allocated-cpus",
+            "2",
+        ],
+    )
+    native_source_survey.main()
 
 
 def test_empty_release_fingerprints_without_overlap_candidates():

@@ -132,12 +132,12 @@ def test_repaired_script_scores_gold_one_and_noop_zero():
 def test_convert_population_repairs_every_row():
     task = _tiered_task()
     rows = [{"task_spec": task.model_dump_json()}]
-    converted, receipts, counts = convert_population(rows)
-    assert counts["converted_rows"] == 1 and counts["excluded_rows"] == 0
-    repaired = TaskSpec.model_validate_json(converted[0]["task_spec"])
+    population = convert_population(rows)
+    assert population.counts["converted_rows"] == 1 and population.counts["excluded_rows"] == 0
+    repaired = TaskSpec.model_validate_json(population.tasks[0]["task_spec"])
     script = next(r for r in repaired.resources.verifier if r.path == "tests/test.sh")
     assert "0.25" not in resource_bytes(script).decode()
-    assert receipts[0]["removed_tiers"] == list(REMOVED_TIERS)
+    assert population.receipts[0]["removed_tiers"] == list(REMOVED_TIERS)
 
 
 def test_repair_passes_through_an_already_clean_task():

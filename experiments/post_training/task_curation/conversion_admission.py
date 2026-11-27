@@ -37,6 +37,7 @@ from finestore.rl.curation import (
 )
 from pydantic import BaseModel, ConfigDict, model_validator
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.derived_contract import SHAPE_TAGS
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
 from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
@@ -219,7 +220,9 @@ def bind_conversion_admission(source: RlDataSource, receipt: ConversionAdmission
             else None
         ),
         daytona_run_evidence=receipt.acceptance,
-        tags=tuple(tag for tag in source.info.tags if tag not in {"excluded", "deprecated"}),
+        # Original-population shape claims do not describe the converted TaskSpecs;
+        # their current contract census supplies the derived shape after admission.
+        tags=tuple(tag for tag in source.info.tags if tag not in SHAPE_TAGS | {"excluded", "deprecated"}),
         notes=(
             f"Base-pinned conversion admitted {count} executable TaskSpecs at "
             f"{receipt.conversion_release.repo}@{receipt.conversion_release.revision}; the zero-task "

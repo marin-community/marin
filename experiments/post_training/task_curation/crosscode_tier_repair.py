@@ -15,8 +15,10 @@ instruction. The removed tiers are recorded in the repair lineage.
 """
 
 import argparse
+import hashlib
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -152,7 +154,14 @@ def repair_task(task: TaskSpec) -> TaskSpec:
     return repaired
 
 
-def convert_population(rows: list[dict]) -> tuple[list[dict], list[dict], dict]:
+@dataclass(frozen=True)
+class RepairedPopulation:
+    tasks: list[dict]
+    receipts: list[dict]
+    counts: dict[str, int]
+
+
+def convert_population(rows: list[dict]) -> RepairedPopulation:
     """Repair every row; strict — a row without the tier verifier fails the run."""
     converted, receipts = [], []
     for row in rows:
@@ -163,7 +172,7 @@ def convert_population(rows: list[dict]) -> tuple[list[dict], list[dict], dict]:
             {
                 "path": task.source.row,
                 "task_spec": serialized,
-                "task_sha256": __import__("hashlib").sha256(serialized.encode()).hexdigest(),
+                "task_sha256": hashlib.sha256(serialized.encode()).hexdigest(),
             }
         )
         receipts.append(
@@ -177,7 +186,7 @@ def convert_population(rows: list[dict]) -> tuple[list[dict], list[dict], dict]:
             }
         )
     counts = {"input_rows": len(rows), "converted_rows": len(converted), "excluded_rows": 0}
-    return converted, receipts, counts
+    return RepairedPopulation(tasks=converted, receipts=receipts, counts=counts)
 
 
 def load_population(release_repo: str, release_revision: str) -> list[dict]:
@@ -189,8 +198,8 @@ def publish(
     *,
     source_id: str,
     intended_use: str,
-    release_repo: str,
-    release_revision: str,
+    input_release_repo: str,
+    input_release_revision: str,
     output_root: Path,
     artifact_version: str,
     converted: list[dict],
@@ -205,7 +214,7 @@ def publish(
     manifest["repair"] = {
         "version": REPAIR_VERSION,
         "removed_tiers": list(REMOVED_TIERS),
-        "input_release": {"repo": release_repo, "revision": release_revision},
+        "input_release": {"repo": input_release_repo, "revision": input_release_revision},
     }
     (output_root / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
@@ -218,7 +227,7 @@ def publish(
         "forgiving verifier is replaced with the clean normalized exact-text contract (reward 1.0 on a "
         "match, 0 otherwise; no partial-credit tiers), and the instruction's scoring hints are removed. "
         "The removed tiers are recorded in the repair lineage and the per-task conversion receipts. "
-        f"Input release: {release_repo}@{release_revision}. Converted: {manifest['converted_rows']}; "
+        f"Input release: {input_release_repo}@{input_release_revision}. Converted: {manifest['converted_rows']}; "
         f"input: {manifest['input_rows']}.\n"
     )
     (output_root / "README.md").write_text(
@@ -272,10 +281,14 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
     rows = load_population(args.release_repo, args.release_revision)
-    converted, receipts, counts = convert_population(rows)
+    population = convert_population(rows)
     if not args.run:
         manifest = write_native_conversion_artifacts(
-            converted, receipts, counts, output_root=str(args.output_root), source_id=args.source_id
+            population.tasks,
+            population.receipts,
+            population.counts,
+            output_root=str(args.output_root),
+            source_id=args.source_id,
         )
         print(
             json.dumps({"plan": manifest, "release_repo": release_repo(args.source_id, args.artifact_version)}, indent=2)
@@ -284,13 +297,13 @@ def main() -> None:
     result = publish(
         source_id=args.source_id,
         intended_use=args.intended_use,
-        release_repo=args.release_repo,
-        release_revision=args.release_revision,
+        input_release_repo=args.release_repo,
+        input_release_revision=args.release_revision,
         output_root=args.output_root,
         artifact_version=args.artifact_version,
-        converted=converted,
-        receipts=receipts,
-        counts=counts,
+        converted=population.tasks,
+        receipts=population.receipts,
+        counts=population.counts,
     )
     payload = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.report is not None:

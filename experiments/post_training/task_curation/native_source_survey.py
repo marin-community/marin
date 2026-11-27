@@ -3,21 +3,17 @@
 
 """Build the re-pinned native conversions' source-identity survey in-region.
 
-The admission of the re-pinned native SWE conversions needs fresh source
-fingerprints: the served identity survey still carries their 2026-11-14
-empty-population fingerprints while the declarations moved to the native
-conversion releases. Run as one interactive-priority job in the populations'
-region, it:
+Re-pinned conversion populations need measured fingerprints and prepared caches
+at their current inputs. Run in the populations' region, this stage:
 
 1. copies each staged population's spec shards to the survey's durable
-   source-identity prefix and verifies every copied byte;
-2. fingerprints each complete population over the uploaded shards and fails
-   closed unless the measured task count matches the declared census;
-3. stages the survey input: the served identity survey with the three stale
-   empty-population entries replaced by the fresh measurements;
+   source-identity prefix and verifies SHA-256 digests after upload;
+2. fingerprints each complete population and creates its prepared content cache,
+   refusing unless both task counts match the declared census;
+3. replaces the target fingerprints and prepared-population locators together,
+   preserving other sources' measurements and locations;
 4. runs the deterministic content-NN neighbor survey focused on the re-pinned
-   sources (no LLM; the served locator document resolves every partner
-   population), which also builds each source's prepared population cache.
+   sources (no LLM), using the fresh locations during input preflight.
 
 Prints one JSON summary with the artifact URIs and SHA-256 digests the
 FingerprintReference registry append consumes.
@@ -46,6 +42,7 @@ from experiments.post_training.task_curation.source_fingerprints import fingerpr
 from experiments.post_training.task_curation.source_neighbor_survey import SAMPLE_SIZE, rerun, write_json
 from experiments.post_training.task_curation.source_population_cache import (
     CONTENT_SCHEMA,
+    PopulationLocations,
     PreparedPopulation,
     read_locator_manifest,
 )
@@ -210,6 +207,13 @@ def main() -> None:
         args.served_survey_uri, args.served_survey_sha256, fingerprints, survey_root
     )
     survey_work = args.work_dir / "survey"
+    prior_locations = read_locator_manifest(
+        Path("experiments/post_training/task_curation/source_population_locators.json")
+    )
+    locations = PopulationLocations(
+        files={**prior_locations.files, **files},
+        prepared={**prior_locations.prepared, **prepared},
+    )
     summary = rerun(
         canonical_identity_survey(json.loads(StoragePath(survey_input_uri).read_bytes())),
         args.survey_root,
@@ -218,7 +222,7 @@ def main() -> None:
         SAMPLE_SIZE,
         False,
         args.allocated_cpus,
-        read_locator_manifest(Path("experiments/post_training/task_curation/source_population_locators.json")),
+        locations,
         source_survey_uri=survey_input_uri,
         source_survey_sha256=survey_input_sha,
         source_ids=set(fingerprints),
