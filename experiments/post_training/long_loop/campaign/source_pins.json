@@ -2966,32 +2966,27 @@
       "status": "Excluded",
       "intended_use": "train",
       "pipeline": {
-        "name": "swe-rebench-v2-1-repaired",
+        "name": "swe-rebench-v2-1-repaired-release-20261126-v1",
         "files": [
-          "data/train-00000-of-00006.parquet",
-          "data/train-00001-of-00006.parquet",
-          "data/train-00002-of-00006.parquet",
-          "data/train-00003-of-00006.parquet",
-          "data/train-00004-of-00006.parquet",
-          "data/train-00005-of-00006.parquet"
+          "tasks.parquet"
         ],
-        "source": "ibragim-bad/SWE-rebench-V2.1",
+        "source": "open-athena/swe-rebench-v2-1-repaired-release-20261126-v1",
         "version": "2026.11.20.2",
-        "revision": "26c0145ded93168b0d5d095420155901ad2d5a2f"
+        "revision": "adaba5629b54ca31f8e6055ae2ae680d5555fd49"
       },
       "current_release": {
-        "url": "https://huggingface.co/datasets/ibragim-bad/SWE-rebench-V2.1/tree/26c0145ded93168b0d5d095420155901ad2d5a2f",
-        "repo": "ibragim-bad/SWE-rebench-V2.1",
-        "revision": "26c0145ded93168b0d5d095420155901ad2d5a2f"
+        "url": "https://huggingface.co/datasets/open-athena/swe-rebench-v2-1-repaired-release-20261126-v1/tree/adaba5629b54ca31f8e6055ae2ae680d5555fd49",
+        "repo": "open-athena/swe-rebench-v2-1-repaired-release-20261126-v1",
+        "revision": "adaba5629b54ca31f8e6055ae2ae680d5555fd49"
       },
-      "dataset_id": "ibragim-bad/SWE-rebench-V2.1",
-      "dataset_revision": "26c0145ded93168b0d5d095420155901ad2d5a2f",
+      "dataset_id": "open-athena/swe-rebench-v2-1-repaired-release-20261126-v1",
+      "dataset_revision": "adaba5629b54ca31f8e6055ae2ae680d5555fd49",
       "actor_census_input": {
-        "dataset_id": "ibragim-bad/SWE-rebench-V2.1",
+        "dataset_id": "open-athena/swe-rebench-v2-1-repaired-release-20261126-v1",
         "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/swe-repair/2026.11.20.1/measurements/rl-data/atlas/intake-population/swe-rebench-v2-1-repaired/2026.11.20.3/.artifact.json",
         "carry_forward": null,
-        "measured_tasks": 21272,
-        "dataset_revision": "26c0145ded93168b0d5d095420155901ad2d5a2f",
+        "measured_tasks": 7207,
+        "dataset_revision": "adaba5629b54ca31f8e6055ae2ae680d5555fd49",
         "converter_version": "2026.11.20.2",
         "task_specs_sha256": "d6c14ac019e3686771241880430b3170929dffd9c78a58c574e6f9ad1c9cacc1",
         "converter_revision": "9c01efa7e76beb99f0b5755799c1c86250aef55a"
@@ -3002,6 +2997,24 @@
         "counts": {
           "unsupported": 21272
         }
+      },
+      "repin": {
+        "parent_pipeline": {
+          "name": "swe-rebench-v2-1-repaired",
+          "files": [
+            "data/train-00000-of-00006.parquet",
+            "data/train-00001-of-00006.parquet",
+            "data/train-00002-of-00006.parquet",
+            "data/train-00003-of-00006.parquet",
+            "data/train-00004-of-00006.parquet",
+            "data/train-00005-of-00006.parquet"
+          ],
+          "source": "ibragim-bad/SWE-rebench-V2.1",
+          "version": "2026.11.20.2",
+          "revision": "26c0145ded93168b0d5d095420155901ad2d5a2f"
+        },
+        "change": "bound to the sealed 7,207-task TaskSpec release declared on atlas-env-audit (repair_releases.py; fingerprint 37dec5e342)",
+        "evidence": "atlas-env-audit experiments/post_training/task_curation/datasets/repair_releases.py; release tasks.parquet 7,207 rows"
       }
     },
     "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2": {
