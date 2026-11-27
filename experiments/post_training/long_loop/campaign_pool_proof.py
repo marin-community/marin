@@ -24,13 +24,15 @@ from experiments.post_training.long_loop.campaign_stall_e2e import run_proof
 
 def prove_pool(mix_id: str, version: str, source_commit: str, output: str) -> dict:
     """Build only the canonical CPU dependency and verify every prepared rollout."""
-    if get_job_info() is None or not output.startswith("s3://marin-us-east-08a/"):
-        raise ValueError("The pool proof must execute in an 08a Iris CPU job")
+    if get_job_info() is None:
+        raise ValueError("The pool proof must execute in an Iris CPU job")
     configure_coreweave_s3()
     mix = load_mix(mix_id)
     agentic = [label for label, pin in mix.sources.items() if pin["route"] == "agentic"]
     assert agentic, "The proof must contain an agentic source"
     spec = campaign_round(mix, version, max_steps=50)
+    if not output.startswith(spec.storage.output_prefix.rstrip("/") + "/"):
+        raise ValueError("The proof receipt must use the campaign's regional output prefix")
     os.environ.update(MARIN_PREFIX=spec.storage.output_prefix, MARIN_TEMP_PREFIX=spec.storage.temporary_prefix)
     graph = campaign_graph(mix, spec)
     pools = [handle for handle in graph_handles([graph.training]) if handle.name == spec.name + "/pools"]
