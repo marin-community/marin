@@ -16,7 +16,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Sequence
-from urllib.parse import quote
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -59,12 +58,6 @@ class PackedTaskReference:
     path: str
     dockerfile_id: str
     mode: str
-
-    def stable_uri(self) -> str:
-        identity = quote(self.dataset_identity, safe="")
-        source = quote(self.source, safe="")
-        path = quote(self.path, safe="/")
-        return f"tasktrove://{identity}/{source}/{path}"
 
     def uid(self) -> str:
         return f"{self.dataset_identity}/{self.source}/{self.path}"

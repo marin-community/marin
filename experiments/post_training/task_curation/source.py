@@ -9,15 +9,23 @@ from typing import Protocol
 
 from finestore.rl.curation import (
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
+    DatasetRelease,
     IndependentQC,
     OracleValidation,
     OversightEvidence,
     OversightLevel,
     PipelineReference,
     SourceDeclaration,
+    SourceOrigin,
+    SourceUse,
     daytona_verdict,
+    source_identifier,
+    source_title,
 )
+from finestore.rl.licenses import LicenseReceipt, require_license
+from finestore.rl.status_taxonomy import DataRestriction
 from marin.execution.lazy import ArtifactStep
+from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.config import PipelineOptions
@@ -51,6 +59,9 @@ class CatalogConfig(Protocol):
     @property
     def files(self) -> tuple[str, ...]: ...
 
+    @property
+    def intended_use(self) -> IntendedUse: ...
+
 
 class TaskFormat(StrEnum):
     """The ingested task layout of a source's pinned payload.
@@ -71,30 +82,30 @@ GRANDFATHERED_MARINSKYRL_SOURCES: frozenset[str] = frozenset(
     {
         # Nemotron Ultra mix components: JSONL rows produced by Marin's own RL
         # pipeline, predating the task-directory format.
-        "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym",
-        "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2",
-        "MarinSkyRL:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train",
-        "MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
-        "MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
-        "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_lean",
-        "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_math_tir",
-        "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
-        "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema",
-        "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
-        "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
-        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
-        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir",
-        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
-        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
-        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot",
-        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema",
-        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
-        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir",
-        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
-        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
-        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot",
-        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema",
-        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+        "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym",
+        "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2",
+        "Nemotron:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train",
+        "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
+        "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_tir",
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema",
+        "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
+        "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir",
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot",
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema",
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir",
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot",
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema",
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
     }
 )
 """Marin-internal blend sources admitted before the task-directory requirement."""
@@ -117,18 +128,46 @@ EXCLUDED_TAG = "excluded"
 class SourceInfo:
     """Identity and discovery information for one source population.
 
-    ``count`` is the number of selected input rows at the dataset revision,
-    before conversion or curation. Leave it unknown unless the pinned payload
-    or a complete manifest establishes it. A sample size is not a source count.
+    ``id`` and ``title`` are generated from the upstream identity keys:
+    ``<origin>:<upstream_dataset>[/<subset>][@<variant>]`` and
+    ``<upstream_name> · <subset> · <variant>``. Stored records written under
+    historical IDs resolve through the alias table where they are read, never
+    at authoring. ``count`` is the number of selected input rows at the dataset
+    revision, before conversion or curation. Leave it unknown unless the
+    pinned payload or a complete manifest establishes it. A sample size is not
+    a source count.
 
     ``dataset`` identifies inventory entries without a configuration. Runnable
     sources expose their configured pinned input directly. Tags describe task type,
     interaction, benchmark status, and source-specific search terms.
     """
 
-    id: str
-    title: str
-    origin: str
+    origin: SourceOrigin
+    upstream_dataset: str
+    upstream_name: str
+    build_path: str
+    """Internal campaign or pipeline, independently of the upstream origin."""
+    subset: str | None = None
+    variant: str | None = None
+    data_restriction: DataRestriction
+    """The source's typed restriction tier, set explicitly on every source.
+
+    ``PRIVATE_ALWAYS`` keeps the source's content in its private store no matter
+    what else changes. The tier travels with the qualified declaration the
+    source's ingestion publishes; this legacy catalog row does not carry it.
+    """
+    current_release: DatasetRelease | None = None
+    """The exact release consumed for training, separately from upstream provenance."""
+    intended_use: IntendedUse | None = None
+    """The declared use of a source recorded without its registered converter.
+
+    Configured sources resolve their use from the converter instead; a source
+    that declares it in both places is refused.
+    """
+    upstream_url: str | None = None
+    """Upstream provenance URL, including for repaired releases."""
+    license_receipt: LicenseReceipt | None = None
+    """The stage-0 license resolution this source's ingest and admission rest on."""
     family: str = ""
     tags: tuple[str, ...] = ()
     count: int | None = None
@@ -167,6 +206,14 @@ class SourceInfo:
     oversight: OversightEvidence | None = None
     """The review this source's admission rests on, with its evidence pointers."""
 
+    @property
+    def id(self) -> str:
+        return source_identifier(self.origin, self.upstream_dataset, self.subset, self.variant)
+
+    @property
+    def title(self) -> str:
+        return source_title(self.upstream_name, self.subset, self.variant)
+
 
 @dataclass(frozen=True)
 class RlDataSource[ConfigT: CatalogConfig]:
@@ -181,6 +228,29 @@ class RlDataSource[ConfigT: CatalogConfig]:
     info: SourceInfo
     config: ConfigT | None = None
     pipeline: "CurationPipeline[ConfigT] | None" = None
+
+    def require_license(self) -> None:
+        """Require stage-0 permission at the current pin before constructing any work."""
+        dataset = self.dataset
+        require_license(
+            self.info.license_receipt,
+            self.info.id,
+            dataset.name if dataset else None,
+            dataset.revision if dataset else None,
+            self.intended_use.value,
+            ban=None,
+        )
+
+    @property
+    def intended_use(self) -> SourceUse:
+        """Resolve population policy from the registered converter, or the record's declared use."""
+        if self.config is not None and self.info.intended_use is not None:
+            raise ValueError(f"Source {self.info.id} declares its use twice")
+        if self.config is not None:
+            return SourceUse(self.config.intended_use.value)
+        if self.info.intended_use is None:
+            raise ValueError(f"No registered conversion Use: {self.info.id}")
+        return SourceUse(self.info.intended_use.value)
 
     @property
     def name(self) -> str:
@@ -197,6 +267,17 @@ class RlDataSource[ConfigT: CatalogConfig]:
     @property
     def dataset(self) -> PinnedReference | None:
         return self.config.dataset if self.config is not None else self.info.dataset
+
+    @property
+    def current_release(self) -> DatasetRelease:
+        dataset = self.dataset
+        if dataset is None or not dataset.revision:
+            raise ValueError(f"Source {self.info.id} requires an exact current release pin")
+        release = DatasetRelease(repo=dataset.name, revision=dataset.revision, url=dataset.url)
+        declared = self.info.current_release
+        if declared is not None and declared != release:
+            raise ValueError("Current release must match the configured dataset pin")
+        return release
 
     @property
     def declaration(self) -> SourceDeclaration:
@@ -229,7 +310,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             notes=info.notes,
             dataset_id=dataset.name if dataset else None,
             dataset_revision=dataset.revision if dataset else None,
-            url=dataset.url if dataset else None,
+            url=info.upstream_url or (dataset.url if dataset else None),
             type=next(
                 (
                     label

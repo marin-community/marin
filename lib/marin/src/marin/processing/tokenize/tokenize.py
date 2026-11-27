@@ -29,7 +29,7 @@ from levanter.data.text.datasets import (
     LmDatasetSourceConfigBase,
     UrlDatasetSourceConfig,
 )
-from levanter.data.text.formats import LmDatasetFormatBase, TextLmDatasetFormat
+from levanter.data.text.formats import LmDatasetFormatBase, PrebuiltLmDatasetFormat, TextLmDatasetFormat
 from levanter.store.cache import ShardedCacheLayout
 from levanter.tokenizers import TokenizerBackend
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -76,7 +76,8 @@ class TokenizedCache(Artifact):
     config, so a consumer (a training :func:`~marin.experiment.data.mixture`) builds a Levanter
     component from the artifact alone, never from the producing recipe. Adopted caches resolve
     through ``record.source``; their tokenizer/format come from the synthetic config recorded when
-    the cache is adopted.
+    the cache is adopted. A seal record pins the underlying cache root as ``config.cache_dir``
+    and carries the packing fields (``pack``/``split``/``flat_cache``) its component needs.
     """
 
     @property
@@ -85,7 +86,13 @@ class TokenizedCache(Artifact):
 
     @property
     def cache_dir(self) -> str:
-        """The Levanter cache directory: an adopted cache's source, else this artifact's path."""
+        """The Levanter cache directory: a recorded ``cache_dir`` pin, else an adopted
+        cache's source, else this artifact's path. A seal record pins the cache root it
+        describes, so the record's location need not be the data's location.
+        """
+        pinned = self._config.get("cache_dir")
+        if isinstance(pinned, str) and pinned:
+            return pinned
         rec = self.record
         return (rec.source if rec is not None and rec.source else None) or self.path
 
@@ -99,16 +106,44 @@ class TokenizedCache(Artifact):
 
     @property
     def format(self) -> LmDatasetFormatBase:
-        """The dataset format; marin's tokenized caches are text format (``text_key``)."""
+        """The dataset format, as recorded: a text cache (``text_key``) or a prebuilt
+        token cache (``input_ids_key``/``loss_weights_key``)."""
         fmt = self._config.get("format")
-        if isinstance(fmt, dict) and "text_key" in fmt:
-            return TextLmDatasetFormat(text_key=fmt["text_key"])
+        if isinstance(fmt, dict):
+            if "text_key" in fmt:
+                return TextLmDatasetFormat(text_key=fmt["text_key"])
+            if fmt.get("type") == "prebuilt" or "input_ids_key" in fmt:
+                return PrebuiltLmDatasetFormat(
+                    input_ids_key=fmt.get("input_ids_key") or "input_ids",
+                    loss_weights_key=fmt.get("loss_weights_key"),
+                )
         return TextLmDatasetFormat()
 
     @property
-    def tags(self) -> list[str]:
+    def tags(self) -> list[str] | None:
+        """The recorded tags, verbatim (a recorded ``None`` stays ``None``); ``[]`` when
+        the record does not describe tags."""
+        if "tags" not in self._config:
+            return []
         tags = self._config.get("tags")
-        return list(tags) if isinstance(tags, list) else []
+        return list(tags) if isinstance(tags, list) else tags
+
+    @property
+    def pack(self) -> bool | int | None:
+        """The recorded packing: ``True`` packs up to 64 documents per example, an integer
+        caps documents per example at that value; ``None`` falls back to the format's packing.
+        """
+        return self._config.get("pack")
+
+    @property
+    def split(self) -> str:
+        """The split this cache's single layout holds (a seal record names it)."""
+        return self._config.get("split") or "validation"
+
+    @property
+    def flat_cache(self) -> bool:
+        """Whether the cache dir is the cache root directly, without a ``/<split>`` subdir."""
+        return bool(self._config.get("flat_cache"))
 
     @property
     def num_train_tokens(self) -> int:
@@ -118,12 +153,22 @@ class TokenizedCache(Artifact):
     def as_component(self) -> DatasetComponent:
         """A Levanter mixture component pointing at this built cache.
 
-        A built cache needs no raw urls; the component carries the cache dir, format, and tags.
+        The source is the empty-URL form, not ``None``: Levanter skips a split the cache
+        does not have in that case but raises on ``None``. The component also carries the
+        recorded packing (``pack``/``split``/``flat_cache``).
         """
         source = UrlDatasetSourceConfig(
             tags=self.tags, train_urls=[], validation_urls=[], cache_dir=self.cache_dir, format=self.format
         )
-        return DatasetComponent(source=source, cache_dir=source.cache_dir, format=source.format, tags=source.tags)
+        return DatasetComponent(
+            source=source,
+            cache_dir=source.cache_dir,
+            format=source.format,
+            pack=self.pack,
+            tags=source.tags,
+            split=self.split,
+            flat_cache=self.flat_cache,
+        )
 
 
 @dataclasses.dataclass(frozen=True)

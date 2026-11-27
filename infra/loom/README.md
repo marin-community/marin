@@ -46,6 +46,8 @@ current base images, so every update rebuilds the image, even for an unchanged
 commit. When preview skips that build, it shows the VM image as unknown.
 `pulumi up` builds and pushes the image, places the provider-produced digest in
 VM metadata, and waits for `https://loom.oa.dev/api/ready` after activation.
+The image entrypoint sets the Claude and Codex CLI and ACP adapter versions
+and selects the Codex executable for ACP sessions.
 
 ```sh
 cd /path/to/marin
@@ -182,8 +184,8 @@ their federation mapping.
 The PR review workflow launches on open, ready-for-review, and reopen events.
 Reopen a PR to retry its latest head if a push invalidates an in-progress review.
 The `pr-holistic-review` mapping authorizes the whole-change review profile,
-which runs the `claude` agent with the `fable` model and also launches on
-pushes; its session skips small deltas since the last reviewed head.
+which also launches on pushes. Each PR has a stable channel, and each
+new head has a distinct run key.
 
 The `remoteMcps` declaration registers Marina's authenticated Streamable HTTP
 endpoints as the full `/marina/api` capability and the read-only
@@ -224,6 +226,10 @@ each job, and `BELAY_CW_KEY_ID` and `BELAY_CW_KEY_SECRET`, a CoreWeave access
 key set as `CW_KEY_ID` and `CW_KEY_SECRET`. Iris attaches the submitter's keys
 to every CoreWeave job, so this key's access policy bounds what Belay runs can
 read and write. Replies on the intake issue use Loom's GitHub App token.
+
+Idle archiving has a 15-minute minimum (five for completed watches) and waits
+for active turns to finish. Suspended sessions still count toward concurrency
+limits. Profile edits apply to new sessions.
 
 Every profile that can run the `claude` agent sets `CLAUDE_CODE_OAUTH_TOKEN`
 from the `LOOM_CLAUDE_CODE_OAUTH_TOKEN` secret. That covers the interactive
@@ -358,6 +364,22 @@ The `belay` watch runs the `belay` profile every 10 minutes
 ([prompt](watches/belay.md)): a cheap check of the Belay app's queue, and a
 runbook session that drains the queue only when events wait. Turning dispatch off in the
 Belay app's admin page pauses it without a Loom deploy.
+
+The [PR review reminder watch](watches/pr-review-reminders.md) runs at 10:00
+Pacific each weekday. Loom posts a digest to `#marin-eng`. Each entry links the PR, gives its title,
+and shows how long since its last update and how long each reviewer has been
+waiting. Ages show elapsed calendar time. A request is due
+when it predates the same time on the previous weekday and the reviewer has
+had no activity since then. A new request, discussion or inline comment,
+review, or commit by that reviewer restarts the clock. Weekends are excluded
+and holidays count as weekdays. Drafts, PRs last updated over seven days ago,
+and PRs by bots or people without repository write access are skipped.
+
+Preview the messages locally with an authenticated `gh` CLI:
+
+```sh
+uv run --no-project python scripts/ops/pr_review_reminders.py --as-of "$(date -u +%FT%TZ)"
+```
 
 The `old-iris-jobs` watch runs the `ops-report` profile
 ([instructions](profiles/ops-report/AGENTS.md)) at 09:00 Pacific on weekdays

@@ -30,7 +30,7 @@ from levanter.inference.jit_scheduler import (
     TokenQueue,
     _DecodeOutputs,
 )
-from levanter.inference.page_table import PageTable
+from levanter.inference.page_table import PageBatchInfo, PageTable
 from levanter.inference.utils import INVALID, is_valid
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.layers.attention import AttentionMask
@@ -308,6 +308,19 @@ class GenState(eqx.Module):
         return new_state, child_local_id  # type: ignore
 
 
+def _copy_clone_cache(cache: PageCache, decode_state: DecodeState, source, target, length) -> PageCache:
+    page_size = decode_state.page_table.page_size
+
+    def copy_partial_page(cache):
+        last_page = length // page_size
+        source_page = decode_state.sequences.page_indices["seq", source, "page", last_page].scalar()
+        target_page = decode_state.sequences.page_indices["seq", target, "page", last_page].scalar()
+        return cache.copy_page(source_page, target_page)
+
+    cache = jax.lax.cond(length % page_size != 0, copy_partial_page, lambda cache: cache, cache)
+    return cache.copy_sequence(source, target)
+
+
 @functools.partial(jax.jit, donate_argnums=0)
 def _clone_sequence(
     state,
@@ -345,19 +358,8 @@ def _clone_sequence(
 
     decode_state = decode_state.clone_pages_from(parent_local_id, child_local_id)
 
-    page_size = decode_state.page_table.page_size
     src_len = decode_state.seq_lens["seq", parent_local_id].scalar()
-
-    def _copy(_):
-        last_idx = (src_len + page_size - 1) // page_size - 1
-        src_page = decode_state.sequences.page_indices["seq", parent_local_id, "page", last_idx].scalar()
-        dst_page = decode_state.sequences.page_indices["seq", child_local_id, "page", last_idx].scalar()
-        return state.cache.copy_page(src_page, dst_page)
-
-    def _identity(_):
-        return state.cache
-
-    cache = jax.lax.cond((src_len % page_size != 0) & (src_len > 0), _copy, _identity, None)
+    cache = _copy_clone_cache(state.cache, decode_state, parent_local_id, child_local_id, src_len)
 
     new_state = dataclasses.replace(state, decode_state=decode_state, cache=cache)
     return new_state, child_local_id
@@ -410,6 +412,7 @@ def _prefill_kernel(
     model: LmHeadModel,
     sampler: Sampler,
     queue: TokenQueue,
+    batch_info: PageBatchInfo,
     max_seqs_in_prefill: int,  # static
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run prefill using a fresh, local token queue. Newly sampled tokens are enqueued to the main decode queue via update_tokens."""
@@ -418,7 +421,7 @@ def _prefill_kernel(
     pos_ids = queue.queued_pos_ids
     slot_ids = queue.queued_slot_ids
 
-    decode_state, binfo = gen_state.decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
+    decode_state = gen_state.decode_state
 
     seq_lens = decode_state.seq_lens
 
@@ -431,7 +434,7 @@ def _prefill_kernel(
     #     pos=pos_ids.array,
     #     lens=decode_state.seq_lens.array,
     # )
-    logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
+    logits, cache = model.decode(tokens, gen_state.cache, batch_info, pos_ids)
     logits_at_samples = _gather_logits(logits, sample_indices)
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
@@ -454,7 +457,9 @@ def _prefill_kernel(
     temps = decode_state.temperature["seq", new_slot_ids]
     top_ps = decode_state.top_p["seq", new_slot_ids]
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
+    new_tokens, log_probs = sampler.sample_positions(
+        logits_at_samples, temps, top_ps=top_ps, num_samples=num_new_tokens, key=prng_keys
+    )
 
     # Update decode_state (also enqueues into the main decode queue)
     decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
@@ -502,46 +507,46 @@ def _seq_params_from_work(work: PrefillWork, idx: int) -> SeqDecodingParams:
     return hax.tree_util.tree_map(select, work.seq_params)
 
 
-def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
+def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> tuple[GenState, PageBatchInfo]:
     num_new = work.new_num_seqs.astype(jnp.int32)
     max_slots = work.new_slot_ids.array.shape[0]
 
-    def body(i: int, state: GenState) -> GenState:
-        slot_val = work.new_slot_ids.array[i]
+    def primary(i: int, state: GenState) -> GenState:
+        slot = work.new_slot_ids.array[i]
 
-        def process(gs: GenState) -> GenState:
-            parent_val = work.clone_targets.array[i]
-            seq_params = _seq_params_from_work(work, i)
+        def assign(gs: GenState) -> GenState:
+            decode_state, _ = gs.decode_state.reserve_slot(slot)
+            decode_state = decode_state.assign_seq(
+                local_slot_id=slot,
+                tokens=work.prompt_tokens["seq", i],
+                seq_len=work.prompt_lengths.array[i].astype(jnp.int32),
+                kv_pages=None,
+                page_indices=None,
+                seq_params=_seq_params_from_work(work, i),
+            )
+            return dataclasses.replace(gs, decode_state=decode_state)
 
-            def do_clone(gs_clone: GenState) -> GenState:
-                new_state, _ = gs_clone.clone_sequence(
-                    parent_val,
-                    child_local_id=slot_val,
-                    seq_params=seq_params,
-                )
-                return new_state
+        is_primary = (i < num_new) & is_valid(slot) & ~is_valid(work.clone_targets.array[i])
+        return jax.lax.cond(is_primary, assign, lambda gs: gs, state)
 
-            def do_primary(gs_primary: GenState) -> GenState:
-                decode_state = gs_primary.decode_state
-                decode_state, assigned = decode_state.reserve_slot(slot_val)
-                # Get the prompt length for this sequence
-                prompt_len = work.prompt_lengths.array[i].astype(jnp.int32)
-                decode_state = decode_state.assign_seq(
-                    local_slot_id=slot_val,
-                    tokens=work.prompt_tokens["seq", i],
-                    seq_len=prompt_len,
-                    kv_pages=None,  # Will be allocated later in allocate_for_seq
-                    page_indices=None,  # Will be set during page allocation
-                    seq_params=seq_params,
-                )
-                return dataclasses.replace(gs_primary, decode_state=decode_state)
+    def clone(i: int, state: GenState) -> GenState:
+        slot = work.new_slot_ids.array[i]
+        parent = work.clone_targets.array[i]
 
-            return jax.lax.cond(is_valid(parent_val), do_clone, do_primary, gs)
+        def assign(gs: GenState) -> GenState:
+            cloned, _ = gs.clone_sequence(parent, child_local_id=slot, seq_params=_seq_params_from_work(work, i))
+            return cloned
 
-        should_process = (i < num_new) & is_valid(slot_val)
-        return jax.lax.cond(should_process, process, lambda gs: gs, state)
+        is_clone = (i < num_new) & is_valid(slot) & is_valid(parent)
+        return jax.lax.cond(is_clone, assign, lambda gs: gs, state)
 
-    return jax.lax.fori_loop(0, max_slots, body, gen_state)
+    gen_state = jax.lax.fori_loop(0, max_slots, primary, gen_state)
+    # Full prefix pages must exist before cloning, so parent prefill fills the shared pages.
+    decode_state, batch_info = gen_state.decode_state.allocate_for_seq(
+        token_slot_ids=work.queue.queued_slot_ids, token_pos_ids=work.queue.queued_pos_ids
+    )
+    gen_state = dataclasses.replace(gen_state, decode_state=decode_state)
+    return jax.lax.fori_loop(0, max_slots, clone, gen_state), batch_info
 
 
 @functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill",))
@@ -552,8 +557,8 @@ def _run_prefill(
     work: PrefillWork,
     max_seqs_in_prefill: int,
 ) -> tuple[GenState, _DecodeOutputs]:
-    gen_state = _apply_prefill_work(gen_state, work)
-    return _prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill)
+    gen_state, batch_info = _apply_prefill_work(gen_state, work)
+    return _prefill_kernel(gen_state, model, sampler, work.queue, batch_info, max_seqs_in_prefill)
 
 
 def _handle_clones(
@@ -622,37 +627,21 @@ def _handle_clones(
     top_ps = gen_state.decode_state.top_p["seq", tgt_ids]
     prng_keys = gen_state.decode_state.prng_keys_for(tgt_ids, pos_ids_this_time)
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_this_time, temps, top_ps=top_ps, key=prng_keys)
+    new_tokens, log_probs = sampler.sample_positions(
+        logits_this_time, temps, top_ps=top_ps, num_samples=num_new, key=prng_keys
+    )
 
     # update page table and cache for the clone targets
     decode_state = gen_state.decode_state
     cache = gen_state.cache
-    size = decode_state.sequences.page_size
 
-    def copy_pages_for_updated_seq(
-        i,
-        state: tuple[DecodeState, PageCache],
-    ) -> tuple[DecodeState, PageCache]:
-        decode_state, cache = state
-        src_slot_id = src_ids["position", i].scalar()
-        dst_slot_id = tgt_ids["position", i].scalar()
+    def copy_prefilled_cache(i, cache):
+        source = src_ids["position", i].scalar()
+        target = tgt_ids["position", i].scalar()
+        length = decode_state.seq_lens["seq", target].scalar()
+        return _copy_clone_cache(cache, decode_state, source, target, length)
 
-        src_len = decode_state.seq_lens["seq", dst_slot_id].scalar()
-        used_pages = (src_len + size - 1) // size
-        last_idx = jnp.maximum(used_pages - 1, 0)
-
-        def _copy(_):
-            src_page = decode_state.sequences.page_indices["seq", src_slot_id, "page", last_idx].scalar()
-            dst_page = decode_state.sequences.page_indices["seq", dst_slot_id, "page", last_idx].scalar()
-            return cache.copy_page(src_page, dst_page)
-
-        def _identity(_):
-            return cache
-
-        cache = jax.lax.cond((src_len % size != 0) & (src_len > 0), _copy, _identity, None)
-        return decode_state, cache
-
-    decode_state, cache = jax.lax.fori_loop(0, num_new, copy_pages_for_updated_seq, (decode_state, cache))
+    cache = jax.lax.fori_loop(0, num_new, copy_prefilled_cache, cache)
 
     # Enqueue/update tokens for the clone targets (only the first num_new entries will be used)
     decode_state = decode_state.update_tokens(new_tokens, tgt_ids, log_probs, num_new)
@@ -722,7 +711,9 @@ def _run_generation_loop(
         temps = decode_state.temperature["seq", new_slot_ids]
         top_ps = decode_state.top_p["seq", new_slot_ids]
 
-        new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
+        new_tokens, log_probs = sampler.sample_positions(
+            logits_at_samples, temps, top_ps=top_ps, num_samples=num_new_tokens, key=prng_keys
+        )
 
         # Update decode state with the freshly sampled tokens (also enqueues them)
         decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)

@@ -1,12 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Interpret the protocol choices encoded by historical Evalchemy launch labels."""
+"""Interpret the protocol choices encoded by historical Evalchemy launch labels and Harbor datasets."""
 
 from dataclasses import dataclass
 from typing import Literal
 
-from evalrecords.records import EvalRunRecord, ResolvedEvaluationSelection
+from evalrecords.records import EvalRunRecord, HarborRef, ResolvedEvaluationSelection
+
+HF_DATASET_PREFIX = "hf://"
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,34 @@ HISTORICAL_PROTOCOLS = {
     "mrcr-32k": HistoricalProtocol("mrcr", "32k", None, "chat", False),
     "mrcr-65k": HistoricalProtocol("mrcr", "65k", None, "chat", False),
 }
+
+
+# Harbor records name the dataset they ran, not a benchmark. Keys are recorded ``harbor.dataset`` values
+# without the ``hf://`` prefix, which early records omitted; values are curated benchmark names.
+HISTORICAL_HARBOR_BENCHMARKS = {
+    "DCAgent2/terminal_bench_2": "terminal-bench-2.0",
+    "terminal-bench/terminal-bench-2-1": "terminal-bench-2.1",
+    "DCAgent2/swebench-verified-random-100-folders": "swebench-verified-100",
+    "DCAgent/swebench-verified": "swebench-verified",
+    "swebench_multilingual": "swebench-multilingual",
+    "DCAgent/dev_set_v2": "ot-tblite",
+    "openthoughts-tblite": "ot-tblite",
+    "aime": "aime-agent",
+    "simpleqa": "simpleqa-agent",
+    "../../local_datasets/ds1000": "ds-1000",
+    "DCAgent2/bfcl-parity": "bfcl-parity",
+    "bfcl_parity": "bfcl-parity",
+    "bixbench-cli-marin-corrections": "bixbench",
+    "DCAgent/gaia_127": "gaia",
+    "DCAgent2/aider_polyglot": "aider-polyglot",
+    "DCAgent/medagentbench": "medagentbench",
+    "DCAgent/financeagent_terminal": "financeagent",
+}
+
+
+def harbor_benchmark(harbor: HarborRef) -> str:
+    """The curated benchmark a Harbor dataset ran, or the dataset itself when no benchmark replaces it."""
+    return HISTORICAL_HARBOR_BENCHMARKS.get(harbor.dataset.removeprefix(HF_DATASET_PREFIX), harbor.dataset)
 
 
 def historical_selection(record: EvalRunRecord) -> ResolvedEvaluationSelection | None:

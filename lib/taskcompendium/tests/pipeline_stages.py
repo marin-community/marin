@@ -20,6 +20,7 @@ from taskcompendium.models import (
     CommandSemantics,
     EnvironmentRequirements,
     ExitCodeReward,
+    GraderMachine,
     ScriptGrader,
     Source,
     TaskSpec,
@@ -119,7 +120,7 @@ def script_graded(task: TaskSpec, script: bytes, *, answer_path: str | None = "/
     """``task`` graded in the fixture grader image by ``script``, which passes by exiting zero in /app."""
     grader = ScriptGrader(
         argv=("bash", "/tests/grade.sh"),
-        environment=GRADER_ENVIRONMENT,
+        placement=GraderMachine(environment=GRADER_ENVIRONMENT),
         answer_path=answer_path,
         reward=ExitCodeReward(),
         timeout=30,

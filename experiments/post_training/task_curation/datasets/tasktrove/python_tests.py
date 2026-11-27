@@ -12,6 +12,7 @@ the grader runs separately with ``GRADER_PACKAGES``.
 
 from dataclasses import dataclass, field
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
@@ -30,7 +31,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.pytho
     convert as convert_unit_tests,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 PYTHON_TESTS_CONTROLS = Controls(golden=solve_script)
 
@@ -201,9 +202,12 @@ SOURCES = {
         convert_python_tests,
         CURRICULUM_EASY_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_curriculum-easy",
-            title="DCAgent/exp_rpt_curriculum-easy",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="DCAgent__exp_rpt_curriculum-easy",
+            upstream_name="DCAgent/exp_rpt_curriculum-easy",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python"),
             count=509,
@@ -220,9 +224,12 @@ SOURCES = {
         CURRICULUM_MEDIUM_RUBRIC,
         version="6",
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_curriculum-medium-v2",
-            title="DCAgent/exp_rpt_curriculum-medium-v2",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="DCAgent__exp_rpt_curriculum-medium-v2",
+            upstream_name="DCAgent/exp_rpt_curriculum-medium-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python"),
             count=492,
@@ -239,9 +246,12 @@ SOURCES = {
         E2EGIT_RUBRIC,
         version="8",
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_e2egit-v2",
-            title="DCAgent/exp_rpt_e2egit-v2",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="DCAgent__exp_rpt_e2egit-v2",
+            upstream_name="DCAgent/exp_rpt_e2egit-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python", "language:javascript"),
             count=487,
@@ -257,9 +267,12 @@ SOURCES = {
         convert_python_tests,
         E2EGIT_LARGE_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_e2egit-large",
-            title="DCAgent/exp_rpt_e2egit-large",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="DCAgent__exp_rpt_e2egit-large",
+            upstream_name="DCAgent/exp_rpt_e2egit-large",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python"),
             count=4998,
@@ -275,9 +288,12 @@ SOURCES = {
         convert_python_tests,
         MULTIFILE_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_multifile-v3",
-            title="DCAgent/exp_rpt_multifile-v3",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="DCAgent__exp_rpt_multifile-v3",
+            upstream_name="DCAgent/exp_rpt_multifile-v3",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python"),
             count=4843,
@@ -293,9 +309,12 @@ SOURCES = {
         convert_python_tests,
         PYMETHODS_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_pymethods2test-v3",
-            title="DCAgent/exp_rpt_pymethods2test-v3",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="DCAgent__exp_rpt_pymethods2test-v3",
+            upstream_name="DCAgent/exp_rpt_pymethods2test-v3",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python"),
             count=500,
@@ -311,9 +330,12 @@ SOURCES = {
         convert_python_tests,
         PYMETHODS_LARGE_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_pymethods2test-large-v2",
-            title="DCAgent/exp_rpt_pymethods2test-large-v2",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="DCAgent__exp_rpt_pymethods2test-large-v2",
+            upstream_name="DCAgent/exp_rpt_pymethods2test-large-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python"),
             count=4991,
@@ -329,9 +351,12 @@ SOURCES = {
         convert_unitsyn,
         UNITSYN_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_unitsyn-python-v4",
-            title="DCAgent/exp_rpt_unitsyn-python-v4",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="DCAgent__exp_rpt_unitsyn-python-v4",
+            upstream_name="DCAgent/exp_rpt_unitsyn-python-v4",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python"),
             count=491,
@@ -347,9 +372,12 @@ SOURCES = {
         convert_python_tests,
         UNITSYN_LARGE_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_unitsyn-python-large-v2",
-            title="DCAgent/exp_rpt_unitsyn-python-large-v2",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="DCAgent__exp_rpt_unitsyn-python-large-v2",
+            upstream_name="DCAgent/exp_rpt_unitsyn-python-large-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python"),
             count=4991,
@@ -365,9 +393,12 @@ SOURCES = {
         convert_python_tests,
         STACK_PYTEST_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:DCAgent__exp_rpt_stack-pytest-v2",
-            title="DCAgent/exp_rpt_stack-pytest-v2",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="DCAgent__exp_rpt_stack-pytest-v2",
+            upstream_name="DCAgent/exp_rpt_stack-pytest-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
             tags=("agentic", "multi-turn", "language:python"),
             count=500,

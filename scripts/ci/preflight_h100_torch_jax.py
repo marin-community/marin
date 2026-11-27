@@ -13,7 +13,7 @@ import torch
 
 def main() -> None:
     assert os.environ.get("JAX_PLATFORMS") == "cuda,cpu"
-    assert torch.__version__.endswith("+cu128"), torch.__version__
+    assert torch.__version__.endswith("+cu132"), torch.__version__
     assert torch.cuda.is_available()
     assert torch.cuda.device_count() == 1
     torch_name = torch.cuda.get_device_name(0)
