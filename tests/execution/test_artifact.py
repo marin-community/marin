@@ -14,6 +14,7 @@ import logging
 
 import pytest
 from marin.execution.artifact import (
+    EXECUTOR_INFO_FILENAME,
     Artifact,
     FingerprintMismatchError,
     StepRecordIdentity,
@@ -78,6 +79,17 @@ def test_same_recipe_rerun_is_cache_hit(tmp_path, monkeypatch):
     run(_toy(V, "a"))
     # Identical recipe + version: a cache hit, no error.
     run(_toy(V, "a"))
+
+
+def test_cold_step_ignores_incomplete_executor_info(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    output_path = tmp_path / "datasets" / "toy" / V
+    output_path.mkdir(parents=True)
+    (output_path / EXECUTOR_INFO_FILENAME).write_text('{"name":')
+
+    result = run(_toy(V, "a"))
+
+    assert result[0].payload == "a"
 
 
 # --- advisory drift (no more ImmutableArtifactError) ---------------------------

@@ -99,6 +99,8 @@ from verifyit.spec import (
 )
 from zephyr.context import ZephyrContext
 
+CORPUS_TRIAL_SEED = 7
+
 
 def convert(row: RawRow, _context: ConversionContext):
     task = exact_answer_task(row, prompt=row.data["question"], answers=("red",), ignore_case=False)
@@ -175,7 +177,7 @@ def published_corpora(tmp_path):
                     sampling=Sampling(
                         temperature=0.7, top_p=1, top_k=None, max_tokens=8, stop=(), chat_template_kwargs={}
                     ),
-                    trials=TrialPolicy(count=2, seed=7),
+                    trials=TrialPolicy(count=2, seed=CORPUS_TRIAL_SEED),
                     metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
                     primary_metric="accuracy",
                     summary=SummaryKind.MEAN,
@@ -235,6 +237,44 @@ async def test_unexpected_model_error_is_saved_and_propagates(tmp_path, publishe
     assert all(record["cause_type"] == "ConnectionError" for record in failures)
     assert all(record["operation"] == "model" for record in failures)
     assert all(record["retry_disposition"] == "transient" for record in failures)
+
+
+@pytest.mark.asyncio
+async def test_malformed_model_tool_arguments_score_zero_without_cancelling_other_attempts(
+    tmp_path, published_corpora, run_config
+):
+    malformed_arguments = '{"cmd": "oops'
+
+    async def model(request):
+        prompt = request.messages[-1]["content"]
+        if prompt == "colors/0" and request.options["seed"] == CORPUS_TRIAL_SEED:
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call-1", "type": "function", "function": {"name": "bash", "arguments": malformed_arguments}}
+                ],
+            }
+        else:
+            message = {"role": "assistant", "content": "red"}
+        return ModelTurn(message, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+    output = str(tmp_path / "results")
+    await run_evaluation((published_corpora[0],), output, run_config, model, machine_factories={})
+
+    reader = ReadView(output)
+    finished = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert Counter(row["outcome"] for row in finished) == {"submission_failure": 1, "graded": 3}
+    failed = next(row for row in finished if row["outcome"] == "submission_failure")
+    assert failed["retry"] == 0
+    raw = json.loads(reader.read_blob(failed["result_blob"]))
+    assert raw["grade"]["reward"] == 0
+    samples = list(reader.iter_rows(ARCHIVE_SAMPLES_TABLE))
+    assert Counter(row["grading"]["score"] for row in samples) == {0.0: 1, 1.0: 3}
+    assert (
+        raw["conversations"][0]["steps"][0]["turn"]["message"]["tool_calls"][0]["function"]["arguments"]
+        == malformed_arguments
+    )
 
 
 @pytest.mark.asyncio
@@ -1286,6 +1326,42 @@ def publish_episodes(tmp_path, questions, agent, convert=convert_episode_row):
     finally:
         client.shutdown()
     return str(output)
+
+
+@pytest.mark.asyncio
+async def test_reused_model_tool_call_id_scores_zero_without_cancelling_other_attempts(tmp_path, run_config):
+    corpus = publish_episodes(tmp_path, ("episode/reused", "episode/solve"), ShellAgent())
+
+    async def model(request):
+        question = request.messages[0]["content"]
+        observations = sum(message["role"] == "tool" for message in request.messages)
+        if question == "episode/reused" and observations < 2:
+            call = {
+                "id": "reused",
+                "type": "function",
+                "function": {"name": "shell", "arguments": json.dumps({"command": "echo red"})},
+            }
+            message = {"role": "assistant", "content": "", "tool_calls": [call]}
+        else:
+            message = {"role": "assistant", "content": "red"}
+        return ModelTurn(message, (), (), None, "stop", usage=TokenUsage(5, 2))
+
+    config = run_config.model_copy(update={"source_limit": None, "task_machine": machine_runtime(backend="shellsim")})
+    output = str(tmp_path / "results")
+    await run_evaluation(
+        (corpus,),
+        output,
+        config,
+        model,
+        machine_factories={"shellsim": ShellSimMachineFactory()},
+        harnesses={"shell": lambda _agent, _budget: ShellHarness(command_timeout=None)},
+    )
+
+    reader = ReadView(output)
+    finished = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert Counter(row["outcome"] for row in finished) == {"submission_failure": 1, "graded": 1}
+    failed = next(row for row in finished if row["outcome"] == "submission_failure")
+    assert json.loads(reader.read_blob(failed["result_blob"]))["grade"]["reward"] == 0.0
 
 
 @pytest.fixture

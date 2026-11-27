@@ -58,12 +58,12 @@ def test_grader_report_keeps_baseline_and_final_success_by_task_and_subset(tmp_p
     )
     summary = final.summary()
     write_grader_report(export_path, "25", {"evaluation": summary["subsets"], "evaluation_tasks": summary["tasks"]})
-    write_grader_report(export_path, "25", {"evaluation_duration_seconds": 3.5})
+    write_grader_report(export_path, "25", {"evaluation_duration_seconds": 11.0})
 
     report = json.loads((tmp_path / "grader_report.json").read_text())
     evaluations = report["evaluation"]
-    assert report["evaluation_duration_seconds"] == {"25": 3.5}
     code, math = evaluations["0"]
+    assert report["evaluation_duration_seconds"] == {"25": 11.0}
     assert code["subset_id"] == "code"
     assert code["success_rate"] is None
     assert code["grading_failures"] == {"execution": 1}

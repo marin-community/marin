@@ -58,9 +58,23 @@ MARIN_PREFIX=s3://marin-us-east-02a/marin uv run python -m experiments.post_trai
   --preset train-long --sft mixture-262k-32node --version 2026.11.19.1 --plan
 ```
 
-The Mochi RL presets default to the completed production Mochi SFT export. The export
-supplies its own tokenizer. Use `--init NAME@VERSION` to start from another published model,
-or select an SFT preset with `--sft`. Mochi writes artifacts under the cluster's
+The Mochi RL presets default to the verified CoreWeave copy of the production Mochi SFT
+step-400407 export. Its SkyRL model manifest binds the weights to the SFT run's tokenizer.
+Use the `train-long` preset to plan the standard one-rack loop with the default initializer.
+
+```bash
+uv run python -m experiments.post_training.mochi_rl \
+  --preset train-long --version YYYY.MM.DD --plan
+```
+
+The one-rack presets use the pinned two-layer DSpark draft with four proposals when
+the resolved initializer matches step 400407. Selecting a different task mix with
+`--tasks` keeps that default. Three-rack presets use plain decoding pending
+measurements with their 262k context and FlashInfer serving configuration.
+
+Use `--init NAME@VERSION`
+to start from another published model or select an SFT preset with `--sft`.
+Mochi writes artifacts under the cluster's
 `tmp/ttl=3d/` prefix. Set `MARIN_PREFIX` to use a durable prefix.
 
 ```bash
@@ -83,9 +97,12 @@ Use the run's resolved launch document to export its best committed native
 checkpoint, including after an early stop.
 
 ```bash
-uv run --project vendor/skyrl --extra cpu python -m cloud.iris.export_hf_checkpoint \
+uv run --isolated --frozen --project vendor/skyrl --extra cpu python -m cloud.iris.export_hf_checkpoint \
   --launch-config ./training-launch.yaml --recover-best
 ```
+
+The `cpu` extra runs on macOS. The `vllm` and `megatron` extras and GPU torch
+builds do not run on macOS; export and training jobs run on Iris.
 
 ## One Hydra launch document
 
@@ -190,6 +207,12 @@ This shape keeps validation mechanical. Adding a launch setting means adding one
 reading it where the behavior lives; it does not require adding matching CLI flags, argv builders, and
 forwarding tests at every process boundary.
 
+Iris invokes SkyRL's checked-in task setup script with the selected runtime
+profile. The GPU node entry point loads the runtime and runs the transport probe
+before starting the controller. The controller prepares Ray spill storage. Training
+and generation include the vLLM transport check. Checkpoint export runs the
+PyTorch transport check with its export profile.
+
 ## Publish a checkpoint export
 
 The checkpoint-export GPU job stops after writing and verifying the object-store
@@ -210,7 +233,7 @@ with the original checkpoint directory, resolved training configuration, and
 export placement in these variables:
 
 ```bash
-uv run --directory vendor/skyrl --frozen --extra cpu --no-group dev \
+uv run --isolated --frozen --project vendor/skyrl --extra cpu --no-group dev \
   python -m cloud.iris.export_hf_checkpoint \
   --request "$CHECKPOINT_PATH" --launch-config "$LAUNCH_CONFIG" \
   --cluster "$CLUSTER" --gpu-variant "$GPU_VARIANT"
@@ -288,11 +311,14 @@ parallelism. An omitted or null ETP inherits the role's TP before these checks.
 Context-parallel ranks participate in the expert grid, so EP need not divide dense
 data parallelism.
 
+A rollout window holds `max_staleness_steps + 1` batches. The training pool needs a distinct
+prompt for each group slot in the window and one spare after dataset preparation.
+
 Set `trainer.rollout_buffer.groups_per_family` for fixed numbers of prompt groups per task family in
 each training batch. Each Parquet training row supplies its `family`. The counts must sum to
 `trainer.train_batch_size`. Use `batch_policy: full_batch` and leave `data.sampling.kind` unset.
-Each family needs its group count times `max_staleness_steps + 1` usable rows so that every batch in
-the rollout window can use distinct prompts. A rejected group releases a slot in its own family.
+Apply the prompt minimum to each family using its group count per batch. A rejected group releases
+a slot in its own family.
 Each family draws prompts from its own seeded passes. Checkpoints retain the position in each
 family’s order. Omit the family counts to use the configured prompt order, including curriculum sampling.
 
@@ -326,7 +352,10 @@ For a single immutable Parquet task selection, the SkyRL driver caches validated
 lengths for 14 days in the checkpoint storage backend's temporary bucket. The key includes the
 selection's Parquet and manifest bytes, the loaded fast tokenizer and template, task runtime settings,
 and the installed preparation code. Each launch applies its own prompt limit to the cached lengths.
-A cache miss runs the original selection validation before publishing prepared rows.
+A cache miss validates the selection, writes batches of prepared rows and lengths to driver-local disk,
+and publishes the Parquet object when complete. A hit decodes the object in batches to driver-local
+disk. The driver memory-maps the prepared rows during training, so its local disk needs space for
+the uncompressed dataset as well as the staged Parquet file.
 
 Shared W&B trackers bound final SDK uploads to 30 seconds per process. The
 training entrypoint first waits up to 30 seconds for remote node loggers, then

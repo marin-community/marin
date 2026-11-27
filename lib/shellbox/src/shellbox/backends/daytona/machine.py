@@ -62,6 +62,7 @@ from shellbox.machine import (
     MachineDiskFull,
     MachineSpec,
     MachineTerminated,
+    MachineUnavailable,
     NetworkPolicy,
     ProcessScope,
     Result,
@@ -111,7 +112,11 @@ def _control_command(script: str) -> str:
 async def _create_sandbox(
     client: AsyncDaytona, params: CreateSandboxFromSnapshotParams | CreateSandboxFromImageParams, timeout: float
 ) -> AsyncSandbox:
-    """Retry throttling using a caller-owned name to recover an accepted creation."""
+    """Retry throttling using a caller-owned name to recover an accepted creation.
+
+    Raises:
+        MachineUnavailable: Daytona removed the sandbox before it started.
+    """
     assert params.name is not None
     backoff = ExponentialBackoff(initial=1, maximum=30, factor=2, jitter=0.5)
     while True:
@@ -122,6 +127,8 @@ async def _create_sandbox(
                 sandbox = await client.get(params.name)
                 await sandbox.wait_for_sandbox_start(timeout=timeout)
                 return sandbox
+        except DaytonaNotFoundError as error:
+            raise MachineUnavailable(f"Daytona removed sandbox {params.name} before it started") from error
         except DaytonaRateLimitError as error:
             retry_after = max(
                 (

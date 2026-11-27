@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures
+from evalrecords.records import RLAttemptRef, read_record, write_record
 from marina.db import DatabaseSpec, engine_for
 
 APP = "evaldash"
@@ -30,7 +31,11 @@ os.environ[evaldash_app.PREFIXES_ENV] = RECORDS_PREFIX
 def seeded_records(marina_database: DatabaseSpec) -> Iterator[str]:
     """Fixture records on disk, reconciled into the app's schema; yields the records prefix."""
     prefix = RECORDS_PREFIX
-    fixtures.build_fixtures(prefix)
+    first, *_ = fixtures.build_fixtures(prefix)
+    record = read_record(first)
+    write_record(
+        record.model_copy(update={"rl_attempt": RLAttemptRef(run_id="native/fixture", attempt_id="wanted")}), prefix
+    )
     fixtures.build_native_fixtures(prefix)
     engine = engine_for(marina_database, APP)
     try:

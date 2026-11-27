@@ -52,7 +52,7 @@ from rigging.timing import Duration
 from cloud.iris.launch_config import RunMode, SubmissionMode, load_launch_config, validate_launch_config
 from cloud.iris.paths import PROJECT_ROOT
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT, IRIS_TASK_IMAGE
-from cloud.iris.runtime_environment import RuntimeMode, RuntimeProfile, runtime_profile_for_strategy, task_setup_script
+from cloud.iris.runtime_environment import RuntimeMode, RuntimeProfile, runtime_profile_for_strategy, task_setup_command
 from cloud.iris.submission import submission_client
 from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX, policy_export_path, selected_export_checkpoint
 from marinskyrl.resource_locator import ModelLocatorError
@@ -65,6 +65,7 @@ from skyrl_train.hf_export_schema import (
     DEFAULT_HF_EXPORT_TIMEOUT,
     DEFAULT_HF_HUB_REVISION,
     DEFAULT_HF_UPLOAD_MODE,
+    ExportFailed,
     HFExportRequest,
     HFExportStatus,
     HFUploadMode,
@@ -436,7 +437,7 @@ def _run_hub_upload(spec: ExportJobSpec) -> None:
             entrypoint=Entrypoint.from_callable(publish_verified_hf_export, spec.request, SCRATCH_CACHE_PATH),
             task_image=IRIS_TASK_IMAGE,
             resources=ResourceSpec(cpu=4, memory="8GB", disk=disk_bytes),
-            environment=EnvironmentSpec(setup_scripts=[task_setup_script(RuntimeProfile.HUB_PUBLISH)]),
+            environment=EnvironmentSpec(setup_scripts=[task_setup_command(RuntimeProfile.HUB_PUBLISH)]),
             constraints=constraints,
             max_retries_failure=1,
             max_task_failures=1,
@@ -450,7 +451,7 @@ def _run_hub_upload(spec: ExportJobSpec) -> None:
             job.cancel()
             raise
         if status.state is not JobState.SUCCEEDED:
-            raise subprocess.CalledProcessError(1, ["publish-hf", str(spec.request.hf_hub_repo_id)])
+            raise ExportFailed(f"Hub publication job {job.job_id} ended in {status.state.name}")
 
 
 def submit_requested_export(spec: ExportJobSpec, command: list[str]) -> None:
@@ -467,14 +468,14 @@ def submit_requested_export(spec: ExportJobSpec, command: list[str]) -> None:
         if not completed:
             _run_export(spec, command)
         if not _has_completed_hf_model_export(export_path):
-            raise RuntimeError(f"Export job returned without a completed HF model at {export_path}")
+            raise ExportFailed(f"Export job returned without a completed HF model at {export_path}")
         if request.hf_hub_repo_id is not None:
             _run_hub_upload(spec)
     except BaseException as error:
         exit_code = error.returncode if isinstance(error, subprocess.CalledProcessError) else 1
         _write_hf_export_request(request.with_status(HFExportStatus.PENDING, last_exit_code=exit_code))
         if isinstance(error, ConnectError):
-            raise subprocess.CalledProcessError(exit_code, ["publish-hf", str(request.hf_hub_repo_id)]) from error
+            raise ExportFailed(f"Could not connect to Iris for checkpoint export at step {request.step}") from error
         raise
     _write_hf_export_request(request.with_status(HFExportStatus.COMPLETE, last_exit_code=0))
 

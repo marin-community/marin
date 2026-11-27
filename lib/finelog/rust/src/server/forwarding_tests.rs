@@ -362,7 +362,6 @@ async fn read_all(client: &LogServiceClient<TestTransport>) -> Vec<(String, Stri
     response
         .into_view()
         .to_owned_message()
-        .unwrap()
         .entries
         .iter()
         .map(|e| {
@@ -1000,7 +999,6 @@ async fn hub_log_count_for_cluster(fx: &Fixture, cluster: &str) -> usize {
         .unwrap()
         .into_view()
         .to_owned_message()
-        .unwrap()
         .entries
         .len()
 }

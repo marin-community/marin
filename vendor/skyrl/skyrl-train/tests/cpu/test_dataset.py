@@ -1,3 +1,4 @@
+import errno
 import json
 import os
 from dataclasses import replace
@@ -13,6 +14,7 @@ from omegaconf import OmegaConf
 from skyrl_train import task_inputs
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY
 from skyrl_train.config.utils import get_default_config
+from skyrl_train.dataset.prepared_tasks import PROMPT_LENGTH_COLUMN
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, SourceTaskDataset, TaskDataset, source_row_task, write_tasks
 from skyrl_train.entrypoints.main_base import BasePPOExp
 from skyrl_train.rollouts.context import TrainingContext
@@ -75,9 +77,9 @@ def test_task_preprocessing_preserves_filtered_rows_and_forks_only_large_inputs(
     [
         (None, "requires a family column"),
         ([None] * 4 + ["math"] * 3 + ["agentic"], "requires a family on every training row"),
-        (["math"] * 4 + ["agentic"] * 4, "requires 2 rows for family 'agentic', found 1"),
+        (["math"] * 3 + ["agentic"] * 5, "requires 3 distinct prompts for family 'agentic'"),
     ],
-    ids=["missing-column", "null-before-named", "undersized-after-filtering"],
+    ids=["missing-column", "null-before-named", "no-spare-after-filtering"],
 )
 def test_training_context_checks_family_pools_on_prepared_rows(tmp_path, monkeypatch, families, error):
     monkeypatch.setattr("skyrl_train.dataset.dataset.PARALLEL_DATASET_MIN_ROWS", 4)
@@ -155,13 +157,15 @@ def prepared_selection(tmp_path):
 def test_prepared_selection_reuses_lengths_across_budgets_and_preserves_rollout_inputs(
     prepared_selection, monkeypatch, cache_location
 ):
+    monkeypatch.setattr("skyrl_train.dataset.dataset.PARALLEL_DATASET_MIN_ROWS", 2)
+    monkeypatch.setattr("skyrl_train.dataset.prepared_tasks.PREPARED_TASK_BATCH_SIZE", 1)
     cache, configs = prepared_selection
     if cache_location == "object":
         cache = replace(cache, cache_dir=f"memory://{Path(cache.path).parent.parent.name}/prepared")
     full = SourceTaskDataset(
-        [cache.path], _selection_tokenizer(), 1000, environment_configs=configs, prepared_cache=cache
+        [cache.path], _selection_tokenizer(), 1000, environment_configs=configs, prepared_cache=cache, num_workers=2
     )
-    reference = SourceTaskDataset([cache.path], _selection_tokenizer(), 100, environment_configs=configs)
+    reference = SourceTaskDataset([cache.path], _selection_tokenizer(), 100, environment_configs=configs, num_workers=2)
 
     def unavailable(*_args, **_kwargs):
         pytest.fail("A prepared cache hit should not render or tokenize prompts")
@@ -179,18 +183,41 @@ def test_prepared_selection_reuses_lengths_across_budgets_and_preserves_rollout_
     assert warm.collate_fn([warm[0], warm[1]]) == reference.collate_fn([reference[0], reference[1]])
 
 
-def test_prepared_selection_rebuilds_a_truncated_cache(prepared_selection):
+@pytest.mark.parametrize("damage", ["truncated", "invalid last batch"])
+def test_prepared_selection_rebuilds_a_damaged_cache(prepared_selection, monkeypatch, damage):
+    monkeypatch.setattr("skyrl_train.dataset.prepared_tasks.PREPARED_TASK_BATCH_SIZE", 1)
     cache, configs = prepared_selection
     original = SourceTaskDataset(
         [cache.path], _selection_tokenizer(), 100, environment_configs=configs, prepared_cache=cache
     )
     (cache_file,) = tuple(Path(cache.cache_dir).glob("*.parquet"))
-    cache_file.write_bytes(b"PAR1")
+    if damage == "truncated":
+        cache_file.write_bytes(b"PAR1")
+    else:
+        table = pq.read_table(cache_file)
+        lengths = table[PROMPT_LENGTH_COLUMN].to_pylist()
+        lengths[-1] = None
+        table = table.set_column(
+            table.schema.get_field_index(PROMPT_LENGTH_COLUMN), PROMPT_LENGTH_COLUMN, pa.array(lengths, type=pa.int64())
+        )
+        pq.write_table(table, cache_file, row_group_size=1)
     recovered = SourceTaskDataset(
         [cache.path], _selection_tokenizer(), 100, environment_configs=configs, prepared_cache=cache
     )
     assert [recovered[i] for i in range(len(recovered))] == [original[i] for i in range(len(original))]
-    assert pq.read_metadata(cache_file).num_rows == 3
+    assert pq.read_table(cache_file)[PROMPT_LENGTH_COLUMN].null_count == 0
+
+
+def test_prepared_selection_surfaces_driver_scratch_write_failure(prepared_selection, monkeypatch):
+    cache, configs = prepared_selection
+    SourceTaskDataset([cache.path], _selection_tokenizer(), 100, environment_configs=configs, prepared_cache=cache)
+
+    def no_space(*_args, **_kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(pa.ipc, "new_stream", no_space)
+    with pytest.raises(OSError, match="No space left on device"):
+        SourceTaskDataset([cache.path], _selection_tokenizer(), 100, environment_configs=configs, prepared_cache=cache)
 
 
 def test_prepared_selection_recomputes_lengths_when_installed_lowering_changes(

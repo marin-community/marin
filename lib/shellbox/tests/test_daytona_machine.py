@@ -81,9 +81,31 @@ from shellbox.machine import (
     MachineDiskFull,
     MachineSpec,
     MachineTerminated,
+    MachineUnavailable,
     UnsupportedMachineSpec,
 )
 from yarl import URL
+
+
+def sandbox_json(sandbox_id: str, state: str, toolbox_url: str) -> dict:
+    """A Daytona API sandbox record named ``fixture``."""
+    return {
+        "id": sandbox_id,
+        "organizationId": "fixture",
+        "name": "fixture",
+        "user": "root",
+        "env": {},
+        "labels": {},
+        "public": False,
+        "networkBlockAll": False,
+        "target": "us",
+        "cpu": 2,
+        "gpu": 0,
+        "memory": 4,
+        "disk": 10,
+        "state": state,
+        "toolboxProxyUrl": toolbox_url,
+    }
 
 
 @pytest.mark.parametrize("failure", ["rejected_post", "late_get", "prolonged_throttle", "deadline", "cancelled"])
@@ -124,27 +146,11 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
             ):
                 created = True
                 return web.json_response(
-                    {
-                        "id": "created-once",
-                        "organizationId": "fixture",
-                        "name": "fixture",
-                        "user": "root",
-                        "env": {},
-                        "labels": {},
-                        "public": False,
-                        "networkBlockAll": False,
-                        "target": "us",
-                        "cpu": 2,
-                        "gpu": 0,
-                        "memory": 4,
-                        "disk": 10,
-                        "state": "started",
-                        "toolboxProxyUrl": (
-                            ""
-                            if failure == "late_get" and request.method == "POST"
-                            else "https://fixture.invalid/toolbox"
-                        ),
-                    }
+                    sandbox_json(
+                        "created-once",
+                        "started",
+                        "" if failure == "late_get" and request.method == "POST" else "https://fixture.invalid/toolbox",
+                    )
                 )
             return web.json_response(
                 {"message": "rate limited"}, status=429, headers={"Retry-After-sandbox-create": "17"}
@@ -189,6 +195,26 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
                     assert sandbox.id == "created-once"
                     assert requests == ["POST", "GET", "POST", "GET"]
                     assert len(delays) == 1 and delays[0] >= 17
+
+    asyncio.run(scenario())
+
+
+def test_daytona_creation_reports_a_sandbox_removed_while_starting_as_unavailable():
+    async def scenario():
+        async def endpoint(request):
+            if request.method == "POST":
+                return web.json_response(sandbox_json("removed", "starting", "https://fixture.invalid/toolbox"))
+            return web.json_response({"message": "Sandbox with ID or name removed not found"}, status=404)
+
+        app = web.Application()
+        app.router.add_route("*", "/{path:.*}", endpoint)
+        async with TestServer(app) as server:
+            async with AsyncDaytona(
+                DaytonaConfig(api_key="fixture", api_url=str(server.make_url("")).rstrip("/"))
+            ) as client:
+                params = CreateSandboxFromSnapshotParams(name="fixture", snapshot="fixture")
+                with pytest.raises(MachineUnavailable):
+                    await _create_sandbox(client, params, 60)
 
     asyncio.run(scenario())
 
