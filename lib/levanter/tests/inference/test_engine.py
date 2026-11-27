@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
+
 import equinox as eqx
 import haliax as hax
 import jax
@@ -112,3 +114,36 @@ def test_generate_decodes_through_short_context_limit(max_rounds):
         params = SeqDecodingParams.default()
         result = engine.generate([Request([1], request_id=0, decode_params=params, n_generations=1)])
     assert result.tokens == [[3] * 9]
+
+
+def test_generate_admits_waiting_requests_with_reused_pages():
+    output_lengths = (1, 5, 2, 4, 3)
+    mesh = create_mesh_from_axis_specs(ici_axes={"model": jax.device_count()}, dcn_axes={})
+    with hax.partitioning.set_mesh(mesh):
+        engine = InferenceEngine.from_model_with_config(
+            model=DummyModel(vocab_size=10),  # type: ignore
+            tokenizer=None,
+            config=InferenceEngineConfig(
+                max_seq_len=8,
+                max_pages=4,
+                page_size=4,
+                max_rounds=2,
+                max_seqs=2,
+                max_seqs_in_prefill=1,
+                max_queued_tokens=4,
+                max_prefill_size=4,
+            ),
+        )
+        requests = [
+            Request(
+                [1, 2, 4],
+                request_id=i,
+                decode_params=replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(3 + length)),
+                n_generations=1,
+            )
+            for i, length in enumerate(output_lengths)
+        ]
+        result = engine.generate(requests)
+
+    assert result.tokens == [[3] * length for length in output_lengths]
+    assert result.total_generated == sum(output_lengths)

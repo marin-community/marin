@@ -1117,6 +1117,35 @@ class TokenQueue(eqx.Module):
         jax.experimental.io_callback(callback, None, ordered=True, self=self)
 
 
+class _CapturedRoutes(eqx.Module):
+    """Device buffer of expert IDs and the corresponding request slots and positions."""
+
+    experts: NamedArray
+    slots: NamedArray
+    positions: NamedArray
+    count: jax.Array
+
+    @classmethod
+    def init(cls, capacity: int, layers: int, top_k: int, dtype: jnp.dtype) -> "_CapturedRoutes":
+        return cls(
+            hax.zeros({"position": capacity, "layer": layers, "expert_slot": top_k}, dtype=dtype),
+            hax.full({"position": capacity}, INVALID, dtype=jnp.int32),
+            hax.full({"position": capacity}, INVALID, dtype=jnp.int32),
+            jnp.asarray(0, dtype=jnp.int32),
+        )
+
+    def append(self, experts: jax.Array, slots: NamedArray, positions: NamedArray, count: jax.Array):
+        expert_rows = hax.named(
+            experts.transpose(1, 0, 2).astype(self.experts.dtype), ("position", "layer", "expert_slot")
+        )
+        return _CapturedRoutes(
+            masked_set(self.experts, "position", self.count, expert_rows, count),
+            masked_set(self.slots, "position", self.count, slots, count),
+            masked_set(self.positions, "position", self.count, positions, count),
+            self.count + count,
+        )
+
+
 class _DecodeOutputs(eqx.Module):
     """
     A simple queue-like buffer for outputs emitted by the decode generation loop.
@@ -1133,6 +1162,7 @@ class _DecodeOutputs(eqx.Module):
     logprobs: ht.Float[NamedArray, "position"] | None
     num_tokens: jax.Array
     finished: ht.bool_[NamedArray, "seq"]
+    routes: _CapturedRoutes | None = None
 
     @property
     def max_queued_tokens(self) -> int:

@@ -9,9 +9,15 @@ import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
+from levanter.grug.sharding import compact_grug_mesh
+from levanter.layers.sampler import LogprobMode
 from levanter.models.llama import LlamaLMHeadModel
+from levanter.models.lm_model import LmExample
+from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+from levanter.testing.devices import use_cpu_devices
 from levanter.testing.helpers import skip_if_no_torch
 from levanter.testing.model_configs import llama_test_config
 from levanter.trainer import TrainerConfig
@@ -21,6 +27,7 @@ try:
     from fastapi.testclient import TestClient
     from openai.types import Completion
 
+    from levanter.inference.binary import GENERATE_PATH, MEDIA_TYPE, choice_expert_routes, decode_frame, encode_frame
     from levanter.inference.engine import (
         InferenceEngineConfig,
         score_token_sequence_logprobs,
@@ -612,3 +619,164 @@ def test_tokens_endpoint(test_client):
         assert all(isinstance(t, int) for t in token_list["tokens"])
 
     print(f"Tokenization results: {result['results']}")
+
+
+def test_binary_generation_returns_exact_token_ids_and_scores(test_client):
+    client, _ = test_client
+    prompt = np.array([18, 7, 3, 18], dtype=np.int32)
+    body = encode_frame({"max_tokens": 2, "temperature": 0, "seed": 17}, {"prompt_token_ids": prompt})
+    response = client.post(GENERATE_PATH, content=body, headers={"content-type": MEDIA_TYPE})
+    assert response.status_code == 200, response.text
+    metadata, tensors = decode_frame(response.content)
+
+    np.testing.assert_array_equal(tensors["prompt_token_ids"], prompt)
+    assert metadata["choices"][0]["completion_tokens"] == 2
+    assert tensors["choice.0.token_ids"].shape == (2,)
+    assert tensors["choice.0.token_ids"].dtype == np.int32
+    assert tensors["choice.0.behavior_logprobs"].shape == (2,)
+    assert np.isfinite(tensors["choice.0.behavior_logprobs"]).all()
+
+    wrong_dtype = encode_frame({"max_tokens": 2}, {"prompt_token_ids": prompt.astype(np.float32)})
+    response = client.post(GENERATE_PATH, content=wrong_dtype, headers={"content-type": MEDIA_TYPE})
+    assert response.status_code == 400
+
+
+def test_binary_generation_returns_unwarped_policy_logprobs(inference_server_config, generated_model_and_tokenizer):
+    model, tokenizer = generated_model_and_tokenizer
+    config = dataclasses.replace(
+        inference_server_config,
+        service=dataclasses.replace(inference_server_config.service, logprob_mode=LogprobMode.POLICY),
+    )
+    model = jax.tree.map(jnp.zeros_like, model)
+    server = InferenceServer.create(config, model, tokenizer)
+    prompt = np.array([18, 7, 3, 18], dtype=np.int32)
+    fields = {"max_tokens": 1, "temperature": 0.7, "top_p": 0.05, "seed": 17}
+    try:
+        with TestClient(server.app) as client:
+            response = client.post(
+                GENERATE_PATH,
+                content=encode_frame(fields | {"expected_logprob_mode": "policy"}, {"prompt_token_ids": prompt}),
+                headers={"content-type": MEDIA_TYPE},
+            )
+            assert response.status_code == 200, response.text
+            metadata, tensors = decode_frame(response.content)
+            assert metadata["logprob_mode"] == "policy"
+            assert "choice.0.behavior_logprobs" not in tensors
+            expected = -np.log(model.Vocab.size)
+            np.testing.assert_allclose(tensors["choice.0.policy_logprobs"], [expected], atol=1e-5, rtol=0)
+
+            mismatch = client.post(
+                GENERATE_PATH,
+                content=encode_frame(fields | {"expected_logprob_mode": "behavior"}, {"prompt_token_ids": prompt}),
+                headers={"content-type": MEDIA_TYPE},
+            )
+            assert mismatch.status_code == 400
+    finally:
+        server.shutdown()
+
+
+def test_binary_generation_fences_rollouts_by_installed_policy(inference_server_config, generated_model_and_tokenizer):
+    model, tokenizer = generated_model_and_tokenizer
+    server = InferenceServer.create(inference_server_config, model, tokenizer)
+    try:
+        with TestClient(server.app) as client:
+            _assert_binary_policy_fence(client, server)
+    finally:
+        server.shutdown()
+
+
+def _assert_binary_policy_fence(client, server):
+    prompt = np.array([18, 7, 3], dtype=np.int32)
+
+    def generate(policy):
+        return client.post(
+            GENERATE_PATH,
+            content=encode_frame(
+                {"max_tokens": 2, "temperature": 0, "expected_policy_id": policy}, {"prompt_token_ids": prompt}
+            ),
+            headers={"content-type": MEDIA_TYPE},
+        )
+
+    assert server.reload(lambda model: model, expected_version=0, policy_id="policy-a") == 1
+    first_metadata, first_tensors = decode_frame(generate("policy-a").content)
+    assert first_metadata["choices"][0] == {"completion_tokens": 2, "model_version": 1, "policy_id": "policy-a"}
+
+    def fail_load(model):
+        raise RuntimeError("invalid replacement")
+
+    with pytest.raises(RuntimeError, match="invalid replacement"):
+        server.reload(fail_load, expected_version=1, policy_id="policy-b")
+    still_first, still_first_tensors = decode_frame(generate("policy-a").content)
+    assert still_first == first_metadata
+    np.testing.assert_array_equal(still_first_tensors["choice.0.token_ids"], first_tensors["choice.0.token_ids"])
+
+    assert server.reload(lambda model: model, expected_version=1, policy_id="policy-b") == 2
+    with pytest.raises(ValueError):
+        server.reload(lambda model: model, expected_version=1, policy_id="policy-c")
+    assert generate("policy-a").status_code == 409
+    second_metadata, _ = decode_frame(generate("policy-b").content)
+    assert second_metadata["choices"][0] == {"completion_tokens": 2, "model_version": 2, "policy_id": "policy-b"}
+
+
+def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_tokenizer):
+    cfg = SnowballConfig(
+        vocab_size=48,
+        hidden_dim=16,
+        intermediate_dim=32,
+        shared_expert_intermediate_dim=24,
+        num_layers=2,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        max_seq_len=16,
+        sliding_window=4,
+        attention_implementation="reference",
+    )
+    server_config = InferenceServerConfig(
+        service=InferenceEngineConfig(
+            max_seq_len=16,
+            max_pages=16,
+            max_seqs=4,
+            max_seqs_in_prefill=4,
+            max_prefill_size=12,
+            max_queued_tokens=8,
+            max_rounds=2,
+            page_size=2,
+            compute_dtype=jnp.float32,
+        ),
+    )
+    prompt = np.array([2, 7, 4, 9, 6], dtype=np.int32)
+    with use_cpu_devices(1):
+        mesh = compact_grug_mesh()
+        with jax.set_mesh(mesh):
+            model = SnowballLMHeadModel.init(hax.Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(19))
+            server = InferenceServer.create(server_config, model, local_gpt2_tokenizer, mesh=mesh)
+            try:
+                with TestClient(server.app) as client:
+                    body = encode_frame(
+                        {"max_tokens": 4, "temperature": 0, "return_route_captures": True},
+                        {"prompt_token_ids": prompt},
+                    )
+                    response = client.post(GENERATE_PATH, content=body, headers={"content-type": MEDIA_TYPE})
+                    assert response.status_code == 200, response.text
+                    _, tensors = decode_frame(response.content)
+            finally:
+                server.inference_context.shutdown()
+
+            inputs = np.concatenate((prompt, tensors["choice.0.token_ids"]))
+            experts, valid = choice_expert_routes(tensors, 0, inputs)
+            tokens = hax.named(jnp.asarray(inputs[None]), ("batch", "position"))
+            replay = model.prepare_route_replay(jnp.asarray(experts[:, None]), hax.named(valid[None], tokens.axes))
+            learner_loss, _ = model.next_token_loss_and_metrics(
+                LmExample(tokens, hax.ones(tokens.axes)), route_replay=replay, reduction=None
+            )
+
+    np.testing.assert_allclose(
+        tensors["choice.0.behavior_logprobs"], -learner_loss.array[0, len(prompt) - 1 : -1], atol=1e-5, rtol=0
+    )
+    wrong_inputs = inputs.copy()
+    wrong_inputs[0] += 1
+    with pytest.raises(ValueError):
+        choice_expert_routes(tensors, 0, wrong_inputs)
