@@ -372,7 +372,6 @@ class ResponseSource:
     root: str
     run: str
     """The run identity of the source."""
-    driver_revision: str
 
 
 class _StoredResponses:
@@ -391,7 +390,7 @@ class _StoredResponses:
                 f"Reused model responses require execution revision {EVALUATION_EXECUTION_REVISION}; "
                 f"{root} stored {run['driver_revision']}"
             )
-        self.source = ResponseSource(root, run_identity(run), run["driver_revision"])
+        self.source = ResponseSource(root, run_identity(run))
         datasets: dict[str, str] = {}
         for entry in run["datasets"]:
             benchmark = entry["protocol"]["benchmark"]

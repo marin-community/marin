@@ -1795,7 +1795,7 @@ async def test_reuse_asks_the_model_when_a_sampling_option_changed(tmp_path, run
 
 
 @pytest.mark.asyncio
-async def test_reuse_records_the_source_run_and_its_driver_revision_outside_the_run_identity(tmp_path, run_config):
+async def test_reuse_records_the_source_run_outside_the_run_identity(tmp_path, run_config):
     strict = publish_colors_corpus(tmp_path, "strict")
     lenient = publish_colors_corpus(tmp_path, "lenient", converter=convert_ignoring_case)
     source, output, fresh = (str(tmp_path / name) for name in ("stored", "regraded", "fresh"))
@@ -1812,7 +1812,6 @@ async def test_reuse_records_the_source_run_and_its_driver_revision_outside_the_
         {
             "root": source,
             "run": stored_run_identity(source),
-            "driver_revision": evaluation.EVALUATION_EXECUTION_REVISION,
         }
     ]
     assert regraded["driver_revision"] == evaluation.EVALUATION_EXECUTION_REVISION
