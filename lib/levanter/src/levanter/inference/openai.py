@@ -906,17 +906,14 @@ def _format_chat_completion(
     completion_id: str,
     created: int,
 ) -> ChatCompletion:
-    # Format response
     choices = []
     total_completion_tokens = 0
 
     for i, generation in enumerate(results):
-        # Format logprobs if available
         logprobs = None
         if request.logprobs:
             generated_tokens = generation.tokens
 
-            # Create content logprobs in OpenAI format
             content_logprobs = []
             assert generation.logprobs is not None, "Logprobs requested but missing in generation result"
             for token_id, lp in zip(generated_tokens, generation.logprobs, strict=True):
@@ -1067,11 +1064,12 @@ async def _stream_chat_completion(
     return StreamingResponse(events(), media_type=_EVENT_STREAM)
 
 
+def _grpc_logprob_mode(mode: LogprobMode) -> inference_pb2.LogprobMode:
+    return inference_pb2.LOGPROB_MODE_POLICY if mode == LogprobMode.POLICY else inference_pb2.LOGPROB_MODE_BEHAVIOR
+
+
 def _encode_chat_generation(prompt: list[int], results: list[InferenceResponse], score_mode: LogprobMode) -> str:
-    mode = (
-        inference_pb2.LOGPROB_MODE_POLICY if score_mode == LogprobMode.POLICY else inference_pb2.LOGPROB_MODE_BEHAVIOR
-    )
-    response = _grpc_generate_response(prompt, results, mode)
+    response = _grpc_generate_response(prompt, results, _grpc_logprob_mode(score_mode))
     return base64.b64encode(response.SerializeToString()).decode("ascii")
 
 
@@ -1100,11 +1098,7 @@ class _GrpcInference:
             await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "Router replay requires a Snowball model")
 
         config = ctx.engine.config
-        score_mode = (
-            inference_pb2.LOGPROB_MODE_POLICY
-            if config.logprob_mode == LogprobMode.POLICY
-            else inference_pb2.LOGPROB_MODE_BEHAVIOR
-        )
+        score_mode = _grpc_logprob_mode(config.logprob_mode)
         if request.expected_logprob_mode not in (inference_pb2.LOGPROB_MODE_UNSPECIFIED, score_mode):
             await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "The server uses a different logprob mode")
         max_prefill_size = config.max_prefill_size or ctx.model.Pos.size
