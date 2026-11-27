@@ -63,6 +63,7 @@ from marin.inference.iris_cli import (
 )
 from marin.inference.levanter_backend import (
     DEFAULT_LEVANTER_MAX_SEQ_LEN,
+    LevanterBackend,
     inference_mesh,
     levanter_max_seq_len,
     validate_levanter_dtype,
@@ -625,19 +626,48 @@ def test_validate_levanter_dtype_rejects_vllm_aliases():
 
 
 @pytest.mark.parametrize(
-    ("num_chips", "tensor_parallel_size", "expected"),
+    ("num_chips", "tensor_parallel_size", "expert_parallel_size", "expected"),
     [
-        (8, 8, {"replica": 1, "data": 1, "model": 8, "expert": 1, "context": 1}),
-        (8, 2, {"replica": 1, "data": 4, "model": 2, "expert": 1, "context": 1}),
+        (8, 8, 1, {"replica": 1, "data": 1, "model": 8, "expert": 1, "context": 1}),
+        (8, 2, 1, {"replica": 1, "data": 4, "model": 2, "expert": 1, "context": 1}),
+        (8, 2, 2, {"replica": 1, "data": 2, "model": 2, "expert": 2, "context": 1}),
     ],
 )
-def test_inference_mesh_covers_every_chip(num_chips, tensor_parallel_size, expected):
-    assert dict(inference_mesh(num_chips, tensor_parallel_size).axes) == expected
+def test_inference_mesh_covers_every_chip(num_chips, tensor_parallel_size, expert_parallel_size, expected):
+    assert dict(inference_mesh(num_chips, tensor_parallel_size, expert_parallel_size).axes) == expected
 
 
 def test_inference_mesh_rejects_a_tp_that_does_not_divide_the_slice():
     with pytest.raises(ValueError, match="does not divide"):
         inference_mesh(8, 3)
+
+
+def test_levanter_auto_tensor_parallelism_reserves_expert_devices(monkeypatch):
+    monkeypatch.setattr("marin.inference.levanter_backend.read_attention_heads", lambda *args: (32, 8))
+    backend = LevanterBackend(LevanterEngineConfig(expert_parallel_size=4))
+    spec = backend._resolved_spec(
+        ModelSpec(
+            weights="fixture",
+            api_model="fixture",
+            num_chips=8,
+            tensor_parallel_size=None,
+            dtype="bfloat16",
+            max_model_len=None,
+            chat_template_content=None,
+        )
+    )
+    assert spec.tensor_parallel_size == 2
+
+
+def test_iris_auto_tensor_parallelism_reserves_expert_devices(tmp_path):
+    (tmp_path / "config.json").write_text('{"model_type": "llama", "num_attention_heads": 32, "num_key_value_heads": 8}')
+    iris = IrisConfig(
+        worker_resources=ResourceConfig.with_tpu("v6e-8"),
+        worker_environment=create_environment(extras=["tpu"]),
+    )
+    model, num_chips = _resolved_model(ServedModelConfig(weights=str(tmp_path)), iris, expert_parallel_size=4)
+    assert num_chips == 8
+    assert model.tensor_parallel_size == 2
 
 
 def test_cli_rejects_vllm_flags_under_the_levanter_backend():

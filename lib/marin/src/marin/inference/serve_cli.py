@@ -21,8 +21,12 @@ from marin.inference.config import (
     VllmSource,
     load_vllm_metric_family_additions,
 )
+from marin.inference.iris_cli import (
+    LEVANTER_EXPERT_PARALLEL_SIZE_FLAG,
+    levanter_expert_parallel_option,
+    reject_backend_options,
+)
 from marin.inference.iris_cli import main as iris
-from marin.inference.iris_cli import reject_backend_options
 from marin.inference.serve import local_inference
 from marin.inference.vllm_release import load_vllm_gpu_release
 
@@ -42,6 +46,7 @@ _LOCAL_LEVANTER_OPTIONS = {
     "max_seqs": "--max-seqs",
     "page_size": "--page-size",
     "hbm_utilization": "--hbm-utilization",
+    "levanter_expert_parallel_size": LEVANTER_EXPERT_PARALLEL_SIZE_FLAG,
 }
 
 
@@ -87,6 +92,7 @@ def main() -> None:
 @click.option("--max-seqs", type=int, default=16)
 @click.option("--page-size", type=int, default=128)
 @click.option("--hbm-utilization", type=float, default=0.8)
+@levanter_expert_parallel_option
 def local(
     model: str,
     backend: str,
@@ -110,6 +116,7 @@ def local(
     max_seqs: int,
     page_size: int,
     hbm_utilization: float,
+    levanter_expert_parallel_size: int,
 ) -> None:
     """Start one inference server on the current host."""
 
@@ -159,6 +166,7 @@ def local(
             max_seqs=max_seqs,
             page_size=page_size,
             hbm_utilization=hbm_utilization,
+            expert_parallel_size=levanter_expert_parallel_size,
         )
     if backend == "vllm" and launcher_type is VllmLauncherType.TPU:
         click.echo(f"Using pinned TPU vLLM {VLLM_FORK_REQUIREMENT}")

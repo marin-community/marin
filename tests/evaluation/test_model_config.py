@@ -488,6 +488,26 @@ def test_invalid_pipeline_or_memory_settings_fail_before_submission(serve):
         ServeConfig(**serve)
 
 
+def test_native_evaluation_accepts_tensor_and_expert_parallelism_on_gpu():
+    model = ModelConfig(
+        name="snowball",
+        location="fixture/snowball",
+        resource_hint=ResourceHint(memory="128g"),
+        serve=ServeConfig(
+            backend=ServeBackend.LEVANTER,
+            tensor_parallel_size=2,
+            levanter_expert_parallel_size=4,
+            auto_overrides=False,
+        ),
+    )
+    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8)
+    config = inference_config_for_model(model, choice, env_vars={}, priority=0)
+    assert isinstance(config.engine, LevanterEngineConfig)
+    assert config.engine.expert_parallel_size == 4
+    assert config.model.tensor_parallel_size == 2
+    assert config.iris.worker_resources.device.chip_count() == 8
+
+
 def test_explicit_multihost_tpu_uses_direct_gang_serving():
     model = ModelConfig(
         name="multi-host-model",

@@ -90,6 +90,7 @@ class ServeConfig:
     backend: ServeBackend = ServeBackend.VLLM
     tensor_parallel_size: int | None = None
     data_parallel_size: int | None = None
+    levanter_expert_parallel_size: int | None = field(default=None, metadata={"fingerprint_omit_value": None})
     pipeline_parallel_size: int = 1
     instances: int = 1
     gpu_memory_utilization: float | None = None
@@ -126,7 +127,9 @@ class ServeConfig:
             raise ValueError("pipeline_parallel_size must be >= 1")
         if self.instances < 1:
             raise ValueError("instances must be >= 1")
-        for name in ("tensor_parallel_size", "data_parallel_size"):
+        if self.levanter_expert_parallel_size is not None and self.backend is not ServeBackend.LEVANTER:
+            raise ValueError("levanter_expert_parallel_size requires the Levanter backend")
+        for name in ("tensor_parallel_size", "data_parallel_size", "levanter_expert_parallel_size"):
             value = getattr(self, name)
             if value is not None and value < 1:
                 raise ValueError(f"{name} must be positive")

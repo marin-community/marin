@@ -50,6 +50,7 @@ from marin.inference.config import (
     RemoteInferenceConfig,
     ServedModelConfig,
     VllmEngineConfig,
+    levanter_data_parallel_size,
     uses_native_vllm_group,
 )
 from marin.inference.dashboard_server import (
@@ -98,6 +99,7 @@ _METADATA_KIND = "kind"
 _METADATA_BACKEND = "backend"
 _METADATA_TENSOR_PARALLEL_SIZE = "tensor_parallel_size"
 _METADATA_DATA_PARALLEL_SIZE = "data_parallel_size"
+_METADATA_EXPERT_PARALLEL_SIZE = "expert_parallel_size"
 _METADATA_PIPELINE_PARALLEL_SIZE = "pipeline_parallel_size"
 _METADATA_TASK_COUNT = "task_count"
 _METADATA_MAX_MODEL_LEN = "max_model_len"
@@ -255,9 +257,12 @@ def _broker_config(instances: int, broker: BrokerConfig | None) -> BrokerConfig 
     return None
 
 
-def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedModelConfig, int]:
+def _resolved_model(
+    model: ServedModelConfig, iris: IrisConfig, *, expert_parallel_size: int | None = None
+) -> tuple[ServedModelConfig, int]:
     # Resolve serving geometry inside accelerator workers.
     from marin.inference.model_preparation import (  # noqa: PLC0415
+        levanter_tensor_parallel_limit,
         read_attention_heads,
         resolve_model_path,
         select_tensor_parallel_size,
@@ -272,6 +277,9 @@ def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedM
     if isinstance(iris.worker_resources.device, TpuConfig):
         num_chips *= iris.worker_resources.device.vm_count()
     geometry = iris.serving_geometry
+    tp_limit = (
+        num_chips if expert_parallel_size is None else levanter_tensor_parallel_limit(num_chips, expert_parallel_size)
+    )
     tensor_parallel_size = geometry.tensor_parallel_size if geometry is not None else model.tensor_parallel_size
     if tensor_parallel_size is None and isinstance(iris.worker_resources.device, TpuConfig):
         if iris.worker_resources.device.vm_count() > 1:
@@ -281,7 +289,7 @@ def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedM
     tokenizer_revision = model.effective_tokenizer_revision
     if tensor_parallel_size is None:
         num_attention_heads, num_key_value_heads = read_attention_heads(weights, revision)
-        tensor_parallel_size = select_tensor_parallel_size(num_attention_heads, num_chips, num_key_value_heads)
+        tensor_parallel_size = select_tensor_parallel_size(num_attention_heads, tp_limit, num_key_value_heads)
     return (
         replace(
             model,
@@ -323,7 +331,8 @@ def _prepared_local_inference(
     engine: VllmEngineConfig | LevanterEngineConfig,
     iris: IrisConfig,
 ) -> Iterator[LocalInferenceSession]:
-    resolved_model, num_chips = _resolved_model(model, iris)
+    expert_parallel_size = engine.expert_parallel_size if isinstance(engine, LevanterEngineConfig) else None
+    resolved_model, num_chips = _resolved_model(model, iris, expert_parallel_size=expert_parallel_size)
     resolved_engine = _resolved_engine(engine, iris)
     geometry = iris.serving_geometry
     if geometry is not None and isinstance(resolved_engine, VllmEngineConfig):
@@ -389,6 +398,8 @@ def _endpoint_metadata(
             }
         )
         metadata[_METADATA_TENSOR_PARALLEL_SIZE] = str(effective_serving.tensor_parallel_size)
+        if effective_serving.expert_parallel_size is not None:
+            metadata[_METADATA_EXPERT_PARALLEL_SIZE] = str(effective_serving.expert_parallel_size)
     return metadata
 
 
@@ -399,18 +410,31 @@ def _effective_serving(
     tensor_parallel_size: int,
     instances: int = 1,
 ) -> EffectiveServing:
+    task_count = iris.worker_resources.replicas * instances
+    if isinstance(engine, LevanterEngineConfig):
+        return EffectiveServing(
+            tensor_parallel_size=tensor_parallel_size,
+            data_parallel_size=levanter_data_parallel_size(
+                iris.worker_resources.device.chip_count(), tensor_parallel_size, engine.expert_parallel_size
+            ),
+            pipeline_parallel_size=1,
+            task_count=task_count,
+            max_model_len=model.max_model_len,
+            expert_parallel_size=engine.expert_parallel_size,
+        )
+
     geometry = iris.serving_geometry
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument("--tensor-parallel-size", type=int, default=tensor_parallel_size)
     parser.add_argument(*VLLM_DATA_PARALLEL_SIZE_FLAGS, type=int, default=geometry.data_parallel_size if geometry else 1)
     parser.add_argument("--max-model-len", default=model.max_model_len)
-    options, _ = parser.parse_known_args(engine.extra_args if isinstance(engine, VllmEngineConfig) else ())
+    options, _ = parser.parse_known_args(engine.extra_args)
     context = options.max_model_len
     return EffectiveServing(
         tensor_parallel_size=options.tensor_parallel_size,
         data_parallel_size=options.data_parallel_size,
         pipeline_parallel_size=geometry.pipeline_parallel_size if geometry else 1,
-        task_count=iris.worker_resources.replicas * instances,
+        task_count=task_count,
         max_model_len=int(context) if context is not None and str(context).isdigit() else None,
     )
 
@@ -845,12 +869,14 @@ def _start_direct_inference(
             )
             tensor_parallel_size = int(metadata[_METADATA_TENSOR_PARALLEL_SIZE])
             backend_name = metadata[_METADATA_BACKEND]
+            expert_parallel_size = metadata.get(_METADATA_EXPERT_PARALLEL_SIZE)
             effective_serving = EffectiveServing(
                 tensor_parallel_size=tensor_parallel_size,
                 data_parallel_size=int(metadata[_METADATA_DATA_PARALLEL_SIZE]),
                 pipeline_parallel_size=int(metadata[_METADATA_PIPELINE_PARALLEL_SIZE]),
                 task_count=int(metadata[_METADATA_TASK_COUNT]),
                 max_model_len=int(metadata[_METADATA_MAX_MODEL_LEN]) if metadata[_METADATA_MAX_MODEL_LEN] else None,
+                expert_parallel_size=int(expert_parallel_size) if expert_parallel_size is not None else None,
             )
         except Exception as exc:
             raise RemoteInferenceStartupError(

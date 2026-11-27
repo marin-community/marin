@@ -58,6 +58,14 @@ def select_tensor_parallel_size(
     return best
 
 
+def levanter_tensor_parallel_limit(num_chips: int, expert_parallel_size: int) -> int:
+    """Return the largest power of two that divides the chips per expert shard."""
+    chips_per_expert_shard, remainder = divmod(num_chips, expert_parallel_size)
+    if remainder or not chips_per_expert_shard:
+        raise ValueError(f"expert_parallel_size={expert_parallel_size} does not divide the {num_chips}-chip slice.")
+    return chips_per_expert_shard & -chips_per_expert_shard
+
+
 def _kv_heads_compatible(num_key_value_heads: int | None, tensor_parallel_size: int) -> bool:
     if not num_key_value_heads:
         return True

@@ -163,6 +163,7 @@ class EffectiveServing:
     pipeline_parallel_size: int
     task_count: int
     max_model_len: int | None
+    expert_parallel_size: int | None = None
 
 
 # This standard set includes families consumed by Marin's inference dashboards or needed for
@@ -392,13 +393,31 @@ class VllmEngineConfig:
         object.__setattr__(self, "extra_metric_families", extra_metric_families)
 
 
+DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE = 1
+
+
+def levanter_data_parallel_size(num_chips: int, tensor_parallel_size: int, expert_parallel_size: int) -> int:
+    """Return the data axis width for a Levanter serving mesh."""
+    if min(num_chips, tensor_parallel_size, expert_parallel_size) < 1:
+        raise ValueError("Serving mesh dimensions must be positive")
+    data, remainder = divmod(num_chips, tensor_parallel_size * expert_parallel_size)
+    if remainder:
+        raise ValueError(
+            f"The serving mesh {tensor_parallel_size} x {expert_parallel_size} does not divide {num_chips} chips."
+        )
+    return data
+
+
 @dataclass(frozen=True)
 class LevanterEngineConfig:
     max_seqs: int = 16
     page_size: int = 128
     hbm_utilization: float = 0.8
+    expert_parallel_size: int = DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE
 
     def __post_init__(self) -> None:
+        if self.expert_parallel_size < 1:
+            raise ValueError("expert_parallel_size must be positive")
         if self.max_seqs <= 0:
             raise ValueError("max_seqs must be positive")
         if self.page_size <= 0:
