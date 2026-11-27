@@ -101,7 +101,15 @@ def repaired_instruction(text: str) -> str:
 
 
 def repair_task(task: TaskSpec) -> TaskSpec:
-    """Replace the tier-scoring verifier and the coaching instruction; record the lineage."""
+    """Replace the tier-scoring verifier, the coaching instruction AND the public
+    conversation message; record the lineage.
+
+    The scoring hints live in TWO places: the private ``instruction.md`` resource and
+    the public conversation message (the task's context event — the text the actor
+    actually reads). The SAMPLE QC caught the first repair repairing only the
+    resource (87/100 csharp tasks flagged: the public contract misstated the rubric).
+    Both surfaces get the same surgery.
+    """
     verifier = {resource.path: resource for resource in task.resources.verifier}
     script = verifier.get("tests/test.sh")
     instruction = verifier.get("instruction.md")
@@ -132,8 +140,20 @@ def repair_task(task: TaskSpec) -> TaskSpec:
             )
         else:
             updated.append(resource)
+    # The public conversation message: the same scoring-section surgery.
+    events = []
+    public_repaired = 0
+    for event in task.context.events:
+        content = event.content
+        if isinstance(content, str) and SCORING_SECTION_START in content:
+            events.append(event.model_copy(update={"content": repaired_instruction(content)}))
+            public_repaired += 1
+        else:
+            events.append(event)
+    context = task.context.model_copy(update={"events": tuple(events)})
     repaired = task.model_copy(
         update={
+            "context": context,
             "resources": task.resources.model_copy(
                 update={
                     "verifier": tuple(updated),
@@ -149,6 +169,8 @@ def repair_task(task: TaskSpec) -> TaskSpec:
         }
     )
     repaired = TaskSpec.model_validate_json(repaired.model_dump_json())
+    if public_repaired == 0:
+        raise ValueError(f"{task.id}: the public conversation message carries no scoring section to repair")
     return repaired
 
 

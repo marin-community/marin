@@ -68,7 +68,24 @@ def _tiered_task() -> TaskSpec:
     return TaskSpec(
         id="TaskTrove:laion__fixture-v4/task-1",
         source={"dataset": "fixture", "revision": "a" * 40, "row": "fixture/task-1", "importer_revision": "v1"},
-        context=ConversationInput(events=(TextMessage(role="user", content="Complete the file."),)),
+        context=ConversationInput(
+            events=(
+                TextMessage(
+                    role="user",
+                    content=(
+                        "# Cross-File Code Completion Task\n\nComplete the fragment.\n\n"
+                        "- The verifier byte-compares your fragment to a reference fragment after\n"
+                        "  whitespace normalisation. It also accepts:\n"
+                        "    * a leading-identifier match, and\n"
+                        "    * a non-empty partial credit if your fragment contains at least one\n"
+                        "      C# identifier and is under ~400 characters.\n"
+                        "  So even if you can't guess the exact reference identifier, writing\n"
+                        "  *something* shaped like a C# completion fragment is strictly better than\n"
+                        "  writing nothing.\n"
+                    ),
+                ),
+            ),
+        ),
         environment_requirements=EnvironmentRequirements(
             command_semantics=CommandSemantics.LINUX_PROCESS,
             docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", dockerfile),)),
@@ -103,6 +120,20 @@ def test_repair_removes_the_hack_tiers_and_records_the_lineage():
     assert "0.25" not in text
     assert "leading-identifier" not in text
     assert "normalize" in text
+
+
+def test_repair_also_rewrites_the_public_conversation_message():
+    """The coaching lives in the public context message too (the SAMPLE QC gap)."""
+    task = _tiered_task()
+    public = task.context.events[0].content
+    assert "leading-identifier" in public or "partial credit" in public
+    repaired = repair_task(task)
+    public = repaired.context.events[0].content
+    assert "partial credit" not in public
+    assert "leading-identifier" not in public
+    assert "exact match" in public
+    # the task description stays
+    assert "Cross-File Code Completion Task" in public
     provenance = next(r for r in repaired.resources.oracle if r.path == "taskcompendium/crosscode-tier-repair.json")
     doc = json.loads(resource_bytes(provenance).decode())
     assert doc["version"] == REPAIR_VERSION
