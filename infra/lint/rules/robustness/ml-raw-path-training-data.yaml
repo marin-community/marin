@@ -26,7 +26,7 @@ prompt: |-
 
   **Bad example:**
   ```python
-  data = LmDataConfig(components={          # component addressed by a raw prefix
+  data = LmDataConfig(components={
       "sft_v7": dataset_component(UrlDatasetSourceConfig(cache_dir="gs://marin-us-central2/tokenized/sft-v7/", ...)),
   }, train_weights={"sft_v7": 1.0})
 

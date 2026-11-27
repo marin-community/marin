@@ -182,7 +182,7 @@ handle = pretokenized(
 )
 train_lm(
     name="checkpoints/tiny-fineweb-edu-h100x8",
-    datasets={handle: 1.0},  # the mix: {handle: weight}
+    datasets={handle: 1.0},
     ...
 )
 ```
