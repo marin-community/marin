@@ -8,6 +8,7 @@ from verifyit.candidate import grade_candidate
 from verifyit.closure_scoring import ClosureFormat
 from verifyit.grade import Status
 from verifyit.spec import StructureClosureSpec, parse_spec, render_spec
+from verifyit.structure_closure import MAX_JSON_DEPTH
 
 
 @pytest.mark.parametrize(
@@ -54,3 +55,24 @@ def test_structure_closure_rejects_premature_completion_and_invalid_references()
     assert grade_candidate(spec, "]}", {}).reward == 0.0
     malformed = StructureClosureSpec('{"values":[', '{"values":[', ClosureFormat.JSON)
     assert grade_candidate(malformed, "1]}", {}).status == Status.INVALID_TASK
+
+
+@pytest.mark.parametrize(
+    "structure_format,prefix,expected,closer",
+    [
+        (ClosureFormat.JSON, '{"a":', '{"a":1}', "}"),
+        (ClosureFormat.TOOL, '<tool_call>\n{"a":', '<tool_call>\n{"a":1}</tool_call>', "}</tool_call>"),
+    ],
+)
+def test_structure_closure_scores_a_deeply_nested_reply_zero(structure_format, prefix, expected, closer):
+    spec = StructureClosureSpec(prefix, expected, structure_format)
+    grade = grade_candidate(spec, "[" * 100_000 + "]" * 100_000 + closer, {})
+    assert (grade.status, grade.reward, grade.detail["syntax_complete"]) == (Status.SCORED, 0.0, False)
+
+
+def test_structure_closure_task_depth_limit():
+    depth = MAX_JSON_DEPTH
+    at_limit = StructureClosureSpec("[" * depth, "[" * depth + "]" * depth, ClosureFormat.JSON)
+    assert grade_candidate(at_limit, "]" * depth, {}).reward == 1.0
+    past_limit = StructureClosureSpec("[" * (depth + 1), "[" * (depth + 1) + "]" * (depth + 1), ClosureFormat.JSON)
+    assert grade_candidate(past_limit, "]" * (depth + 1), {}).status == Status.INVALID_TASK

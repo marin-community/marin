@@ -304,6 +304,24 @@ def test_predicted_action_overflowing_private_tolerance_clears_stale_reward(tmp_
             0.0,
             id="action-duplicate-candidate",
         ),
+        pytest.param(
+            StructuredExactSpec(expected={"payload": {"id": 1}}),
+            "[" * 100_000,
+            0.0,
+            id="structured-candidate-nested-past-recursion-limit",
+        ),
+        pytest.param(
+            PredictedActionSpec(expected_calls=(FunctionCall("lookup", {"id": 1}),)),
+            "[" * 100_000,
+            0.0,
+            id="action-candidate-nested-past-recursion-limit",
+        ),
+        pytest.param(
+            PredictedActionSpec(expected_calls=(FunctionCall("lookup", {"id": 1}),)),
+            '[{"name":"lookup","arguments":{"id":' + "[" * 2_000 + "]" * 2_000 + "}}]",
+            0.0,
+            id="action-arguments-nested-past-recursion-limit",
+        ),
     ],
 )
 def test_json_file_grading_preserves_contract_from_toml(tmp_path, spec, candidate, reward):
