@@ -43,6 +43,8 @@ from verifyit.spec import (
     spec_from_table,
 )
 
+from taskcompendium.integrity import MultiSweDeliveryContract, RootDeliveryContract, SharedIntegrityContract
+
 SCHEMA_VERSION = "0.30"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 TOOL_ARGUMENTS_OBJECT_ERROR = "Tool arguments must be a JSON object"
@@ -949,8 +951,7 @@ class TaskSpec(BaseModel):
     verifier_execution_requirements: ExecutionRequirements | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
-    # Non-null integrity contracts need runtime protections outside this source port.
-    integrity_contract: None = None
+    integrity_contract: RootDeliveryContract | MultiSweDeliveryContract | SharedIntegrityContract | None = None
     final_tools: tuple[FunctionDefinition, ...] = ()
     interaction_tools: tuple[FunctionDefinition, ...] = ()
     tool_bindings: dict[str, ShellToolBinding] = Field(default_factory=dict)

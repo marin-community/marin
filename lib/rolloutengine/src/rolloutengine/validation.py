@@ -21,6 +21,7 @@ from taskcompendium.models import (
     require_resolved_environment,
 )
 from taskcompendium.runtime.environment import validate_machine_spec
+from taskcompendium.runtime.integrity import require_integrity_contract
 
 from rolloutengine.grading import judge_connection
 from rolloutengine.machines import _machine_spec
@@ -54,6 +55,7 @@ def task_machine_reason(task: TaskSpec) -> str | None:
 def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, MachineFactory]) -> None:
     """Check the machine selections against the task's environments, resources, and grader."""
     task = spec.task
+    require_integrity_contract(task)
     if any(
         requirement.network_access is ProviderNetworkAccess.SERVICE_ONLY
         for requirement in task.environment_requirements.tool_providers.values()

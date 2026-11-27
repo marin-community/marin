@@ -13,6 +13,7 @@ from cloud.iris.launch_config import load_launch_config
 from omegaconf import OmegaConf
 from skyrl_train.dataset.tasks import canonical_task_spec
 from taskcompendium.models import NoGrader, TaskSpec
+from taskcompendium.runtime.integrity import require_integrity_contract
 
 POOL_BATCH_SIZE = 64
 
@@ -20,6 +21,7 @@ POOL_BATCH_SIZE = 64
 def bind_runtime(row: dict, environment: dict) -> dict:
     """Lower the unchanged task through the native adapter, retaining published sizing."""
     task = TaskSpec.model_validate_json(row["task_spec"])
+    require_integrity_contract(task)
     settings = {
         **environment,
         "harness_by_dataset": dict(environment["harness_by_dataset"]),
