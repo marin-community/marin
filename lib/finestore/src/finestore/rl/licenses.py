@@ -280,23 +280,25 @@ class LicenseBan(BaseModel):
 def require_license(
     receipt: LicenseReceipt | None,
     source_id: str,
-    dataset_id: str | None,
-    revision: str | None,
     use: str,
     *,
     ban: LicenseBan | None,
 ) -> None:
-    """Fail closed before ingest or admission, including on stale evidence, bans and registry bans.
+    """Fail closed on a source's licence record: missing evidence, bans, scope, verdict.
 
-    ``ban`` is the source's registry ban, or None after the caller checked the
-    registry; every caller states that it looked.
+    A licence is ingest-time provenance (user ruling 2026-11-27): the record binds the
+    source_id once at ingest and every revision of that source inherits it, so this
+    check evaluates the record itself and never compares pins. A new upstream dataset
+    is a new source and is licensed at its own ingest. ``ban`` is the source's registry
+    ban, or None after the caller checked the registry; every caller states that it
+    looked.
     """
     if ban is not None and ban.source_id != source_id:
         raise ValueError(f"The registry ban names another source: {ban.source_id}")
     if receipt is None or not receipt.evidence:
         raise ValueError(f"License evidence is missing: {source_id}")
-    if (receipt.source_id, receipt.dataset_id, receipt.revision) != (source_id, dataset_id, revision):
-        raise ValueError(f"License evidence belongs to another source revision: {source_id}")
+    if receipt.source_id != source_id:
+        raise ValueError(f"License evidence belongs to another source: {source_id}")
     if receipt.resolver_version != LICENSE_RESOLVER_VERSION:
         raise ValueError(f"License receipt needs resolution with the current resolver: {source_id}")
     scoped = [item for item in receipt.decisions if use in item.scope]

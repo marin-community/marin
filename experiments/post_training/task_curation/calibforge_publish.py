@@ -5,8 +5,11 @@
 
 Curation that converts data must publish the converted artifact, so the Atlas can
 point at something a reader can actually load instead of at the deprecated native
-release. This uploads the lowered task spec rows beside the dataset card, verifies the
-result through an authenticated read-back, and prints the revision to record.
+release. This uploads the lowered task spec rows beside the licensed dataset card,
+verifies the result through an authenticated read-back, and prints the revision to
+record. The licence carries forward from the parent pin's receipt through the
+publication chokepoint: the card declares the parent's resolved upstream and the new
+pin's receipt registers before the revision is returned.
 
 Campaign datasets stay private until release, so the repo is created private and the
 artifact is verified by reading it back through the cached login and comparing hashes.
@@ -27,11 +30,13 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 from finestore.rl.status_taxonomy import DataRestriction
-from huggingface_hub import HfApi, hf_hub_download
-from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.models import TaskSpec
 
+from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX
+from experiments.post_training.task_curation.license_publication import (
+    PublishedLicensedPopulation,
+    publish_licensed_population,
+)
 from experiments.post_training.task_curation.publication_gate import require_public_data
 
 TASKS_FILENAME = "tasks.parquet"
@@ -74,73 +79,78 @@ def _source_pin_line(card_text: str) -> str | None:
     return None
 
 
+def card_body(card: Path) -> str:
+    """The card's provenance body; the chokepoint writes the licensed front matter."""
+    text = card.read_text()
+    if text.startswith("---"):
+        parts = text.split("---", 2)
+        if len(parts) == 3:
+            return parts[-1].strip()
+    return text.strip()
+
+
 def publish(
-    tasks: Path, card: Path, repo: str, *, data_restriction: DataRestriction, evidence_files: tuple[Path, ...] = ()
-) -> str:
-    """Upload ``tasks`` and ``card`` to a private ``repo`` and return the commit revision.
+    tasks: Path,
+    card: Path,
+    repo: str,
+    *,
+    data_restriction: DataRestriction,
+    evidence_files: tuple[Path, ...] = (),
+    source_id: str,
+    use: str,
+    pretty_name: str,
+    index_path: Path = LICENSE_RECEIPT_INDEX,
+) -> PublishedLicensedPopulation:
+    """Upload ``tasks`` beside its licensed card to a private ``repo``; return the publication.
 
     The caller passes the source population's tier: a PRIVATE_ALWAYS payload is
-    refused here at the shared helper, never published anywhere.
-
-    A repo left behind by a partial prior run is resumed into, never clobbered:
-    the existing card must declare the same ``Source pin`` as the new card, or
-    the publication refuses and a new version name is required.
+    refused here at the shared helper, never published anywhere. The licence moves
+    forward mechanically from the parent pin's receipt: the card declares the parent's
+    resolved upstream, every uploaded byte is read back, and the new pin's receipt
+    lands in the registry before the revision is returned.
     """
     require_public_data(data_restriction, destination=repo)
-    api = HfApi()
-    exist_ok = False
-    try:
-        existing_card_path = hf_hub_download(repo_id=repo, filename=CARD_FILENAME, repo_type="dataset")
-        existing_pin = _source_pin_line(Path(existing_card_path).read_text())
-        new_pin = _source_pin_line(card.read_text())
-        if existing_pin is not None and existing_pin != new_pin:
-            raise ValueError(
-                f"Publication destination holds another content pin: {repo}; "
-                f"existing {existing_pin!r} != new {new_pin!r} — use a new version name"
-            )
-        exist_ok = True
-    except Exception as error:
-        if "Source pin" in str(error):
-            raise
+    _require_loader_row_integrity(tasks)
     with tempfile.TemporaryDirectory(prefix="calibforge-publish-") as directory:
         staging = Path(directory)
         shutil.copyfile(tasks, staging / TASKS_FILENAME)
-        shutil.copyfile(card, staging / CARD_FILENAME)
         for source in evidence_files:
             shutil.copyfile(source, staging / source.name)
-        _require_loader_row_integrity(staging / TASKS_FILENAME)
-        api.create_repo(repo_id=repo, repo_type="dataset", private=True, exist_ok=exist_ok)
-        if not api.repo_info(repo, repo_type="dataset").private:
-            raise ValueError(f"Publication destination must be private: {repo}")
-        commit = api.upload_folder(
-            repo_id=repo,
-            repo_type="dataset",
-            folder_path=staging,
-            commit_message="Publish the private TaskCompendium cohort",
+        return publish_licensed_population(
+            source_id,
+            repo,
+            staging,
+            (TASKS_FILENAME, *(source.name for source in evidence_files)),
+            body=card_body(card),
+            pretty_name=pretty_name,
+            use=use,
+            index_path=index_path,
         )
-    revision = commit.oid
-    # Read the artifact back through the login that uploaded it and compare hashes, so
-    # a truncated or rewritten file fails here rather than at a reader.
-    files = ((tasks, TASKS_FILENAME), (card, CARD_FILENAME), *((path, path.name) for path in evidence_files))
-    for source, name in files:
-        downloaded = hf_hub_download(repo_id=repo, repo_type="dataset", filename=name, revision=revision)
-        if file_sha256(StoragePath(downloaded)) != file_sha256(StoragePath(str(source))):
-            raise ValueError(f"{name} at {repo}@{revision} does not match the uploaded file")
-    return revision
 
 
 def main() -> None:
     """Publish the cohort and print the revision to pin in the Atlas."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tasks", type=Path, required=True, help="lowered task spec parquet")
-    parser.add_argument("--card", type=Path, required=True, help="dataset card markdown")
+    parser.add_argument("--card", type=Path, required=True, help="dataset card body markdown")
     parser.add_argument("--repo", required=True, help="dataset repo, e.g. open-athena/<name> (created private)")
     parser.add_argument(
         "--data-restriction", type=DataRestriction, required=True, help="the source's typed restriction tier"
     )
+    parser.add_argument("--source-id", required=True, help="the cohort source id the publication belongs to")
+    parser.add_argument("--use", required=True, choices=["train", "eval"], help="the publication use")
+    parser.add_argument("--pretty-name", required=True, help="the card's pretty_name")
     args = parser.parse_args()
-    revision = publish(args.tasks, args.card, args.repo, data_restriction=args.data_restriction)
-    print(f"{args.repo}@{revision}")
+    publication = publish(
+        args.tasks,
+        args.card,
+        args.repo,
+        data_restriction=args.data_restriction,
+        source_id=args.source_id,
+        use=args.use,
+        pretty_name=args.pretty_name,
+    )
+    print(f"{args.repo}@{publication.revision}")
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ from experiments.post_training.task_curation.conversion_admission import (
     conversion_admission_receipts,
 )
 from experiments.post_training.task_curation.datasets import (
+    acecode_89k_admitted,
     backfill_releases,
     big_math_admitted,
     campaign_releases,
@@ -24,8 +25,10 @@ from experiments.post_training.task_curation.datasets import (
     edge_websearch_admitted,
     facet_terminal,
     freeform_formatting_admitted,
+    hardmath_rhs_admitted,
     hierarchy_intake,
     inverse_ifeval_admitted,
+    leetcode_dataset_admitted,
     native_releases,
     nemo_mcqa,
     nemo_structured,
@@ -33,6 +36,7 @@ from experiments.post_training.task_curation.datasets import (
     qa_abstention_admitted,
     repair_releases,
     s1_deepresearch_admitted,
+    structeval_admitted,
     structure_closure,
     tasktrove_structured_native,
     terminus_pivot,
@@ -106,10 +110,8 @@ from experiments.post_training.task_curation.grading_binding import bind_grading
 from experiments.post_training.task_curation.lexical_binding import bind_lexical_measurement
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
 from experiments.post_training.task_curation.license_binding import (
-    LICENSE_RECEIPT_HISTORY_INDEX,
     LICENSE_RECEIPT_INDEX,
-    bind_registered_license_receipt,
-    read_license_receipt_history,
+    bind_license_receipt,
     read_license_receipts,
 )
 from experiments.post_training.task_curation.oracle_admitted_release import (
@@ -267,6 +269,9 @@ PENDING_MEASUREMENT_SOURCES = (
     *freeform_formatting_admitted.sources(),
     *citation_formatting_admitted.sources(),
     *big_math_admitted.sources(),
+    *acecode_89k_admitted.sources(),
+    *leetcode_dataset_admitted.sources(),
+    *structeval_admitted.sources(),
     *(
         source
         for source in campaign_releases.sources()
@@ -326,7 +331,8 @@ def configured_sources() -> list[RlDataSource]:
         *eval_simpleqa.sources(),
         *eval_long_context.sources(),
         *eval_nupa.sources(),
-        *skyrl_math.sources(),
+        *(source for source in skyrl_math.sources() if source.info.id != "pafitis:hardmath@rhs"),
+        *hardmath_rhs_admitted.sources(),
         *skyrl_code.sources(),
         *skyrl_ifeval.sources(),
         *skyrl_mcq.sources(),
@@ -358,6 +364,9 @@ def configured_sources() -> list[RlDataSource]:
         *freeform_formatting_admitted.sources(),
         *citation_formatting_admitted.sources(),
         *big_math_admitted.sources(),
+        *acecode_89k_admitted.sources(),
+        *leetcode_dataset_admitted.sources(),
+        *structeval_admitted.sources(),
         *nemotron_ultra_renames_admitted.sources(),
         *workplace.sources(),
         *nemo_mcqa.sources(),
@@ -496,9 +505,8 @@ def all_sources() -> dict[str, RlDataSource]:
         for source_id, source in sources.items()
     }
     license_receipts = read_license_receipts(LICENSE_RECEIPT_INDEX)
-    archived_licenses = read_license_receipt_history(LICENSE_RECEIPT_HISTORY_INDEX)
     selected = {
-        source_id: bind_registered_license_receipt(source, license_receipts, archived_licenses)
+        source_id: bind_license_receipt(source, license_receipts.get(source_id))
         for source_id, source in selected.items()
     }
     receipts = derived_contract_receipts()

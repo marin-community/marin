@@ -10,7 +10,6 @@ receipt creates a new dataset revision plus an index bump for the next landing.
 
 import json
 import re
-from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
@@ -18,7 +17,6 @@ from finestore.rl.licenses import LICENSE_REGISTRY_ISSUE, LicenseReceipt
 from pydantic import ValidationError
 
 from experiments.post_training.task_curation.receipt_shards import (
-    RECEIPTS_PER_SHARD,
     read_receipt_shards,
     receipts_from_documents,
 )
@@ -31,10 +29,8 @@ from experiments.post_training.task_curation.source import CatalogConfig, RlData
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 LICENSE_RECEIPT_INDEX = Path(__file__).with_name("datasets") / "license_receipts" / "index.json"
-LICENSE_RECEIPT_HISTORY_INDEX = Path(__file__).with_name("datasets") / "license_receipt_history" / "index.json"
 LICENSE_RECEIPT_REPO = "open-athena/marin-license-receipts"
 BANNED_SOURCES_ISSUE = LICENSE_REGISTRY_ISSUE
-type LicensePin = tuple[str, str, str]
 
 
 def read_license_receipts(path: Path) -> dict[str, LicenseReceipt]:
@@ -63,92 +59,6 @@ def read_license_receipts(path: Path) -> dict[str, LicenseReceipt]:
     if any(key != receipt.source_id for key, receipt in receipts.items()):
         raise ValueError("License registry key differs from the receipt source identity")
     return receipts
-
-
-def read_license_receipt_history(path: Path) -> dict[LicensePin, LicenseReceipt]:
-    """Read immutable receipts keyed by exact source, dataset and revision.
-
-    Distinct pins of one source may coexist. Duplicate pins are refused, so
-    neither shard order nor upload time can override a reviewed decision.
-    """
-    receipts = {}
-    for _, document in sorted(load_referenced_json(path).items()):
-        for source_id, record in document.items():
-            receipt = LicenseReceipt.model_validate(record)
-            pin = (receipt.source_id, receipt.dataset_id, receipt.revision)
-            if source_id != canonical_source_id(source_id) or source_id != receipt.source_id or pin in receipts:
-                raise ValueError(f"Duplicate or mismatched archived license pin: {pin}")
-            receipts[pin] = receipt
-    return receipts
-
-
-def exact_pin_license_receipt(
-    source_id: str,
-    dataset_id: str | None,
-    revision: str | None,
-    selected: Mapping[str, LicenseReceipt],
-    archived: Mapping[LicensePin, LicenseReceipt],
-) -> LicenseReceipt | None:
-    """Prefer the selected exact-pin receipt, then check reviewed history."""
-    receipt = selected.get(source_id)
-    if receipt is not None and (receipt.source_id, receipt.dataset_id, receipt.revision) == (
-        source_id,
-        dataset_id,
-        revision,
-    ):
-        return receipt
-    if dataset_id is None or revision is None:
-        return None
-    return archived.get((source_id, dataset_id, revision))
-
-
-def bind_registered_license_receipt[ConfigT: CatalogConfig](
-    source: RlDataSource[ConfigT],
-    selected: Mapping[str, LicenseReceipt],
-    archived: Mapping[LicensePin, LicenseReceipt],
-) -> RlDataSource[ConfigT]:
-    """Bind reviewed evidence for the source's current pin without changing selection."""
-    dataset = source.dataset
-    receipt = exact_pin_license_receipt(
-        source.info.id,
-        dataset.name if dataset is not None else None,
-        dataset.revision if dataset is not None else None,
-        selected,
-        archived,
-    )
-    return bind_license_receipt(source, receipt)
-
-
-def adopt_license_receipt(index_path: Path, receipt: LicenseReceipt, *, message: str, namespace: str) -> str:
-    """Re-pin one source's receipt through a complete immutable selection namespace.
-
-    The selected view is the union of every existing receipt with this source's row
-    replaced by ``receipt``. The union lands as a NEW shard family under
-    ``namespace/`` and the index is atomically re-pinned to reference only that
-    family — shared shards keep their exact bytes, the reader's strict duplicate
-    rejection stays intact, and no newest-wins rule exists (ingest B's design,
-    coordinator ruling 2026-11-26). The index re-pin lands in git through the
-    caller's landing flow.
-    """
-    key = canonical_source_id(receipt.source_id)
-    if key != receipt.source_id:
-        raise ValueError("License registry key differs from the receipt source identity")
-    if not namespace or namespace.endswith("/") or ".." in namespace:
-        raise ValueError("The selection namespace must be a relative directory name")
-    documents = load_referenced_json(index_path)
-    existing = receipts_from_documents(documents, LicenseReceipt, "license receipt")
-    union = {
-        **{name: row.model_dump(mode="json") for name, row in existing.items()},
-        key: receipt.model_dump(mode="json"),
-    }
-    documents_out: dict[str, bytes] = {}
-    entries = sorted(union.items())
-    for part, offset in enumerate(range(0, len(entries), RECEIPTS_PER_SHARD)):
-        chunk = dict(entries[offset : offset + RECEIPTS_PER_SHARD])
-        documents_out[f"{namespace}/part-{part:03d}.json"] = (
-            json.dumps(chunk, indent=2, sort_keys=True) + "\n"
-        ).encode()
-    return commit_reference_documents(index_path, documents_out, message=message, retain_references=False)
 
 
 class AppendWouldRewriteSharedShard(ValueError):
@@ -194,12 +104,14 @@ def append_license_receipt(index_path: Path, receipt: LicenseReceipt, *, message
 def bind_license_receipt[ConfigT: CatalogConfig](
     source: RlDataSource[ConfigT], receipt: LicenseReceipt | None
 ) -> RlDataSource[ConfigT]:
-    """Keep stale receipts out of a new pin; the gate reports missing evidence."""
-    dataset = source.dataset
-    if receipt is not None and (
-        dataset is None
-        or (receipt.source_id, receipt.dataset_id, receipt.revision) != (source.info.id, dataset.name, dataset.revision)
-    ):
+    """Bind the source's ingest licence record; every revision of the source inherits it.
+
+    The lookup is by source_id (ruling 2026-11-27): the record's own pin is the ingest
+    pin, and a declaration at any later revision binds the same record without a pin
+    match — a licence never changes after ingest. A record that belongs to another
+    source never binds, and the gate fails closed on the missing evidence.
+    """
+    if receipt is not None and receipt.source_id != source.info.id:
         return replace(source, info=replace(source.info, license_receipt=None))
     return replace(source, info=replace(source.info, license_receipt=receipt))
 
@@ -208,7 +120,6 @@ def licensed_source[ConfigT: CatalogConfig](source: RlDataSource[ConfigT]) -> Rl
     """Load the canonical reviewed receipt, then enforce permission before any graph work."""
     if source.info.license_receipt is None:
         receipts = read_license_receipts(LICENSE_RECEIPT_INDEX)
-        archived = read_license_receipt_history(LICENSE_RECEIPT_HISTORY_INDEX)
-        source = bind_registered_license_receipt(source, receipts, archived)
+        source = bind_license_receipt(source, receipts.get(source.info.id))
     source.require_license()
     return source

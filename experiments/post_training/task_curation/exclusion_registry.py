@@ -487,24 +487,6 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
             ),
         ),
     ),
-    "TaskTrove:laion__exp_rpt_crosscodeeval-csharp-v4": (
-        ExclusionClaim(
-            reason=ExclusionReason.GRADER_DEFECT,
-            evidence=_note("0.25 reward for any identifier-shaped output; instruction coaches the hack."),
-        ),
-    ),
-    "TaskTrove:laion__exp_rpt_crosscodeeval-java-v3": (
-        ExclusionClaim(
-            reason=ExclusionReason.GRADER_DEFECT,
-            evidence=_note("Exact string match on a single line completion. Not agentic, no execution."),
-        ),
-    ),
-    "TaskTrove:laion__exp_rpt_crosscodeeval-typescript-v2": (
-        ExclusionClaim(
-            reason=ExclusionReason.GRADER_DEFECT,
-            evidence=_note("Re-skin of the Python variant with the same free 0.25 tier; metadata still says python."),
-        ),
-    ),
     "TaskTrove:laion__exp_rpt_methods2test-large-v4": (
         ExclusionClaim(
             reason=ExclusionReason.GRADER_DEFECT,

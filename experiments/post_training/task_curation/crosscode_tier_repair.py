@@ -15,31 +15,18 @@ instruction. The removed tiers are recorded in the repair lineage.
 """
 
 import argparse
-import hashlib
 import json
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 
 import pyarrow.parquet as pq
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import hf_hub_download
 from taskcompendium.identity import task_spec_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
-from experiments.post_training.task_curation.excluded_population_conversion import repin_license_receipt
-from experiments.post_training.task_curation.harbor_cohort_release import release_repo
-from experiments.post_training.task_curation.license_binding import (
-    LICENSE_RECEIPT_INDEX,
-    AppendWouldRewriteSharedShard,
-    append_license_receipt,
-    read_license_receipts,
-)
-from experiments.post_training.task_curation.license_publication import (
-    check_publication,
-    licensed_dataset_card,
-    prepare_license_publication,
-)
+from experiments.post_training.task_curation.harbor_cohort_release import release_repo as conversion_release_repo
+from experiments.post_training.task_curation.license_publication import publish_licensed_population
 from experiments.post_training.task_curation.native_source_conversion import (
     write_native_conversion_artifacts,
 )
@@ -103,14 +90,27 @@ def repaired_instruction(text: str) -> str:
 
 
 def repair_task(task: TaskSpec) -> TaskSpec:
-    """Replace the tier-scoring verifier and the coaching instruction; record the lineage."""
+    """Replace the tier-scoring verifier, the coaching instruction AND the public
+    conversation message; record the lineage.
+
+    The scoring hints live in TWO places: the private ``instruction.md`` resource and
+    the public conversation message (the task's context event — the text the actor
+    actually reads). The SAMPLE QC caught the first repair repairing only the
+    resource (87/100 csharp tasks flagged: the public contract misstated the rubric).
+    Both surfaces get the same surgery.
+    """
     verifier = {resource.path: resource for resource in task.resources.verifier}
     script = verifier.get("tests/test.sh")
     instruction = verifier.get("instruction.md")
     if script is None or instruction is None:
         raise ValueError(f"{task.id}: the package carries no tests/test.sh or instruction.md to repair")
     original_script = resource_bytes(script).decode()
-    if "4-tier" not in original_script and "3/leading-identifier" not in original_script:
+    # A task needs the repair while EITHER surface carries the scoring hints: the
+    # v1-repaired releases cleaned the verifier but left the public message coached.
+    public_coached = any(
+        isinstance(event.content, str) and SCORING_SECTION_START in event.content for event in task.context.events
+    )
+    if "4-tier" not in original_script and "3/leading-identifier" not in original_script and not public_coached:
         return task
     provenance = {
         "version": REPAIR_VERSION,
@@ -120,13 +120,18 @@ def repair_task(task: TaskSpec) -> TaskSpec:
     }
     updated = []
     for resource in task.resources.verifier:
-        if resource.path == "tests/test.sh":
+        # Each surface repairs only when IT still carries the hints: the v1-repaired
+        # releases cleaned the verifier and the resource instruction but left the
+        # public message coached — the pass-through must not force a full rewrite.
+        if resource.path == "tests/test.sh" and (
+            "4-tier" in original_script or "3/leading-identifier" in original_script
+        ):
             updated.append(
                 inline_resource("tests/test.sh", REPAIRED_TEST_SCRIPT.encode()).model_copy(
                     update={"mode": resource.mode, "mtime_ns": resource.mtime_ns}
                 )
             )
-        elif resource.path == "instruction.md":
+        elif resource.path == "instruction.md" and SCORING_SECTION_START in resource_bytes(instruction).decode():
             updated.append(
                 inline_resource(
                     "instruction.md", repaired_instruction(resource_bytes(instruction).decode()).encode()
@@ -134,13 +139,31 @@ def repair_task(task: TaskSpec) -> TaskSpec:
             )
         else:
             updated.append(resource)
+    # The public conversation message: the same scoring-section surgery.
+    events = []
+    public_repaired = 0
+    for event in task.context.events:
+        content = event.content
+        if isinstance(content, str) and SCORING_SECTION_START in content:
+            events.append(event.model_copy(update={"content": repaired_instruction(content)}))
+            public_repaired += 1
+        else:
+            events.append(event)
+    context = task.context.model_copy(update={"events": tuple(events)})
     repaired = task.model_copy(
         update={
+            "context": context,
             "resources": task.resources.model_copy(
                 update={
                     "verifier": tuple(updated),
+                    # The v1-repaired rows already carry a provenance resource — replace it
+                    # (a path collision) with the fresh lineage.
                     "oracle": (
-                        *task.resources.oracle,
+                        *(
+                            resource
+                            for resource in task.resources.oracle
+                            if resource.path != "taskcompendium/crosscode-tier-repair.json"
+                        ),
                         inline_resource(
                             "taskcompendium/crosscode-tier-repair.json", json.dumps(provenance, indent=1).encode()
                         ),
@@ -151,17 +174,12 @@ def repair_task(task: TaskSpec) -> TaskSpec:
         }
     )
     repaired = TaskSpec.model_validate_json(repaired.model_dump_json())
+    if public_repaired == 0:
+        raise ValueError(f"{task.id}: the public conversation message carries no scoring section to repair")
     return repaired
 
 
-@dataclass(frozen=True)
-class RepairedPopulation:
-    tasks: list[dict]
-    receipts: list[dict]
-    counts: dict[str, int]
-
-
-def convert_population(rows: list[dict]) -> RepairedPopulation:
+def convert_population(rows: list[dict]) -> tuple[list[dict], list[dict], dict]:
     """Repair every row; strict — a row without the tier verifier fails the run."""
     converted, receipts = [], []
     for row in rows:
@@ -172,7 +190,7 @@ def convert_population(rows: list[dict]) -> RepairedPopulation:
             {
                 "path": task.source.row,
                 "task_spec": serialized,
-                "task_sha256": hashlib.sha256(serialized.encode()).hexdigest(),
+                "task_sha256": __import__("hashlib").sha256(serialized.encode()).hexdigest(),
             }
         )
         receipts.append(
@@ -186,7 +204,7 @@ def convert_population(rows: list[dict]) -> RepairedPopulation:
             }
         )
     counts = {"input_rows": len(rows), "converted_rows": len(converted), "excluded_rows": 0}
-    return RepairedPopulation(tasks=converted, receipts=receipts, counts=counts)
+    return converted, receipts, counts
 
 
 def load_population(release_repo: str, release_revision: str) -> list[dict]:
@@ -198,8 +216,8 @@ def publish(
     *,
     source_id: str,
     intended_use: str,
-    input_release_repo: str,
-    input_release_revision: str,
+    input_repo: str,
+    input_revision: str,
     output_root: Path,
     artifact_version: str,
     converted: list[dict],
@@ -214,56 +232,34 @@ def publish(
     manifest["repair"] = {
         "version": REPAIR_VERSION,
         "removed_tiers": list(REMOVED_TIERS),
-        "input_release": {"repo": input_release_repo, "revision": input_release_revision},
+        "input_release": {"repo": input_repo, "revision": input_revision},
     }
     (output_root / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
-    previous = read_license_receipts(LICENSE_RECEIPT_INDEX).get(source_id)
-    if previous is None:
-        raise ValueError(f"{source_id}: no license receipt to re-pin for the repaired release")
-    publication = prepare_license_publication(previous, output_root, use=intended_use)
     body = (
         "Private research artifact. The tier-repair of a base-pinned conversion release: the 4-tier "
         "forgiving verifier is replaced with the clean normalized exact-text contract (reward 1.0 on a "
         "match, 0 otherwise; no partial-credit tiers), and the instruction's scoring hints are removed. "
         "The removed tiers are recorded in the repair lineage and the per-task conversion receipts. "
-        f"Input release: {input_release_repo}@{input_release_revision}. Converted: {manifest['converted_rows']}; "
+        f"Input release: {input_repo}@{input_revision}. Converted: {manifest['converted_rows']}; "
         f"input: {manifest['input_rows']}.\n"
     )
-    (output_root / "README.md").write_text(
-        licensed_dataset_card(body, publication, pretty_name="Tier-repaired conversion release")
+    # The repair derives from the input release's receipt; the chokepoint carries that
+    # licence onto the repaired pin and registers the receipt before returning.
+    publication = publish_licensed_population(
+        source_id,
+        conversion_release_repo(source_id, artifact_version),
+        output_root,
+        ("tasks.parquet", "manifest.json", "conversion-receipts.jsonl"),
+        body=body,
+        pretty_name="Tier-repaired conversion release",
+        use=intended_use,
     )
-    api = HfApi()
-    repo = release_repo(source_id, artifact_version)
-    api.create_repo(repo, repo_type="dataset", private=True, exist_ok=True)
-    if not api.repo_info(repo, repo_type="dataset").private:
-        raise ValueError("Conversion destination must be private")
-    filenames = ["tasks.parquet", "manifest.json", "conversion-receipts.jsonl", "README.md"]
-    commit = api.upload_folder(
-        repo_id=repo,
-        repo_type="dataset",
-        folder_path=str(output_root),
-        allow_patterns=filenames,
-        commit_message="Publish the tier-repaired conversion release",
-    )
-    card_path = Path(api.hf_hub_download(repo, "README.md", repo_type="dataset", revision=commit.oid))
-    bound = repin_license_receipt(previous, repo, commit.oid, card_path.read_bytes())
-    try:
-        index_commit: str | None = append_license_receipt(
-            LICENSE_RECEIPT_INDEX,
-            bound,
-            message=f"Bind {source_id}'s tier-repaired release to its original upstream license",
-        )
-    except AppendWouldRewriteSharedShard as error:
-        LOGGER.warning("receipt append refused for %s: %s", source_id, error)
-        index_commit = None
-    license_check = check_publication(source_id, repo, commit.oid, intended_use)
     return {
         **manifest,
-        "release_repo": repo,
-        "release_revision": commit.oid,
-        "license_index_commit": index_commit,
-        "license_check_verdict": license_check["verdict"],
+        "release_repo": publication.repo,
+        "release_revision": publication.revision,
+        "license_check_verdict": publication.license_check["verdict"],
     }
 
 
@@ -281,29 +277,28 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
     rows = load_population(args.release_repo, args.release_revision)
-    population = convert_population(rows)
+    converted, receipts, counts = convert_population(rows)
     if not args.run:
         manifest = write_native_conversion_artifacts(
-            population.tasks,
-            population.receipts,
-            population.counts,
-            output_root=str(args.output_root),
-            source_id=args.source_id,
+            converted, receipts, counts, output_root=str(args.output_root), source_id=args.source_id
         )
         print(
-            json.dumps({"plan": manifest, "release_repo": release_repo(args.source_id, args.artifact_version)}, indent=2)
+            json.dumps(
+                {"plan": manifest, "release_repo": conversion_release_repo(args.source_id, args.artifact_version)},
+                indent=2,
+            )
         )
         return
     result = publish(
         source_id=args.source_id,
         intended_use=args.intended_use,
-        input_release_repo=args.release_repo,
-        input_release_revision=args.release_revision,
+        input_repo=args.release_repo,
+        input_revision=args.release_revision,
         output_root=args.output_root,
         artifact_version=args.artifact_version,
-        converted=population.tasks,
-        receipts=population.receipts,
-        counts=population.counts,
+        converted=converted,
+        receipts=receipts,
+        counts=counts,
     )
     payload = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.report is not None:

@@ -312,7 +312,7 @@ def main() -> None:
     args = parser.parse_args()
     configure_coreweave_s3()
     license_receipt = read_license_receipts(LICENSE_RECEIPT_INDEX)[SOURCE]
-    require_license(license_receipt, SOURCE, DATASET, REVISION, "eval", ban=None)
+    require_license(license_receipt, SOURCE, "eval", ban=None)
     require_unbanned(SOURCE, DATASET, license_receipt, "eval")
     runtime = CampaignRuntime()
     with artifact_prefix(args.artifact_root):

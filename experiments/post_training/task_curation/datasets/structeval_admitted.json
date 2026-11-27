@@ -1,0 +1,6 @@
+{
+  "repo": "open-athena/marin-rl-data-atlas-registry",
+  "revision": "cf9124c5ce420fafed744c655ba0a046772d5473",
+  "path": "experiments/post_training/task_curation/datasets/structeval_admitted.json",
+  "sha256": "6605a636d5d130de265dd46e7e66deafb8dae121ff5c0d6e93b8afaadcf63fdb"
+}

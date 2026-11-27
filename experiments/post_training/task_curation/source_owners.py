@@ -310,6 +310,18 @@ SOURCE_OWNERS: dict[str, SourceOwner] = {
         owner="ingest B · OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
         note="admitted atlas-2026.11.27 intake; surfaces at the load",
     ),
+    "Tiger-lab:AceCode-89K": SourceOwner(
+        owner="ingest B · OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+        note="admitted R41 intake; surfaces at the load",
+    ),
+    "Newfacade:LeetCodeDataset": SourceOwner(
+        owner="ingest B · OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+        note="admitted R41 intake; surfaces at the load",
+    ),
+    "Tiger-lab:StructEval": SourceOwner(
+        owner="ingest B · OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+        note="admitted R41 eval-use intake; surfaces at the load",
+    ),
     "Nvidia:Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1": SourceOwner(
         owner="ingest B · OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
         note="admitted R41 intake; surfaces at the load",
@@ -783,8 +795,8 @@ SOURCE_OWNERS: dict[str, SourceOwner] = {
         note="excluded",
     ),
     "pafitis:hardmath@rhs": SourceOwner(
-        owner="ingest A · ses_de826fccdffe (+ atlas-grader-reseal for the grader)",
-        note="P0 republish of the repaired variant; grader reseal in flight",
+        owner="ingest A · OpenCode ses_de6edbb89ffeqVOdgWg76ZcV3f (+ atlas-grader-reseal for the grader)",
+        note="admitted at recipe version 2; surfaces at the load",
     ),
     "project-numina:NuminaMath-LEAN": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",

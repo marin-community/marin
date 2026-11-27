@@ -14,7 +14,6 @@ from urllib.parse import quote, urlsplit
 import yaml
 from finestore.rl.licenses import (
     LicenseCheckVerdict,
-    LicenseDecision,
     LicenseDecisionKind,
     LicenseEvidence,
     LicenseReceipt,
@@ -27,10 +26,7 @@ from huggingface_hub import DatasetCard, HfApi, hf_hub_download
 from huggingface_hub.hf_api import RepoFile
 
 from experiments.post_training.task_curation.license_binding import (
-    LICENSE_RECEIPT_HISTORY_INDEX,
     LICENSE_RECEIPT_INDEX,
-    exact_pin_license_receipt,
-    read_license_receipt_history,
     read_license_receipts,
 )
 from experiments.post_training.task_curation.license_resolution import (
@@ -62,6 +58,7 @@ class PreparedPrivateDataset:
     folder: Path
     file_hashes: dict[str, str]
     lineage: dict | None = None
+    license_source: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -79,9 +76,10 @@ def prepare_private_dataset(
     *,
     use: str,
     lineage: dict | None = None,
+    license_source: dict | None = None,
 ) -> PreparedPrivateDataset:
     """Validate the input grant and freeze upload bytes without repository writes."""
-    require_publication_license(license_receipt, source_id, license_receipt.dataset_id, license_receipt.revision, use)
+    require_publication_license(license_receipt, source_id, license_receipt.dataset_id, use)
     check_publication(source_id, license_receipt.dataset_id, license_receipt.revision, use, lineage=lineage)
     if "README.md" not in files or len(files) != len(set(files)):
         raise ValueError("Private publication needs one card and a unique file inventory")
@@ -91,7 +89,7 @@ def prepare_private_dataset(
     for name in files:
         with (folder / name).open("rb") as stream:
             hashes[name] = hashlib.file_digest(stream, "sha256").hexdigest()
-    return PreparedPrivateDataset(source_id, repo, use, folder, hashes, lineage)
+    return PreparedPrivateDataset(source_id, repo, use, folder, hashes, lineage, license_source)
 
 
 def publish_private_dataset(prepared: PreparedPrivateDataset) -> PublishedPrivateDataset:
@@ -121,6 +119,21 @@ def publish_private_dataset(prepared: PreparedPrivateDataset) -> PublishedPrivat
         existing_private = api.repo_info(prepared.repo, repo_type="dataset")
         if not existing_private.private:
             raise ValueError("Private publication destination is not private") from error
+        if "README.md" in existing and prepared.license_source is not None:
+            # A different population must never overwrite this repo's card: the reused
+            # destination may only carry this publication's declared licence pin.
+            existing_card = Path(
+                hf_hub_download(prepared.repo, "README.md", repo_type="dataset", revision=existing_private.sha)
+            ).read_bytes()
+            declared = DatasetCard(existing_card.decode()).data.to_dict().get("license_source")
+            if declared is not None and (
+                declared.get("dataset_id"),
+                declared.get("revision"),
+            ) != (prepared.license_source["dataset_id"], prepared.license_source["revision"]):
+                raise ValueError(
+                    f"Private publication repo declares another licence source: {prepared.repo}; "
+                    f"use a new version name for this population"
+                ) from error
         logging.info("PUBLICATION_REPO_REUSED repo=%s files=%d", prepared.repo, len(existing))
     initial = api.repo_info(prepared.repo, repo_type="dataset")
     if not initial.private:
@@ -143,6 +156,73 @@ def publish_private_dataset(prepared: PreparedPrivateDataset) -> PublishedPrivat
             raise ValueError(f"Private publication readback changed: {name}")
     gate = check_publication(prepared.source_id, prepared.repo, commit.oid, prepared.use, lineage=prepared.lineage)
     return PublishedPrivateDataset(commit.oid, gate)
+
+
+@dataclass(frozen=True)
+class PublishedLicensedPopulation:
+    """A published revision carrying its source's ingest-time licence record."""
+
+    source_id: str
+    repo: str
+    revision: str
+    ingest_record: tuple[str, str]
+    license_source: dict
+    license_check: dict
+    file_hashes: dict[str, str]
+
+
+def publish_licensed_population(
+    source_id: str,
+    repo: str,
+    folder: Path,
+    files: tuple[str, ...],
+    *,
+    body: str,
+    pretty_name: str,
+    use: str,
+    lineage: dict | None = None,
+    index_path: Path = LICENSE_RECEIPT_INDEX,
+) -> PublishedLicensedPopulation:
+    """Publish a revision of an ingested source; its ingest licence record governs.
+
+    A licence is ingest-time provenance (user ruling 2026-11-27): the publication looks
+    the licence up by source_id, the card's ``license_source`` declares the ingest
+    record's upstream provenance (its permissive licence set, for a source repaired at
+    ingest), the upload is byte-frozen, read back and private, and the new pin passes
+    the publication gate on the record — no per-pin re-resolution, no per-revision
+    receipt, and nothing is written to the receipts registry. A source without a record
+    refuses: it is licensed once, at ingest, before any revision publishes.
+    """
+    ingest = read_license_receipts(index_path).get(source_id)
+    if ingest is None:
+        raise ValueError(
+            f"{source_id}: no ingest licence record; a source is licensed once at ingest — "
+            "register its receipt before publishing any revision"
+        )
+    publication = prepare_license_publication(ingest, folder, use=use, lineage=lineage)
+    license_source = publication.metadata["license_source"]
+    (folder / "README.md").write_text(licensed_dataset_card(body, publication, pretty_name=pretty_name))
+    upload_files = tuple(dict.fromkeys((*files, "README.md", *(notice.name for notice in publication.notice_files))))
+    prepared = prepare_private_dataset(
+        source_id,
+        repo,
+        folder,
+        upload_files,
+        ingest,
+        use=use,
+        lineage=lineage,
+        license_source=license_source,
+    )
+    published = publish_private_dataset(prepared)
+    return PublishedLicensedPopulation(
+        source_id=source_id,
+        repo=repo,
+        revision=published.revision,
+        ingest_record=(ingest.dataset_id, ingest.revision),
+        license_source=license_source,
+        license_check=published.license_check,
+        file_hashes=prepared.file_hashes,
+    )
 
 
 def _package_wheel_url(receipt: LicenseReceipt, evidence: LicenseEvidence) -> tuple[str, bytes]:
@@ -205,11 +285,15 @@ def _prepare_package_publication(receipt: LicenseReceipt, evidence: LicenseEvide
 
 
 def require_publication_license(
-    receipt: LicenseReceipt | None, source_id: str, dataset_id: str | None, revision: str | None, use: str
+    receipt: LicenseReceipt | None, source_id: str, dataset_id: str | None, use: str
 ) -> None:
-    """Check current source and upstream registry bans before the pinned license grant."""
+    """Check current source and upstream registry bans, then the source's licence record.
+
+    The record is the source's ingest-time licence (ruling 2026-11-27); the dataset id
+    feeds the registry ban lookup, and the record's own verdict governs.
+    """
     require_unbanned(source_id, dataset_id, receipt, use)
-    require_license(receipt, source_id, dataset_id, revision, use, ban=None)
+    require_license(receipt, source_id, use, ban=None)
 
 
 def lineage_folder_identifier(record: dict) -> str:
@@ -234,7 +318,7 @@ def prepare_license_publication(
     receipt: LicenseReceipt, output: Path, *, use: str, lineage: dict | None = None, folders: list[str] | None = None
 ) -> LicensePublication:
     """Archive the pinned grant and notices after validating the exact input receipt."""
-    require_publication_license(receipt, receipt.source_id, receipt.dataset_id, receipt.revision, use)
+    require_publication_license(receipt, receipt.source_id, receipt.dataset_id, use)
     package_evidence = [
         item
         for item in receipt.evidence
@@ -332,15 +416,22 @@ def prepare_license_publication(
     else:
         check = check_license(receipt)
         if check.verdict is LicenseCheckVerdict.PASS:
-            # The published card states the license the checker verified at the resolved
-            # source, not the upstream card's own declared field, which stays archived.
-            citation = next(
-                (item for item in source_evidence if license_verdict(tuple(item.license_ids)) is LicenseVerdict.ALLOWED),
-                None,
+            # The published card states the licence set the checker verified at the
+            # resolved source — every permissive item's identifier, not just the first
+            # citation — so a source repaired at ingest to permissive-only items carries
+            # its whole set forward (user ruling 2026-11-27). The upstream card's own
+            # declared field stays archived.
+            identifiers = sorted(
+                {
+                    identifier.lower()
+                    for item in source_evidence
+                    if license_verdict(tuple(item.license_ids)) is LicenseVerdict.ALLOWED
+                    for identifier in item.license_ids
+                }
+                - {"missing"}
             )
-            if citation is None:
+            if not identifiers:
                 raise ValueError("Publication has no checked permissive license evidence for its resolved source")
-            identifiers = sorted(set(citation.license_ids) - {"missing"})
             metadata["license"] = identifiers[0] if len(identifiers) == 1 else identifiers
         elif "license" not in metadata:
             identifiers = sorted(
@@ -391,47 +482,52 @@ def licensed_dataset_card(body: str, publication: LicensePublication, *, pretty_
     )
 
 
-def recorded_lineage_exception(source_id: str, dataset_id: str, revision: str, use: str) -> LicenseDecision | None:
-    """The user-cleared parent exception bound to this exact pin in the receipts registry.
-
-    A lineage receipt binds one source identity at one resolved upstream pin; its typed
-    exception decision records the user's clearance for a scoped use. Only that exact
-    combination rescues a card-check escalation: the receipt must sit at the published
-    pin, carry the resolved upstream, and hold an approved exception for this use.
-    """
-    receipt = exact_pin_license_receipt(
-        source_id,
-        dataset_id,
-        revision,
-        read_license_receipts(LICENSE_RECEIPT_INDEX),
-        read_license_receipt_history(LICENSE_RECEIPT_HISTORY_INDEX),
-    )
-    if receipt is None:
-        return None
-    if receipt.resolved_source is None:
-        return None
-    return next(
-        (
-            decision
-            for decision in receipt.decisions
-            if decision.kind is LicenseDecisionKind.EXCEPTION and decision.approved and use in decision.scope
-        ),
-        None,
-    )
-
-
 def check_publication(source_id: str, dataset_id: str, revision: str, use: str, *, lineage: dict | None = None) -> dict:
-    """Require the new private pin's own checker result before returning publication evidence.
+    """Require the publication's licence: the source's ingest record governs every revision.
 
-    A card-check escalation stays blocked unless the receipts registry binds this exact
-    repo@revision to a user-cleared parent lineage exception covering the publication's
-    use; the recorded decision then carries the pass and stays in the evidence. Fail
+    A source_id with an ingest record passes on that record — the gate looks the licence
+    up by source_id, never re-resolves the new repo@revision card, and never refuses a
+    revision for lacking its own upstream pin declaration (ruling 2026-11-27). Bans still
+    apply at every revision. A source without a record is being ingested by this
+    publication: the full ban-and-doubt check runs at this pin, and a card-check
+    escalation stays blocked unless the receipts registry binds this exact repo@revision
+    to a user-cleared parent lineage exception covering the publication's use. Fail
     verdicts never clear: a restricted or banned pin fails its own publication — except
     at a repackager pin whose folder-lineage receipt carries an approved per-folder
     decision (the repackager-license-follows-upstream ruling): the license follows each
     included folder's original upstream, so the repackager's own empty card does not
     fail the publication.
     """
+    ingest = read_license_receipts(LICENSE_RECEIPT_INDEX).get(source_id)
+    if ingest is not None:
+        # Ingest-time provenance: bans first (they stay at every revision), then the
+        # record's own verdict and use scope. The new pin is never resolved.
+        require_unbanned(source_id, dataset_id, ingest, use)
+        require_license(ingest, source_id, use, ban=None)
+        result = check_license(ingest, source_license_ban(source_id, dataset_id, ingest, use))
+        evidence = {
+            **result.model_dump(mode="json"),
+            "receipt": ingest.model_dump(mode="json"),
+            "ingest_record": {"dataset_id": ingest.dataset_id, "revision": ingest.revision},
+        }
+        if result.verdict is LicenseCheckVerdict.PASS:
+            return evidence
+        exception = next(
+            (
+                decision
+                for decision in ingest.decisions
+                if decision.kind is LicenseDecisionKind.EXCEPTION and decision.approved and use in decision.scope
+            ),
+            None,
+        )
+        if exception is not None:
+            # require_license already cleared this record for the use; report the carry.
+            return {
+                **evidence,
+                "verdict": LicenseCheckVerdict.PASS.value,
+                "ingest_exception": exception.model_dump(mode="json"),
+            }
+        raise ValueError(f"Published pin failed its exact-pin license check: {json.dumps(evidence)}")
     target = LicenseTarget(
         source_id, dataset_id, revision, f"https://huggingface.co/datasets/{dataset_id}/tree/{revision}"
     )
@@ -440,14 +536,6 @@ def check_publication(source_id: str, dataset_id: str, revision: str, use: str, 
     evidence = {**result.model_dump(mode="json"), "receipt": receipt.model_dump(mode="json")}
     if result.verdict is LicenseCheckVerdict.PASS:
         return evidence
-    if result.verdict is LicenseCheckVerdict.ESCALATE:
-        exception = recorded_lineage_exception(source_id, dataset_id, revision, use)
-        if exception is not None:
-            return {
-                **evidence,
-                "verdict": LicenseCheckVerdict.PASS.value,
-                "lineage_exception": exception.model_dump(mode="json"),
-            }
     if result.verdict is LicenseCheckVerdict.FAIL and lineage is not None:
         record = lineage.get(source_id)
         resolved = (result.dataset_id, result.revision)

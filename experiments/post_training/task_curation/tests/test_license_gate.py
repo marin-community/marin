@@ -64,11 +64,11 @@ def test_license_evidence_controls_permission(license_id, classification, allowe
     receipt = LicenseReceipt.model_validate_json(receipt.model_dump_json())
     assert receipt.classification is classification
     if allowed:
-        require_license(receipt, "Marin:fixture", "fixture/data", "a" * 40, "train", ban=None)
+        require_license(receipt, "Marin:fixture", "train", ban=None)
         assert receipt.evidence[0].sha256
     else:
         with pytest.raises(ValueError, match="blocks ingest and admission"):
-            require_license(receipt, "Marin:fixture", "fixture/data", "a" * 40, "train", ban=None)
+            require_license(receipt, "Marin:fixture", "train", ban=None)
 
 
 def test_restrictive_file_overrides_permissive_card_and_affirmative_terms_do_not_restrict():
@@ -104,32 +104,18 @@ def test_scoped_exception_is_preserved_and_cannot_override_a_ban():
         issue_url=BANNED_SOURCES_ISSUE,
     )
     receipt = LicenseReceipt.model_validate_json(receipt.model_copy(update={"decisions": [approval]}).model_dump_json())
-    require_license(receipt, receipt.source_id, receipt.dataset_id, receipt.revision, "train", ban=None)
+    require_license(receipt, receipt.source_id, "train", ban=None)
     assert receipt.decisions[0].issue_url == BANNED_SOURCES_ISSUE
     with pytest.raises(ValueError, match="blocks ingest"):
-        require_license(receipt, receipt.source_id, receipt.dataset_id, receipt.revision, "eval", ban=None)
-    with pytest.raises(ValueError, match="another source revision"):
-        require_license(receipt, receipt.source_id, receipt.dataset_id, "b" * 40, "train", ban=None)
+        require_license(receipt, receipt.source_id, "eval", ban=None)
+    with pytest.raises(ValueError, match="belongs to another source"):
+        require_license(receipt.model_copy(update={"source_id": "Other:source"}), receipt.source_id, "train", ban=None)
     # Informational provenance flags alone do not override a dataset-level grant or scoped user decision.
     for flag in ("bundled_third_party", "model_generated_outputs"):
-        require_license(
-            receipt.model_copy(update={flag: True}),
-            receipt.source_id,
-            receipt.dataset_id,
-            receipt.revision,
-            "train",
-            ban=None,
-        )
+        require_license(receipt.model_copy(update={flag: True}), receipt.source_id, "train", ban=None)
     ban = approval.model_copy(update={"kind": LicenseDecisionKind.BAN, "approved": False})
     with pytest.raises(ValueError, match="bans this source"):
-        require_license(
-            receipt.model_copy(update={"decisions": [approval, ban]}),
-            receipt.source_id,
-            receipt.dataset_id,
-            receipt.revision,
-            "train",
-            ban=None,
-        )
+        require_license(receipt.model_copy(update={"decisions": [approval, ban]}), receipt.source_id, "train", ban=None)
 
 
 def test_hardmath_exception_admits_exactly_this_source_and_scope(monkeypatch):

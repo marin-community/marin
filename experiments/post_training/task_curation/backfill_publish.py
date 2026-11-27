@@ -4,9 +4,10 @@
 """Publish one backfilled population as a private open-athena release with a read-back receipt.
 
 Issue #11976 step 3: upload the requirement-backfilled TaskSpecs as a NEW private dataset
-revision (the published source revision is never touched), verify the upload by reading
-every byte back, and record the exact pin the variant declaration and the Atlas queue
-bind. HF credentials come from the job environment; the release stays private.
+revision (the published source revision is never touched) through the licensed
+publication chokepoint: the card declares the parent pin's resolved upstream, every
+byte is read back, and the new pin's receipt registers before the receipt is recorded.
+HF credentials come from the job environment; the release stays private.
 """
 
 import argparse
@@ -18,9 +19,10 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from huggingface_hub import HfApi, hf_hub_download
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+
+from experiments.post_training.task_curation.license_publication import publish_licensed_population
 
 LOGGER = logging.getLogger(__name__)
 
@@ -84,47 +86,35 @@ def main() -> None:
     parser.add_argument("--output", required=True, help="The evidence prefix for the publication receipt")
     parser.add_argument("--policy-revision", required=True)
     parser.add_argument("--parent-task-specs-sha256", required=True)
+    parser.add_argument("--use", required=True, choices=["train", "eval"], help="The publication use")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     configure_coreweave_s3()
-    api = HfApi()
 
     rows = read_population(args.population)
     LOGGER.info("Read %d backfilled tasks from %s", len(rows), args.population)
     table = pa.Table.from_pylist(rows, schema=TASK_SCHEMA)
 
-    api.create_repo(args.repo, repo_type="dataset", private=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="backfill-release-") as scratch:
         root = Path(scratch)
         tasks_path = root / "tasks.parquet"
         with tasks_path.open("wb") as stream:
             pq.write_table(table, stream, compression="zstd")
         tasks_sha256 = hashlib.sha256(tasks_path.read_bytes()).hexdigest()
-        card = dataset_card(args.source_id, args.parent_task_specs_sha256, args.policy_revision, len(rows))
-        api.upload_file(
-            path_or_fileobj=str(tasks_path),
-            path_in_repo="tasks.parquet",
-            repo_id=args.repo,
-            repo_type="dataset",
-        )
-        api.upload_file(
-            path_or_fileobj=card.encode(),
-            path_in_repo="README.md",
-            repo_id=args.repo,
-            repo_type="dataset",
+        body = dataset_card(args.source_id, args.parent_task_specs_sha256, args.policy_revision, len(rows))
+        publication = publish_licensed_population(
+            args.source_id,
+            args.repo,
+            root,
+            ("tasks.parquet",),
+            body=body,
+            pretty_name=f"{args.source_id} requirement-backfilled release",
+            use=args.use,
         )
 
-    revision = api.repo_info(args.repo, repo_type="dataset").sha
-    LOGGER.info("Uploaded %s at revision %s", args.repo, revision)
-
-    downloaded = hf_hub_download(args.repo, "tasks.parquet", repo_type="dataset", revision=revision)
-    readback = hashlib.sha256(Path(downloaded).read_bytes()).hexdigest()
-    if readback != tasks_sha256:
-        raise ValueError(f"Published release readback differs: {args.source_id}")
-    if not api.repo_info(args.repo, repo_type="dataset", revision=revision).private:
-        raise ValueError(f"Published release is not private: {args.source_id}")
-    LOGGER.info("Read-back verified: %s (%d bytes), repo private", tasks_sha256, Path(downloaded).stat().st_size)
+    revision = publication.revision
+    LOGGER.info("Published %s at revision %s", args.repo, revision)
 
     receipt = {
         "source_id": args.source_id,
@@ -135,6 +125,8 @@ def main() -> None:
         "population": args.population,
         "policy_revision": args.policy_revision,
         "parent_task_specs_sha256": args.parent_task_specs_sha256,
+        "license_source": publication.license_source,
+        "license_check_verdict": publication.license_check["verdict"],
     }
     output = StoragePath(args.output)
     (output / "publication.json").write_text(json.dumps(receipt, indent=2) + "\n")

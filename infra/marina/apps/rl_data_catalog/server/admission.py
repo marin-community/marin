@@ -151,8 +151,6 @@ def require_declaration_license(declaration: SourceDeclaration) -> None:
     require_license(
         declaration.license_receipt,
         declaration.id,
-        declaration.dataset_id,
-        declaration.dataset_revision,
         declaration.intended_use.value,
         ban=None,
     )

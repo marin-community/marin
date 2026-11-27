@@ -21,12 +21,7 @@ from huggingface_hub import DatasetCard
 from huggingface_hub.hf_api import RepoFile
 from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation import (
-    license_binding,
-    license_publication,
-    license_resolution,
-    native_quick,
-)
+from experiments.post_training.task_curation import license_publication, license_resolution, native_quick
 from experiments.post_training.task_curation.license_resolution import license_evidence
 from infra.marina.apps.rl_data_catalog.server import licensing
 
@@ -438,14 +433,14 @@ def test_new_private_pin_rechecks_restrictive_terms(tmp_path, monkeypatch):
 
 
 def test_native_publication_binds_the_input_receipt_before_reading_tasks(tmp_path):
-    receipt = source_receipt(b"---\nlicense: apache-2.0\n---\n")
-    entry = {"id": receipt.source_id, "dataset_id": DATASET, "dataset_revision": "c" * 40}
-    with pytest.raises(ValueError, match="License"):
+    """The QUICK publication gate fails closed on missing licence evidence before any task read."""
+    entry = {"id": "fixture:source", "dataset_id": DATASET, "dataset_revision": "c" * 40}
+    with pytest.raises(ValueError, match="License evidence is missing"):
         native_quick.publish_quick(
             entry,
             tmp_path / "no-task-files",
             "open-athena/new-private-pin",
-            receipt,
+            None,
             intended_use=IntendedUse.TRAIN,
             data_restriction=DataRestriction.OPEN,
         )
@@ -485,9 +480,7 @@ def test_new_private_pin_cannot_hide_a_resolved_upstream_ban(monkeypatch):
     with pytest.raises(ValueError, match="Recorded upstream ban"):
         license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
     with pytest.raises(ValueError, match="Recorded upstream ban"):
-        license_publication.require_publication_license(
-            receipt, receipt.source_id, receipt.dataset_id, receipt.revision, "train"
-        )
+        license_publication.require_publication_license(receipt, receipt.source_id, receipt.dataset_id, "train")
 
 
 def lineage_receipt(revision: str, scope: list[str], *, with_source: bool = True) -> LicenseReceipt:
@@ -528,41 +521,22 @@ def registered_lineage(monkeypatch, receipt: LicenseReceipt) -> None:
     monkeypatch.setattr(license_publication, "read_license_receipts", lambda path: {receipt.source_id: receipt})
 
 
-def test_check_publication_passes_on_the_recorded_lineage_exception(tmp_path, monkeypatch):
+def test_check_publication_passes_on_the_ingest_record_exception(tmp_path, monkeypatch):
+    """A user-cleared exception recorded at ingest carries to every revision of the source."""
     receipt = lineage_receipt(REVISION, ["train"])
     registered_lineage(monkeypatch, receipt)
     evidence = license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
     assert evidence["verdict"] == "PASS"
     assert evidence["rule_id"] == "E1"
-    assert evidence["lineage_exception"]["scope"] == ["train"]
-    assert evidence["lineage_exception"]["approved"] is True
+    assert evidence["ingest_exception"]["scope"] == ["train"]
+    assert evidence["ingest_exception"]["approved"] is True
 
 
-def test_check_publication_uses_archived_exception_only_at_its_exact_pin_and_scope(monkeypatch):
+def test_check_publication_clears_a_repackager_fail_on_the_folder_lineage_at_ingest(tmp_path, monkeypatch):
+    """The repackager ruling at ingest: the folder lineage carries the pass at a repackager pin."""
     receipt = lineage_receipt(REVISION, ["train"])
-    registered_lineage(monkeypatch, receipt)
-    future = lineage_receipt("e" * 40, ["train"])
-    monkeypatch.setattr(license_publication, "read_license_receipts", lambda path: {future.source_id: future})
-    monkeypatch.setattr(
-        license_binding,
-        "load_referenced_json",
-        lambda path: {"history/part-000.json": {receipt.source_id: receipt.model_dump(mode="json")}},
-    )
-    evidence = license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
-    assert evidence["verdict"] == "PASS"
-    assert evidence["lineage_exception"]["revision"] == receipt.revision
-    with pytest.raises(ValueError, match="Published pin failed"):
-        license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "eval")
-    unrelated = lineage_receipt("f" * 40, ["train"])
-    monkeypatch.setattr(license_publication, "resolve_license", lambda target: unrelated)
-    with pytest.raises(ValueError, match="Published pin failed"):
-        license_publication.check_publication(unrelated.source_id, unrelated.dataset_id, unrelated.revision, "train")
-
-
-def test_check_publication_clears_a_repackager_fail_on_the_folder_lineage(tmp_path, monkeypatch):
-    """The repackager ruling: the folder lineage carries the pass at a repackager pin."""
-    receipt = lineage_receipt(REVISION, ["train"])
-    registered_lineage(monkeypatch, receipt)
+    monkeypatch.setattr(license_publication, "read_license_receipts", lambda path: {})
+    monkeypatch.setattr(license_publication, "resolve_license", lambda target: receipt)
     failing = LicenseCheck(
         source_id=receipt.source_id,
         dataset_id=receipt.dataset_id,
@@ -597,75 +571,19 @@ def test_check_publication_clears_a_repackager_fail_on_the_folder_lineage(tmp_pa
     assert evidence["folder_lineage"]["upstream"] == f"{receipt.dataset_id}@{receipt.revision}"
 
 
-def test_check_publication_ignores_a_lineage_exception_at_another_pin(tmp_path, monkeypatch):
-    receipt = lineage_receipt(REVISION, ["train"])
-    registered = lineage_receipt("e" * 40, ["train"])
-    registered_lineage(monkeypatch, receipt)
-    monkeypatch.setattr(license_publication, "read_license_receipts", lambda path: {registered.source_id: registered})
-    with pytest.raises(ValueError, match="Published pin failed"):
-        license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
-
-
-def test_check_publication_ignores_a_lineage_exception_out_of_scope(tmp_path, monkeypatch):
+def test_check_publication_ignores_an_exception_out_of_scope(tmp_path, monkeypatch):
     receipt = lineage_receipt(REVISION, ["eval"])
     registered_lineage(monkeypatch, receipt)
-    with pytest.raises(ValueError, match="Published pin failed"):
+    with pytest.raises(ValueError, match="blocks ingest"):
         license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
 
 
-def test_check_publication_ignores_a_missing_lineage_receipt(tmp_path, monkeypatch):
-    receipt = lineage_receipt(REVISION, ["train"])
-    registered_lineage(monkeypatch, receipt)
-    monkeypatch.setattr(license_publication, "read_license_receipts", lambda path: {})
-    with pytest.raises(ValueError, match="Published pin failed"):
-        license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
-
-
-def test_check_publication_ignores_an_exception_without_lineage(tmp_path, monkeypatch):
-    receipt = lineage_receipt(REVISION, ["train"], with_source=False)
-    registered_lineage(monkeypatch, receipt)
-    with pytest.raises(ValueError, match="Published pin failed"):
-        license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
-
-
-def test_check_publication_never_clears_a_restricted_pin(tmp_path, monkeypatch):
-    receipt = source_receipt(b"---\nlicense: cc-by-nc-4.0\n---\n").model_copy(
-        update={
-            "resolved_source": LicenseSourcePin(
-                dataset_id="fixture/upstream-parent",
-                revision="d" * 40,
-                url=f"https://huggingface.co/datasets/fixture/upstream-parent/tree/{'d' * 40}",
-                declaration=license_evidence("https://example.test/declaration", b"declared", "wrapper_source"),
-            )
-        }
-    )
-    decision = LicenseDecision(
-        kind="exception",
-        approved=True,
-        who="Fixture user ruling",
-        when="2026-11-15T00:00:00+00:00",
-        source_id=receipt.source_id,
-        dataset_id=receipt.dataset_id,
-        revision=receipt.revision,
-        scope=["train"],
-        rationale="Fixture lineage exception",
-        evidence_urls=["https://huggingface.co/datasets/fixture/upstream-parent/tree/" + "d" * 40],
-        issue_url="https://github.com/marin-community/marin/issues/11497",
-    )
-    receipt = receipt.model_copy(update={"decisions": [decision]})
-    registered_lineage(monkeypatch, receipt)
-    with pytest.raises(ValueError, match="Published pin failed"):
-        license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
-
-
-@pytest.mark.parametrize("revision", [REVISION, "b" * 40])
-def test_publication_license_gate_calls_current_checker_with_exact_pin(revision):
+def test_publication_license_gate_evaluates_the_source_record():
+    """The gate looks the licence up by source_id: any revision inherits the record."""
     receipt = source_receipt(b"---\nlicense: apache-2.0\n---\n")
-    if revision != REVISION:
-        with pytest.raises(ValueError, match="another source revision"):
-            license_publication.require_publication_license(receipt, receipt.source_id, DATASET, revision, "train")
-        return
-    license_publication.require_publication_license(receipt, receipt.source_id, DATASET, revision, "train")
+    license_publication.require_publication_license(receipt, receipt.source_id, DATASET, "train")
+    with pytest.raises(ValueError, match="belongs to another source"):
+        license_publication.require_publication_license(receipt, "Other:source", DATASET, "train")
 
 
 def test_private_publication_reuses_its_own_prior_attempt_repo(tmp_path, monkeypatch):
@@ -726,4 +644,273 @@ def test_private_publication_rejects_a_repo_with_other_content(tmp_path, monkeyp
         receipt.source_id, repo, tmp_path, ("README.md", "tasks.parquet"), receipt, use="train"
     )
     with pytest.raises(ValueError, match="already exists with other content"):
+        license_publication.publish_private_dataset(prepared)
+
+
+def test_licensed_population_publishes_on_the_ingest_record(tmp_path, monkeypatch):
+    """The chokepoint publishes a revision on the source's ingest record: the card declares
+    the record's provenance, the new pin passes the gate by source_id lookup, and the
+    registry is never written per revision (user ruling 2026-11-27)."""
+    card = b"---\nlicense: mit\n---\n# Dataset\n"
+    ingest = source_receipt(card)
+    (tmp_path / "tasks.parquet").write_bytes(b"population bytes")
+    repo = "open-athena/fixture-population"
+    revision = "d" * 40
+    writes = []
+
+    class Hub:
+        def dataset_info(self, dataset, *, revision):
+            return SimpleNamespace(sha=revision, siblings=[SimpleNamespace(rfilename="README.md")])
+
+        def list_repo_tree(self, dataset, *, repo_type, revision, recursive):
+            assert (dataset, repo_type, revision, recursive) == (DATASET, "dataset", REVISION, True)
+            return [RepoFile(path="README.md", size=len(card), oid="b" * 40)]
+
+        def create_repo(self, **kwargs):
+            assert kwargs == {"repo_id": repo, "repo_type": "dataset", "private": True, "exist_ok": False}
+            writes.append("create")
+
+        def repo_info(self, dataset, **kwargs):
+            assert dataset == repo and kwargs["repo_type"] == "dataset"
+            return SimpleNamespace(private=True, sha=kwargs.get("revision", "c" * 40))
+
+        def upload_folder(self, **kwargs):
+            assert set(kwargs["allow_patterns"]) == {
+                "README.md",
+                "tasks.parquet",
+                "UPSTREAM_README.md",
+                "publication-provenance.json",
+            }
+            writes.append("upload")
+            return SimpleNamespace(oid=revision)
+
+    upstream = tmp_path / "upstream" / "README.md"
+    upstream.parent.mkdir(parents=True, exist_ok=True)
+    upstream.write_bytes(card)
+
+    def download(dataset, name, *, repo_type, revision):
+        if dataset == DATASET:
+            return str(upstream)
+        return str(tmp_path / name)
+
+    monkeypatch.setattr(license_publication, "HfApi", Hub)
+    monkeypatch.setattr(license_publication, "hf_hub_download", download)
+    monkeypatch.setattr(license_publication, "read_license_receipts", lambda index_path: {ingest.source_id: ingest})
+    monkeypatch.setattr(
+        license_publication,
+        "resolve_license",
+        lambda target: (_ for _ in ()).throw(AssertionError("a revision must not re-resolve its card")),
+    )
+    monkeypatch.setattr(licensing, "license_bans", lambda: {})
+    published = license_publication.publish_licensed_population(
+        ingest.source_id,
+        repo,
+        tmp_path,
+        ("tasks.parquet",),
+        body="# Population\n",
+        pretty_name="Fixture population",
+        use="train",
+    )
+    assert writes == ["create", "upload"]
+    assert published.revision == revision and published.license_check["verdict"] == "PASS"
+    assert published.ingest_record == (DATASET, REVISION)
+    declared = {
+        "dataset_id": DATASET,
+        "revision": REVISION,
+        "url": f"https://huggingface.co/datasets/{DATASET}/tree/{REVISION}",
+    }
+    assert published.license_source == declared
+    assert DatasetCard((tmp_path / "README.md").read_text()).data.to_dict()["license_source"] == declared
+
+
+def test_licensed_population_refuses_a_source_without_an_ingest_record(tmp_path, monkeypatch):
+    """Fail closed: a source is licensed once at ingest; no record, no publication."""
+    (tmp_path / "tasks.parquet").write_bytes(b"population bytes")
+    writes = []
+
+    class Hub:
+        def create_repo(self, **kwargs):
+            writes.append("create")
+
+    monkeypatch.setattr(license_publication, "HfApi", Hub)
+    monkeypatch.setattr(license_publication, "read_license_receipts", lambda index_path: {})
+    with pytest.raises(ValueError, match="no ingest licence record"):
+        license_publication.publish_licensed_population(
+            "fixture:source",
+            "open-athena/fixture-population",
+            tmp_path,
+            ("tasks.parquet",),
+            body="# Population\n",
+            pretty_name="Fixture population",
+            use="train",
+        )
+    assert writes == []
+
+
+def test_licensed_population_refuses_a_failing_ingest_record(tmp_path, monkeypatch):
+    """A restricted ingest record never publishes; doubt means ban at every revision."""
+    ingest = source_receipt(b"---\nlicense: cc-by-nc-4.0\n---\n")
+    (tmp_path / "tasks.parquet").write_bytes(b"population bytes")
+    writes = []
+
+    class Hub:
+        def create_repo(self, **kwargs):
+            writes.append("create")
+
+    monkeypatch.setattr(license_publication, "HfApi", Hub)
+    monkeypatch.setattr(license_publication, "read_license_receipts", lambda index_path: {ingest.source_id: ingest})
+    monkeypatch.setattr(licensing, "license_bans", lambda: {})
+    with pytest.raises(ValueError, match="blocks ingest and admission"):
+        license_publication.publish_licensed_population(
+            ingest.source_id,
+            "open-athena/fixture-population",
+            tmp_path,
+            ("tasks.parquet",),
+            body="# Population\n",
+            pretty_name="Fixture population",
+            use="train",
+        )
+    assert writes == []
+
+
+def test_licensed_population_carries_a_repaired_permissive_set(tmp_path, monkeypatch):
+    """A source repaired at ingest to permissive-only items carries the whole licence set
+    forward: the record holds the set, the card declares it, and the revision passes
+    without any per-pin re-resolution (user ruling 2026-11-27, mixed-licence exception)."""
+    card = b"---\nlicense: [mit, apache-2.0]\n---\n# Dataset\n"
+    ingest = source_receipt(card)
+    (tmp_path / "tasks.parquet").write_bytes(b"population bytes")
+    repo = "open-athena/fixture-population"
+    revision = "d" * 40
+    writes = []
+
+    class Hub:
+        def list_repo_tree(self, dataset, *, repo_type, revision, recursive):
+            return [RepoFile(path="README.md", size=len(card), oid="b" * 40)]
+
+        def create_repo(self, **kwargs):
+            writes.append("create")
+
+        def repo_info(self, dataset, **kwargs):
+            return SimpleNamespace(private=True, sha=kwargs.get("revision", "c" * 40))
+
+        def upload_folder(self, **kwargs):
+            writes.append("upload")
+            return SimpleNamespace(oid=revision)
+
+    upstream = tmp_path / "upstream" / "README.md"
+    upstream.parent.mkdir(parents=True, exist_ok=True)
+    upstream.write_bytes(card)
+
+    def download(dataset, name, *, repo_type, revision):
+        return str(upstream if dataset == DATASET else tmp_path / name)
+
+    monkeypatch.setattr(license_publication, "HfApi", Hub)
+    monkeypatch.setattr(license_publication, "hf_hub_download", download)
+    monkeypatch.setattr(license_publication, "read_license_receipts", lambda index_path: {ingest.source_id: ingest})
+    monkeypatch.setattr(
+        license_publication,
+        "resolve_license",
+        lambda target: (_ for _ in ()).throw(AssertionError("a revision must not re-resolve its card")),
+    )
+    monkeypatch.setattr(licensing, "license_bans", lambda: {})
+    published = license_publication.publish_licensed_population(
+        ingest.source_id,
+        repo,
+        tmp_path,
+        ("tasks.parquet",),
+        body="# Population\n",
+        pretty_name="Fixture population",
+        use="train",
+    )
+    assert writes == ["create", "upload"]
+    assert published.license_check["verdict"] == "PASS"
+    assert published.license_source["dataset_id"] == DATASET
+    card_metadata = DatasetCard((tmp_path / "README.md").read_text()).data.to_dict()
+    assert card_metadata["license"] == ["apache-2.0", "mit"]
+
+
+def test_licensed_population_refuses_a_registry_ban_at_a_revision(tmp_path, monkeypatch):
+    """A ban recorded after ingest still bans every revision of the source."""
+    ingest = source_receipt(b"---\nlicense: mit\n---\n")
+    (tmp_path / "tasks.parquet").write_bytes(b"population bytes")
+    ban = LicenseBan(
+        source_id=ingest.source_id,
+        upstream_id=DATASET,
+        upstream_revision=REVISION,
+        classification="unknown",
+        license_ids=["unknown"],
+        reason="Recorded source ban",
+        evidence_urls=[PREFIX + "README.md"],
+        decided_at="2026-11-27T12:00:00+00:00",
+        decision_by="Fixture user ruling",
+        issue_url="https://github.com/marin-community/marin/issues/11497",
+    )
+    monkeypatch.setattr(
+        licensing, "LICENSE_BANS", json.dumps({"version": "fixture", "bans": [ban.model_dump(mode="json")]})
+    )
+    licensing.license_bans.cache_clear()
+    monkeypatch.setattr(license_publication, "read_license_receipts", lambda index_path: {ingest.source_id: ingest})
+    with pytest.raises(ValueError, match="Recorded source ban"):
+        license_publication.check_publication(ingest.source_id, "open-athena/fixture-population", "e" * 40, "train")
+
+
+def test_private_publication_reuse_refuses_another_declared_pin(tmp_path, monkeypatch):
+    """A reused destination may only carry this publication's declared licence pin."""
+    card = b"---\nlicense: mit\n---\n# Dataset\n"
+    receipt = source_receipt(card)
+    (tmp_path / "README.md").write_bytes(card)
+    (tmp_path / "tasks.parquet").write_bytes(b"population bytes")
+    repo = "open-athena/fixture-publication"
+    other = (
+        b"---\nlicense: mit\nlicense_source:\n  dataset_id: other/upstream\n  revision: "
+        + b"e" * 40
+        + b"\n  url: https://huggingface.co/datasets/other/upstream/tree/"
+        + b"e" * 40
+        + b"\n---\n"
+    )
+
+    class Hub:
+        def dataset_info(self, dataset, *, revision):
+            assert dataset == DATASET and revision == REVISION
+            return SimpleNamespace(sha=revision, siblings=[SimpleNamespace(rfilename="README.md")])
+
+        def create_repo(self, **kwargs):
+            raise RuntimeError("409 Conflict: the repo already exists")
+
+        def list_repo_tree(self, dataset, *, repo_type, recursive):
+            assert dataset == repo and recursive is True
+            return [SimpleNamespace(path="README.md"), SimpleNamespace(path="tasks.parquet")]
+
+        def repo_info(self, dataset, **kwargs):
+            assert dataset == repo
+            return SimpleNamespace(private=True, sha="c" * 40)
+
+        def upload_folder(self, **kwargs):
+            raise AssertionError("a foreign pin must refuse before any upload")
+
+    def download(dataset, name, *, repo_type, revision):
+        assert name == "README.md"
+        return str(tmp_path / "existing-card.md")
+
+    (tmp_path / "existing-card.md").write_bytes(other)
+    monkeypatch.setattr(license_publication, "HfApi", Hub)
+    monkeypatch.setattr(license_publication, "hf_hub_download", download)
+    monkeypatch.setattr(license_resolution, "HfApi", Hub)
+    monkeypatch.setattr(license_resolution, "_fetch", lambda url, **kwargs: card)
+    monkeypatch.setattr(licensing, "license_bans", lambda: {})
+    prepared = license_publication.prepare_private_dataset(
+        receipt.source_id,
+        repo,
+        tmp_path,
+        ("README.md", "tasks.parquet"),
+        receipt,
+        use="train",
+        license_source={
+            "dataset_id": DATASET,
+            "revision": REVISION,
+            "url": f"https://huggingface.co/datasets/{DATASET}/tree/{REVISION}",
+        },
+    )
+    with pytest.raises(ValueError, match="declares another licence source"):
         license_publication.publish_private_dataset(prepared)

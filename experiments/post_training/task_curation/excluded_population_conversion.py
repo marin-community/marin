@@ -26,37 +26,21 @@ import json
 import logging
 import os
 from collections.abc import Callable
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pyarrow.parquet as pq
-from finestore.rl.licenses import LicenseDecision, LicenseEvidence, LicenseReceipt
-from huggingface_hub import HfApi
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import task_spec_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 from experiments.post_training.task_curation import native_source_conversion
-from experiments.post_training.task_curation.harbor_cohort_conversion import (
-    CONVERSION_PROTOCOL,
-    CohortConversionRejected,
-)
+from experiments.post_training.task_curation.harbor_cohort_conversion import CONVERSION_PROTOCOL
 from experiments.post_training.task_curation.harbor_cohort_release import (
     converter_revision,
     release_repo,
 )
-from experiments.post_training.task_curation.license_binding import (
-    LICENSE_RECEIPT_INDEX,
-    AppendWouldRewriteSharedShard,
-    append_license_receipt,
-    read_license_receipts,
-)
-from experiments.post_training.task_curation.license_publication import (
-    check_publication,
-    licensed_dataset_card,
-    prepare_license_publication,
-)
+from experiments.post_training.task_curation.license_publication import publish_licensed_population
 from experiments.post_training.task_curation.native_source_conversion import (
     BasePinMissing,
     convert_native_source_row,
@@ -64,7 +48,6 @@ from experiments.post_training.task_curation.native_source_conversion import (
     save_digest_cache,
     write_native_conversion_artifacts,
 )
-from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
 
 LOGGER = logging.getLogger(__name__)
 
@@ -207,71 +190,6 @@ def convert_population_rows(rows: list[dict], resolve: Callable[[str], str]) -> 
     return converted, receipts, {**counts, "exclusions": exclusions}
 
 
-def _card_evidence(release: str, revision: str, card_bytes: bytes) -> LicenseEvidence:
-    """The release card's own wrapper declaration, quoting its license_source lines."""
-    quoted = [
-        line
-        for line in card_bytes.decode("utf-8").splitlines()
-        if line.startswith(("license_source:", "  dataset_id:", "  revision:", "  url:"))
-    ][:6]
-    if not quoted:
-        raise CohortConversionRejected("The release card declares no license_source to bind")
-    return LicenseEvidence(
-        kind="wrapper_source",
-        url=f"https://huggingface.co/datasets/{release}/resolve/{revision}/README.md",
-        sha256=hashlib.sha256(card_bytes).hexdigest(),
-        license_ids=[],
-        quoted_lines=quoted,
-        restrictive_terms=False,
-        unidentified_third_party_terms=False,
-    )
-
-
-def repin_license_receipt(previous: LicenseReceipt, release: str, revision: str, card_bytes: bytes) -> LicenseReceipt:
-    """Re-pin the source's existing license receipt onto the pinned conversion release.
-
-    The conversion derives from the archived filtration input of the receipt's own
-    dataset, so the checker-verified resolution carries over byte-for-byte: the
-    receipt is the immutable record, and re-resolving an aggregate upstream through a
-    different wrapper path would manufacture a different pin than the recorded one.
-    The new release's own card is arbitrated separately by check_publication.
-    Recorded decisions carry their original lineage per the repackager rule.
-    """
-    carried = []
-    for decision in previous.decisions:
-        carried.append(
-            LicenseDecision(
-                kind=decision.kind,
-                approved=decision.approved,
-                who=decision.who,
-                when=datetime.now(UTC).isoformat(),
-                source_id=previous.source_id,
-                dataset_id=release,
-                revision=revision,
-                scope=list(decision.scope),
-                rationale=(
-                    f"{decision.rationale} Lineage: recorded at {decision.dataset_id}@{decision.revision} "
-                    f"({decision.when}); carried to this release pin by the repackager rule."
-                ),
-                evidence_urls=list(decision.evidence_urls),
-                issue_url=decision.issue_url,
-            )
-        )
-    return LicenseReceipt(
-        source_id=previous.source_id,
-        dataset_id=release,
-        revision=revision,
-        resolved_at=previous.resolved_at,
-        resolver_version=previous.resolver_version,
-        evidence=[*previous.evidence, _card_evidence(release, revision, card_bytes)],
-        bundled_third_party=previous.bundled_third_party,
-        model_generated_outputs=previous.model_generated_outputs,
-        decisions=carried,
-        resolved_source=previous.resolved_source,
-        wrapper_chain=previous.wrapper_chain,
-    )
-
-
 def publish_pinned_population(
     *,
     source_id: str,
@@ -297,15 +215,9 @@ def publish_pinned_population(
     manifest["input_population"] = {"uri": population_uri, "sha256": population_sha256}
     (output_root / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
-    receipts_by_source = read_license_receipts(LICENSE_RECEIPT_INDEX)
-    previous = receipts_by_source.get(source_id)
-    if previous is None:
-        raise CohortConversionRejected(f"{source_id}: no license receipt to re-pin for the conversion release")
-    require_unbanned(source_id, previous.dataset_id, previous)
-
-    # The publication package (pinned grant + notices) comes from the existing receipt;
-    # the card ships with the data upload so the readback is complete.
-    publication = prepare_license_publication(previous, output_root, use=intended_use)
+    # The publication package (pinned grant + notices) comes from the declared release's
+    # receipt; the card ships with the data upload so the readback is complete, and the
+    # new pin's receipt lands in the registry before the publish returns.
     body = (
         "Private research artifact. The base-pinned conversion of a mechanically excluded compendium "
         "population: every row's docker build FROM bases are digest-pinned through the maintained "
@@ -318,71 +230,20 @@ def publish_pinned_population(
         f"Converted: {manifest['converted_rows']}; input: {manifest['input_rows']}; "
         f"typed exclusions: {manifest['excluded_rows']}.\n"
     )
-    (output_root / "README.md").write_text(
-        licensed_dataset_card(body, publication, pretty_name="Base-pinned conversion release")
+    publication = publish_licensed_population(
+        source_id,
+        release_repo(source_id, artifact_version),
+        output_root,
+        ("tasks.parquet", "manifest.json", "conversion-receipts.jsonl", "conversion-exclusions.jsonl"),
+        body=body,
+        pretty_name="Base-pinned conversion release",
+        use=intended_use,
     )
-    filenames = [
-        "tasks.parquet",
-        "manifest.json",
-        "conversion-receipts.jsonl",
-        "conversion-exclusions.jsonl",
-        "README.md",
-    ]
-    api = HfApi()
-    repo = release_repo(source_id, artifact_version)
-    api.create_repo(repo, repo_type="dataset", private=True, exist_ok=True)
-    if not api.repo_info(repo, repo_type="dataset").private:
-        raise ValueError("Conversion destination must be private")
-    commit = api.upload_folder(
-        repo_id=repo,
-        repo_type="dataset",
-        folder_path=str(output_root),
-        allow_patterns=filenames,
-        commit_message="Publish the base-pinned conversion release",
-    )
-    for filename in filenames:
-        if not (output_root / filename).exists():
-            continue
-        downloaded = api.hf_hub_download(repo, filename, repo_type="dataset", revision=commit.oid)
-        if (
-            hashlib.sha256((output_root / filename).read_bytes()).hexdigest()
-            != hashlib.sha256(Path(downloaded).read_bytes()).hexdigest()
-        ):
-            raise ValueError(f"Private upload readback differs: {filename}")
-    card_path = Path(api.hf_hub_download(repo, "README.md", repo_type="dataset", revision=commit.oid))
-    bound = repin_license_receipt(previous, repo, commit.oid, card_path.read_bytes())
-    try:
-        index_commit: str | None = append_license_receipt(
-            LICENSE_RECEIPT_INDEX,
-            bound,
-            message=f"Bind {source_id}'s base-pinned conversion release to its original upstream license",
-        )
-    except AppendWouldRewriteSharedShard as error:
-        LOGGER.warning("receipt append refused for %s: %s", source_id, error)
-        index_commit = None
-    rebind_root = output_root.parent / f"{output_root.name}-rebind"
-    if rebind_root.exists():
-        import shutil  # noqa: PLC0415
-
-        shutil.rmtree(rebind_root)
-    rebound_publication = prepare_license_publication(bound, rebind_root, use=intended_use)
-    (rebind_root / "README.md").write_text(
-        licensed_dataset_card(body, rebound_publication, pretty_name="Base-pinned conversion release")
-    )
-    card_commit = api.upload_folder(
-        repo_id=repo,
-        repo_type="dataset",
-        folder_path=str(rebind_root),
-        allow_patterns=["README.md"],
-        commit_message="Bind the release card to its original upstream license",
-    )
-    license_check = check_publication(source_id, repo, card_commit.oid, intended_use)
     result = {
         **manifest,
-        "release_repo": repo,
-        "release_revision": card_commit.oid,
-        "license_index_commit": index_commit,
-        "license_check_verdict": license_check["verdict"],
+        "release_repo": publication.repo,
+        "release_revision": publication.revision,
+        "license_check_verdict": publication.license_check["verdict"],
     }
     return result
 

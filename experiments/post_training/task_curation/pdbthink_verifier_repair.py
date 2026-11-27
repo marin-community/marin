@@ -144,7 +144,7 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     receipt = read_license_receipts(LICENSE_RECEIPT_INDEX)[SOURCE]
-    require_license(receipt, SOURCE, DATASET, REVISION, "train", ban=None)
+    require_license(receipt, SOURCE, "train", ban=None)
     require_unbanned(SOURCE, DATASET, receipt)
     repair_cohort(
         args.input_parquet, args.output_dir, expected_sha256=args.input_sha256, expected_tasks=args.expected_tasks
