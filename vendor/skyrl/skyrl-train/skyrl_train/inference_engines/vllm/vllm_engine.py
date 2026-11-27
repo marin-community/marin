@@ -1456,7 +1456,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         try:
             final_output, deadline_finished = await finish_partial_on_timeout(
                 collect(), self._request_timeout, lambda: self.abort_active_partial_request(request_id),
-                scheduled=self._request_timings.scheduled_event(request_id)
+                scheduled=self._request_timings.scheduled_event(request_id), no_partial_grace=0.0,
             )
             if deadline_finished and final_output.outputs[0].finish_reason == ABORT_FINISH_REASON:
                 final_output.outputs[0].finish_reason = TOTAL_TURN_TIMEOUT_STOP_REASON
@@ -1689,7 +1689,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                     )
                 generator, deadline_finished = await finish_partial_on_timeout(
                     pending, self._request_timeout, lambda: self.abort_active_partial_request(request_id),
-                    scheduled=self._request_timings.scheduled_event(request_id)
+                    scheduled=self._request_timings.scheduled_event(request_id), no_partial_grace=0.0,
                 )
                 assert isinstance(generator, (ChatCompletionResponse, ErrorResponse))
             else:
@@ -1698,6 +1698,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                     self._request_timeout,
                     lambda: self.abort_active_partial_request(request_id),
                     scheduled=self._request_timings.scheduled_event(request_id),
+                    no_partial_grace=0.0,
                 )
                 assert isinstance(generator, (CompletionResponse, ErrorResponse))
             response = generator.model_dump()

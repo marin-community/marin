@@ -58,6 +58,20 @@ async def test_unstarted_request_remains_cancellable_without_inventing_a_respons
 
 
 @pytest.mark.asyncio
+async def test_engine_local_timeout_cancels_an_admitted_request_without_sampled_tokens():
+    pending = asyncio.get_running_loop().create_future()
+    scheduled = asyncio.Event()
+    scheduled.set()
+
+    async def finish():
+        return False
+
+    with pytest.raises(TimeoutError, match="without a partial response"):
+        await finish_partial_on_timeout(pending, 0, finish, scheduled=scheduled, no_partial_grace=0.0)
+    assert pending.cancelled()
+
+
+@pytest.mark.asyncio
 async def test_failed_abort_does_not_leave_a_generation_running():
     pending = asyncio.get_running_loop().create_future()
 

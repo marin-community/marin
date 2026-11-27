@@ -17,12 +17,13 @@ def partial_response_timeout(execution_remaining: float | None) -> float | None:
 
 async def finish_partial_on_timeout[T](
     request: Awaitable[T], timeout: float | None, finish_partial: Callable[[], Awaitable[bool]],
-    *, scheduled: asyncio.Event | None = None
+    *, scheduled: asyncio.Event | None = None, no_partial_grace: float | None = None
 ) -> tuple[T, bool]:
     """Finish an active decode, leaving an unstarted request to its caller's timeout.
 
     ``finish_partial`` must return false without aborting when no tokens exist.
-    An outer cancellation still cancels the request; it never converts a shutdown
+    ``no_partial_grace`` bounds a request without sampled tokens when no outer
+    execution deadline owns it. An outer cancellation never converts a shutdown
     into a successful partial response.
     """
     if timeout is None:
@@ -36,6 +37,10 @@ async def finish_partial_on_timeout[T](
         if task in done:
             return task.result(), False
         finished = await finish_partial()
+        if not finished and no_partial_grace is not None:
+            done, _ = await asyncio.wait({task}, timeout=no_partial_grace)
+            if task not in done:
+                raise TimeoutError("Inference request timed out without a partial response")
         return await task, finished
     finally:
         task.cancel()
