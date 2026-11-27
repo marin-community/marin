@@ -173,9 +173,13 @@ def convert_row(
     registry resolver with its digest cache), the static blocker audit, and the
     cohort conversion to the executable ScriptGrader form. ``resolve`` overrides
     the registry resolver (tests stage a fake); the production default is the
-    shared resolver.
+    shared resolver. Registry refusals and static blockers become typed
+    per-row exclusions instead of failing the whole conversion.
     """
     from experiments.post_training.task_curation.native_source_conversion import (  # noqa: PLC0415
+        BasePinMissing,
+        BasePinRejected,
+        CohortConversionRejected,
         convert_native_source_row,
     )
 
@@ -186,6 +190,14 @@ def convert_row(
     task = native_task(row_to_raw(row, files), context)
     if isinstance(task, ImportRejection):
         return task
-    if resolve is not None:
-        return convert_native_source_row(task, input_task_sha256=task_spec_sha256(task), resolve=resolve)
-    return convert_native_source_row(task, input_task_sha256=task_spec_sha256(task))
+    try:
+        if resolve is not None:
+            return convert_native_source_row(task, input_task_sha256=task_spec_sha256(task), resolve=resolve)
+        return convert_native_source_row(task, input_task_sha256=task_spec_sha256(task))
+    except BasePinRejected as error:
+        # BasePinMissing subclasses BasePinRejected: a missing tag is a missing image;
+        # any other refusal fails closed as a rejected pin.
+        reason = "base_image_missing" if isinstance(error, BasePinMissing) else "base_pin_rejected"
+        return OpenSweRowExcluded(reason, str(error))
+    except CohortConversionRejected as error:
+        return OpenSweRowExcluded("cohort_conversion_rejected", str(error))

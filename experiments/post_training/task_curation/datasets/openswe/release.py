@@ -90,6 +90,25 @@ def load_gate_evidence(gate_root: str) -> GateEvidence:
     return GateEvidence(frozenset(qualified), excluded, result)
 
 
+def row_conversion_record(row, outcome) -> dict | None:
+    """The typed exclusion record for a rejected row outcome, else ``None``.
+
+    Covers both shapes the converter produces: the exception instance a raise
+    path surfaces (caught by the caller) and the instance ``convert_row``
+    returns for a row it excluded mid-conversion.
+    """
+    if isinstance(outcome, convert.OpenSweRowExcluded):
+        return {"instance_id": row.instance_id, "reason": outcome.reason, "detail": outcome.detail, "evidence": {}}
+    if isinstance(outcome, ImportRejection):
+        return {
+            "instance_id": row.instance_id,
+            "reason": f"import_{outcome.kind.value}",
+            "detail": outcome.reason,
+            "evidence": {},
+        }
+    return None
+
+
 def convert_population(
     *,
     condensed_bindings: object,
@@ -125,19 +144,11 @@ def convert_population(
         try:
             outcome = convert.convert_row(row, condensed_bases, context, resolve=resolve_base_digest)
         except convert.OpenSweRowExcluded as excluded:
-            exclusions.append(
-                {"instance_id": row.instance_id, "reason": excluded.reason, "detail": excluded.detail, "evidence": {}}
-            )
+            exclusions.append(row_conversion_record(row, excluded))
             continue
-        if isinstance(outcome, ImportRejection):
-            exclusions.append(
-                {
-                    "instance_id": row.instance_id,
-                    "reason": f"import_{outcome.kind.value}",
-                    "detail": outcome.reason,
-                    "evidence": {},
-                }
-            )
+        record = row_conversion_record(row, outcome)
+        if record is not None:
+            exclusions.append(record)
             continue
         serialized = outcome.task.model_dump_json()
         converted.append(

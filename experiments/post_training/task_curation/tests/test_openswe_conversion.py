@@ -11,13 +11,16 @@ import json
 import pytest
 from taskcompendium.models import NoGrader, ScriptGrader, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
+from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection
 
+from experiments.post_training.task_curation import native_source_conversion
 from experiments.post_training.task_curation.datasets.openswe import bases, convert, grader, launch_base_build
 from experiments.post_training.task_curation.datasets.openswe.dockerfile_translation import (
     DockerfileRejected,
     dockerfile_instructions,
     translate_dockerfile,
 )
+from experiments.post_training.task_curation.datasets.openswe.release import row_conversion_record
 from experiments.post_training.task_curation.datasets.openswe.sources import (
     KEEP_RELEASE_REPO,
     UPSTREAM_REVISION,
@@ -252,6 +255,68 @@ def test_package_files_excludes_unconvertible_rows_with_typed_evidence():
             convert.package_files(row(**overrides), CONDENSED)
         assert raised.value.reason == reason
         assert raised.value.detail
+
+
+def _native_module():
+    return native_source_conversion
+
+
+def test_convert_row_excludes_a_rejected_base_pin_with_typed_evidence(monkeypatch):
+    """A registry refusal at the pin stage excludes the row; it never fails the conversion."""
+    native = _native_module()
+
+    def raise_rejected(*args, **kwargs):
+        raise native.BasePinRejected(
+            "The registry refused to serve instructor to this identity (HTTP 401); "
+            "the bearer was minted within the token TTL"
+        )
+
+    monkeypatch.setattr(native, "convert_native_source_row", raise_rejected)
+    outcome = convert.convert_row(row(), CONDENSED, ConversionContext({}, None), resolve=lambda reference: reference)
+    assert isinstance(outcome, convert.OpenSweRowExcluded)
+    assert outcome.reason == "base_pin_rejected"
+    assert "HTTP 401" in outcome.detail
+
+
+def test_convert_row_excludes_a_missing_base_image(monkeypatch):
+    native = _native_module()
+
+    def raise_missing(*args, **kwargs):
+        raise native.BasePinMissing("FROM base ghcr.io/org/gone:1 does not resolve: manifest unknown")
+
+    monkeypatch.setattr(native, "convert_native_source_row", raise_missing)
+    outcome = convert.convert_row(row(), CONDENSED, ConversionContext({}, None), resolve=lambda reference: reference)
+    assert isinstance(outcome, convert.OpenSweRowExcluded)
+    assert outcome.reason == "base_image_missing"
+
+
+def test_convert_row_excludes_a_static_blocker_after_pinning(monkeypatch):
+    native = _native_module()
+
+    def raise_rejected(*args, **kwargs):
+        raise native.CohortConversionRejected(f"{row().instance_id}: static blockers remain after pinning")
+
+    monkeypatch.setattr(native, "convert_native_source_row", raise_rejected)
+    outcome = convert.convert_row(row(), CONDENSED, ConversionContext({}, None), resolve=lambda reference: reference)
+    assert isinstance(outcome, convert.OpenSweRowExcluded)
+    assert outcome.reason == "cohort_conversion_rejected"
+
+
+def test_row_conversion_record_classifies_converter_outcomes():
+    """Both converter outcome shapes carry the typed exclusion evidence the loop records."""
+    sample = row()
+    excluded = convert.OpenSweRowExcluded("base_pin_rejected", "the registry refused (HTTP 401)")
+    assert row_conversion_record(sample, excluded) == {
+        "instance_id": sample.instance_id,
+        "reason": "base_pin_rejected",
+        "detail": "the registry refused (HTTP 401)",
+        "evidence": {},
+    }
+    converted = convert.convert_row(sample, CONDENSED, ConversionContext({}, None), resolve=lambda reference: reference)
+    assert isinstance(converted.task, TaskSpec)
+    assert row_conversion_record(sample, converted) is None
+    rejection = ImportRejection(kind=ImportFailureKind.SOURCE_DEFECT, reason="no Dockerfile", detail="d")
+    assert row_conversion_record(sample, rejection)["reason"] == "import_source_defect"
 
 
 def test_convert_row_produces_the_pinned_cohort_task_spec():

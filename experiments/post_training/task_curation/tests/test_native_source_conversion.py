@@ -92,6 +92,41 @@ def test_pinned_dockerfile_refuses_unresolvable_base():
         pinned_dockerfile("FROM ghcr.io/org/image:latest\n", _resolve)
 
 
+def test_pinned_dockerfile_leaves_heredoc_bodies_untouched():
+    """A FROM inside a RUN heredoc is shell data, never a base instruction.
+
+    Machine-authored recipes embed instruction-looking lines in RUN heredocs;
+    the scanner must not resolve them (a crash) or rewrite their bytes.
+    """
+    digest = "c" * 64
+    text = (
+        "FROM ubuntu:22.04\n"
+        "COPY repo /testbed\n"
+        "RUN <<'EOF'\n"
+        "cat > /tmp/inner.Dockerfile <<'INNER'\n"
+        "FROM instructor:2\n"
+        "INNER\n"
+        "echo FROM ghcr.io/unresolved/thing:1\n"
+        "EOF\n"
+        "FROM python:3.12-slim\n"
+        "RUN true\n"
+    )
+
+    def resolve(reference: str) -> str:
+        assert reference in ("ubuntu:22.04", "python:3.12-slim"), reference
+        return f"{reference}@sha256:{digest}"
+
+    pinned, pins = pinned_dockerfile(text, resolve)
+    assert "FROM instructor:2" in pinned
+    assert "echo FROM ghcr.io/unresolved/thing:1" in pinned
+    assert f"FROM python:3.12-slim@sha256:{digest}" in pinned
+    assert f"FROM ubuntu:22.04@sha256:{digest}" in pinned
+    assert pins == (
+        BasePin(base="ubuntu:22.04", pinned=f"ubuntu:22.04@sha256:{digest}"),
+        BasePin(base="python:3.12-slim", pinned=f"python:3.12-slim@sha256:{digest}"),
+    )
+
+
 def _package(dockerfile: str) -> TaskSpec:
     build = DockerBuildContext(
         files=(inline_resource("Dockerfile", dockerfile.encode()),),
