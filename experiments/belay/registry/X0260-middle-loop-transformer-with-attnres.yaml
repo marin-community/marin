@@ -65,3 +65,9 @@ trials:
     middle_loop: window_x3
   commit: f7ebaa9736
   priority: interactive
+potential:
+  score: 5
+  rationale: 'No result: all 4 sweep values NaN at step 2 (non-finite AttnRes query grads on GPU); escalated → 5'
+  model: claude-opus-5-5
+  date: '2026-11-27'
+  inputs_digest: 018912e78a9b
