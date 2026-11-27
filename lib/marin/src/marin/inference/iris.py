@@ -625,13 +625,11 @@ def _ready_vllm_dashboard(service, model, environment, *, tensor_parallel_size, 
 
 def _run_tpu_service(service: IrisServiceConfig) -> None:
     from marin.inference.vllm_backend import VllmBackend, vllm_launcher  # noqa: PLC0415
-    from marin.inference.vllm_server import IsolatedTpuVllm  # noqa: PLC0415
 
     assert isinstance(service.engine, VllmEngineConfig)
     device = service.iris.worker_resources.device
     assert isinstance(device, TpuConfig)
     launcher = vllm_launcher(service.engine)
-    assert isinstance(launcher, IsolatedTpuVllm)
     with tpu_ray_gang(
         launcher,
         # Ray's --num-cpus is an integer: round the Iris request down, minimum 1.
