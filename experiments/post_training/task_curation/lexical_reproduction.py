@@ -1,13 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reproduce one sealed branch lexical measurement from main's lexical stage.
+"""Compare a rebuilt source census with one sealed branch lexical measurement.
 
 The sealed branch measured the converted census of a source — every converter-emitted
 TaskSpec, exact contracts deduplicated — rendered with the shared conversation renderer,
 and marked it against a frozen eval corpus. This script rebuilds that population from
-main's registered converter, adopts the receipt's frozen bloom and drop sets, marks and
-attributes through main's stage engine, and compares the result with the sealed
+the registered converter, adopts the receipt's frozen bloom and drop sets, marks and
+attributes through the Datakit engine, and compares the result with the sealed
 evidence: the branch's frozen text population and its frozen per-task marks.
 
 A converter that no longer emits a sealed row (for example, a reference the current
