@@ -210,7 +210,8 @@ def test_reconciliation_batches_verification_writes_and_preserves_last_valid_rec
         for index in range(259)
     ]
     paths = [observation.path for observation in initial]
-    results_db.reconcile_prefix(engine, prefix, paths, initial, now, 600)
+    results_db.record_observations(engine, prefix, initial, now)
+    results_db.finish_prefix_listing(engine, prefix, paths, set(), now, 600)
     generation = results_db.catalog_generation(engine)
     probe_at = now + timedelta(days=1)
     observations = [
@@ -242,7 +243,8 @@ def test_reconciliation_batches_verification_writes_and_preserves_last_valid_rec
 
     sqlalchemy.event.listen(engine, "before_cursor_execute", count_source_updates)
     try:
-        results_db.reconcile_prefix(engine, prefix, [*paths, invalid_path], observations, probe_at, 600)
+        results_db.record_observations(engine, prefix, observations, probe_at)
+        results_db.finish_prefix_listing(engine, prefix, [*paths, invalid_path], {initial[0].path}, probe_at, 600)
     finally:
         sqlalchemy.event.remove(engine, "before_cursor_execute", count_source_updates)
 

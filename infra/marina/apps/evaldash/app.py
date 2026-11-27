@@ -38,6 +38,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+from itertools import batched
 from typing import Protocol
 
 import google.auth
@@ -85,16 +86,23 @@ from .metrics import (
     record_headline,
     run_metric_rows,
 )
-from .record_reconciliation import VerificationSchedule, inspect_record_paths, step_status_for_record
+from .record_reconciliation import (
+    VerificationSchedule,
+    due_record_paths,
+    inspect_record_paths,
+    step_status_for_record,
+)
 from .results_db import (
+    ObservationKind,
     catalog_generation,
     configure_prefixes,
     fetch_archived_models,
     fetch_snapshot,
+    finish_prefix_listing,
     mark_prefix_failed,
     prefix_statuses,
     prune_untracked_records,
-    reconcile_prefix,
+    record_observations,
     set_model_archived,
     source_states,
     verify_schema,
@@ -103,6 +111,8 @@ from .results_db import (
 logger = logging.getLogger(__name__)
 
 CATALOG_CHECK_INTERVAL = 10.0
+# Records checked and committed together; a pass that stops early keeps every finished batch.
+OBSERVATION_BATCH_SIZE = 512
 DEFAULT_RUNS_LIMIT = 200
 MAX_RUNS_LIMIT = 1000
 DEFAULT_LOG_TAIL = 200
@@ -887,22 +897,25 @@ class PostgresIngestor:
             try:
                 paths = await asyncio.to_thread(list_record_paths, prefix)
                 states = await asyncio.to_thread(source_states, self._engine, prefix)
-                observations = await asyncio.to_thread(
-                    inspect_record_paths,
-                    paths,
-                    states,
-                    VerificationSchedule(
-                        checked_at=probe_at,
-                        retry_after=self.interval,
-                        revalidate_after=self.revalidate_after,
-                    ),
+                schedule = VerificationSchedule(
+                    checked_at=probe_at,
+                    retry_after=self.interval,
+                    revalidate_after=self.revalidate_after,
                 )
+                due = due_record_paths(paths, states, probe_at)
+                missing_paths: set[str] = set()
+                for batch in batched(due, OBSERVATION_BATCH_SIZE):
+                    observations = await asyncio.to_thread(inspect_record_paths, list(batch), states, schedule)
+                    await asyncio.to_thread(record_observations, self._engine, prefix, observations, probe_at)
+                    missing_paths.update(
+                        observation.path for observation in observations if observation.kind is ObservationKind.MISSING
+                    )
                 await asyncio.to_thread(
-                    reconcile_prefix,
+                    finish_prefix_listing,
                     self._engine,
                     prefix,
                     paths,
-                    observations,
+                    missing_paths,
                     probe_at,
                     self.interval,
                 )
@@ -915,7 +928,7 @@ class PostgresIngestor:
             logger.info(
                 "reconcile: %d candidates, %d checked from %s",
                 len(paths),
-                len(observations),
+                len(due),
                 prefix,
             )
         await asyncio.to_thread(prune_untracked_records, self._engine, self._prefixes)

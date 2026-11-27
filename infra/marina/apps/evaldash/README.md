@@ -16,12 +16,15 @@ results and per-sample artifacts. The app's own Postgres schema is the serving c
 full validated record snapshot before answering, and object storage stays the durable producer and
 recovery input. The EvalDash Marina runner scans object storage and commits catalog changes; serving
 instances do no background reconciliation work.
-The runner writes through the database engine without loading a serving snapshot. Catalog
-materialization reads and writes at most 128 run IDs per batch within the prefix transaction.
-Source verification updates and upserts also use batches of at most 128 rows; PostgreSQL applies
-each verification batch in one statement rather than sending an update for each record.
-Object checks finish before that transaction begins; parsed records from those checks remain in
-memory until commit.
+The runner writes through the database engine without loading a serving snapshot. A pass checks
+each prefix's due records in batches of 512 and commits each batch before checking the next, so a
+pass that stops early keeps every finished batch and the next pass checks only what is still due.
+Known records whose last check succeeded are checked before new or errored records, which are read
+and scored in full. After the last batch, one transaction applies the complete listing: it ages out
+absent records and records the prefix's successful probe. Within each transaction, catalog
+materialization reads and writes at most 128 run IDs per batch, and source verification updates and
+upserts use batches of at most 128 rows; PostgreSQL applies each verification batch in one statement
+rather than sending an update for each record.
 Historical records may omit `model.config.tokenizer_revision`; the record reader treats an omitted
 value as `None`. Current writers include the field. For runs with a per-eval StepSpec, EvalDash also
 reads `{run_id}/.executor_status`. A score is eligible only after that step reaches `SUCCESS`; runs
@@ -50,13 +53,16 @@ Running or failed steps, and recent runs still waiting for a status file, are ch
 Completed steps and older records are checked once per 24 hours after their first recheck is spread
 across the first day. The record body is reread only when its version or step state changes. A missing
 object must be absent on two successful checks before its source is removed. A
-failed prefix listing leaves that prefix's last committed rows untouched, and an invalid rewrite keeps
+failed prefix listing keeps the batches committed before the failure and changes no other row of that
+prefix, and an invalid rewrite keeps
 the last valid record while surfacing the error on the Debug page. Failures in a serving instance's
 generation check or the scheduled reconciliation pass remain visible there until a later check or
 pass succeeds.
 
-Each source change and its selected `eval_catalog_runs`/`eval_catalog_metrics` projection commit in one
-transaction. The lowest configured prefix priority wins duplicate run IDs, so a removed canonical
+Once every active prefix has listed successfully, each source change and its selected
+`eval_catalog_runs`/`eval_catalog_metrics` projection commit in one transaction. Before then, batches
+commit sources only; a prefix's listing publishes its runs, and the listing or configuration change
+that completes the inventory publishes every run. The lowest configured prefix priority wins duplicate run IDs, so a removed canonical
 record promotes its legacy copy without rereading it. The transaction advances
 `eval_catalog_state.generation`. Each serving instance checks that generation at most once every 10
 seconds and swaps its in-memory record snapshot only after a newer generation commits. A failed check
