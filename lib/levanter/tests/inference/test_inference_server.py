@@ -939,8 +939,6 @@ def test_openai_rejects_stop_sequences_that_exceed_engine_capacity(test_client):
     assert response.status_code == 400
 
 
-
-
 def test_publish_snowball_checkpoint_drives_the_live_grpc_snapshot(tmp_path, local_gpt2_tokenizer):
     cfg = SnowballConfig(
         vocab_size=48,
