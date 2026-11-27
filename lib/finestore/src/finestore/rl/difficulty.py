@@ -20,6 +20,8 @@ from finestore.schema import SHA256_PATTERN, arrow_schema
 from finestore.store import DataStore
 
 PROTOCOL_ID = "atlas-difficulty-v3"
+# Serving receipts label the client request policy; workers enforce its budget.
+LARGE_DYNAMIC_OUTPUT_PROTOCOL_ID = "large-context-minus-prompt-20261127-v2"
 MEASUREMENTS = "difficulty_measurements"
 
 

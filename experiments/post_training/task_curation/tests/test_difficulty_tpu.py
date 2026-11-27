@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from finestore.rl.difficulty import SampleTask, Solver
+from finestore.rl.difficulty import LARGE_DYNAMIC_OUTPUT_PROTOCOL_ID, PROTOCOL_ID, SampleTask, Solver
 from fray.iris_backend import convert_constraints
 from iris.cli.job import run as iris_run_command
 from iris.client.client import NamespacedEndpointRegistry
@@ -44,7 +44,7 @@ from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate
 from verifyit.spec import JudgeSpec
 
 from experiments.post_training.task_curation import difficulty_preparation
-from experiments.post_training.task_curation.difficulty import campaign, remediate, tpu, tpu_launch
+from experiments.post_training.task_curation.difficulty import campaign, engine_pool, remediate, tpu, tpu_launch
 from experiments.post_training.task_curation.difficulty.importer import catalog_sources, population_revision, receipt_row
 from experiments.post_training.task_curation.difficulty.ledger import append_rows, digest, read_rows
 from experiments.post_training.task_curation.difficulty.planner import QualifyJudgeRoute
@@ -389,18 +389,32 @@ def test_full_allocation_waits_for_cancelled_pilot_tasks_to_release_chips(tmp_pa
         tpu_launch.await_pilot_teardown(str(tmp_path), timeout_seconds=0)
 
 
+@pytest.mark.parametrize(
+    "solver,protocol_id,sweep_max,throughput_per_chip",
+    [
+        (Solver.SMALL, PROTOCOL_ID, 512, 32),
+        (Solver.LARGE, LARGE_DYNAMIC_OUTPUT_PROTOCOL_ID, 256, 16),
+    ],
+)
 @pytest.mark.parametrize("registry_failure", [False, True])
 @pytest.mark.parametrize("excluded_tpu_names", [(), ("failed-slice",)])
 def test_tpu_owner_qualifies_registers_routes_retains_receipts_and_tears_down(
-    tmp_path, monkeypatch, review_server, registry_failure, excluded_tpu_names
+    tmp_path,
+    monkeypatch,
+    review_server,
+    registry_failure,
+    excluded_tpu_names,
+    solver,
+    protocol_id,
+    sweep_max,
+    throughput_per_chip,
 ):
     """Run the whole owner, including its real HTTP router and publication boundary."""
-    solver = Solver.SMALL
     model = tpu.SOLVER_MODELS[solver]
     review_server.model_ids = [model]
     endpoint = f"http://127.0.0.1:{review_server.server_port}/v1"
     (tmp_path / "staging").mkdir()
-    (tmp_path / "staging/small.json").write_text(
+    (tmp_path / "staging" / (solver.value + ".json")).write_text(
         json.dumps(
             {
                 "model": model,
@@ -430,7 +444,11 @@ def test_tpu_owner_qualifies_registers_routes_retains_receipts_and_tears_down(
         try:
             yield SimpleNamespace(
                 ready_direct_session=lambda: SimpleNamespace(
-                    effective_serving=EffectiveServing(8, 4, 1, 8, 65536),
+                    effective_serving=(
+                        EffectiveServing(8, 4, 1, 8, 65536)
+                        if solver == Solver.SMALL
+                        else EffectiveServing(16, 2, 1, 16, 65536)
+                    ),
                     model=SimpleNamespace(endpoint=SimpleNamespace(base_url=endpoint)),
                 ),
                 endpoint_name="slice-fixture",
@@ -495,22 +513,42 @@ def test_tpu_owner_qualifies_registers_routes_retains_receipts_and_tears_down(
     set_job_info(owner)
     try:
         with pytest.raises(EndOwner):
-            tpu.run_tpu_pool(solver, str(tmp_path), 1, excluded_tpu_names=excluded_tpu_names)
+            argv = [
+                "engine-pool",
+                "--solver",
+                solver.value,
+                "--registry",
+                str(tmp_path / "pools"),
+                "--tpu-root",
+                str(tmp_path),
+                "--replicas",
+                "1",
+            ]
+            if protocol_id != PROTOCOL_ID:
+                argv.extend(["--solver-protocol-id", protocol_id])
+            for name in excluded_tpu_names:
+                argv.extend(["--exclude-tpu-name", name])
+            monkeypatch.setattr(sys, "argv", argv)
+            engine_pool.main()
         assert get_job_info() is owner
         assert owner.constraints == []
     finally:
         set_job_info(original_info)
-    assert sweeps == [8, 32, 128, 512]
+    assert sweeps == [8, 32, 128, sweep_max]
     assert lifecycle == (
         ["slice_enter", "register", "slice_exit"]
         if registry_failure
         else ["slice_enter", "register", "unregister", "slice_exit"]
     )
-    (qualification,) = (tmp_path / "qualification/small").glob("*.json")
+    (qualification,) = (tmp_path / "qualification" / solver.value).glob("*.json")
     archived = json.loads(qualification.read_text())
     assert archived["excluded_tpu_names"] == list(excluded_tpu_names)
-    assert archived["replicas"][0]["warm_throughput"]["output_tokens_per_second_per_chip"] == 32
-    assert (tmp_path / "pools/small.json").exists() is not registry_failure
+    assert archived["replicas"][0]["warm_throughput"]["output_tokens_per_second_per_chip"] == throughput_per_chip
+    assert (tmp_path / "pools" / (solver.value + ".json")).exists() is not registry_failure
+
+    assert archived.get("solver_protocol_id", PROTOCOL_ID) == protocol_id
+    if protocol_id == PROTOCOL_ID:
+        assert "solver_protocol_id" not in archived
 
 
 def test_full_rollout_preserves_pilot_hardware_exclusions(tmp_path):
@@ -784,3 +822,14 @@ def test_regional_judge_rebind_reuses_inputs_and_preserves_old_ledger(tmp_path, 
         assert all(row.source_id == "held-source" for row in rows)
     assert mapped(previous_uri).read_bytes() == raw
     assert old_rows.read_text() == '{"historical-score": 1}\n'
+
+
+@pytest.mark.parametrize(
+    "solver,protocol_id", [(Solver.SMALL, LARGE_DYNAMIC_OUTPUT_PROTOCOL_ID), (Solver.LARGE, "unknown-policy")]
+)
+def test_pool_policy_mismatch_fails_before_regional_allocation(tmp_path, solver, protocol_id):
+    # Outside Iris, reaching placement would fail with a missing-context error.
+    # A bad declared policy must fail before staging, placement or registry writes.
+    with pytest.raises(ValueError, match="Unknown solver protocol"):
+        tpu.run_tpu_pool(solver, str(tmp_path), 1, solver_protocol_id=protocol_id)
+    assert not list(tmp_path.iterdir())

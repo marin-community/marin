@@ -11,7 +11,7 @@ import time
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 
-from finestore.rl.difficulty import SOLVER_MODELS, Solver
+from finestore.rl.difficulty import PROTOCOL_ID, SOLVER_MODELS, Solver
 from iris.rpc.proto_display import priority_band_name, priority_band_value
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeConfig
@@ -226,11 +226,24 @@ def main() -> None:
     parser.add_argument("--tpu-root")
     parser.add_argument("--replicas", type=int, default=1)
     parser.add_argument("--exclude-tpu-name", action="append", default=[])
+    parser.add_argument(
+        "--solver-protocol-id",
+        default=PROTOCOL_ID,
+        help="Request-policy identity declared by this TPU pool; defaults to the legacy receipt format",
+    )
     args = parser.parse_args()
     if args.exclude_tpu_name and args.tpu_root is None:
         parser.error("--exclude-tpu-name requires a TPU pool")
+    if args.solver_protocol_id != PROTOCOL_ID and args.tpu_root is None:
+        parser.error("--solver-protocol-id requires a TPU pool")
     if args.tpu_root is not None:
-        run_tpu_pool(args.solver, args.tpu_root, args.replicas, excluded_tpu_names=tuple(args.exclude_tpu_name))
+        run_tpu_pool(
+            args.solver,
+            args.tpu_root,
+            args.replicas,
+            excluded_tpu_names=tuple(args.exclude_tpu_name),
+            solver_protocol_id=args.solver_protocol_id,
+        )
     elif args.solver == Solver.HOSTED:
         run_provider_warm(args.registry)
     else:
