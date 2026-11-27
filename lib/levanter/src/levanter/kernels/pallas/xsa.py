@@ -38,8 +38,8 @@ def _validate_shape(y: jax.Array, v: jax.Array) -> tuple[int, int]:
     if y.shape[-1] < 1:
         raise ValueError(f"XSA requires a non-empty head width, got {y.shape[-1]}")
     rows = math.prod(y.shape[:-1])
-    if not 1 <= rows <= _MAX_FLATTENED_ROWS:
-        raise ValueError(f"XSA supports 1..{_MAX_FLATTENED_ROWS} flattened rows, got {rows}")
+    if rows == 0:
+        raise ValueError("XSA requires at least one row")
     if y.dtype not in (jnp.float32, jnp.bfloat16) or v.dtype not in (jnp.float32, jnp.bfloat16):
         raise TypeError(f"XSA supports float32/bfloat16 storage, got y={y.dtype}, v={v.dtype}")
     return rows, y.shape[-1]
@@ -54,7 +54,7 @@ def _xsa_reference_flat(y: jax.Array, v: jax.Array) -> jax.Array:
     return (y32 - (dot / (norm_sq + _EPSILON)) * v32).astype(y.dtype)
 
 
-def xsa_reference(y: Float[Array, "... H 128"], v: Float[Array, "... H 128"]) -> jax.Array:
+def xsa_reference(y: Float[Array, "... W"], v: Float[Array, "... W"]) -> jax.Array:
     """Apply XSA using the obvious row-local JAX reference.
 
     Reference arithmetic accepts arbitrary positive head widths so portable model tests can
@@ -160,6 +160,8 @@ def _validate_physical_layout(y: jax.Array, v: jax.Array) -> P | None:
 def xsa_pallas_tpu(y: Float[Array, "M 128"], v: Float[Array, "M 128"]) -> jax.Array:
     """Run XSA on explicitly replicated or row-sharded TPU inputs."""
     rows, width = _validate_shape(y, v)
+    if rows > _MAX_FLATTENED_ROWS:
+        raise XsaUnsupportedError(f"pallas_tpu supports at most {_MAX_FLATTENED_ROWS} flattened rows, got {rows}")
     if width != _HEAD_WIDTH:
         raise XsaUnsupportedError(f"pallas_tpu requires head width {_HEAD_WIDTH}, got {width}")
     if y.ndim != 2 or rows != y.shape[0] or jax.default_backend() != "tpu":
@@ -175,10 +177,10 @@ def xsa_pallas_tpu(y: Float[Array, "M 128"], v: Float[Array, "M 128"]) -> jax.Ar
 
 
 def _forward(y: jax.Array, v: jax.Array, implementation: Implementation) -> jax.Array:
-    _, width = _validate_shape(y, v)
     if implementation == "reference":
         return xsa_reference(y, v)
     if implementation == "pallas_tpu":
+        _, width = _validate_shape(y, v)
         spec = _validate_physical_layout(y, v)
         flat_y = y.reshape((-1, width))
         flat_v = v.reshape((-1, width))
@@ -192,7 +194,7 @@ def _forward(y: jax.Array, v: jax.Array, implementation: Implementation) -> jax.
 
 @partial(jax.custom_vjp, nondiff_argnums=(2,))
 def xsa_forward(
-    y: Float[Array, "... H 128"], v: Float[Array, "... H 128"], implementation: Implementation = "reference"
+    y: Float[Array, "... W"], v: Float[Array, "... W"], implementation: Implementation = "reference"
 ) -> jax.Array:
     """Project each attention row orthogonally away from its aligned value row."""
     return _forward(y, v, implementation)

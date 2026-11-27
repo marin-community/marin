@@ -29,6 +29,16 @@ def test_xsa_reference_matches_independent_oracle_and_batch_shape():
     np.testing.assert_allclose(actual, flattened, rtol=0, atol=0)
 
 
+def test_xsa_reference_projects_and_differentiates_beyond_tpu_row_limit():
+    y = jnp.broadcast_to(jnp.array([1.0, 2.0, 3.0]), (4096, 3))
+    v = jnp.broadcast_to(jnp.array([1.0, 0.0, 0.0]), y.shape)
+
+    projected = jax.jit(xsa_forward)(y, v)
+    dy = jax.jit(jax.grad(lambda value: xsa_forward(value, v).sum()))(y)
+    np.testing.assert_allclose(projected, np.broadcast_to([0, 2, 3], y.shape), rtol=0, atol=1e-6)
+    np.testing.assert_allclose(dy, np.broadcast_to([0, 1, 1], y.shape), rtol=0, atol=1e-6)
+
+
 def test_xsa_reference_custom_vjp_matches_reference_gradient():
     y = jnp.asarray([[0.2, -0.7, 1.1], [0.4, 0.3, -0.9]], dtype=jnp.float32)
     v = jnp.asarray([[1.3, 0.1, -0.4], [-0.2, 0.8, 0.6]], dtype=jnp.float32)
