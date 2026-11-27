@@ -935,8 +935,8 @@ class InferenceEngine:
         shared_pages = len(request.prompt_tokens) // page_size
         # The final sampled token is returned without being written to the KV cache.
         max_tokens = min(int(request.decode_params.max_num_tokens), self.config.max_seq_len)
-        last_write = max(len(request.prompt_tokens), max_tokens - 1)
-        pages_per_choice = (last_write + page_size - 1) // page_size
+        kv_token_count = max(len(request.prompt_tokens), max_tokens - 1)
+        pages_per_choice = (kv_token_count + page_size - 1) // page_size
         return shared_pages + request.n_generations * (pages_per_choice - shared_pages)
 
     def _prefill_prompts(self, requests: Sequence[Request], page_requirements: dict[int, int]) -> PrefillWork | None:
