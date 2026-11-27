@@ -9,11 +9,12 @@ from hydra import compose, initialize_config_dir
 from skyrl_gym.verification import VerificationResult
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
-from skyrl_train.config.driver_validation import validate_cfg
+from skyrl_train.config.driver_validation import validate_cfg, validate_driver_config
+from skyrl_train.config.rollout_validation import EntrypointOperation
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING
-from skyrl_train.batch_metrics import reward_metrics
+from skyrl_train.batch_metrics import advantage_metrics, reward_metrics
 from skyrl_train.rollouts.buffer import RowFacts
 
 import torch
@@ -192,6 +193,102 @@ def assert_batch_exact(actual, expected):
         assert row.dtype == reference.dtype
         np.testing.assert_array_equal(row, reference)
     torch.testing.assert_close(actual.routed_experts_tensor(), expected.routed_experts_tensor(), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("path", ["driver", "worker"])
+@pytest.mark.parametrize("estimator,hard_credit", [("grpo", 0.7071063), ("rloo", 2.0), ("rloo_n", 2.0)])
+def test_group_credit_and_flat_metric_use_eligible_rows(path, estimator, hard_credit):
+    cfg = get_default_config()
+    algorithm = cfg.trainer.algorithm
+    algorithm.advantage_estimator = estimator
+    invariant = resolve_group_advantage_invariant(
+        advantage_estimator=estimator, physical_group_size=2, minimum_group_size=2 if estimator == "rloo_n" else None
+    )
+    with open_dict(algorithm):
+        algorithm.resolved_group_advantage = invariant.to_config()
+    uids = (
+        "easy",
+        "easy",
+        "hard",
+        "hard",
+        "masked",
+        "masked",
+        "excluded-flat",
+        "excluded-flat",
+        "near",
+        "near",
+        "spread",
+        "spread",
+    )
+    batch = {
+        "prompt_token_ids": [[1]] * len(uids),
+        "response_ids": [[2]] * len(uids),
+        "loss_masks": [[1]] * len(uids),
+        "rewards": [[reward] for reward in (1.0, 1.0, 0.0, 2.0, 1.0, 0.0, 1.0, 1.0, 0.7, 0.7000001, 0.0, 1.25e-6)],
+        "exclude_from_baseline": [False, False, False, False, False, True, False, True, False, False, False, False],
+    }
+    facts = RowFacts.from_batch(batch)
+    plan = BatchPlan(
+        global_step=1, uids=uids, facts=(facts,), fields=facts.fields, rollout_staleness=None, num_experts=None
+    )
+    rows = range(3, 6) if path == "worker" else range(len(uids))
+    payload = {key: values[rows.start : rows.stop] for key, values in batch.items()}
+    data = assemble_slice(plan, rows, payload, pad_token_id=0, algorithm=algorithm)
+    if path == "worker":
+        other_scores = torch.tensor(batch["rewards"]).flatten()
+        other_scores[rows.start : rows.stop] = 0
+        scores = install_plan_advantages(
+            data, plan, rows, algorithm, reduction=WorldReduction(lambda values, operation: values + other_scores, True)
+        )
+        metrics = advantage_metrics(data, step_wise=False, group_scores=(uids, scores))
+    else:
+        trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+        trainer.cfg, trainer.group_advantage_invariant, trainer.all_metrics = cfg, invariant, {}
+        data = trainer.compute_advantages(data)
+        metrics = trainer.all_metrics
+
+    expected = [0, 0, -hard_credit, hard_credit, 0, 0, 0, 0, 0, 0][rows.start : rows.stop]
+    credit = data["advantages"].flatten().tolist()
+    assert credit[: len(expected)] == pytest.approx(expected)
+    if path == "driver":
+        assert credit[-2] < 0 < credit[-1]
+    assert metrics["reward/zero_std_group_fraction"] == pytest.approx(1 / 3)
+
+
+def test_step_wise_credit_uses_eligible_final_outcomes():
+    cfg = get_default_config()
+    cfg.trainer.step_wise_training = True
+    algorithm = cfg.trainer.algorithm
+    algorithm.advantage_estimator = "rloo_n"
+    batch = {
+        "prompt_token_ids": [[1], [1, 2], [1], [1]],
+        "response_ids": [[2, 3, 4, 5], [6, 7], [8, 9, 10], [11, 12, 13]],
+        "loss_masks": [[1, 1, 1, 1], [1, 1], [1, 1, 1], [1, 1, 1]],
+        "rewards": [[0.0, 0.0, 0.0, 0.0], [0.0, 1.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+        "is_last_step": [False, True, True, True],
+        "exclude_from_baseline": [False, False, False, True],
+    }
+    facts = RowFacts.from_batch(batch)
+    plan = BatchPlan(
+        global_step=1, uids=("g",) * 4, facts=(facts,), fields=facts.fields, rollout_staleness=None, num_experts=None
+    )
+    data = assemble_slice(plan, range(4), batch, pad_token_id=0, algorithm=algorithm)
+    trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+    trainer.cfg, trainer.all_metrics = cfg, {}
+    trainer.group_advantage_invariant = resolve_group_advantage_invariant(
+        advantage_estimator="rloo_n", physical_group_size=3, minimum_group_size=2
+    )
+    result = trainer.compute_advantages(data)
+    expected = torch.tensor([[1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 0.0, 0.0], [-1.0, -1.0, -1.0, 0.0], [0.0, 0.0, 0.0, 0.0]])
+    torch.testing.assert_close(result["advantages"], expected, rtol=0, atol=0)
+
+
+def test_step_wise_training_requires_outcome_advantages():
+    cfg = get_default_config()
+    cfg.trainer.step_wise_training = True
+    cfg.trainer.algorithm.advantage_estimator = "reinforce++"
+    with pytest.raises(ValueError, match="step-wise training requires an outcome advantage estimator"):
+        validate_driver_config(cfg, EntrypointOperation.TRAIN, check_runtime_resources=False)
 
 
 @pytest.mark.parametrize("dp_size", [1, 3, 8])

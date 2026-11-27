@@ -96,6 +96,7 @@ from skyrl_train.group_admission import (
     GroupAdvantageInvariant,
     admission_stall_timeout,
     assert_training_groups_eligible,
+    trial_row_masks,
 )
 from marinskyrl.checkpoint_paths import (
     GLOBAL_STEP_PREFIX,
@@ -2150,14 +2151,9 @@ class RayPPOTrainer:
                 response_masks_tensor.bool(),
                 self.cfg.generator.sampling_params.logprobs,
             )
-            excluded = trajectory_batch.get("exclude_from_baseline")
-            final = trajectory_batch.get("is_last_step")
-            if excluded is None:
-                excluded = [False] * len(response_ids)
-            if final is None:
-                final = [True] * len(response_ids)
+            _, eligible_rows = trial_row_masks(trajectory_batch, len(response_ids))
             loop = parse_trajectory_reward_shaping_config(self.cfg.generator.get("trajectory_reward_shaping")).loop
-            eligible = [last and not exclude for last, exclude in zip(final, excluded, strict=True)]
+            eligible = eligible_rows.tolist()
             verified_boundaries = None
             closure_targets = None
             if ftpo.boundary.uses_verified_boundaries:
@@ -2435,16 +2431,18 @@ class RayPPOTrainer:
             config = self.cfg.trainer.algorithm
             gamma = self.cfg.trainer.algorithm.gamma
             grpo_norm_by_std = self.cfg.trainer.algorithm.grpo_norm_by_std
-            last_step_rewards = token_level_rewards[is_last_step]
-            # compatible with any advantage estimator
+            last_step_rewards = token_level_rewards[is_last_step].sum(dim=-1, keepdim=True)
+            final_rows = is_last_step.cpu().numpy()
+            exclusions = data.metadata.get("exclude_from_baseline")
             last_step_advantages, _ = compute_advantages_and_returns(
                 token_level_rewards=last_step_rewards,
-                response_mask=response_mask[is_last_step],
-                index=index[is_last_step.cpu().numpy()],
+                response_mask=torch.ones_like(last_step_rewards, dtype=response_mask.dtype),
+                index=index[final_rows],
                 adv_estimator=adv_estimator,
                 config=config,
                 gamma=gamma,
                 grpo_norm_by_std=grpo_norm_by_std,
+                exclude_from_baseline=None if exclusions is None else np.asarray(exclusions)[final_rows],
                 group_advantage_invariant=self.group_advantage_invariant,
             )
             traj_ids = (
@@ -2454,7 +2452,7 @@ class RayPPOTrainer:
             assert num_groups == len(last_step_advantages), (
                 f"number of groups {num_groups} doesn't match the number of trajectories as given by `is_last_step` {len(last_step_advantages)}. The `is_last_step` tensor is likely malformed"
             )
-            advantages = last_step_advantages[traj_ids]
+            advantages = last_step_advantages[traj_ids] * response_mask
         else:
             advantages, _ = batch_advantages(
                 data, self.cfg.trainer.algorithm, invariant=self.group_advantage_invariant

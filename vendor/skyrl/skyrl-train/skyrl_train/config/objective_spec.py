@@ -225,13 +225,12 @@ def validate_dpo(cfg: DictConfig) -> None:
     if (
         algorithm.use_kl_loss
         or algorithm.use_kl_in_reward
-        or algorithm.think_token_weight != 1
         or algorithm.enable_token_reward_channel
         or algorithm.dynamic_sampling.type is not None
     ):
         raise ValueError(
             "dpo supplies its own beta-weighted reference term; disable use_kl_loss, use_kl_in_reward, "
-            "think_token_weight, the token-reward channel, and reward-based dynamic sampling"
+            "the token-reward channel and reward-based dynamic sampling"
         )
     if cfg.generator.n_samples_per_prompt != 2:
         raise ValueError("dpo requires generator.n_samples_per_prompt=2 (chosen and rejected rows per prompt)")
@@ -342,8 +341,6 @@ def validate_objective(cfg: DictConfig, *, loss_spec: LossSpec | None = None) ->
             raise ValueError(f"{algorithm.policy_loss_type} requires trainer.algorithm.loss_reduction=sequence_mean")
         if token_credit or (plan is not None and not topk):
             raise ValueError(f"{algorithm.policy_loss_type} requires sequence-level advantages; use a token-level loss")
-    if algorithm.think_token_weight != 1 and not algorithm.enable_token_reward_channel:
-        raise ValueError("think_token_weight != 1 requires trainer.algorithm.enable_token_reward_channel=true")
     if plan is None:
         return
     if not topk and algorithm.policy_loss_type == PolicyLossType.SFT:

@@ -25,7 +25,12 @@ from skyrl_gym.task_sessions import AnswerTaskSession
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from finestore.rl.run_records import read_attempt, read_attempt_metrics, read_evaluations
 from cloud.iris import launch, skyrl_entrypoint, task_runtime, training_driver
-from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
+from cloud.iris.launch_config import (
+    LaunchTopology,
+    load_launch_config,
+    validate_launch_config,
+    validate_launch_driver_config,
+)
 from cloud.iris.role_plan import derive_num_nodes, derive_role_plan
 from cloud.iris.rl_config_translation import (
     RL_CONFIG_PAYLOAD_ENV,
@@ -323,19 +328,26 @@ def test_default_hf_export_requests_only_the_terminal_checkpoint(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("text,reward", [("#### 12", 1.0), ("#### 12\nMore reasoning.", 0.0)])
-async def test_custom_session_settings_reach_private_grading_through_the_launch_config(
-    tmp_path: Path, text: str, reward: float
+@pytest.mark.parametrize(
+    "env_class,sessions,text,reward",
+    [
+        ("custom_math", {"custom_math": {"reward_method": "final_line"}}, "#### 12", 1.0),
+        ("custom_math", {"custom_math": {"reward_method": "final_line"}}, "#### 12\nMore reasoning.", 0.0),
+        ("gsm8k", {}, "#### 12\n#### 13", 0.0),
+    ],
+)
+async def test_session_reward_methods_reach_grading_through_the_launch_config(
+    tmp_path: Path, env_class: str, sessions: dict, text: str, reward: float
 ) -> None:
     raw = raw_launch_config()
-    raw["skyrl"]["environment"] = {"task_sessions": {"custom_math": {"reward_method": "final_line"}}}
+    raw["skyrl"]["environment"] = {"task_sessions": sessions}
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
     config = load_launch_config(path)
     task = source_row_task(
         {
             "prompt": [{"role": "user", "content": "What is six plus six?"}],
-            "env_class": "custom_math",
+            "env_class": env_class,
             "reward_spec": {"ground_truth": "12"},
         },
         0,
@@ -353,6 +365,16 @@ async def test_custom_session_settings_reach_private_grading_through_the_launch_
         assert start.messages == ({"role": "user", "content": "What is six plus six?"},)
     finally:
         await session.close()
+
+
+def test_training_driver_rejects_ineffective_reward_settings(tmp_path):
+    raw = raw_launch_config()
+    raw["skyrl"]["generator"]["n_samples_per_prompt"] = 1
+    raw["skyrl"]["trainer"]["algorithm"]["advantage_estimator"] = "grpo"
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError, match=r"generator\.n_samples_per_prompt >= 2"):
+        validate_launch_driver_config(load_launch_config(path))
 
 
 @pytest.mark.parametrize("storage_prefix", ["s3://runs/smoke", "gs://runs/smoke"])

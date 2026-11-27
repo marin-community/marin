@@ -45,7 +45,7 @@ from skyrl_train.timing_observability import PhaseBreakdown
 from skyrl_train.telemetry import WORKER_ROLE, ProcessTelemetry, TelemetryConfig
 from skyrl_train.config.objective_spec import topk_loss_params
 from skyrl_train.objective.objective import TopKTeacherBatch, build_objective_micro_batch, compute_policy_objective
-from skyrl_train.objective.reduction import StepCounts, policy_data_weights, step_counts
+from skyrl_train.objective.reduction import StepCounts, step_counts
 from skyrl_train.distillation import student_topk_logprobs
 from skyrl_train.dataset.replay_buffer import Experience
 from skyrl_train.training_batch import (
@@ -1062,14 +1062,6 @@ class PolicyWorkerBase(Worker):
                 if local_step % accumulation_steps == 0:
                     chunks = dataloader.chunks(local_step, local_step + accumulation_steps)
                     counts = step_counts(
-                        [
-                            policy_data_weights(
-                                chunk["loss_mask"],
-                                chunk.get("response_span_tags"),
-                                self.cfg.trainer.algorithm.think_token_weight,
-                            )
-                            for chunk in chunks
-                        ],
                         [chunk["loss_mask"] for chunk in chunks],
                         [
                             chunk["loss_mask"] * chunk["teacher_valid_mask"]
@@ -1189,7 +1181,6 @@ class PolicyWorkerBase(Worker):
         loss_mask = experience.loss_mask
         rollout_action_logprobs = experience.rollout_logprobs
         rollout_routed_experts = experience.rollout_routed_experts
-        response_span_tags = experience.response_span_tags
 
         grug_causal_lm = self._grug_causal_lm()
         grug_query_bias_window = self._grug_query_bias_window
@@ -1237,9 +1228,7 @@ class PolicyWorkerBase(Worker):
                 loss_mask=loss_mask,
                 rollout_logprobs=rollout_action_logprobs,
                 correction_weights=experience.correction_weights,
-                response_span_tags=response_span_tags,
                 token_entropy=token_entropy,
-                think_token_weight=self.cfg.trainer.algorithm.think_token_weight,
                 teacher=teacher,
                 pair_roles=experience.pair_roles,
             )

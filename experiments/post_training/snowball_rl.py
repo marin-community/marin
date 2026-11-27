@@ -471,11 +471,6 @@ _PRESETS = (
         recipe=replace(
             _RENO_P40,
             fixed_reply_tokens=4096,
-            config=_RENO_P40.config.merge(
-                RecipePatch(
-                    trainer=sections.Trainer(algorithm=sections.Algorithm(rloo_n_filter_zero_reward_groups=False))
-                )
-            ),
         ),
         updates=10,
         measured=range(2, 11),

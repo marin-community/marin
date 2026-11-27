@@ -183,7 +183,6 @@ trainer:
       label_smoothing: 0.0
     loss_reduction: "token_mean"
     grpo_norm_by_std: true
-    rloo_n_filter_zero_reward_groups: true
     gamma: 1.0
     eps_clip_low: 0.2
     eps_clip_high: 0.2
@@ -191,7 +190,6 @@ trainer:
     off_policy_correction: null
     off_policy_correction_rules: null
     enable_token_reward_channel: false
-    think_token_weight: 1.0
     sapo:
       tau_pos: 1.0
       tau_neg: 1.05

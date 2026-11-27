@@ -54,6 +54,8 @@ REMOVED = MappingProxyType(
         "generator.async_engine": "every engine is asynchronous (MarinSkyRL #774)",
         "generator.batched": "configure generator sampling and batch limits (MarinSkyRL #774)",
         "trainer.algorithm.use_tis": "configure trainer.algorithm.off_policy_correction (MarinSkyRL #858)",
+        "trainer.algorithm.rloo_n_filter_zero_reward_groups": "flat groups always give zero advantage",
+        "trainer.algorithm.think_token_weight": "all eligible response tokens have equal policy weight",
         "trainer.policy.fsdp_config": "use trainer.policy.megatron_config (MarinSkyRL #776)",
     }
 )
