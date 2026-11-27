@@ -70,7 +70,7 @@ def _hf_initializer(path):
 def _rollout_with_routes(tokens, scores, expert_ids, policy_id):
     valid = np.ones(tokens.size, dtype=bool)
     valid[-1] = False
-    ids = np.broadcast_to(np.asarray(expert_ids, np.uint32), (2, tokens.size, 2))
+    ids = np.broadcast_to(np.asarray(expert_ids, np.uint8), (2, tokens.size, 2))
     response = inference_pb2.GenerateResponse(
         prompt_token_ids=tokens[: -scores.size].tolist(),
         logprob_mode=inference_pb2.LOGPROB_MODE_POLICY,
@@ -83,7 +83,8 @@ def _rollout_with_routes(tokens, scores, expert_ids, policy_id):
                     num_layers=2,
                     num_positions=tokens.size,
                     experts_per_token=2,
-                    expert_ids=ids.ravel().tolist(),
+                    expert_ids=ids.tobytes(),
+                    expert_id_dtype=inference_pb2.EXPERT_ID_DTYPE_UINT8,
                     valid=valid.tolist(),
                 ),
             )
