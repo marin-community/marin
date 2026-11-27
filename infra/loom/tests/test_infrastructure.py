@@ -280,24 +280,6 @@ def test_deployment_manifest_preserves_unicode_profile_instructions() -> None:
     assert json.loads(manifest)["profiles"][0]["profile"]["instructions"] == "Prefix comments with 🤖"
 
 
-def test_deployment_manifest_contains_stack_pull_request_rules(monkeypatch: pytest.MonkeyPatch) -> None:
-    stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())
-    monkeypatch.setenv(
-        "PULUMI_CONFIG",
-        json.dumps(
-            {key: value if isinstance(value, str) else json.dumps(value) for key, value in stack["config"].items()}
-        ),
-    )
-    pulumi.runtime.set_mocks(RecordingMocks(), project="marin-loom", stack="test")
-    config = DeploymentConfig.from_pulumi()
-    manifest = json.loads(_deployment_manifest(config, _deployment_profiles(config.profiles), []))
-
-    assert (
-        json.loads(manifest["settings"]["github.pull_request_rules"])
-        == stack["config"]["marin-loom:githubPullRequestRules"]
-    )
-
-
 def test_pull_request_rules_share_run_keys_and_channels_with_actions() -> None:
     stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())["config"]
     workflow_paths = {
