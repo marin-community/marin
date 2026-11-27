@@ -131,8 +131,31 @@ IDs and the validity mask can exceed gRPC's default 4 MiB receive limit.
 
 ## Strict Snowball policy replay
 
-Call `SnowballConfig.with_zero_kl_replay()` on the same model configuration for serving and learning. The TPUv4 fixture uses a four-device explicit data mesh, four sequence slots of 256 positions, eight 128-token pages, FP32 weights and activations, and BF16 serving KV. The model applies JAX matmul precision `highest` in both forwards.
+Call `SnowballConfig.with_zero_kl_replay()` with the same model configuration
+and weight snapshot on both sides. Use FP32 weights and activations, BF16
+serving KV, and full slot capacity with 128-token pages. Fixed attention uses
+one logical slot per device on an explicit data or expert mesh axis. Packed
+learner batches restore the independent slots before applying causal attention
+and gather the resulting activations back into packed order.
 
-Set `InferenceEngineConfig.logprob_mode` to `LogprobMode.POLICY`. Call the exact-token gRPC service with `capture_router_replay` enabled. Pass the returned generation response and choice to `prepare_rollout_policy_batch` for learner replay.
+Set `InferenceEngineConfig.logprob_mode` to `LogprobMode.POLICY` and request
+`capture_router_replay` through the exact-token gRPC endpoint. Prepare the
+responses with `prepare_rollout_policy_batch` before calling `pack_policy_batch`.
+The numerical gate checks the bits of every scored token and requires zero
+old/current log-ratio and KL at the serving snapshot.
 
-With the same model snapshot and token history, the v4-8 regression requires each sampled-token log probability to match bitwise. This yields zero KL between the serving and replayed policies at that snapshot. The objective's KL penalty coefficient remains a separate setting. The 67B 64K serving configuration uses a different precision profile.
+Run the production-width case on v4-8, v5p-8, or v6e-4 to exercise Snowball's
+2560-wide, 20-query-head, five-KV-head, 256-expert geometry. This case uses two
+layers and a 256-token context. The full-depth case uses 26 layers and requires
+the v5p HBM budget.
+
+```bash
+uv run --package marin-levanter --extra tpu --extra serve --group test pytest \
+    -n 0 -s -m manual -k production-width lib/levanter/tests/inference/test_snowball_zero_kl_replay.py
+```
+
+The gate reports first-batch latency and warmed aggregate output tokens per
+second at four concurrent requests. For the fast score comparison it feeds
+the fast rollouts' exact tokens and captured expert IDs into the strict learner.
+This keeps the probability comparison aligned even when sampling choices differ
+between serving modes.
