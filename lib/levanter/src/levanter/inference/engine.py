@@ -41,6 +41,8 @@ from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_
 
 logger = logging.getLogger(__name__)
 
+_release_finished_slots = jax.jit(DecodeState.free_pages_for_finished, donate_argnums=0)
+
 
 @dataclass(frozen=True)
 class InferenceEngineConfig:
@@ -928,6 +930,12 @@ class InferenceEngine:
         self.gen_state, outputs = new_state
         return outputs
 
+    @staticmethod
+    def _prefill_page_count(request: Request, page_size: int) -> int:
+        full_pages, tail = divmod(len(request.prompt_tokens), page_size)
+        # Clones share full prompt pages and copy any partial last page.
+        return full_pages + request.n_generations * bool(tail)
+
     def _prefill_prompts(
         self,
         requests: Sequence[Request],
@@ -939,6 +947,10 @@ class InferenceEngine:
         max_prefill_size = self.config.max_prefill_size or self.model.Pos.size
         max_seq_len = decode_state.tokens.axis_size("position")
         max_slots = decode_state.max_seqs
+        page_table = decode_state.page_table
+        free_pages = page_table.num_pages
+        if len(self.free_slots) < max_slots:
+            free_pages = int(jnp.count_nonzero(page_table.page_ref_counts.array == 0))
 
         queue_tokens = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
         queue_slot_ids = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
@@ -986,6 +998,11 @@ class InferenceEngine:
                         "Increase max_seqs_in_prefill or reduce n_generations."
                     )
                 break
+
+            prompt_pages = self._prefill_page_count(request, page_table.page_size)
+            if prompt_pages > free_pages:
+                break
+            free_pages -= prompt_pages
 
             requested_slot = self.free_slots.pop()
             slot_id = int(requested_slot)
@@ -1086,6 +1103,27 @@ class InferenceEngine:
             ),
         )
 
+    def _validate_generation_requests(self, requests: Sequence[Request]) -> None:
+        if len({request.request_id for request in requests}) != len(requests):
+            raise ValueError("Request IDs must be unique within a generation batch")
+        max_prefill = self.config.max_prefill_size or self.model.Pos.size
+        if any(not 0 < len(request.prompt_tokens) <= max_prefill for request in requests):
+            raise ValueError("Prompts must be nonempty and fit within max_prefill_size")
+        if any(len(request.prompt_tokens) >= self.config.max_seq_len for request in requests):
+            raise ValueError("Prompts must leave room for generation within max_seq_len")
+        if any(request.n_generations < 1 for request in requests):
+            raise ValueError("Every request must ask for at least one generation")
+
+        page_table = self.gen_state.decode_state.page_table
+        if any(self._prefill_page_count(request, page_table.page_size) > page_table.num_pages for request in requests):
+            raise ValueError("A prompt and its clones must fit within the KV page table")
+
+        max_needed = max(int(r.n_generations) for r in requests)
+        if max_needed > page_table.max_seqs:
+            raise ValueError(
+                f"A request asks for {max_needed} generations, exceeding max_seqs ({page_table.max_seqs})."
+            )
+
     def generate(self, requests: Sequence[Request], step_callback=None) -> GenerationResult:
         """Generate tokens for a batch of Requests.
 
@@ -1096,16 +1134,9 @@ class InferenceEngine:
             requests: Sequence of generation requests
             step_callback: Optional callback function called at each decode iteration with iteration number
         """
-        if any(len(request.prompt_tokens) >= self.config.max_seq_len for request in requests):
-            raise ValueError("Prompts must leave room for generation within max_seq_len")
-
-        # validate we don't have any sequences with n_generations exceeding max_seqs
-        max_needed = max(int(r.n_generations) for r in requests)
-        if max_needed > int(self.gen_state.decode_state.page_table.max_seqs):
-            raise ValueError(
-                f"Total sequences needed ({max_needed}) exceeds max_seqs ({self.gen_state.decode_state.page_table.max_seqs})."
-                "Decompose your request into smaller batches or increase max_seqs when building the service."
-            )
+        if not requests:
+            return GenerationResult(tokens=[], logprobs=[], total_generated=0)
+        self._validate_generation_requests(requests)
 
         # for now, reset the engine state between each batch - the engine cannot be called with
         # parallel batches.
@@ -1147,11 +1178,6 @@ class InferenceEngine:
                 )
 
         time_in = time.time()
-        # Initial admission from queue and extract prompt tokens
-        decode_outputs = self._prefill_batch(requests)
-        self._extract_outputs(decode_outputs)
-        initial_prefill_out = time.time()
-        logger.info(f"Initial prefill and extraction took {initial_prefill_out - time_in:.3f}s")
 
         def _all_done() -> bool:
             for rid, n_kids in expected_children.items():
@@ -1162,8 +1188,16 @@ class InferenceEngine:
                         return False
             return True
 
+        pending = list(requests)
         decode_iteration = 0
         while not _all_done():
+            if pending and self.free_slots:
+                prefill_outputs = self._prefill_batch(pending)
+                if prefill_outputs is not None:
+                    self._extract_outputs(prefill_outputs)
+                    pending = [request for request in pending if request.request_id not in self.sequences]
+                    continue
+
             # Call step callback if provided
             if step_callback is not None:
                 step_callback(decode_iteration)
@@ -1204,8 +1238,7 @@ class InferenceEngine:
             decode_iteration += 1
 
             if new_tokens == 0:
-                logger.warning("No progress in decoding with unfinished requests")
-                break
+                raise RuntimeError("Inference made no progress with unfinished requests")
 
         # Assemble outputs in the order of the requests for this call
         outputs_list: list[list[int]] = []
@@ -1328,7 +1361,8 @@ class InferenceEngine:
             dr.tokens_decoded += 1
             appended += 1
 
-        # Update done flags based on snapshot
+        # Finish outputs before releasing slots, so a new request can reuse them.
+        released_slots = []
         for local_slot, is_done in enumerate(fins):
             if not bool(is_done):
                 continue
@@ -1338,9 +1372,9 @@ class InferenceEngine:
             rid, cid = info
             dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
             dr.done = True
+            del self.local_map[local_slot]
+            released_slots.append(local_slot)
 
-            # Finished slots stay finished until they are released, so this runs on every drain: only
-            # detokenize the sequence when the debug log that consumes it is actually enabled.
             if logger.isEnabledFor(logging.DEBUG):
                 try:
                     full_text = self.tokenizer.decode(dr.token_list, skip_special_tokens=False)
@@ -1350,7 +1384,12 @@ class InferenceEngine:
                         f"[Request {rid}, Choice {cid}] FINAL ({dr.tokens_decoded} tokens): <decode_error: {e}>"
                     )
 
-        num_finished = int(fins.sum())
-        logger.debug(f"extract: appended={appended} (drained={n}) unmapped={unmapped} finished_count={num_finished}")
+        if released_slots:
+            decode_state = _release_finished_slots(self.gen_state.decode_state, jnp.asarray(fins))
+            self.gen_state = dataclasses.replace(self.gen_state, decode_state=decode_state)
+            self.free_slots.extend(released_slots)
+        logger.debug(
+            "extract: appended=%d (drained=%d) unmapped=%d finished=%d", appended, n, unmapped, len(released_slots)
+        )
 
         return appended
