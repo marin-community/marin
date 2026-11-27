@@ -168,6 +168,7 @@ _GATED_NORM_RANK = 128
 _CACHE_LAYER_AXIS = "layer"
 _LONG_ATTENTION_INTERVAL = 4
 _ROUTING_RENORM_SUM = 2.5
+_STRICT_MOE_IMPLEMENTATION = "ring_gather_combine"
 _QK_RMS_NORM_EPS = 1e-6  # q/k rms_norm uses the function default 1e-6, NOT layer_norm_eps
 # June 67B qk_mult (YaRN mscale 1.3*(0.1*ln(65536/8192)+1)); used as the field default and the
 # from_hf_config fallback so the two never drift. Real grug_moe exports always carry qk_mult.
@@ -286,7 +287,7 @@ class SnowballConfig(HFCompatConfig):
             if (
                 self.projection_implementation != "fixed_schedule"
                 or self.shared_attention_implementation != "fixed_schedule"
-                or self.moe_implementation != "ring"
+                or self.moe_implementation != _STRICT_MOE_IMPLEMENTATION
             ):
                 raise ValueError("Use SnowballConfig.with_zero_kl_replay() to select the complete replay profile")
         if self.num_heads % self.num_kv_heads != 0:
@@ -309,7 +310,7 @@ class SnowballConfig(HFCompatConfig):
         _ = self.inferred_head_dim
 
     def with_zero_kl_replay(self) -> "SnowballConfig":
-        """Select shared TPUv4 arithmetic for the bounded four-slot replay fixture.
+        """Select fixed TPU arithmetic for serving and policy replay.
 
         Use FP32 parameters and activations, BF16 serving KV, and highest native
         matmul precision on both sides. Serving must return raw policy scores.
@@ -320,7 +321,7 @@ class SnowballConfig(HFCompatConfig):
             replay_precision="zero_kl",
             shared_attention_implementation="fixed_schedule",
             projection_implementation="fixed_schedule",
-            moe_implementation="ring",
+            moe_implementation=_STRICT_MOE_IMPLEMENTATION,
         )
 
     @property
@@ -2049,9 +2050,14 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             return block
         # A receiver can get every sender's assignments. Reserve that worst-case
         # capacity so expert dispatch cannot drop tokens at serving time.
-        experts = dataclasses.replace(block.mlp.expert_mlp, implementation="ring", capacity_factor=float(expert_size))
+        strict = self.config.replay_precision == "zero_kl"
+        implementation = _STRICT_MOE_IMPLEMENTATION if strict else "ring"
+        experts = dataclasses.replace(
+            block.mlp.expert_mlp, implementation=implementation, capacity_factor=float(expert_size)
+        )
         selected = (
-            self._selected_ep_decode
+            not strict
+            and self._selected_ep_decode
             and token_rows == expert_size
             and not self.config.router_combine_fp32
             and _mesh_axis_size(_current_mesh(), "data") == 1

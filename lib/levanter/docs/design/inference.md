@@ -134,7 +134,8 @@ IDs and the validity mask can exceed gRPC's default 4 MiB receive limit.
 Call `SnowballConfig.with_zero_kl_replay()` with the same model configuration
 and weight snapshot on both sides. Use FP32 weights and activations, BF16
 serving KV, and full slot capacity with 128-token pages. Fixed attention uses
-one logical slot per device on an explicit data or expert mesh axis. Packed
+one logical slot per device on an explicit data or expert mesh axis. Expert
+parallelism combines routed contributions in route order. Packed
 learner batches restore the independent slots before applying causal attention
 and gather the resulting activations back into packed order.
 
@@ -150,8 +151,8 @@ layers and a 256-token context. The full-depth case uses 26 layers and requires
 the v5p HBM budget.
 
 ```bash
-uv run --package marin-levanter --extra tpu --extra serve --group test pytest \
-    -n 0 -s -m manual -k production-width lib/levanter/tests/inference/test_snowball_zero_kl_replay.py
+uv run --package marin-levanter --extra tpu --extra serve --extra test pytest \
+    -n 0 -s -m 'tpu and manual' -k production-width lib/levanter/tests/inference/test_snowball_zero_kl_replay.py
 ```
 
 The gate reports first-batch latency and warmed aggregate output tokens per

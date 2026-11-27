@@ -218,8 +218,9 @@ def response_logprobs(
     """Score raw-policy response tokens before applying the objective weights.
 
     Both scoring and training disable dropout. Padding forms a separate
-    attention segment in standard scoring. Zero-KL scoring restores independent causal slots from packed batches. Returned scores at masked positions have no
-    effect on the objective.
+    attention segment in standard scoring. Zero-KL scoring restores independent
+    causal slots from packed batches. Scores at masked positions have no effect
+    on the objective.
     """
     Position = batch.tokens.resolve_axis("position")
     Response = batch.response_mask.resolve_axis("response")
