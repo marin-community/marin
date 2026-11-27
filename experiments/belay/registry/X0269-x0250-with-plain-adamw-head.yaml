@@ -1,0 +1,12 @@
+id: X0269
+slug: x0250-with-plain-adamw-head
+name: X0250 with plain AdamW head
+category: Optimizers
+summary: 🤖 Posted on behalf of @armorfaye.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-7228102754
+  author: armorfaye
+  approved_by: armorfaye (trusted)
