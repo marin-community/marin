@@ -15,7 +15,6 @@ from levanter.inference.page_table import PageBatchInfo, PageTable
 from levanter.inference.utils import (
     INVALID,
     get_unique_in_order,
-    is_invalid,
     is_stop_signal,
     is_valid,
     masked_set,
@@ -261,8 +260,6 @@ class SequenceTable(eqx.Module):
         current_lens = self.seq_lens
         active_mask_for_updated = hax.where(valid_updated, self.used_mask["seq", safe_updated], False)
 
-        num_updated_seqs = hax.sum(valid_updated).scalar().astype(jnp.int32)
-
         masked_seq_len = (masked_max_pos + 1) * active_mask_for_updated.astype(new_counts.dtype)
         new_lens = current_lens.at["seq", safe_updated].max(masked_seq_len, mode="drop")
         # jax.debug.print("masked_seq_len={msl} new_lens={nl} safe_updated={su}", msl=masked_seq_len, nl=new_lens, su=safe_updated)
@@ -274,65 +271,32 @@ class SequenceTable(eqx.Module):
         old_num_pages_needed = num_allocated_pages
         old_num_pages_needed = hax.where(valid_updated, old_num_pages_needed["seq", safe_updated], 0)
         new_num_pages_needed = hax.where(valid_updated, new_num_pages_needed["seq", safe_updated], 0)
-        # jax.debug.print("new_num_pages_needed={nnp} old_num_pages_needed={onp}", nnp=new_num_pages_needed, onp=old_num_pages_needed)
-        # jax.debug.print(
-        #     "nnp per seq: seq0={s0} seq1={s1} seq2={s2}",
-        #     s0=new_num_pages_needed["seq", 0],
-        #     s1=new_num_pages_needed["seq", 1],
-        #     s2=new_num_pages_needed["seq", 2],
-        # )
 
-        page_indices = self.page_indices
-        page_ref_counts = page_table.page_ref_counts
+        required = jnp.maximum(new_num_pages_needed.array - old_num_pages_needed.array, 0)
+        offsets = jnp.cumsum(required)
+        total_required = offsets[-1]
 
-        # NB seq_offset refers to the offset into updated_seqs, not the actual seq_id
-        def _alloc_pages_for_seq(seq_offset, carry):
-            indices, ref_counts = carry
-            num_needed = new_num_pages_needed["seq", seq_offset].scalar()
-            old_needed = old_num_pages_needed["seq", seq_offset].scalar()
-            seq_id = safe_updated["seq", seq_offset].scalar()
-            # jax.debug.print(
-            #     "alloc seq {seq_id} lookup nnp={nnp}", seq_id=seq_id, nnp=new_num_pages_needed["seq", seq_id]
-            # )
-            # jax.debug.print("alloc seq {seq_id} old_needed={old} num_needed={new}", seq_id=seq_id, old=old_needed, new=num_needed)
+        def allocate(state):
+            indices, refs = state
+            free = refs.array == 0
+            num_pages = page_table.num_pages
+            available = jnp.nonzero(free, size=num_pages, fill_value=num_pages)[0]
+            available = eqx.error_if(available, total_required > jnp.sum(free), "Out of free pages during allocation")
 
-            def body(page_idx, state):
-                indices, ref_counts = state
-                has_free = hax.any(ref_counts == 0).scalar()
+            logical = jnp.arange(page_table.pages_per_seq)[None, :]
+            previous = old_num_pages_needed.array[:, None]
+            write = (previous <= logical) & (logical < new_num_pages_needed.array[:, None])
+            # Each sequence takes a disjoint run of the ascending free-page list.
+            ranks = (offsets - required)[:, None] + logical - previous
+            physical = available.at[jnp.where(write, ranks, num_pages)].get(mode="fill", fill_value=INVALID)
+            slots = jnp.where(write, safe_updated.array[:, None], self.max_seqs)
+            updated = indices.array.at[slots, logical].set(physical, mode="drop")
+            assigned = jnp.where(jnp.arange(num_pages) < total_required, available, num_pages)
+            updated_refs = refs.array.at[assigned].set(1, mode="drop")
+            return hax.named(updated, indices.axes), hax.named(updated_refs, refs.axes)
 
-                ref_counts = eqx.error_if(ref_counts, ~has_free, "Out of free pages during allocation")
-
-                def do_alloc(state):
-                    indices, ref_counts = state
-                    # choose a page with the smallest ref count; when has_free, argmin will pick a zero-ref page
-                    free_page_idx = hax.argmin(ref_counts, "page")
-                    ref_counts = ref_counts.at["page", free_page_idx].add(1)
-                    indices = indices.at["seq", seq_id, "page", page_idx].set(free_page_idx)
-                    return indices, ref_counts
-
-                def no_alloc(state):
-                    # No-op; leave index INVALID so downstream gets INVALID destinations
-                    state = eqx.error_if(state, jnp.zeros(()) < 4, "INVALID!")
-                    return state
-
-                return jax.lax.cond(has_free, do_alloc, no_alloc, (indices, ref_counts))
-
-            return jax.lax.fori_loop(old_needed, num_needed, body, (indices, ref_counts))
-
-        def outer(i, carry):
-            page_indices, page_ref_counts = carry
-
-            def do_alloc(carry):
-                return _alloc_pages_for_seq(i, carry)
-
-            seq_id = updated_seqs["seq", i].scalar()
-            cond = is_valid(seq_id)
-            # jax.debug.print("outer iter {i}: seq_id={seq} is_valid={iv}", i=i, seq=seq_id, iv=is_valid(seq_id))
-
-            page_indices, page_ref_counts = jax.lax.cond(cond, do_alloc, lambda c: c, (page_indices, page_ref_counts))
-            return page_indices, page_ref_counts
-
-        page_indices, page_ref_counts = jax.lax.fori_loop(0, num_updated_seqs, outer, (page_indices, page_ref_counts))
+        base = (self.page_indices, page_table.page_ref_counts)
+        page_indices, page_ref_counts = jax.lax.cond(total_required > 0, allocate, lambda state: state, base)
 
         batch_info = self._create_batch_info(
             updated_seqs,
@@ -359,24 +323,13 @@ class SequenceTable(eqx.Module):
         seq_lens = new_lens["seq", safe_updated]
         seq_lens = hax.where(mask, seq_lens, INVALID)
 
-        token_dests = hax.full(token_slot_ids.shape, INVALID, dtype=jnp.int32)
-
-        def token_body(i, token_dests):
-            seq_id = token_slot_ids["position", i].scalar()
-            pos_id = token_pos_ids["position", i].scalar()
-
-            def assign(dest):
-                page_idx = pos_id // self.page_size
-                page_offset = pos_id % self.page_size
-                page = page_indices["seq", seq_id, "page", page_idx]
-                dest_value = hax.where(is_invalid(page), INVALID, page * self.page_size + page_offset)
-                return dest.at["position", i].set(dest_value)
-
-            seq_valid = (seq_id >= 0) & (seq_id < self.max_seqs) & is_valid(seq_id)
-            pos_valid = is_valid(pos_id)
-            return jax.lax.cond(seq_valid & pos_valid, assign, lambda d: d, token_dests)
-
-        token_dests = jax.lax.fori_loop(0, token_slot_ids.axis_size("position"), token_body, token_dests)
+        valid = is_valid(token_slot_ids) & (token_slot_ids < self.max_seqs) & is_valid(token_pos_ids)
+        safe_slots = hax.where(valid, token_slot_ids, 0)
+        safe_positions = hax.where(valid, token_pos_ids, 0)
+        pages = page_indices["seq", safe_slots, "page", safe_positions // self.page_size]
+        token_dests = hax.where(
+            valid & is_valid(pages), pages * self.page_size + safe_positions % self.page_size, INVALID
+        )
 
         batch_info = PageBatchInfo(
             slot_ids=updated_seqs,
@@ -432,34 +385,14 @@ class SequenceTable(eqx.Module):
     ) -> tuple["SequenceTable", "PageTable"]:
         assert finished_mask.ndim == 1
 
-        def dec_refcounts_for_seq(pages_row, ref_counts):
-            valid = is_valid(pages_row)
-
-            def body(i, rc):
-                def dec(rc):
-                    page = pages_row["page", i].scalar()
-                    return rc.at["page", page].add(-1)
-
-                return jax.lax.cond(valid["page", i].scalar(), dec, lambda x: x, rc)
-
-            updated = jax.lax.fori_loop(0, pages_row.axis_size("page"), body, ref_counts)
-            return hax.maximum(updated, hax.zeros_like(updated))
-
-        def body(i, state):
-            ref_counts, sequences = state
-
-            def do(state):
-                ref_counts, sequences = state
-                pages_row = sequences.page_indices["seq", i]
-                ref_counts = dec_refcounts_for_seq(pages_row, ref_counts)
-                sequences = sequences.release_slot(i)
-                return ref_counts, sequences
-
-            return jax.lax.cond(finished_mask[i], do, lambda s: s, (ref_counts, sequences))
-
-        ref_counts, sequences = jax.lax.fori_loop(0, self.max_seqs, body, (page_table.page_ref_counts, self))
-        new_page_table = dataclasses.replace(page_table, page_ref_counts=ref_counts)
-        return sequences, new_page_table
+        released = hax.named(finished_mask, "seq") & self.used_mask
+        pages = self.page_indices.array
+        destinations = jnp.where(released.array[:, None] & is_valid(pages), pages, page_table.num_pages)
+        ref_counts = page_table.page_ref_counts
+        # Each released sequence contributes one decrement per page, including shared pages.
+        updated = jnp.maximum(ref_counts.array.at[destinations].add(-1, mode="drop"), 0)
+        table = dataclasses.replace(page_table, page_ref_counts=hax.named(updated, ref_counts.axes))
+        return self.clear_slots(released), table
 
     @eqx.filter_jit(donate="all")
     def clone_pages_from(
