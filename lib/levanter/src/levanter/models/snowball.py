@@ -638,6 +638,19 @@ class MoeForwardStats(eqx.Module):
         return self.sender_dropped + self.receiver_dropped
 
 
+class SnowballDecodeRoutes(eqx.Module):
+    """Expert IDs across the padded query rows and their validity mask."""
+
+    expert_ids: Array  # [layer, position, top_k]
+    token_valid: Array  # [position]
+
+
+class SnowballPagedResult(NamedTuple):
+    logits: NamedArray
+    cache: ListCache[KvPageCache]
+    routes: SnowballDecodeRoutes | None
+
+
 class SnowballRouteReplay(eqx.Module):
     """Layer-ordered expert IDs and token validity from a packed rollout."""
 
@@ -866,7 +879,9 @@ class SnowballBlock(eqx.Module):
         pos_ids: Array,
         use_long: Bool[Array, ""],
         token_valid: Array,
-    ) -> tuple[Array, KvPageCache]:
+        *,
+        return_routes: bool = False,
+    ) -> tuple[MoeForwardOutput, KvPageCache]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         attn_out, cache = jax.lax.cond(
             use_long,
@@ -874,7 +889,7 @@ class SnowballBlock(eqx.Module):
             lambda _: self.attn.decode(attn_in, cache, batch_info, pos_ids, mode="short"),
             operand=None,
         )
-        return self._after_attention(x, attn_out, return_routes=False, token_valid=token_valid).output, cache
+        return self._after_attention(x, attn_out, return_routes, token_valid), cache
 
 
 def long_attention_layer_mask(num_layers: int) -> jnp.ndarray:
@@ -967,8 +982,8 @@ class SnowballTransformer(eqx.Module):
         stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.blocks)
         long_schedule = long_attention_layer_mask(num_blocks)
 
-        def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag):
-            layer, use_long, layer_replay = layer_and_flag
+        def _scan_layer(carry: Float[Array, "B S D"], layer_data):
+            layer, use_long, layer_replay = layer_data
             if token_valid is not None or collect_counts or layer_replay is not None:
                 result = layer._forward(
                     carry,
@@ -1202,6 +1217,28 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         Tokens occupy a flat position axis, with a valid prefix described by batch_info.
         Expert assignments are independent of other requests and padding.
         """
+        logits, caches, _ = self._decode(input_ids, kv_cache, batch_info, pos_ids, capture_routes=False)
+        return logits, caches
+
+    def decode_with_routes(
+        self,
+        input_ids: NamedArray,
+        kv_cache: ListCache[KvPageCache],
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+    ) -> SnowballPagedResult:
+        """Return the paged generation logits, updated cache, and selected IDs for that call."""
+        return self._decode(input_ids, kv_cache, batch_info, pos_ids, capture_routes=True)
+
+    def _decode(
+        self,
+        input_ids: NamedArray,
+        kv_cache: ListCache[KvPageCache],
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+        *,
+        capture_routes: bool,
+    ) -> SnowballPagedResult:
         if input_ids.ndim != 1 or pos_ids.axes != input_ids.axes:
             raise ValueError("Snowball decode requires matching flat token and position arrays")
         if len(kv_cache) != len(self.transformer.blocks):
@@ -1218,16 +1255,20 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         def layer_step(x, layer_data):
             block, pages, use_long = layer_data
             cache = KvPageCache(hax.named(pages, cache_axes))
-            x, cache = block.decode(x, cache, batch_info, pos_ids.array, use_long, token_valid)
-            return x, cache.kv_pages.array
+            result, cache = block.decode(
+                x, cache, batch_info, pos_ids.array, use_long, token_valid, return_routes=capture_routes
+            )
+            routes = None if result.routes is None else result.routes[:, 0]
+            return result.output, (cache.kv_pages.array, routes)
 
-        hidden, cache_pages = jax.lax.scan(layer_step, hidden, (stacked, cache_pages, long_schedule))
+        hidden, (cache_pages, expert_ids) = jax.lax.scan(layer_step, hidden, (stacked, cache_pages, long_schedule))
         hidden = self.transformer.final_gated_norm(self.transformer.final_norm(hidden))
         logits = jnp.einsum(
             "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=_activation_spec("model")
         )
         caches = ListCache(tuple(KvPageCache(hax.named(cache_pages[i], cache_axes)) for i in range(len(kv_cache))))
-        return hax.named(logits[:, 0], (*input_ids.axes, self.Vocab)), caches
+        routes = SnowballDecodeRoutes(expert_ids, token_valid) if expert_ids is not None else None
+        return SnowballPagedResult(hax.named(logits[:, 0], (*input_ids.axes, self.Vocab)), caches, routes)
 
     def _stacked_inference_blocks(self) -> SnowballBlock:
         stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.transformer.blocks)

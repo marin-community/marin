@@ -48,6 +48,7 @@ from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
+from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.layers.attention import AttentionMask
 from levanter.main.export_hf_to_lm import ImportHfConfig, main as import_hf
 from levanter.main.train_lm import TrainLmConfig, main, preserve_hf_runtime_settings
@@ -1295,3 +1296,33 @@ def test_snowball_learner_loss_replays_expert_routes():
 
     np.testing.assert_allclose(replayed, expected, atol=1e-6, rtol=0)
     assert np.max(np.abs(np.asarray(other - replayed))) > 1e-3
+
+
+def test_snowball_paged_routes_replay_into_learner():
+    cfg = _tiny_config(num_layers=2, initializer_std=0.1)
+    position = Axis("position", 6)
+    with use_cpu_devices(1), jax.set_mesh(compact_grug_mesh()):
+        prompt = hax.named(jnp.asarray([3, 13, 7, 20, 21, 0], dtype=jnp.int32), position)
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(19))
+        batch = PageBatchInfo(
+            slot_ids=hax.named(jnp.asarray([0]), "seq"),
+            page_indices=hax.named(jnp.asarray([[0, 1]]), ("seq", "page")),
+            seq_lens=hax.named(jnp.asarray([5]), "seq"),
+            cu_q_lens=hax.named(jnp.asarray([0, 5]), "seq"),
+            num_seqs=jnp.asarray(1),
+            new_token_dests=hax.named(jnp.asarray([0, 1, 2, 3, 4, -1]), position),
+            page_size=4,
+        )
+        cache = model.initial_cache(
+            PageTableSpec(num_pages=2, page_size=batch.page_size, max_seqs=1), dtype=jnp.float32
+        )
+        logits, _, routes = eqx.filter_jit(model.decode_with_routes)(
+            prompt, cache, batch, hax.arange(position, dtype=jnp.int32)
+        )
+        assert routes is not None
+        replay = model.prepare_route_replay(routes.expert_ids, hax.named(routes.token_valid, position))
+        features, _, _ = model._activations(prompt, False, None, route_replay=replay)
+        replayed = hax.dot(features, model.get_lm_head(), axis=model.Embed)
+
+    np.testing.assert_array_equal(routes.token_valid, [True, True, True, True, True, False])
+    np.testing.assert_allclose(logits.array[:5], replayed.array[:5], atol=2e-5, rtol=2e-5)
