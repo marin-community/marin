@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fixed-row log-normalization shared by sampling and unfused policy losses."""
+"""Fixed-row log-normalization for selected-token and full-distribution scores."""
 
 import math
 from typing import NamedTuple
@@ -77,7 +77,7 @@ def _mapped_shifted_normalizer(logits: jax.Array) -> _ShiftedNormalizer:
         )(reshard(logits, local_spec))
     else:
         reduced = _local_shifted_normalizer(logits)
-    # Give the row reduction the same fusion boundary in serving and training.
+    # Keep the row reduction separate from downstream scoring.
     return jax.lax.optimization_barrier(reduced)
 
 

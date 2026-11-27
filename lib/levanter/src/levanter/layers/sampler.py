@@ -70,6 +70,8 @@ class Sampler(eqx.Module):
             log_probs : NamedArray
                 Log-probabilities for each sampled token (same shape as *tokens*).
                 Behavior scores use the filtered, temperature-scaled distribution.
+                At zero temperature, behavior scores use raw logits with optional
+                top-p filtering even though token selection is greedy.
                 Policy scores use the original model distribution.
         """
 
