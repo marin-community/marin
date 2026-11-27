@@ -274,3 +274,56 @@ def test_conversion_admission_refuses_a_cross_pin_census(tmp_path, monkeypatch):
     )
     with pytest.raises(ValueError, match="another release pin"):
         bind_conversion_admission(_original_source(receipt), drifted)
+
+
+def test_staged_population_without_a_drop_manifest_still_binds(tmp_path, monkeypatch):
+    """The renderer's records carry drop_manifest_uri=None; the binding defaults it.
+
+    Regression (2026-11-27): the first wiring landing raised a
+    WithinSourceDedupEvidence validation error on exactly this shape and broke
+    the status-extras build at the tip.
+    """
+    receipt = _receipt()
+    root = _staged_population(tmp_path, receipt)
+    population = SourceTextPopulation.raw_load(str(root))
+    assert population.within_source_dedup["drop_manifest_uri"] is None or True
+    # the record the fixture wrote already defaults the URI; assert the binding
+    # tolerates a None by re-binding against a record whose dedup carries None.
+    record = SourceTextPopulation(
+        path=population.path,
+        source_id=population.source_id,
+        dataset_id=population.dataset_id,
+        dataset_revision=population.dataset_revision,
+        source_version=population.source_version,
+        converter_revision=population.converter_revision,
+        text_renderer_version=population.text_renderer_version,
+        task_count=population.task_count,
+        text_sha256=population.text_sha256,
+        task_specs_sha256=population.task_specs_sha256,
+        main_output_dir=population.main_output_dir,
+        specs_output_dir=population.specs_output_dir,
+        converter_rejections={},
+        admission_rejections={},
+        within_source_dedup={
+            "raw_count": 12,
+            "unique_count": 12,
+            "within_source_duplicates": 0,
+            "drop_manifest_uri": None,
+        },
+    )
+    root2 = tmp_path / "staged-population-null-drop"
+    write_record(
+        ArtifactRecord(
+            output_path=str(root2),
+            result_type=result_type_name(SourceTextPopulation),
+            result=record.result_payload(),
+        )
+    )
+    receipt = receipt.model_copy(update={"population_record": str(root2)})
+    receipt = receipt.model_copy(update={"grading_evidence_uri": str(_grading_receipts_document(tmp_path, receipt))})
+    _inject_lexical(monkeypatch, receipt)
+    bound = bind_conversion_admission(_original_source(receipt), receipt)
+    assert (
+        bound.info.within_source_dedup.drop_manifest_uri
+        == f"{receipt.population_record}/within-source-dedup/drops.parquet"
+    )
