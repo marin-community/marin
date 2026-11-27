@@ -401,26 +401,25 @@ _TRAIN_MEDIUM_AGENTIC = replace(
     ),
 )
 
+_CPU_OPTIMIZER_OFFLOAD = RecipePatch(
+    trainer=sections.Trainer(
+        policy=sections.Policy(
+            megatron_config=sections.PolicyMegatronConfig(
+                optimizer_config_kwargs=sections.OptimizerConfigKwargs(
+                    optimizer_cpu_offload=True, optimizer_offload_fraction=1.0
+                )
+            )
+        )
+    )
+)
+
 _TRAIN_MEDIUM_TOOLS = shell_tool_preset(
     replace(
         _TRAIN_LONG.with_updates(10),
         recipe=replace(
             _TRAIN_LONG.recipe,
-            config=_TRAIN_LONG.recipe.config.merge(
-                RecipePatch(
-                    trainer=sections.Trainer(
-                        policy=sections.Policy(
-                            # A full-window trajectory needs the GPU memory for the policy update, so the
-                            # optimizer state stays on the CPU.
-                            megatron_config=sections.PolicyMegatronConfig(
-                                optimizer_config_kwargs=sections.OptimizerConfigKwargs(
-                                    optimizer_cpu_offload=True, optimizer_offload_fraction=1.0
-                                )
-                            )
-                        )
-                    )
-                )
-            ),
+            # Full-window trajectories need GPU memory for the policy update.
+            config=_TRAIN_LONG.recipe.config.merge(_CPU_OPTIMIZER_OFFLOAD),
         ),
         data_settings=frozenset({"shuffle"}),
         checkpoints="none",
@@ -463,20 +462,8 @@ _SPEED_MEDIUM_16X16 = replace(
             name="p16-r16",
             workload=Training(replace(_P40_PLAN, policy_num_nodes=2, num_inference_engines=2)),
         ),
-        config=_SPEED_MEDIUM.recipe.config.merge(
-            RecipePatch(
-                trainer=sections.Trainer(
-                    policy=sections.Policy(
-                        megatron_config=sections.PolicyMegatronConfig(
-                            # Keep Adam state in host memory to leave GPU memory for the smaller learner.
-                            optimizer_config_kwargs=sections.OptimizerConfigKwargs(
-                                optimizer_cpu_offload=True, optimizer_offload_fraction=1.0
-                            )
-                        )
-                    )
-                )
-            )
-        ),
+        # Keep Adam state in host memory to give the smaller learner GPU memory headroom.
+        config=_SPEED_MEDIUM.recipe.config.merge(_CPU_OPTIMIZER_OFFLOAD),
     ),
     guards=(),
     objectives=_SPEED_GUARDS,
