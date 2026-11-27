@@ -54,7 +54,11 @@ from skyrl_train.dynamic_sampling import (
     resolve_dynamic_sampling_criteria,
 )
 from skyrl_train.grader_reporting import write_grader_report
-from rolloutengine.models import GROSS_ROLLOUT_TOKENS_METRIC
+from rolloutengine.models import (
+    GROSS_ROLLOUT_TOKENS_METRIC,
+    UNOBSERVED_ROLLOUT_CALLS_METRIC,
+    UNOBSERVED_ROLLOUT_TOKEN_LIMIT_METRIC,
+)
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.rollouts.buffer import (
@@ -563,8 +567,8 @@ class TrainingContext:
                         **admission.selection.metrics,
                         **sampling_metrics,
                         GROSS_ROLLOUT_TOKENS_METRIC: gross_tokens,
-                        "rollout/unobserved_generation_calls": unobserved_calls,
-                        "rollout/unobserved_generation_token_limit": unobserved_token_limit,
+                        UNOBSERVED_ROLLOUT_CALLS_METRIC: unobserved_calls,
+                        UNOBSERVED_ROLLOUT_TOKEN_LIMIT_METRIC: unobserved_token_limit,
                     },
                     sampling_receipts_enabled=sampling_receipts_enabled,
                     sampling_dispositions=tuple(sampling_dispositions),

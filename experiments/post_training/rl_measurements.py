@@ -13,13 +13,20 @@ from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from finestore.rl.rl_progress import Comparison, ComparisonRole, EvaluationScore, Invariant
-from finestore.rl.run_records import AttemptRecord, LineageEntry, attempt_lineage, read_attempt_metrics, read_evaluations
+from finestore.rl.run_records import (
+    METRIC_ATTEMPT_IDS,
+    AttemptRecord,
+    LineageEntry,
+    attempt_lineage,
+    read_attempt_metrics,
+    read_evaluations,
+)
 from marin.rl.skyrl import read_skyrl_attempt
 from marin.rl.skyrl_records import (
     RecordedLaunch,
@@ -31,7 +38,11 @@ from marin.rl.skyrl_records import (
 from pydantic import BaseModel
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
-from rolloutengine.models import CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC, GROSS_ROLLOUT_TOKENS_METRIC
+from rolloutengine.models import (
+    CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC,
+    GROSS_ROLLOUT_TOKENS_METRIC,
+    UNOBSERVED_ROLLOUT_TOKEN_LIMIT_METRIC,
+)
 from taskcompendium.grading_result import Outcome
 
 from experiments.post_training import rl_compose as recipe
@@ -60,6 +71,13 @@ def read_recorded_launch(attempt: AttemptRecord) -> RecordedLaunch:
 class NativeWindow(NamedTuple):
     seconds: float
     gpus: int
+
+
+class RolloutTokenSpend(NamedTuple):
+    """Observed response tokens and their upper bound in completed checkpoint-lineage updates."""
+
+    observed: int
+    upper_bound: int | None
 
 
 def _native_window(attempt: AttemptRecord, launch: RecordedLaunch) -> NativeWindow | None:
@@ -485,13 +503,14 @@ def evaluation_status(
 
 
 def measured_training(
-    preset: presets.Preset, metrics: Mapping[int, Mapping[str, float]], rollout_token_budget: int | None
-) -> tuple[presets.Preset, tuple[Invariant, ...]]:
-    """Return the measured training horizon and its checks, including the first gross-token budget crossing."""
+    preset: presets.Preset, metrics: Mapping[int, Mapping[str, Any]], rollout_token_budget: int | None
+) -> tuple[presets.Preset, tuple[Invariant, ...], RolloutTokenSpend | None]:
+    """Return the measured horizon, observed budget crossing check and completed-update spend evidence."""
     workload = preset.recipe.layout.workload
     if rollout_token_budget is None:
-        return preset, workload.invariants(preset.updates, metrics)
+        return preset, workload.invariants(preset.updates, metrics), None
     spent = 0
+    unobserved: int | None = 0
     completed = 0
     valid = True
     for step, row in sorted(metrics.items()):
@@ -514,6 +533,17 @@ def measured_training(
         if row.get(CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC) != spent:
             valid = False
             break
+        if unobserved is not None:
+            limit = row.get(UNOBSERVED_ROLLOUT_TOKEN_LIMIT_METRIC, -1)
+            attempts = row.get(METRIC_ATTEMPT_IDS)
+            same_attempt = attempts is None or (
+                attempts.get(UNOBSERVED_ROLLOUT_TOKEN_LIMIT_METRIC) == attempts.get(GROSS_ROLLOUT_TOKENS_METRIC)
+            )
+            unobserved = (
+                unobserved + int(limit)
+                if same_attempt and math.isfinite(limit) and limit >= 0 and limit == int(limit)
+                else None
+            )
     reached = valid and spent >= rollout_token_budget
     if reached:
         window = preset.measured
@@ -523,7 +553,10 @@ def measured_training(
     fact = Invariant(
         name="gross_rollout_budget_reached", value=spent, limit=rollout_token_budget, comparator=">=", holds=reached
     )
-    return preset, (*workload.invariants(preset.updates, metrics), fact)
+    spend = None
+    if valid and completed:
+        spend = RolloutTokenSpend(spent, spent + unobserved if unobserved is not None else None)
+    return preset, (*workload.invariants(preset.updates, metrics), fact), spend
 
 
 def read_measurements(
@@ -548,7 +581,7 @@ def read_measurements(
         raise InvalidComparison(f"run has no recorded source provenance: {path}")
     launch = read_recorded_launch(terminal)
     metrics = read_attempt_metrics(launch.export_root, terminal.attempt_id)
-    preset, training_facts = measured_training(preset, metrics, launch.rollout_token_budget)
+    preset, training_facts, spend = measured_training(preset, metrics, launch.rollout_token_budget)
     workload = preset.recipe.layout.workload
     planned = workload.planned_steps(preset.updates)
     training = [row for step, row in sorted(metrics.items()) if step in planned]
@@ -677,6 +710,10 @@ def read_measurements(
         **_window_values(preset, metrics),
         **score_answers(final),
     }
+    if spend is not None:
+        values["rollout/completed_update_observed_response_tokens"] = float(spend.observed)
+        if spend.upper_bound is not None:
+            values["rollout/completed_update_response_tokens_upper_bound"] = float(spend.upper_bound)
     for key, value in score_answers(pa.concat_tables([scores[0], *initial_scores])).items():
         values[key + "/initial"] = value
         if key in values:

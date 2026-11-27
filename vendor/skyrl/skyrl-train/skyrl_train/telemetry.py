@@ -11,7 +11,12 @@ import ray
 from loguru import logger
 
 from marinskyrl.environment_contract import RUN_MODEL_ENV, TRAINING_TYPE_ENV, TrainingType
-from rolloutengine.models import CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC, GROSS_ROLLOUT_TOKENS_METRIC
+from rolloutengine.models import (
+    CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC,
+    GROSS_ROLLOUT_TOKENS_METRIC,
+    UNOBSERVED_ROLLOUT_CALLS_METRIC,
+    UNOBSERVED_ROLLOUT_TOKEN_LIMIT_METRIC,
+)
 from skyrl_train.metric_names import (
     ABANDONED_RETRY_TOKENS,
     ENVIRONMENT_METRIC_PREFIX,
@@ -87,7 +92,12 @@ def record_consumed_work(work: ConsumedWork, *, step: int) -> None:
 def record_training_metrics(metrics: Mapping[str, object], *, step: int, kind: str) -> None:
     """Mirror the selected trainer scalar families without changing their values."""
     for name, value in metrics.items():
-        if name not in (CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC, GROSS_ROLLOUT_TOKENS_METRIC) and not name.startswith(
+        if name not in (
+            CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC,
+            GROSS_ROLLOUT_TOKENS_METRIC,
+            UNOBSERVED_ROLLOUT_CALLS_METRIC,
+            UNOBSERVED_ROLLOUT_TOKEN_LIMIT_METRIC,
+        ) and not name.startswith(
             (
                 "policy/",
                 "reward/",

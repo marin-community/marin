@@ -451,8 +451,10 @@ Set `trainer.rollout_token_budget` with
 tokens from completed training groups, including admission rejects and tokens
 discarded during retries. Calls that lose their engine response contribute an
 uncertainty bound in `rollout/unobserved_generation_token_limit`. The stopping
-counter uses observed tokens. Check the bound and reconcile interrupted attempts
-before comparing paid spend.
+counter uses observed tokens. Published run evidence reports the observed total
+for completed checkpoint-lineage updates and its upper bound when all those
+updates recorded the missing-response limit. Check the bound and reconcile
+interrupted attempts before comparing paid spend.
 
 After the first completed training step that reaches the budget, SkyRL evaluates
 the current policy on `data.val_data` and closes training. Put the full held-out

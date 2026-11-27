@@ -18,6 +18,8 @@ from verifyit.reasoning_markup import ReasoningViolation
 
 GROSS_ROLLOUT_TOKENS_METRIC = "rollout/gross_response_tokens"
 CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC = "rollout/gross_response_tokens_total"
+UNOBSERVED_ROLLOUT_CALLS_METRIC = "rollout/unobserved_generation_calls"
+UNOBSERVED_ROLLOUT_TOKEN_LIMIT_METRIC = "rollout/unobserved_generation_token_limit"
 GRADING_SECONDS_METRIC = "timing/grading"
 SETUP_SECONDS_METRIC = "timing/setup"
 SETUP_COMPLETED_METRIC = "setup_completed"

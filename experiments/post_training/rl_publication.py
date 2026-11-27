@@ -112,9 +112,16 @@ def _terminal_measurements(
         and history[-1].record.resumed_step in (None, 0)
     )
     metrics = read_attempt_metrics(launch.export_root, attempt_id)
-    measured_preset, invariants = measured_training(preset, metrics, launch.rollout_token_budget)
+    measured_preset, invariants, spend = measured_training(preset, metrics, launch.rollout_token_budget)
     if attempt.metrics_started_at is None:
         invariants = ()
+    elif spend is not None:
+        evidence.append(f"Completed checkpoint-lineage updates observed {spend.observed:,} response tokens.")
+        evidence.append(
+            "The response-token upper bound is unavailable for this checkpoint lineage."
+            if spend.upper_bound is None
+            else f"The completed-update upper bound including unobserved requests is {spend.upper_bound:,} tokens."
+        )
     failed = [fact.name for fact in invariants if not fact.holds]
     evaluations = []
     has_evaluation = bool(launch.validation_data or launch.evaluation_data) or any(
