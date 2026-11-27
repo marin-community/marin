@@ -749,6 +749,7 @@ def pipeline_identity(
         "quality_policy": asdict(config.quality_policy),
         "verification_policy": asdict(config.verification_policy),
         "filter_policy": asdict(config.filter_policy),
+        "lexical": asdict(config.decontamination.identity) if config.decontamination is not None else None,
         "revisions": {
             "procedure": SOURCE_PIPELINE_REVISION,
             "quality": SOURCE_QUALITY_REVISION,

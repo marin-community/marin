@@ -19,7 +19,7 @@ ngram machinery that marks text against them.
 import json
 from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, NamedTuple, Protocol
 
@@ -61,7 +61,13 @@ EVIDENCE_FILENAME = "measurement.json"
 
 @dataclass(frozen=True)
 class EngineIdentity:
-    """The frozen-corpus facts every mark depends on; the evidence schema validates their ranges."""
+    """The frozen-corpus facts every mark depends on; the evidence schema validates their ranges.
+
+    The corpus-common global drop set and any adopted per-source drop sets
+    change the marks as much as the bloom does, so they belong here too: an
+    artifact built against one frozen corpus state must never be reused for
+    another.
+    """
 
     eval_corpus_version: str
     eval_bloom_uri: str
@@ -70,6 +76,8 @@ class EngineIdentity:
     ngram_length: int
     overlap_threshold: float
     min_matched_features: int
+    global_drop_set_uri: str | None = None
+    frozen_source_drop_sets: Mapping[str, str] = field(default_factory=dict)
 
 
 class MarkedPopulation(NamedTuple):

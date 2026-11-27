@@ -79,6 +79,8 @@ class DatakitDecontamination:
             ngram_length=NGRAM.ngram_length,
             overlap_threshold=NGRAM.overlap_threshold,
             min_matched_features=NGRAM.min_matched_features,
+            global_drop_set_uri=self.global_drop_set_dir,
+            frozen_source_drop_sets=dict(self.frozen_source_drop_sets),
         )
 
     def _source_drop_set(self, population: TextPopulation, output_path: str, context: ZephyrContext) -> str:
@@ -153,9 +155,10 @@ class DatakitDecontamination:
         rows = 0
         for path in marks:
             target = str(StoragePath(prefix_join(flags_dir, StoragePath(path).name)))
-            with StoragePath(path).open("rb") as stream:
-                writer = None
-                try:
+            sink = None
+            writer = None
+            try:
+                with StoragePath(path).open("rb") as stream:
                     for batch in pq.ParquetFile(stream).iter_batches():
                         mark_columns = (
                             "id",
@@ -192,10 +195,15 @@ class DatakitDecontamination:
                             schema=TASK_FLAGS_SCHEMA,
                         )
                         if writer is None:
-                            writer = pq.ParquetWriter(target, TASK_FLAGS_SCHEMA, compression="zstd")
+                            # Open the sink through the configured storage filesystem so
+                            # remote targets see the caller's credentials.
+                            sink = StoragePath(target).open("wb", auto_mkdir=True)
+                            writer = pq.ParquetWriter(sink, TASK_FLAGS_SCHEMA, compression="zstd")
                         writer.write_table(table)
                         rows += batch.num_rows
-                finally:
-                    if writer is not None:
-                        writer.close()
+            finally:
+                if writer is not None:
+                    writer.close()
+                if sink is not None:
+                    sink.close()
         return rows
