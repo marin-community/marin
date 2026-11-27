@@ -12,7 +12,11 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.llama import LlamaLMHeadModel
+from levanter.models.lm_model import LmExample
+from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+from levanter.testing.devices import use_cpu_devices
 from levanter.testing.helpers import skip_if_no_torch
 from levanter.testing.model_configs import llama_test_config
 from levanter.trainer import TrainerConfig
@@ -35,6 +39,7 @@ try:
         _compute_tokens,
     )
     from levanter.inference.openai_protocol import ChatMessage
+    from levanter.inference.router_replay import read_router_replay
 
 except ImportError:
     pytest.skip("Serving imports not installed, use --extra=serve", allow_module_level=True)
@@ -660,6 +665,85 @@ def test_grpc_generation_returns_exact_token_ids_and_scores(test_client):
                 timeout=30,
             )
         assert invalid.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+        with pytest.raises(grpc.RpcError) as unsupported:
+            stub.Generate(
+                inference_pb2.GenerateRequest(prompt_token_ids=prompt, max_new_tokens=2, capture_router_replay=True),
+                timeout=30,
+            )
+        assert unsupported.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+
+
+def test_grpc_snowball_generation_replays_exact_expert_routes(local_gpt2_tokenizer):
+    cfg = SnowballConfig(
+        vocab_size=48,
+        hidden_dim=16,
+        intermediate_dim=32,
+        shared_expert_intermediate_dim=24,
+        num_layers=2,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        max_seq_len=16,
+        sliding_window=4,
+        attention_implementation="reference",
+    )
+    server_config = InferenceServerConfig(
+        host="127.0.0.1",
+        grpc_port=0,
+        service=InferenceEngineConfig(
+            max_seq_len=16,
+            max_pages=16,
+            max_seqs=4,
+            max_seqs_in_prefill=4,
+            max_prefill_size=12,
+            max_queued_tokens=8,
+            max_rounds=2,
+            page_size=2,
+            compute_dtype=jnp.float32,
+        ),
+    )
+    prompt = np.array([2, 7, 4, 9, 6], dtype=np.int32)
+    with use_cpu_devices(1):
+        mesh = compact_grug_mesh()
+        with jax.set_mesh(mesh):
+            model = SnowballLMHeadModel.init(hax.Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(19))
+            server = InferenceServer.create(server_config, model, local_gpt2_tokenizer, mesh=mesh)
+            try:
+                with (
+                    TestClient(server.app),
+                    grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel,
+                ):
+                    stub = inference_pb2_grpc.InferenceStub(channel)
+                    request = inference_pb2.GenerateRequest(
+                        prompt_token_ids=prompt.tolist(), max_new_tokens=4, temperature=0, capture_router_replay=True
+                    )
+                    response = stub.Generate(request, timeout=60)
+                    request.capture_router_replay = False
+                    plain = stub.Generate(request, timeout=60)
+            finally:
+                server.inference_context.shutdown()
+
+            choice = response.choices[0]
+            assert list(choice.token_ids) == list(plain.choices[0].token_ids)
+            assert not plain.choices[0].HasField("router_replay")
+            inputs = np.concatenate((prompt, choice.token_ids)).astype(np.int32)
+            experts, valid = read_router_replay(response, 0, inputs)
+            assert valid[:-1].all()
+            tokens = hax.named(jnp.asarray(inputs[None]), ("batch", "position"))
+            replay = model.prepare_route_replay(jnp.asarray(experts[:, None]), hax.named(valid[None], tokens.axes))
+            learner_loss, _ = model.next_token_loss_and_metrics(
+                LmExample(tokens, hax.ones(tokens.axes)), route_replay=replay, reduction=None
+            )
+
+    np.testing.assert_allclose(
+        choice.behavior_logprobs, -learner_loss.array[0, len(prompt) - 1 : -1], atol=1e-5, rtol=0
+    )
+    wrong_inputs = inputs.copy()
+    wrong_inputs[0] += 1
+    with pytest.raises(ValueError):
+        read_router_replay(response, 0, wrong_inputs)
 
 
 def test_openai_rejects_stop_sequences_that_exceed_engine_capacity(test_client):

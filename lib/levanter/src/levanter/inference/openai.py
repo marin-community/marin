@@ -25,6 +25,7 @@ from typing import List, Optional, Union
 import grpc
 import haliax as hax
 import jax.numpy as jnp
+from jax.sharding import Mesh
 import jax.random as jrandom
 import numpy as np
 import uvicorn
@@ -42,6 +43,7 @@ from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenL
 from openai.types.completion_choice import CompletionChoice, Logprobs
 from levanter.inference import inference_pb2, inference_pb2_grpc
 from levanter.inference.engine import (
+    GeneratedExpertRoutes,
     InferenceEngine,
     InferenceEngineConfig,
     Request,
@@ -56,6 +58,7 @@ from levanter.inference.openai_protocol import (
     TokensRequest,
     TokensResponse,
 )
+from levanter.inference.router_replay import write_router_replay
 from levanter.inference.utils import INVALID
 from levanter.models.lm_model import LmHeadModel
 from levanter.tokenizers import MarinTokenizer
@@ -107,6 +110,7 @@ class InferenceRequest:
     future: asyncio.Future
     n_generations: int = 1
     echo_logprobs_top_k: int | None = None
+    return_route_captures: bool = False
 
 
 @dataclass
@@ -121,6 +125,7 @@ class InferenceResponse:
     logprobs: Optional[List[float]] = None
     echo_token_ids: List[int] | None = None
     echo_logprobs: TokenSequenceLogprobs | None = None
+    expert_routes: GeneratedExpertRoutes | None = None
 
 
 class InferenceBatch(list):
@@ -160,11 +165,20 @@ def _encode_stop_tokens(stop: Union[str, List[str], None], tokenizer: MarinToken
 class InferenceContext:
     """Background thread that manages the InferenceEngine and processes requests"""
 
-    def __init__(self, model: LmHeadModel, tokenizer, engine: InferenceEngine, config: InferenceServerConfig):
+    def __init__(
+        self,
+        model: LmHeadModel,
+        tokenizer,
+        engine: InferenceEngine,
+        config: InferenceServerConfig,
+        *,
+        mesh: Mesh | None = None,
+    ):
         self.model = model
         self.tokenizer = tokenizer
         self.engine = engine
         self.config = config
+        self.mesh = config.trainer.device_mesh if mesh is None else mesh
         self.request_queue: queue.Queue[InferenceRequest] = queue.Queue()
         self.batch_queue: queue.Queue[InferenceBatch] = queue.Queue()
         self.shutdown_event = threading.Event()
@@ -209,7 +223,7 @@ class InferenceContext:
 
             start = time.time()
             with (
-                hax.partitioning.set_mesh(self.config.trainer.device_mesh),
+                hax.partitioning.set_mesh(self.mesh),
                 hax.axis_mapping(self.config.trainer.compute_axis_mapping),
             ):
                 self.model = weight_callback(self.model)
@@ -233,6 +247,8 @@ class InferenceContext:
         future: asyncio.Future,
         n_generations: int = 1,
         echo_logprobs_top_k: int | None = None,
+        *,
+        return_route_captures: bool = False,
     ) -> str:
         """Submit a request to the inference queue"""
         assert self.shutdown_event.is_set() is False, "InferenceContext is shut down"
@@ -250,6 +266,7 @@ class InferenceContext:
             future=future,
             n_generations=n_generations,
             echo_logprobs_top_k=echo_logprobs_top_k,
+            return_route_captures=return_route_captures,
         )
 
         logger.info("Enqueuing request %s", request)
@@ -315,7 +332,7 @@ class InferenceContext:
                 batch = self.batch_queue.get(timeout=1)
                 with (
                     self.model_lock,
-                    hax.partitioning.set_mesh(self.config.trainer.device_mesh),
+                    hax.partitioning.set_mesh(self.mesh),
                     hax.axis_mapping(self.config.trainer.compute_axis_mapping),
                 ):
                     self._execute_batch(batch)
@@ -368,7 +385,8 @@ class InferenceContext:
 
         # Generate responses
         start_time = time.time()
-        result = self.engine.generate(service_requests)
+        capture_routes = any(request.return_route_captures for request in requests)
+        result = self.engine.generate(service_requests, capture_routes=capture_routes)
         duration = time.time() - start_time
         logger.info(f"Batch completed in {duration:.2f}s, generated {result.total_generated} tokens")
 
@@ -402,6 +420,11 @@ class InferenceContext:
                                 request_id=req.request_id,
                                 echo_token_ids=echo_token_ids,
                                 echo_logprobs=echo_logprobs,
+                                expert_routes=(
+                                    result.expert_routes[output_idx]
+                                    if req.return_route_captures and result.expert_routes is not None
+                                    else None
+                                ),
                             )
                         )
                         output_idx += 1
@@ -840,6 +863,10 @@ class _GrpcInference:
         num_choices = request.num_choices if request.HasField("num_choices") else 1
         stops = [list(sequence.token_ids) for sequence in request.stop_sequences]
 
+        capture_routes = request.capture_router_replay
+        if capture_routes and not ctx.engine.supports_route_capture:
+            await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "Router replay requires a Snowball model")
+
         config = ctx.engine.config
         max_prefill_size = config.max_prefill_size or ctx.model.Pos.size
         if (
@@ -861,7 +888,15 @@ class _GrpcInference:
 
         future = asyncio.get_running_loop().create_future()
         ctx.submit_request(
-            prompt, max_tokens, temperature, top_p, stops or None, seed, future, n_generations=num_choices
+            prompt,
+            max_tokens,
+            temperature,
+            top_p,
+            stops or None,
+            seed,
+            future,
+            n_generations=num_choices,
+            return_route_captures=capture_routes,
         )
         try:
             # The inference thread completes the queue's future even when the caller disconnects.
@@ -869,12 +904,20 @@ class _GrpcInference:
         except ValueError as exc:
             await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
 
-        return inference_pb2.GenerateResponse(
-            prompt_token_ids=prompt,
-            choices=[
-                inference_pb2.Choice(token_ids=output.tokens, behavior_logprobs=output.logprobs) for output in outputs
-            ],
-        )
+        if capture_routes:
+            if any(output.expert_routes is None for output in outputs):
+                await context.abort(grpc.StatusCode.INTERNAL, "Generation did not capture the requested routes")
+            return await asyncio.to_thread(_grpc_generate_response, prompt, outputs)
+        return _grpc_generate_response(prompt, outputs)
+
+
+def _grpc_generate_response(prompt: list[int], outputs: list[InferenceResponse]) -> inference_pb2.GenerateResponse:
+    response = inference_pb2.GenerateResponse(prompt_token_ids=prompt)
+    for output in outputs:
+        choice = response.choices.add(token_ids=output.tokens, behavior_logprobs=output.logprobs)
+        if output.expert_routes is not None:
+            write_router_replay(choice.router_replay, output.expert_routes.expert_ids, output.expert_routes.valid)
+    return response
 
 
 class InferenceServer:
@@ -899,21 +942,29 @@ class InferenceServer:
         self._server = None
 
     @staticmethod
-    def create(config: InferenceServerConfig, model: LmHeadModel, tokenizer: MarinTokenizer) -> "InferenceServer":
+    def create(
+        config: InferenceServerConfig,
+        model: LmHeadModel,
+        tokenizer: MarinTokenizer,
+        *,
+        mesh: Mesh | None = None,
+    ) -> "InferenceServer":
         """Create and initialize a new InferenceServer.
 
         This factory method loads the model, tokenizer, and creates all necessary
         components for the inference server.
         """
-        service = InferenceEngine.from_model_with_config(
-            model=model,
-            tokenizer=tokenizer,
-            config=config.service,
-            axis_resources=config.trainer.compute_axis_mapping,
-        )
+        mesh = config.trainer.device_mesh if mesh is None else mesh
+        with hax.partitioning.set_mesh(mesh):
+            service = InferenceEngine.from_model_with_config(
+                model=model,
+                tokenizer=tokenizer,
+                config=config.service,
+                axis_resources=config.trainer.compute_axis_mapping,
+            )
 
         # Create and start inference thread
-        inference_context = InferenceContext(model, tokenizer, service, config)
+        inference_context = InferenceContext(model, tokenizer, service, config, mesh=mesh)
         inference_context.start()
 
         # Create FastAPI app with initialized context

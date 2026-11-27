@@ -1148,6 +1148,11 @@ class InferenceEngine:
             ),
         )
 
+    @property
+    def supports_route_capture(self) -> bool:
+        """Whether generation can retain this model's selected expert IDs."""
+        return isinstance(self.model, SnowballLMHeadModel)
+
     def _validate_generation_requests(self, requests: Sequence[Request]) -> None:
         if len({request.request_id for request in requests}) != len(requests):
             raise ValueError("Request IDs must be unique within a generation batch")
@@ -1172,17 +1177,19 @@ class InferenceEngine:
         """Generate tokens for a batch of Requests.
 
         Each Request provides prompt_tokens, decode_params, and n_generations (clones).
-        Returns (outputs_per_sequence, total_generated_tokens).
+        Return tokens, log probabilities, and optional captured routes in choice order.
 
         Args:
             requests: Sequence of generation requests
             step_callback: Optional callback function called at each decode iteration with iteration number.
             capture_routes: Retain the expert IDs used to score each Snowball choice. Routes align with
-                the prompt followed by its generated tokens, excluding the unscheduled terminal row.
+                the prompt followed by generated tokens. The unscheduled terminal row is invalid.
         """
         if not requests:
-            return GenerationResult(tokens=[], logprobs=[], total_generated=0, expert_routes=[] if capture_routes else None)
-        if capture_routes and not isinstance(self.model, SnowballLMHeadModel):
+            return GenerationResult(
+                tokens=[], logprobs=[], total_generated=0, expert_routes=[] if capture_routes else None
+            )
+        if capture_routes and not self.supports_route_capture:
             raise ValueError("Expert route capture requires a Snowball model")
         self._validate_generation_requests(requests)
 

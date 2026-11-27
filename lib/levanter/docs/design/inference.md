@@ -79,6 +79,18 @@ uvx --from grpcio-tools==1.76.0 python -m grpc_tools.protoc \
   --grpc_python_out=lib/levanter/src lib/levanter/src/levanter/inference/inference.proto
 ```
 
+To capture Snowball router replay, set `capture_router_replay`. Each choice then
+includes `router_replay`. Both fields use tag 50001 in their respective messages.
+The replay positions index the concatenated prompt and generated tokens. A
+route at position `i` was used to predict token `i + 1`. The validity mask
+marks positions actually processed by the model.
+Expert IDs are a row-major byte buffer of uint8 or little-endian uint16 values.
+Read the element width from `expert_id_dtype`.
+
+For long contexts or multiple choices, size the client's
+`grpc.max_receive_message_length` for the expected route payload. Packed expert
+IDs and the validity mask can exceed gRPC's default 4 MiB receive limit.
+
 ### Performance Considerations
 - **JIT Compilation**: Warmup generation on startup to trigger JIT compilation
 - **Memory Management**: Efficient KV cache page allocation and deallocation
