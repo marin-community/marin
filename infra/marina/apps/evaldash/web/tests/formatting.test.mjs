@@ -6,9 +6,20 @@ import { formatValue } from '../src/utils/formatting.ts'
 test('the metric Value display rounds to 2 significant digits in plain decimal notation', () => {
   assert.equal(formatValue(0.58193), '0.58')
   assert.equal(formatValue(0.0012345), '0.0012')
-  assert.equal(formatValue(12345), '12000')
+  assert.equal(formatValue(12345.6), '12000')
   assert.equal(formatValue(0), '0')
   assert.equal(formatValue(null), '—')
+})
+
+test('raw item and repeat counts remain exact without a decimal suffix', () => {
+  const cases = [
+    [5, '5'],
+    [1319, '1319'],
+    [14042, '14042'],
+    [-1319, '-1319'],
+    [Number.MAX_SAFE_INTEGER, '9007199254740991'],
+  ]
+  for (const [value, expected] of cases) assert.equal(formatValue(value), expected)
 })
 
 test('rounding across a magnitude boundary never prints a third significant digit', () => {
@@ -37,7 +48,7 @@ test('the Value display keeps sign, integers, and ordinary magnitudes readable',
   assert.equal(formatValue(3.14159), '3.1')
   assert.equal(formatValue(42), '42')
   assert.equal(formatValue(-0.58193), '-0.58')
-  assert.equal(formatValue(1234567), '1200000')
+  assert.equal(formatValue(1234567.8), '1200000')
   assert.equal(formatValue(undefined), '—')
   assert.equal(formatValue(Number.NaN), '—')
   assert.equal(formatValue(Infinity), 'Infinity')

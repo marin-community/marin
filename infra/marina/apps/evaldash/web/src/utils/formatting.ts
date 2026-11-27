@@ -29,11 +29,11 @@ export function formatScore(value: number | null | undefined): string {
   return value.toFixed(3)
 }
 
-// Raw metric display with at most two significant digits and no exponent notation.
+// Raw metrics keep safe integers exact and round other finite values without exponent notation.
 export function formatValue(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return MISSING_VALUE
   if (!Number.isFinite(value)) return String(value)
-  if (value === 0) return '0'
+  if (Number.isSafeInteger(value)) return String(value)
   const text = VALUE_FORMATTER.format(value)
   return /^-?[1-9]$/.test(text) ? `${text}.0` : text
 }
