@@ -136,8 +136,8 @@ Respond with ONLY valid JSON in this exact format:
 }}"""
 
 BIXBENCH_ANSWER = "/workspace/answer.txt"
-BIXBENCH_JUDGE_MODEL = "MiniMaxAI/MiniMax-M3-MXFP8"
-"""The judge the campaign co-hosted for ``bixbench-pi``, which Harbor's runner gave the package as ``MODEL_NAME``."""
+BIXBENCH_JUDGE_MODEL = "openai/gpt-oss-120b"
+"""BixBench's judge, a hosted model in place of the MiniMax-M3 the October campaign served beside each candidate."""
 # From tests/llm_judge.py of penfever/harbor-datasets@454d04b5's bixbench-cli-marin-corrections-1,
 # a str.format template, double space included.
 BIXBENCH_EVAL_PROMPT = """

@@ -51,6 +51,8 @@ VERSION = "2026.11.17.2"
 JUDGED_VERSION = "2026.11.23"
 # SWE-bench Multilingual's version; a change to how its package edits run or grade the agent bumps it.
 SWEBENCH_MULTILINGUAL_VERSION = "2026.11.26"
+# BixBench's version, which a change to its rendered judge bumps.
+BIXBENCH_VERSION = "2026.11.27"
 # Terminal-Bench's build-pov-ray allows its agent and its verifier 12,000 seconds each.
 TERMINAL_BENCH_ATTEMPT_TIMEOUT = 8 * 60 * 60
 
@@ -301,7 +303,7 @@ BIXBENCH = HarborDataset(
         "0a5edab87016e32c6760f813cca681d8215ac9e48f271608516eb61656766658",
         root="datasets/bixbench-cli-marin-corrections-1",
     ),
-    version=JUDGED_VERSION,
+    version=BIXBENCH_VERSION,
     count=205,
     rule=bixbench_answer,
     requires_judge=True,
