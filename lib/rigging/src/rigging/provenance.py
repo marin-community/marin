@@ -250,6 +250,16 @@ _USER_SEGMENT_RE = re.compile(r"[^a-z0-9_-]+")
 _MACHINE_LOGINS = frozenset({"root", "runner", "ubuntu", "exedev"})
 
 
+def launch_user() -> str | None:
+    """The user behind this launch: ``built_by`` from ``MARIN_PROVENANCE``, else the OS login.
+
+    A remote worker therefore reports the submitting user rather than its own login. Returns
+    ``None`` when neither resolves.
+    """
+    launch = _provenance_from_env()
+    return (launch.built_by if launch is not None else None) or _getuser()
+
+
 def username_segment() -> str:
     """The current user as a path-safe segment, for per-user artifact namespacing.
 
@@ -262,8 +272,7 @@ def username_segment() -> str:
     distinct. Raises ``RuntimeError`` if no username resolves — per-user namespacing must never
     silently fall back to a shared bucket.
     """
-    launch = _provenance_from_env()
-    raw = (launch.built_by if launch is not None else None) or _getuser()
+    raw = launch_user()
     if not raw:
         raise RuntimeError(
             "cannot resolve a username for per-user namespacing "

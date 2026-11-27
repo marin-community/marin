@@ -192,6 +192,7 @@ def test_restores_cuda13_shared_library_package_when_present(tmp_path, package, 
 
     wheelhouse = tmp_path / "wheelhouse"
     _write_cuda13_library_wheel(wheelhouse, package, version, library_path)
+    # Ignore workspace package overrides when installing the synthetic wheels.
     # --no-cache: uv installs by hardlinking out of its cache, so the in-place
     # sentinel overwrite below would otherwise corrupt the shared cached wheel
     # and every later install (including the restore step) would re-link it.
@@ -200,6 +201,7 @@ def test_restores_cuda13_shared_library_package_when_present(tmp_path, package, 
             "uv",
             "pip",
             "install",
+            "--no-config",
             "--no-cache",
             "--python",
             str(venv / "bin" / "python"),
@@ -227,6 +229,7 @@ def test_restores_cuda13_shared_library_package_when_present(tmp_path, package, 
         # restore's only source; the machine's shared cache may hold the real
         # cuDNN wheel at this exact version, which would win otherwise.
         extra_env={
+            "UV_NO_CONFIG": "1",
             "UV_FIND_LINKS": str(wheelhouse),
             "UV_OFFLINE": "1",
             "UV_CACHE_DIR": str(tmp_path / "uv-cache"),

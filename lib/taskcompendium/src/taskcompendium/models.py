@@ -4,9 +4,10 @@
 """One deterministic task: its conversation, environment, grader, and answer format.
 
 A grader is one of three kinds. ``VerifyitGrader`` names a verifyit mode, graded in process
-against the extracted answer or, with an environment, by the verifyit command in a fresh
-machine. ``ScriptGrader`` runs a command in a fresh machine and reads its reward. ``NoGrader``
-records why a task cannot be graded. The answer format says how the final answer is requested from the model
+against the extracted answer or, with a placement, by the verifyit command in a machine.
+``ScriptGrader`` runs a command in a machine and reads its reward. A placement says which
+machine grades: the agent's own machine after the harness ends, or a fresh grading machine.
+``NoGrader`` records why a task cannot be graded. The answer format says how the final answer is requested from the model
 and extracted from its conversation.
 """
 
@@ -18,17 +19,17 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Annotated, ClassVar, Literal, NoReturn
+from typing import Annotated, Any, ClassVar, Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
 from shellbox.machine import CommandSemantics as CommandSemantics
-from shellbox.machine import PackageSpec, UnsupportedMachineSpec
+from shellbox.machine import PackageSpec
 from verifyit.candidate import candidate_spec
 from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
+from verifyit.judge_contract import validate_judge_spec
 from verifyit.modes.extract import extract_boxed, unwrap_enclosing_fence
-from verifyit.modes.grade_judge import validate_judge_spec
 from verifyit.spec import (
     DEFAULT_OUTPUT,
     DEFAULT_WORKSPACE,
@@ -41,9 +42,14 @@ from verifyit.spec import (
     Spec,
     StdioSpec,
     spec_from_table,
+    upgrade_judge_table,
 )
 
-SCHEMA_VERSION = "0.30"
+SUBSET_LABEL = "subset_id"
+
+SCHEMA_VERSION = "0.31"
+UPGRADABLE_SCHEMA_VERSION = "0.30"
+"""The one earlier TaskSpec schema that readers upgrade; every other version is rejected."""
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 TOOL_ARGUMENTS_OBJECT_ERROR = "Tool arguments must be a JSON object"
 
@@ -204,28 +210,33 @@ class ConversationInput(BaseModel):
     def validate_input(self) -> "ConversationInput":
         if not self.events:
             raise ValueError("Conversation input requires events")
-        pending: set[str] = set()
-        seen: set[str] = set()
-        for event in self.events:
-            if isinstance(event, AssistantToolCalls):
-                if pending or not event.calls:
-                    raise ValueError("Historical calls require preceding results and a nonempty batch")
-                for call in event.calls:
-                    if not call.call_id or not call.name or call.call_id in seen:
-                        raise ValueError("Historical call identifiers and names must be unique and nonempty")
-                    pending.add(call.call_id)
-                    seen.add(call.call_id)
-            elif isinstance(event, ToolResult):
-                if event.call_id not in pending:
-                    raise ValueError("Historical tool result has no pending call")
-                pending.remove(event.call_id)
-            elif pending:
-                raise ValueError("Historical calls require results before the next message")
-            elif isinstance(event, TextMessage) and not event.content.strip():
-                raise ValueError("Source conversation messages require nonempty content")
-        if pending:
-            raise ValueError("Historical calls require results before the final decision")
+        validate_history(self.events)
+        if any(isinstance(event, TextMessage) and not event.content.strip() for event in self.events):
+            raise ValueError("Source conversation messages require nonempty content")
         return self
+
+
+def validate_history(events: tuple[ConversationEvent, ...]) -> None:
+    """Check that every tool call batch is nonempty, uniquely named and answered before the next message."""
+    pending: set[str] = set()
+    seen: set[str] = set()
+    for event in events:
+        if isinstance(event, AssistantToolCalls):
+            if pending or not event.calls:
+                raise ValueError("Historical calls require preceding results and a nonempty batch")
+            for call in event.calls:
+                if not call.call_id or not call.name or call.call_id in seen:
+                    raise ValueError("Historical call identifiers and names must be unique and nonempty")
+                pending.add(call.call_id)
+                seen.add(call.call_id)
+        elif isinstance(event, ToolResult):
+            if event.call_id not in pending:
+                raise ValueError("Historical tool result has no pending call")
+            pending.remove(event.call_id)
+        elif pending:
+            raise ValueError("Historical calls require results before the next message")
+    if pending:
+        raise ValueError("Historical calls require results before the final decision")
 
 
 class ConversationTrace(BaseModel):
@@ -239,7 +250,8 @@ class ConversationTrace(BaseModel):
     def validate_trace(self) -> "ConversationTrace":
         if len(self.events) < 2:
             raise ValueError("Grading evidence requires a prefix and final assistant message")
-        ConversationInput(events=self.events[:-1])
+        # The model may reply with nothing, so unlike a source conversation, a trace may hold empty messages.
+        validate_history(self.events[:-1])
         final = self.events[-1]
         if isinstance(final, ToolResult) or (isinstance(final, TextMessage) and final.role != "assistant"):
             raise ValueError("Grading evidence requires a final assistant message")
@@ -293,6 +305,10 @@ class TaskResource(BaseModel):
         return value
 
 
+DOCKERFILE = "Dockerfile"
+"""The path of a Docker build context's Dockerfile."""
+
+
 class DockerBuildContext(BaseModel):
     """Unresolved Docker build inputs, preserved as data without executing the recipe.
 
@@ -307,7 +323,7 @@ class DockerBuildContext(BaseModel):
     @model_validator(mode="after")
     def validate_files(self) -> "DockerBuildContext":
         validate_relative_file_paths(resource.path for resource in self.files)
-        if not any(resource.path == "Dockerfile" for resource in self.files):
+        if not any(resource.path == DOCKERFILE for resource in self.files):
             raise ValueError("A Docker build context requires Dockerfile")
         return self
 
@@ -352,8 +368,66 @@ def validate_workspace_path(path: str) -> PurePosixPath:
     return workspace
 
 
+SERVICE_NAME_PATTERN = r"^[a-z][a-z0-9_-]{0,62}$"
+
+
+class EndpointRequirement(BaseModel):
+    """A named TCP port a service listens on, addressed as ``<service>:<port>`` from its group."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(min_length=1)
+    port: int = Field(gt=0, lt=65536)
+
+
+class ReadinessRequirement(BaseModel):
+    """A command repeated until it exits zero, after ``start_period`` and within ``timeout`` overall.
+
+    ``command_timeout`` bounds one attempt; ``attempts`` bounds the failed attempts.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    argv: tuple[str, ...] = Field(min_length=1)
+    command_timeout: float | None = Field(default=None, gt=0)
+    timeout: float = Field(gt=0)
+    interval: float = Field(gt=0)
+    start_period: float = Field(default=0, ge=0)
+    attempts: int | None = Field(default=None, gt=0)
+
+
+class ServiceRequirement(BaseModel):
+    """A sidecar container sharing the task's network and lifetime with the primary environment."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(pattern=SERVICE_NAME_PATTERN)
+    docker_image: str | None = Field(default=None, pattern=DOCKER_IMAGE_PATTERN)
+    docker_build: DockerBuildContext | None = None
+    working_directory: str | None = None
+    environment_variables: dict[str, str] = Field(default_factory=dict)
+    entrypoint: tuple[str, ...] | None = Field(default=None, min_length=1)
+    command: tuple[str, ...] | None = Field(default=None, min_length=1)
+    endpoints: tuple[EndpointRequirement, ...] = ()
+    readiness: ReadinessRequirement | None = None
+
+    @model_validator(mode="after")
+    def validate_service(self) -> "ServiceRequirement":
+        if (self.docker_image is None) == (self.docker_build is None):
+            raise ValueError("A service requires exactly one of a pinned image or a build context")
+        if self.working_directory is not None:
+            validate_workspace_path(self.working_directory)
+        if len({endpoint.name for endpoint in self.endpoints}) != len(self.endpoints):
+            raise ValueError("Service endpoint names must be unique")
+        return self
+
+
 class EnvironmentRequirements(BaseModel):
-    """Operations, initial workspace or unresolved recipe, and tool-provider contracts."""
+    """Operations, initial workspace or unresolved recipe, and tool-provider contracts.
+
+    ``services`` and ``readiness`` are omitted from serialization when unset, so tasks
+    without them keep their serialized form.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -367,6 +441,8 @@ class EnvironmentRequirements(BaseModel):
     tool_providers: dict[str, ProviderRequirement] = Field(default_factory=dict)
     packages_lock: str | None = Field(default=None, min_length=1)
     package_spec: PackageSpec | None = None
+    services: tuple[ServiceRequirement, ...] = Field(default=(), exclude_if=lambda value: not value)
+    readiness: ReadinessRequirement | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def validate_environment(self) -> "EnvironmentRequirements":
@@ -393,13 +469,15 @@ class EnvironmentRequirements(BaseModel):
             raise ValueError("Setup commands must be nonempty")
         if self.working_directory is not None:
             validate_workspace_path(self.working_directory)
+        if self.services:
+            if self.docker_image is None and self.docker_build is None:
+                raise ValueError("Services require a primary image or build context")
+            if len({service.name for service in self.services}) != len(self.services):
+                raise ValueError("Service names must be unique")
+            ports = [endpoint.port for service in self.services for endpoint in service.endpoints]
+            if len(set(ports)) != len(ports):
+                raise ValueError("Services sharing a network must use distinct endpoint ports")
         return self
-
-
-def require_resolved_environment(requirements: EnvironmentRequirements) -> None:
-    """Reject an unbuilt recipe before choosing or creating an execution environment."""
-    if requirements.docker_build is not None:
-        raise UnsupportedMachineSpec("Unresolved Docker build context must be built and pinned before execution")
 
 
 GRADER_ROOTS = ("/tests", "/logs/verifier")
@@ -435,13 +513,18 @@ def _absolute_file_path(value: str) -> str:
 
 
 class VerifierCommand(BaseModel):
-    """A trusted command run as root on the agent's machine to collect grader inputs."""
+    """A trusted command run as root on the agent's machine to collect inputs for a grading machine.
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    ``timeout`` bounds the command in seconds, never beyond the grader's execution limit; ``None``
+    bounds it by that limit alone.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     argv: tuple[str, ...] = Field(min_length=1)
     cwd: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
+    timeout: float | None = Field(default=None, gt=0)
 
 
 class ArtifactKind(StrEnum):
@@ -493,8 +576,11 @@ class ExitCodeReward(BaseModel):
 
 
 class RewardFileFormat(StrEnum):
+    """``JSON`` takes its detail from a ``detail`` object; ``JSON_METRICS`` from every other member, all numbers."""
+
     NUMBER = "number"
     JSON = "json"
+    JSON_METRICS = "json_metrics"
     VERDICT_JSON = "verdict_json"
 
 
@@ -539,6 +625,40 @@ def _require_grader_environment(environment: EnvironmentRequirements) -> None:
         raise ValueError("A grading environment cannot declare tool providers")
 
 
+class AgentMachine(BaseModel):
+    """Grade in the task machine after the harness ends and its commands stop.
+
+    The grader sees the machine as the agent left it, including files and state outside
+    ``output_paths``, and runs under the task machine's network policy.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["agent_machine"] = "agent_machine"
+
+
+class GraderMachine(BaseModel):
+    """Grade in a fresh machine; agent state reaches it only through ``collect`` and ``artifacts``.
+
+    ``collect`` commands run as root on the agent's machine before ``artifacts`` are copied from it.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["grader_machine"] = "grader_machine"
+    environment: EnvironmentRequirements
+    collect: tuple[VerifierCommand, ...] = ()
+    artifacts: tuple[VerifierArtifact, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_placement(self) -> "GraderMachine":
+        _require_grader_environment(self.environment)
+        return self
+
+
+GraderPlacement = Annotated[AgentMachine | GraderMachine, Field(discriminator="kind")]
+
+
 def _require_finite_json(value: JsonValue) -> None:
     try:
         json.dumps(value, allow_nan=False)
@@ -558,9 +678,8 @@ def verifyit_answer_file(spec: Spec) -> str | None:
 class VerifyitGrader(BaseModel):
     """A verifyit mode and its configuration table, without the ``mode`` key.
 
-    Without an environment the mode must be one verifyit grades in process, against the answer
-    extracted from the conversation. With an environment, the verifyit command grades in a fresh
-    machine built from it, with verifier resources under ``/tests``.
+    Without a placement, verifyit grades the captured answer in process. With a placement,
+    the verifyit command grades in that machine with verifier resources under ``/tests``.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -568,13 +687,12 @@ class VerifyitGrader(BaseModel):
     kind: Literal["verifyit"] = "verifyit"
     mode: str
     parameters: dict[str, JsonValue] = Field(repr=False)
-    environment: EnvironmentRequirements | None = None
+    placement: GraderPlacement | None = None
 
     @model_validator(mode="after")
     def validate_grader(self) -> "VerifyitGrader":
         spec = verifyit_spec(self)
-        if self.environment is not None:
-            _require_grader_environment(self.environment)
+        if self.placement is not None:
             answer = verifyit_answer_file(spec)
             if answer is not None and under_grader_root(answer):
                 raise ValueError("The answer file must lie outside /tests and /logs/verifier")
@@ -592,7 +710,7 @@ def verifyit_spec(grader: VerifyitGrader) -> Spec:
             assert isinstance(spec, JudgeSpec)
             validate_judge_spec(spec)
             return spec
-        if grader.environment is None:
+        if grader.placement is None:
             return candidate_spec(grader.mode, grader.parameters)
         if "mode" in grader.parameters:
             raise ValueError("Verifier parameters must not override the mode")
@@ -602,15 +720,16 @@ def verifyit_spec(grader: VerifyitGrader) -> Spec:
 
 
 class ScriptGrader(BaseModel):
-    """A command run in a fresh machine built from ``environment``; ``reward`` says how it scores.
+    """A command run in the machine ``placement`` selects; ``reward`` says how it scores.
 
-    Before ``argv`` runs in ``cwd``, ``collect`` commands run on the agent's machine, ``artifacts``
-    are copied from it, verifier resources are installed under ``/tests``, the extracted answer is
-    written to ``answer_path`` (``None`` when the agent's files are the result), and the
-    conversation is written to ``conversation_path`` as JSON chat messages.
+    Before ``argv`` runs in ``cwd``, or in the machine's own working directory when ``cwd`` is ``None``
+    (an image's ``WORKDIR``, for example), a grading machine collects its inputs from the agent's machine,
+    verifier resources are installed under ``/tests``, the extracted answer is written to
+    ``answer_path`` (``None`` when the agent's files are the result), and the conversation is
+    written to ``conversation_path`` as JSON chat messages.
 
     ``judge`` declares a required service contract, staged as ``/tests/judge.toml``. The runtime
-    supplies endpoint credentials only to the grading machine. ``empty_output`` permits scripts
+    supplies endpoint credentials only to the grading command's machine. ``empty_output`` permits scripts
     to grade blank plain-text submissions when the source requires per-item metrics for them.
     """
 
@@ -618,11 +737,9 @@ class ScriptGrader(BaseModel):
 
     kind: Literal["script"] = "script"
     argv: tuple[str, ...] = Field(min_length=1)
-    cwd: str = "/app"
+    cwd: str | None = "/app"
     env: dict[str, str] = Field(default_factory=dict)
-    environment: EnvironmentRequirements
-    collect: tuple[VerifierCommand, ...] = ()
-    artifacts: tuple[VerifierArtifact, ...] = ()
+    placement: GraderPlacement
     answer_path: str | None = "/app/answer.txt"
     conversation_path: str = "/tests/conversation.json"
     reward: Annotated[StdoutReward | ExitCodeReward | FileReward, Field(discriminator="kind")] = StdoutReward()
@@ -632,10 +749,13 @@ class ScriptGrader(BaseModel):
 
     @model_validator(mode="after")
     def validate_grader(self) -> "ScriptGrader":
-        _require_grader_environment(self.environment)
         if self.judge is not None:
-            validate_judge_spec(self.judge)
-        normalized_absolute_path(self.cwd)
+            try:
+                validate_judge_spec(self.judge)
+            except InvalidTask as error:
+                raise ValueError(str(error)) from error
+        if self.cwd is not None:
+            normalized_absolute_path(self.cwd)
         normalized_absolute_path(self.conversation_path)
         if self.answer_path is not None:
             normalized_absolute_path(self.answer_path)
@@ -666,7 +786,14 @@ Grader = Annotated[VerifyitGrader | ScriptGrader | NoGrader, Field(discriminator
 
 def grades_in_process(grader: Grader) -> bool:
     """Whether the grader scores the extracted answer without a grading machine."""
-    return isinstance(grader, VerifyitGrader) and grader.environment is None and not grades_with_judge(grader)
+    return isinstance(grader, VerifyitGrader) and grader.placement is None and not grades_with_judge(grader)
+
+
+def grader_environment(grader: Grader) -> EnvironmentRequirements | None:
+    """The environment of the fresh machine that grades, or ``None`` when no fresh machine grades."""
+    if isinstance(grader, VerifyitGrader | ScriptGrader) and isinstance(grader.placement, GraderMachine):
+        return grader.placement.environment
+    return None
 
 
 def grades_with_judge(grader: Grader) -> bool:
@@ -685,8 +812,8 @@ def judge_spec(grader: Grader) -> JudgeSpec | None:
     return None
 
 
-def grader_workspace(grader: Grader) -> str:
-    """The directory the grader treats as the agent's workspace."""
+def grader_workspace(grader: Grader) -> str | None:
+    """The directory the grader treats as the agent's workspace; ``None`` is the machine's working directory."""
     if isinstance(grader, ScriptGrader):
         return grader.cwd
     if isinstance(grader, VerifyitGrader):
@@ -915,6 +1042,46 @@ AnswerFormat = Annotated[
 ]
 
 
+def _upgraded_grader(grader: dict[str, Any]) -> dict[str, Any]:
+    grader = dict(grader)
+    if grader.get("kind") == "script":
+        if isinstance(grader.get("judge"), dict):
+            grader["judge"] = upgrade_judge_table(grader["judge"])
+        if "environment" in grader:
+            grader["placement"] = {
+                "kind": "grader_machine",
+                "environment": grader.pop("environment"),
+                "collect": grader.pop("collect", []),
+                "artifacts": grader.pop("artifacts", []),
+            }
+    elif grader.get("kind") == "verifyit":
+        if grader.get("mode") == "judge" and isinstance(grader.get("parameters"), dict):
+            grader["parameters"] = upgrade_judge_table(grader["parameters"])
+        environment = grader.pop("environment", None)
+        grader["placement"] = None if environment is None else {"kind": "grader_machine", "environment": environment}
+    return grader
+
+
+def upgrade_task_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Upgrade a decoded schema 0.30 TaskSpec payload to the current schema; return others unchanged.
+
+    Schema 0.30 is the only upgradable version. Its graders named a fresh grading machine with
+    ``environment``, ``collect`` and ``artifacts``; the upgrade moves them into a ``GraderMachine``
+    placement, and a verifyit grader without an environment keeps grading in process. Its judge
+    specs, a verifyit judge's parameters and a script grader's ``judge``, carried
+    ``strip_candidate_reasoning_blocks`` and top-level ``temperature``. The upgrade moves them
+    into ``candidate_steps`` and ``sampling``.
+    """
+    if payload.get("schema_version") != UPGRADABLE_SCHEMA_VERSION:
+        return payload
+    grader = payload.get("grader")
+    return {
+        **payload,
+        "grader": _upgraded_grader(grader) if isinstance(grader, dict) else grader,
+        "schema_version": SCHEMA_VERSION,
+    }
+
+
 class TaskSpec(BaseModel):
     """The complete semantic definition of one task, its grader, and its final result."""
 
@@ -937,10 +1104,18 @@ class TaskSpec(BaseModel):
     tags: tuple[str, ...] = ()
     labels: dict[str, str] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def upgrade_schema(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        data = upgrade_task_payload(data)
+        if data.get("schema_version", SCHEMA_VERSION) != SCHEMA_VERSION:
+            raise ValueError(f"Unsupported TaskSpec schema: {data['schema_version']}")
+        return data
+
     @model_validator(mode="after")
     def validate_specification(self) -> "TaskSpec":
-        if self.schema_version != SCHEMA_VERSION:
-            raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id:
             raise ValueError("A task id is required")
         if len({function.name for function in self.final_tools}) != len(self.final_tools):
@@ -950,13 +1125,12 @@ class TaskSpec(BaseModel):
         if self.answer_type in CONVERSATION_ANSWERS and not self.answer_format.supports(self.answer_type):
             raise ValueError(f"Answer format {self.answer_format.kind} cannot carry a {self.answer_type} answer")
         validate_output_paths(self.output_paths)
-        if (
-            isinstance(self.grader, VerifyitGrader)
-            and self.grader.environment is None
-            and self.answer_type in (AnswerType.FILE, AnswerType.WORKSPACE_STATE)
-        ):
-            raise ValueError(f"A {self.answer_type} answer requires a grading environment")
-        if isinstance(self.grader, VerifyitGrader) and self.grader.environment is not None:
+        if isinstance(self.grader, VerifyitGrader) and self.grader.placement is None:
+            if self.answer_type == AnswerType.WORKSPACE_STATE:
+                raise ValueError(f"A {self.answer_type} answer requires a grader placement")
+            if self.answer_type == AnswerType.FILE and len(self.output_paths) != 1:
+                raise ValueError("A file answer graded on the host requires exactly one output path")
+        if isinstance(self.grader, VerifyitGrader) and self.grader.placement is not None:
             if self.answer_type in CONVERSATION_ANSWERS and verifyit_answer_file(verifyit_spec(self.grader)) is None:
                 raise ValueError(f"Workspace verifier {self.grader.mode} cannot grade a {self.answer_type} answer")
         if isinstance(self.grader, ScriptGrader):
@@ -966,3 +1140,8 @@ class TaskSpec(BaseModel):
             if self.grader.conversation_path in installed:
                 raise ValueError("The conversation path collides with a verifier resource")
         return self
+
+
+def task_subset(task: TaskSpec) -> str:
+    """Return the reporting subset, using source provenance for unlabelled tasks."""
+    return task.labels.get(SUBSET_LABEL) or task.source.dataset

@@ -17,17 +17,17 @@ from verifyit.spec import ExactSpec, MathSpec, McqSpec, NumericSpec, StructureCl
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
+    AgentMachine,
     ConversationTrace,
     EnvironmentRequirements,
     GradingAttempt,
     NoGrader,
-    ScriptGrader,
     TaskSpec,
     TextMessage,
     VerifyitGrader,
+    grader_environment,
     grades_in_process,
     grades_with_judge,
-    require_resolved_environment,
     verifyit_spec,
 )
 from taskcompendium.pipeline.fingerprints import callable_identity
@@ -146,7 +146,6 @@ async def _control_checks(
     machines: GradingMachines | None,
     judge_connection: JudgeConnection | None,
 ) -> VerificationReport:
-    require_resolved_environment(task.environment_requirements)
     grader = task.grader
     if isinstance(grader, NoGrader):
         return VerificationReport(
@@ -156,14 +155,23 @@ async def _control_checks(
                 )
             ]
         )
+    if isinstance(grader.placement, AgentMachine):
+        return VerificationReport(
+            [
+                CheckResult(
+                    check="grader",
+                    status=CheckStatus.UNSUPPORTED,
+                    detail="Controls do not run graders placed in the agent's machine",
+                )
+            ]
+        )
     judge_task = grades_with_judge(task.grader)
     if judge_task and judge_connection is None:
         raise ValueError("Judge controls require an explicit remote connection")
     sandbox = None
     if not grades_in_process(grader) and not (judge_task and isinstance(grader, VerifyitGrader)):
-        environment = grader.environment
+        environment = grader_environment(grader)
         assert environment is not None
-        require_resolved_environment(environment)
         if machines is None:
             raise ValueError("Sandbox controls require grading machines")
         sandbox = _Sandbox(
@@ -188,7 +196,6 @@ def _selected_machine(
     machines: GradingMachines, environment: EnvironmentRequirements, memory_mb: int
 ) -> tuple[MachineFactory, MachineSpec]:
     """Validate a selected machine without building its environment."""
-    require_resolved_environment(environment)
     factory, spec = machines.machine(environment, memory_mb)
     validate_machine_spec(environment, factory, spec)
     return factory, spec
@@ -207,10 +214,10 @@ def _oracle_environment(task: TaskSpec) -> EnvironmentRequirements:
     """Use the agent's requirements, falling back to the grader only for an empty agent environment."""
     if task.environment_requirements != EnvironmentRequirements():
         return task.environment_requirements
-    grader = task.grader
-    if not isinstance(grader, VerifyitGrader | ScriptGrader) or grader.environment is None:
+    environment = grader_environment(task.grader)
+    if environment is None:
         raise ValueError("An oracle requires a grader environment")
-    return grader.environment
+    return environment
 
 
 async def _control(

@@ -310,6 +310,19 @@ class GenState(eqx.Module):
         return new_state, child_local_id  # type: ignore
 
 
+def _copy_clone_cache(cache: PageCache, decode_state: DecodeState, source, target, length) -> PageCache:
+    page_size = decode_state.page_table.page_size
+
+    def copy_partial_page(cache):
+        last_page = length // page_size
+        source_page = decode_state.sequences.page_indices["seq", source, "page", last_page].scalar()
+        target_page = decode_state.sequences.page_indices["seq", target, "page", last_page].scalar()
+        return cache.copy_page(source_page, target_page)
+
+    cache = jax.lax.cond(length % page_size != 0, copy_partial_page, lambda cache: cache, cache)
+    return cache.copy_sequence(source, target)
+
+
 @functools.partial(jax.jit, donate_argnums=0)
 def _clone_sequence(
     state,
@@ -347,19 +360,8 @@ def _clone_sequence(
 
     decode_state = decode_state.clone_pages_from(parent_local_id, child_local_id)
 
-    page_size = decode_state.page_table.page_size
     src_len = decode_state.seq_lens["seq", parent_local_id].scalar()
-
-    def _copy(_):
-        last_idx = (src_len + page_size - 1) // page_size - 1
-        src_page = decode_state.sequences.page_indices["seq", parent_local_id, "page", last_idx].scalar()
-        dst_page = decode_state.sequences.page_indices["seq", child_local_id, "page", last_idx].scalar()
-        return state.cache.copy_page(src_page, dst_page)
-
-    def _identity(_):
-        return state.cache
-
-    cache = jax.lax.cond((src_len % page_size != 0) & (src_len > 0), _copy, _identity, None)
+    cache = _copy_clone_cache(state.cache, decode_state, parent_local_id, child_local_id, src_len)
 
     new_state = dataclasses.replace(state, decode_state=decode_state, cache=cache)
     return new_state, child_local_id
@@ -421,7 +423,7 @@ def _capture_buffer(model: LmHeadModel, capacity: int) -> _CapturedRoutes:
 def _decode_for_sampling(
     model: LmHeadModel,
     cache: PageCache,
-    binfo: PageBatchInfo,
+    batch_info: PageBatchInfo,
     tokens: NamedArray,
     positions: NamedArray,
     slots: NamedArray,
@@ -429,13 +431,13 @@ def _decode_for_sampling(
     routes: _CapturedRoutes | None,
 ) -> tuple[NamedArray, PageCache, _CapturedRoutes | None]:
     if routes is None:
-        logits, cache = model.decode(tokens, cache, binfo, positions)
+        logits, cache = model.decode(tokens, cache, batch_info, positions)
         return _gather_logits(logits, sample_indices), cache, None
     if not isinstance(model, SnowballLMHeadModel):
         raise ValueError("Expert route capture requires a Snowball model")
-    result = model.decode_with_routes(tokens, cache, binfo, positions, sample_indices=sample_indices)
+    result = model.decode_with_routes(tokens, cache, batch_info, positions, sample_indices=sample_indices)
     assert result.routes is not None
-    routes = routes.append(result.routes.expert_ids, slots, positions, binfo.num_new_tokens)
+    routes = routes.append(result.routes.expert_ids, slots, positions, batch_info.num_new_tokens)
     return result.logits, result.cache, routes
 
 
@@ -444,7 +446,7 @@ def _prefill_kernel(
     model: LmHeadModel,
     sampler: Sampler,
     queue: TokenQueue,
-    binfo: PageBatchInfo,
+    batch_info: PageBatchInfo,
     max_seqs_in_prefill: int,  # static
     capture_routes: bool = False,
 ) -> tuple[GenState, _DecodeOutputs]:
@@ -469,7 +471,7 @@ def _prefill_kernel(
     # )
     route_buffer = _capture_buffer(model, tokens.size) if capture_routes else None
     logits_at_samples, cache, routes = _decode_for_sampling(
-        model, gen_state.cache, binfo, tokens, pos_ids, slot_ids, sample_indices, route_buffer
+        model, gen_state.cache, batch_info, tokens, pos_ids, slot_ids, sample_indices, route_buffer
     )
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
@@ -492,7 +494,9 @@ def _prefill_kernel(
     temps = decode_state.temperature["seq", new_slot_ids]
     top_ps = decode_state.top_p["seq", new_slot_ids]
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
+    new_tokens, log_probs = sampler.sample_positions(
+        logits_at_samples, temps, top_ps=top_ps, num_samples=num_new_tokens, key=prng_keys
+    )
 
     # Update decode_state (also enqueues into the main decode queue)
     decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
@@ -575,11 +579,11 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> tuple[GenStat
 
     gen_state = jax.lax.fori_loop(0, max_slots, primary, gen_state)
     # Full prefix pages must exist before cloning, so parent prefill fills the shared pages.
-    decode_state, binfo = gen_state.decode_state.allocate_for_seq(
+    decode_state, batch_info = gen_state.decode_state.allocate_for_seq(
         token_slot_ids=work.queue.queued_slot_ids, token_pos_ids=work.queue.queued_pos_ids
     )
     gen_state = dataclasses.replace(gen_state, decode_state=decode_state)
-    return jax.lax.fori_loop(0, max_slots, clone, gen_state), binfo
+    return jax.lax.fori_loop(0, max_slots, clone, gen_state), batch_info
 
 
 @functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill", "capture_routes"))
@@ -591,8 +595,8 @@ def _run_prefill(
     max_seqs_in_prefill: int,
     capture_routes: bool = False,
 ) -> tuple[GenState, _DecodeOutputs]:
-    gen_state, binfo = _apply_prefill_work(gen_state, work)
-    return _prefill_kernel(gen_state, model, sampler, work.queue, binfo, max_seqs_in_prefill, capture_routes)
+    gen_state, batch_info = _apply_prefill_work(gen_state, work)
+    return _prefill_kernel(gen_state, model, sampler, work.queue, batch_info, max_seqs_in_prefill, capture_routes)
 
 
 def _handle_clones(
@@ -661,37 +665,21 @@ def _handle_clones(
     top_ps = gen_state.decode_state.top_p["seq", tgt_ids]
     prng_keys = gen_state.decode_state.prng_keys_for(tgt_ids, pos_ids_this_time)
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_this_time, temps, top_ps=top_ps, key=prng_keys)
+    new_tokens, log_probs = sampler.sample_positions(
+        logits_this_time, temps, top_ps=top_ps, num_samples=num_new, key=prng_keys
+    )
 
     # update page table and cache for the clone targets
     decode_state = gen_state.decode_state
     cache = gen_state.cache
-    size = decode_state.sequences.page_size
 
-    def copy_pages_for_updated_seq(
-        i,
-        state: tuple[DecodeState, PageCache],
-    ) -> tuple[DecodeState, PageCache]:
-        decode_state, cache = state
-        src_slot_id = src_ids["position", i].scalar()
-        dst_slot_id = tgt_ids["position", i].scalar()
+    def copy_prefilled_cache(i, cache):
+        source = src_ids["position", i].scalar()
+        target = tgt_ids["position", i].scalar()
+        length = decode_state.seq_lens["seq", target].scalar()
+        return _copy_clone_cache(cache, decode_state, source, target, length)
 
-        src_len = decode_state.seq_lens["seq", dst_slot_id].scalar()
-        used_pages = (src_len + size - 1) // size
-        last_idx = jnp.maximum(used_pages - 1, 0)
-
-        def _copy(_):
-            src_page = decode_state.sequences.page_indices["seq", src_slot_id, "page", last_idx].scalar()
-            dst_page = decode_state.sequences.page_indices["seq", dst_slot_id, "page", last_idx].scalar()
-            return cache.copy_page(src_page, dst_page)
-
-        def _identity(_):
-            return cache
-
-        cache = jax.lax.cond((src_len % size != 0) & (src_len > 0), _copy, _identity, None)
-        return decode_state, cache
-
-    decode_state, cache = jax.lax.fori_loop(0, num_new, copy_pages_for_updated_seq, (decode_state, cache))
+    cache = jax.lax.fori_loop(0, num_new, copy_prefilled_cache, cache)
 
     # Enqueue/update tokens for the clone targets (only the first num_new entries will be used)
     decode_state = decode_state.update_tokens(new_tokens, tgt_ids, log_probs, num_new)
@@ -743,7 +731,7 @@ def _run_generation_loop(
         #     lens=gen_state.decode_state.seq_lens.array,
         # )
 
-        decode_state, binfo = decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
+        decode_state, batch_info = decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
 
         seq_lens = decode_state.seq_lens
 
@@ -752,7 +740,7 @@ def _run_generation_loop(
 
         # Decode logits and sample new tokens
         logits_at_samples, cache, routes = _decode_for_sampling(
-            model, gen_state.cache, binfo, tokens, pos_ids, slot_ids, sample_indices, outputs.routes
+            model, gen_state.cache, batch_info, tokens, pos_ids, slot_ids, sample_indices, outputs.routes
         )
         outputs = dataclasses.replace(outputs, routes=routes)
 
@@ -764,7 +752,9 @@ def _run_generation_loop(
         temps = decode_state.temperature["seq", new_slot_ids]
         top_ps = decode_state.top_p["seq", new_slot_ids]
 
-        new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
+        new_tokens, log_probs = sampler.sample_positions(
+            logits_at_samples, temps, top_ps=top_ps, num_samples=num_new_tokens, key=prng_keys
+        )
 
         # Update decode state with the freshly sampled tokens (also enqueues them)
         decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)

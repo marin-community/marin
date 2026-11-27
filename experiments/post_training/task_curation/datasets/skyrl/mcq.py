@@ -6,6 +6,7 @@
 import hashlib
 import re
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import mcq_task, source_defect, unsupported
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
@@ -13,7 +14,7 @@ from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 from verifyit.modes.extract import extract_boxed
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 GPQA_CHOICES = ("Correct Answer", "Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3")
 OPTION_LABEL = re.compile(r"(?m)^([A-Z]):")
@@ -85,9 +86,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="MarinSkyRL:gpqa",
-                title="Idavidrein/gpqa · gpqa_diamond",
-                origin="MarinSkyRL",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="gpqa",
+                upstream_name="Idavidrein/gpqa · gpqa_diamond",
+                subset=None,
+                build_path="MarinSkyRL",
+                origin=SourceOrigin.GPQA,
                 family="qa-multiple-choice",
                 tags=("rlvr", "single-turn", "benchmark", "license:cc-by-4.0", "gym/mcq"),
             ),
@@ -108,9 +112,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="MarinSkyRL:openscience",
-                title="nvidia/OpenScience",
-                origin="MarinSkyRL",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="openscience",
+                upstream_name="nvidia/OpenScience",
+                subset=None,
+                build_path="MarinSkyRL",
+                origin=SourceOrigin.NEMOTRON,
                 family="qa-multiple-choice",
                 tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/mcq"),
             ),
