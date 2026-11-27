@@ -6,7 +6,7 @@
 import asyncio
 
 import pytest
-from rigging.inference_clock import InferenceClock, wait_execution
+from rigging.inference_clock import InferenceClock
 from taskcompendium.grading_result import Outcome
 
 from rolloutengine.models import TOTAL_TURN_TIMEOUT_STOP_REASON, GradedRolloutInterrupted
@@ -52,10 +52,7 @@ async def test_saturated_engine_wait_does_not_spend_trial_or_turn_budget(monkeyp
 
     async def run():
         with clock.scope():
-            work = asyncio.create_task(engine(QueuedModel([{"role": "assistant", "content": "12"}])).run_task(spec))
-            done, _ = await wait_execution(work, 8)
-            assert work in done  # Harbor phase timers must exclude the same queue wait.
-            return work.result()
+            return await engine(QueuedModel([{"role": "assistant", "content": "12"}])).run_task(spec)
 
     pending = asyncio.create_task(run())
     await queued.wait()
@@ -111,3 +108,18 @@ async def test_never_scheduled_request_uses_separate_queue_allowance(monkeypatch
     assert result.rollout.metrics["inference/queue_timeouts"] == 1
     assert result.rollout.metrics["inference/scheduled_requests"] == 0
     assert not result.rollout.conversations[0].steps
+
+
+async def test_transport_without_scheduling_notice_keeps_the_turn_deadline():
+    clock = InferenceClock(20)
+
+    class UntrackedModel(ReplayModel):
+        async def complete(self, request):
+            await asyncio.Future()
+
+    spec = rollout_spec(arithmetic_task(), total_turn_timeout=0.05, model_turn_timeout=1, attempt_timeout=2)
+    with clock.scope():
+        result = await asyncio.wait_for(engine(UntrackedModel([])).run_task(spec), timeout=1)
+    assert result.rollout.stop_reason == TOTAL_TURN_TIMEOUT_STOP_REASON
+    assert result.grade.status == Outcome.UNAVAILABLE
+    assert clock.scheduled_requests == 0

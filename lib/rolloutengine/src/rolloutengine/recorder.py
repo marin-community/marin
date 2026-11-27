@@ -11,16 +11,23 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from typing import Any, NoReturn
 
-from rigging.inference_clock import InferenceAdmissionTimeout, current_inference_clock, execution_timeout
+from rigging.inference_clock import (
+    PARTIAL_DEADLINE_STOP_REASON,
+    InferenceAdmissionTimeout,
+    current_inference_clock,
+    execution_timeout,
+)
 from shellbox.machine import Machine
 from taskcompendium.models import TaskSpec
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.harness.core import OUTPUT_LIMIT_OPTION_KEYS, Harness, HarnessContext, reply_options_match
 from rolloutengine.models import (
+    ATTEMPT_TIMEOUT_STOP_REASON,
     BUDGET_STOP_REASON,
     LENGTH_STOP_REASON,
     MAX_TURNS_STOP_REASON,
+    MODEL_TURN_TIMEOUT_STOP_REASON,
     TOTAL_TURN_TIMEOUT_STOP_REASON,
     TRACE_METRIC,
     ContextRecovery,
@@ -236,19 +243,31 @@ class _Recorder:
         ):
             # The turn and token limits end the attempt before a new conversation. A length stop does not.
             self._stop_at_limit(self.step_observations, None)
-        if current is None and current_inference_clock() is None:
+        if current is None:
             self.begin_turn_budget()
         conversation = _Conversation(prompt, self.mode)
         request = _Request(self.step_observations, None, conversation, self._waited())
         return await self._send(request, conversation.request((), prompt.token_ids))
 
     def begin_turn_budget(self) -> None:
-        if current_inference_clock() is not None:
-            return
         deadlines = self.deadlines
         assert deadlines is not None
         if deadlines.total.when() is None and self.limits.total_turn_timeout is not None:
             deadlines.total.reschedule(asyncio.get_running_loop().time() + self.limits.total_turn_timeout)
+
+    def _partial_deadline_reason(self, call: asyncio.Timeout) -> str:
+        """Name the active budget that prompted an early partial return."""
+        deadlines = self.deadlines
+        assert deadlines is not None
+        candidates = (
+            (call.when(), MODEL_TURN_TIMEOUT_STOP_REASON),
+            (deadlines.total.when(), TOTAL_TURN_TIMEOUT_STOP_REASON),
+            (None if deadlines.attempt is None else deadlines.attempt.when(), ATTEMPT_TIMEOUT_STOP_REASON),
+        )
+        active = [(when, reason) for when, reason in candidates if when is not None]
+        if not active:
+            raise RolloutContractError("The model reported a partial deadline without an active execution budget")
+        return min(active, key=lambda candidate: candidate[0])[1]
 
     async def reply(
         self,
@@ -378,7 +397,7 @@ class _Recorder:
         assert task is not None
         cancelling = task.cancelling()
         call_context = execution_timeout(
-            self.limits.model_turn_timeout if current_inference_clock() is None else None,
+            self.limits.model_turn_timeout,
             first_schedule_budget=self.limits.model_turn_timeout,
         )
         call = None
@@ -433,6 +452,8 @@ class _Recorder:
             self.model_error = outcome
             raise RolloutEnded("The model request failed") from outcome
         turn = outcome
+        if turn.stop_reason == PARTIAL_DEADLINE_STOP_REASON:
+            turn = replace(turn, stop_reason=self._partial_deadline_reason(call))
         try:
             if self.limits.max_total_tokens is not None and turn.usage is None and not turn.prompt_token_ids:
                 raise RolloutContractError("A token budget needs ModelTurn.usage or prompt token IDs from the model")
@@ -446,7 +467,11 @@ class _Recorder:
         max_total = self.limits.max_total_tokens
         self.budget_reached = max_total is not None and self.spent_tokens + turn.request_tokens >= max_total
         self.stop_reason = turn.stop_reason
-        if turn.stop_reason == TOTAL_TURN_TIMEOUT_STOP_REASON:
+        if turn.stop_reason in {
+            TOTAL_TURN_TIMEOUT_STOP_REASON,
+            MODEL_TURN_TIMEOUT_STOP_REASON,
+            ATTEMPT_TIMEOUT_STOP_REASON,
+        }:
             self.stopped = True
         self.step_observations, self.step_data, self.step_metrics = (), None, {}
         self.events.emit(
@@ -549,7 +574,7 @@ async def _run_harness(
     """
     failure: Exception | None = None
     recorder.turn_ended = time.monotonic()
-    # The recorder arms the total deadline at the first request or engine scheduling.
+    # The first request arms the deadline; engine scheduling rebases it when available.
     total_context = execution_timeout(None, first_schedule_budget=recorder.limits.total_turn_timeout)
     tool_context = execution_timeout(None)
     try:

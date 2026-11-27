@@ -21,6 +21,7 @@ INFERENCE_METRIC_KEYS = (
     INFERENCE_QUEUE_TIMEOUTS_METRIC,
     INFERENCE_SCHEDULED_REQUESTS_METRIC,
 )
+PARTIAL_DEADLINE_STOP_REASON = "partial_deadline"
 
 
 class InferenceAdmissionTimeout(TimeoutError):
@@ -153,18 +154,6 @@ async def execution_timeout(
         finally:
             if clock is not None:
                 clock.timers.remove(timer)
-
-
-async def wait_execution(task: asyncio.Task, seconds: float | None) -> tuple[set, set]:
-    """Wait without cancelling the phase task when its active budget expires."""
-    deadline = None
-    try:
-        async with execution_timeout(seconds) as deadline:
-            return await asyncio.wait({task})
-    except TimeoutError:
-        if deadline is None or not deadline.expired():
-            raise
-        return set(), {task}
 
 
 def remote_execution_watchdog(seconds: float | None) -> float | None:

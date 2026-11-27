@@ -12,8 +12,7 @@ from loguru import logger
 from packaging import version
 from ray.actor import ActorHandle, ActorMethod
 from ray.util.placement_group import PlacementGroupSchedulingStrategy, placement_group, remove_placement_group
-from rigging.inference_clock import current_inference_clock
-from rolloutengine.models import TOTAL_TURN_TIMEOUT_STOP_REASON
+from rigging.inference_clock import PARTIAL_DEADLINE_STOP_REASON, current_inference_clock
 from skyrl_train.inference_engines.request_deadline import finish_partial_on_timeout, partial_response_timeout
 from skyrl_train.inference_engines.request_timing import RequestScheduled, RequestCompleted
 from uuid import uuid4
@@ -378,7 +377,7 @@ class RayWrappedInferenceEngine(InferenceEngineInterface):
             )
             if deadline_finished:
                 output["stop_reasons"] = [
-                    TOTAL_TURN_TIMEOUT_STOP_REASON if reason == ABORT_FINISH_REASON else reason
+                    PARTIAL_DEADLINE_STOP_REASON if reason == ABORT_FINISH_REASON else reason
                     for reason in output["stop_reasons"]
                 ]
             return output
@@ -470,7 +469,7 @@ class RayWrappedInferenceEngine(InferenceEngineInterface):
             if deadline_finished:
                 for choice in output["choices"]:
                     if choice["finish_reason"] == ABORT_FINISH_REASON:
-                        choice["finish_reason"] = TOTAL_TURN_TIMEOUT_STOP_REASON
+                        choice["finish_reason"] = PARTIAL_DEADLINE_STOP_REASON
             return output
         actor_task = await _submit_actor_task(self.inference_engine_actor.chat_completion, request_payload)
         return await _await_actor_task(actor_task)

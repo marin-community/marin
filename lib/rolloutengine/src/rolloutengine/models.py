@@ -30,6 +30,8 @@ TASK_METRIC_KEYS = (
 LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"
 TOTAL_TURN_TIMEOUT_STOP_REASON = "total_turn_timeout"
+MODEL_TURN_TIMEOUT_STOP_REASON = "model_turn_timeout"
+ATTEMPT_TIMEOUT_STOP_REASON = "attempt_timeout"
 BUDGET_STOP_REASON = "budget_reached"
 
 

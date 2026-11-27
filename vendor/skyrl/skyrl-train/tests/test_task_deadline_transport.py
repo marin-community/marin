@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from rigging.inference_clock import InferenceClock, execution_timeout
-from rolloutengine.models import TOTAL_TURN_TIMEOUT_STOP_REASON
+from rigging.inference_clock import PARTIAL_DEADLINE_STOP_REASON
 
 from skyrl_train.inference_engines import ray_wrapped_inference_engine as transport
 from skyrl_train.inference_engines.request_timing import RequestCompleted, RequestScheduled
@@ -116,9 +116,9 @@ async def test_partial_return_uses_the_remaining_trial_budget_after_an_earlier_t
         payload = result if endpoint == "generate" else result["choices"][0]
         assert {key: payload[key] for key in sampled} == sampled
         if endpoint == "generate":
-            assert result["stop_reasons"] == [TOTAL_TURN_TIMEOUT_STOP_REASON]
+            assert result["stop_reasons"] == [PARTIAL_DEADLINE_STOP_REASON]
         else:
-            assert payload["finish_reason"] == TOTAL_TURN_TIMEOUT_STOP_REASON
+            assert payload["finish_reason"] == PARTIAL_DEADLINE_STOP_REASON
     finally:
         work.cancel()
         await asyncio.gather(work, return_exceptions=True)
