@@ -42,6 +42,7 @@ from rolloutengine.models import (
 )
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, AssistantPrefixHarness
+from rolloutengine.harness.tool_free import TOOL_FREE_HARNESS, ToolFreeHarness
 from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
 from marinskyrl.task_machine_factories import task_machine_factories
 from skyrl_train.config.utils import generation_context_limit
@@ -562,6 +563,8 @@ class TaskRolloutWorker:
             raise ValueError("Assistant-prefix tasks cannot reject malformed reasoning spans")
         if lowered.harness == ASSISTANT_PREFIX_HARNESS:
             harnesses[lowered.harness] = AssistantPrefixHarness()
+        elif lowered.harness == TOOL_FREE_HARNESS:
+            harnesses[lowered.harness] = ToolFreeHarness()
         elif is_shell_harness(lowered.harness):
             harnesses[lowered.harness] = shell_harness(lowered.harness, retrieval_service=self.retrieval_service)
         if lowered.harness == HARBOR_TRIAL_SESSION:

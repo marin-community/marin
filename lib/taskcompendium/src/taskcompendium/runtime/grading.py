@@ -59,6 +59,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.environment import prepare_machine_spec, resolve_env_vars, setup_user, validate_machine_spec
 from taskcompendium.runtime.output_capture import selected_output_files
+from taskcompendium.runtime.reply_status import reply_status_files
 from taskcompendium.runtime.script_judge_service import (
     SCRIPT_JUDGE_BASE_URL,
     SCRIPT_JUDGE_GUEST_KEY,
@@ -518,6 +519,7 @@ async def grade_in_sandbox(
     validate_machine_spec(grading.environment, factory, machine_spec)
     answer_file = None if grading.spec is None else verifyit_answer_file(grading.spec)
     submissions = _captured_files(task, attempt, (*task.output_paths, *([answer_file] if answer_file else [])))
+    submissions += reply_status_files(task, attempt)
     try:
         if grading.spec is not None and task.answer_type in CONVERSATION_ANSWERS:
             require_submission_compatibility(task)

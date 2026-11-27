@@ -633,6 +633,7 @@ class ScriptGrader(BaseModel):
     artifacts: tuple[VerifierArtifact, ...] = ()
     answer_path: str | None = "/app/answer.txt"
     conversation_path: str = "/tests/conversation.json"
+    reply_status_path: str | None = Field(default=None, exclude_if=lambda value: value is None)
     reward: Annotated[StdoutReward | ExitCodeReward | FileReward, Field(discriminator="kind")] = StdoutReward()
     timeout: float | None = Field(default=600.0, gt=0)
     """The grader's own deadline in seconds; ``None`` declares no source-imposed deadline and leaves
@@ -647,6 +648,10 @@ class ScriptGrader(BaseModel):
             validate_judge_spec(self.judge)
         normalized_absolute_path(self.cwd)
         normalized_absolute_path(self.conversation_path)
+        if self.reply_status_path is not None:
+            normalized_absolute_path(self.reply_status_path)
+            if self.reply_status_path in {self.answer_path, self.conversation_path}:
+                raise ValueError("Reply status, answer and conversation paths must differ")
         if self.answer_path is not None:
             normalized_absolute_path(self.answer_path)
             if under_grader_root(self.answer_path):
@@ -954,6 +959,7 @@ class TaskSpec(BaseModel):
     )
     integrity_contract: RootDeliveryContract | MultiSweDeliveryContract | SharedIntegrityContract | None = None
     final_tools: tuple[FunctionDefinition, ...] = ()
+    completion_protocol: Literal["tool_free_single"] | None = Field(default=None, exclude_if=lambda value: value is None)
     interaction_tools: tuple[FunctionDefinition, ...] = ()
     tool_bindings: dict[str, ShellToolBinding] = Field(default_factory=dict)
     output_paths: tuple[str, ...] = ()
@@ -977,6 +983,8 @@ class TaskSpec(BaseModel):
                 raise ValueError("Actor and verifier allocations must share the same phase deadlines")
         if self.schema_version != SCHEMA_VERSION:
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
+        if self.completion_protocol == "tool_free_single":
+            _require_tool_free_single(self)
         if not self.id:
             raise ValueError("A task id is required")
         if len({function.name for function in self.final_tools}) != len(self.final_tools):
@@ -1001,4 +1009,23 @@ class TaskSpec(BaseModel):
             installed = {f"/tests/{resource.path}" for resource in self.resources.verifier}
             if self.grader.conversation_path in installed:
                 raise ValueError("The conversation path collides with a verifier resource")
+            if self.grader.reply_status_path in installed:
+                raise ValueError("The reply status path collides with a verifier resource")
         return self
+
+
+def _require_tool_free_single(task: "TaskSpec") -> None:
+    """A single tool-free completion of exactly the source's system and user text."""
+    if task.final_tools or task.interaction_tools or task.tool_bindings:
+        raise ValueError("Tool-free completion cannot advertise or bind tools")
+    events = task.context.events
+    if (
+        len(events) != 2
+        or not all(isinstance(event, TextMessage) for event in events)
+        or (events[0].role, events[1].role) != ("system", "user")
+    ):
+        raise ValueError("Tool-free completion requires exactly one system and one user message")
+    if task.environment_requirements != EnvironmentRequirements():
+        raise ValueError("Tool-free completion cannot provide an actor capability")
+    if task.resources.worker or task.resources.all or task.output_paths:
+        raise ValueError("Tool-free completion cannot expose workspace resources or outputs")

@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 from datasets import Dataset
 from rolloutengine.harness.shell import task_prompt as marin_task_prompt
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, assistant_prefix_prompt
+from rolloutengine.harness.tool_free import TOOL_FREE_HARNESS
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
 from rolloutengine.validation import task_machine_reason
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN
@@ -237,6 +238,8 @@ def canonical_task_spec(task: TaskSpec, config: Mapping[str, Any]) -> TaskRollou
     harness = (
         ASSISTANT_PREFIX_HARNESS
         if continues_assistant
+        else TOOL_FREE_HARNESS
+        if task.completion_protocol == TOOL_FREE_HARNESS
         else config["harness_by_dataset"].get(task.source.dataset, config["default_harness"])
     )
     session = {**config["session"], "task_session": harness}
