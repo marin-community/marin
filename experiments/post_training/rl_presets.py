@@ -203,7 +203,7 @@ class Training:
     def fixed_reply_holds(self, fixed: int, training: list[dict], response_token_counts: set[int | None]) -> bool:
         return all(row.get("generate/min_num_tokens") == row.get("generate/max_num_tokens") == fixed for row in training)
 
-    def evaluation_patch(self, answer_count: int) -> RecipePatch:
+    def evaluation_patch(self, answer_count: int, config: RecipePatch) -> RecipePatch:
         return RecipePatch()
 
     def callbacks(
@@ -314,8 +314,17 @@ class Generation:
     def fixed_reply_holds(self, fixed: int, training: list[dict], response_token_counts: set[int | None]) -> bool:
         return response_token_counts == {fixed}
 
-    def evaluation_patch(self, answer_count: int) -> RecipePatch:
-        return RecipePatch(trajectory_runner=sections.TrajectoryRunner(max_concurrent_tasks=answer_count))
+    def evaluation_patch(self, answer_count: int, config: RecipePatch) -> RecipePatch:
+        concurrency = min(answer_count, config.trajectory_runner.max_concurrent_tasks)
+        if config.generator.backend == "vllm":
+            # Model deadlines start inside evaluation admission, before the vLLM queue.
+            inference_capacity = (
+                self.plan.num_inference_engines
+                * self.plan.inference_engine_data_parallel_size
+                * config.generator.max_num_seqs
+            )
+            concurrency = min(concurrency, inference_capacity)
+        return RecipePatch(trajectory_runner=sections.TrajectoryRunner(max_concurrent_tasks=concurrency))
 
     def callbacks(
         self,

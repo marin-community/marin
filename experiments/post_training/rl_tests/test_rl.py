@@ -38,6 +38,7 @@ from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
+from skyrlrecipe import RecipePatch, sections
 from skyrlrecipe.documents import merge_mappings, set_path
 
 from experiments.post_training import rl as snowball
@@ -50,6 +51,7 @@ from experiments.post_training.mochi_assets import (
     MOCHI_TOKENIZER_URI,
 )
 from experiments.post_training.mochi_rl import MOCHI
+from experiments.post_training.rl_presets import Generation
 from experiments.post_training.rl_tests import model_entry_fixture
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
@@ -167,6 +169,67 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
     del recorded["skyrl"]["environment"]["task_sessions"]["agent_harnesses"]
     del recorded["skyrl"]["trajectory_runner"]["max_concurrent_training_machine_tasks"]
     assert gate.config_version(recorded) == gate.config_version(planned)
+
+
+def test_standalone_evaluation_admission_respects_native_serving_capacity(selection, tmp_path):
+    table = snowball_model.SNOWBALL
+    preset = table.by_name["eval-short"]
+    layout = preset.recipe.layout
+    workload = layout.workload
+    assert isinstance(workload, Generation)
+    (evaluation,) = preset.evaluations
+    selection_path = Path(recipe.selection_artifact(preset.held_out_tasks).path()) / "summary.json"
+    cases = {
+        # rows, answers per row, logical engines, runner ceiling, admitted requests
+        "tiny": (2, 2, 1, None, 4),
+        "e4": (624, 1, 1, None, 32),
+        "runner-ceiling": (624, 1, 1, 12, 12),
+        "two-engines": (624, 1, 2, None, 64),
+    }
+    paths = []
+    for name, (rows, answers, engines, ceiling, _) in cases.items():
+        _json(selection_path, selection_summary(rows))
+        plan = replace(
+            workload.plan,
+            gpus_per_node=4,
+            num_inference_engines=engines,
+            inference_engine_data_parallel_size=4,
+            inference_engine_expert_parallel_size=4,
+        )
+        config = preset.recipe.config.merge(
+            RecipePatch(
+                generator=sections.Generator(max_num_seqs=8),
+                trajectory_runner=(
+                    sections.TrajectoryRunner(max_concurrent_tasks=ceiling)
+                    if ceiling is not None
+                    else sections.TrajectoryRunner()
+                ),
+            )
+        )
+        case = replace(
+            preset,
+            recipe=replace(
+                preset.recipe,
+                layout=replace(layout, workload=replace(workload, plan=plan)),
+                config=config,
+                training_plan=None,
+            ),
+            evaluations=(replace(evaluation, profile=evaluation.profile.replace(n_samples_per_prompt=answers)),),
+        )
+        (step,) = snowball.build_experiment(case, table=table).runs
+        path = tmp_path / f"{name}.yaml"
+        path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
+        paths.append(str(path))
+
+    composed = gate.compose_configs(paths, validate_driver=True)
+    for config, (_, answers, engines, _, expected) in zip(composed, cases.values(), strict=True):
+        native = config["skyrl"]
+        assert config["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
+        assert native["trajectory_runner"]["max_concurrent_tasks"] == expected
+        assert native["generator"]["eval_n_samples_per_prompt"] == answers
+        assert native["generator"]["num_inference_engines"] == engines
+        assert native["generator"]["inference_engine_data_parallel_size"] == 4
+        assert native["generator"]["max_num_seqs"] == 8
 
 
 def test_snowball_held_out_evaluations_use_full_eval_lite(selection, tmp_path):

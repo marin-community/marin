@@ -612,7 +612,7 @@ def run_spec(
                         eval_n_samples_per_prompt=evaluation.answers, eval_sampling_params=sampling
                     ),
                 )
-            ).merge(workload.evaluation_patch(answer_count))
+            ).merge(workload.evaluation_patch(answer_count, config))
         else:
             evaluation_data.append((evaluation.name, sources))
             profiles[evaluation.name] = EvaluationProfile(

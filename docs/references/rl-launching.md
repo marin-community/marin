@@ -171,6 +171,11 @@ staged local weights and S3 streaming. An actor startup failure recreates the
 whole engine gang with fresh rendezvous ports, within the existing
 `generator.engine_init_timeout_seconds` deadline.
 
+Standalone evaluation presets limit admission to the primary answer count and
+the configured `trajectory_runner.max_concurrent_tasks` ceiling. For vLLM they
+also cap admissions at engine count × data parallel size × `max_num_seqs`, so
+requests can wait in the evaluation queue before their model deadlines start.
+
 DP rendezvous ports are bound and held on the engine's target node, excluding
 that node's `/proc/sys/net/ipv4/ip_local_port_range`, kernel-reserved service
 ports, and Iris's default named-port range. Kernel reservations also cover
