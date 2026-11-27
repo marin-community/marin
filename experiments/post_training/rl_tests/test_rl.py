@@ -72,6 +72,7 @@ from experiments.post_training.rl_tests.fixtures import (
 )
 from experiments.post_training.rl_tests.fixtures import write_json as _json
 from experiments.post_training.skyrl_test_support import read_skyrl_metrics, run_native_test, selection_summary
+from experiments.post_training.snowball_sampler import SAMPLER
 from experiments.post_training.snowball_sft import OPENTHOUGHTS_32K_4NODE
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, VALIDATION_FILENAME
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
@@ -169,6 +170,27 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
     del recorded["skyrl"]["environment"]["task_sessions"]["agent_harnesses"]
     del recorded["skyrl"]["trajectory_runner"]["max_concurrent_training_machine_tasks"]
     assert gate.config_version(recorded) == gate.config_version(planned)
+
+
+def test_snowball_sampler_presets_plan_native_launches(selection, tmp_path):
+    selections = {key for preset in SAMPLER.presets for key in (preset.tasks, preset.held_out_tasks)}
+    for key in selections:
+        artifact = recipe.selection_artifact(key)
+        _json(Path(artifact.path()) / "summary.json", selection_summary(1400))
+
+    paths = []
+    for preset in SAMPLER.presets:
+        (step,) = snowball.build_experiment(preset, table=SAMPLER).runs
+        path = tmp_path / f"{preset.name}.yaml"
+        path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
+        paths.append(str(path))
+
+    for preset, config in zip(SAMPLER.presets, gate.compose_configs(paths, validate_driver=True), strict=True):
+        assert config["skyrl"]["trainer"]["max_steps"] == preset.updates
+        (train,) = config["inputs"]["train_data"]
+        (evaluation,) = config["inputs"]["validation_data"]
+        assert train["uri"] == recipe.selection_artifact(preset.tasks).path()
+        assert evaluation["uri"] == recipe.selection_artifact(preset.held_out_tasks).path()
 
 
 def test_standalone_evaluation_admission_respects_native_serving_capacity(selection, tmp_path):

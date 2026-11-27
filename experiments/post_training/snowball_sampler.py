@@ -13,7 +13,6 @@ from experiments.post_training.rl_presets import ModelPresets, Preset
 from experiments.post_training.snowball_rl import DATAKIT_SFT_2026_09_21, SEED, SNOWBALL
 from experiments.post_training.task_curation.snowball_sampler_selection import EVAL_LITE, PILOT
 
-REVISION = "2026.11.25.2"
 SECOND_SEED = 20261021
 SMOKE_UPDATES = 4
 PROMPT_EXPLORATION = 0.05
@@ -63,7 +62,6 @@ def sampler_preset(name: str, updates: int, kind: str, epsilon: float, seed: int
     return replace(
         base,
         name=name,
-        revision="2026.11.25.3" if kind == WITHIN_SOURCE else REVISION,
         recipe=recipe,
         seed=seed,
         tasks=f"{PILOT.name}@{PILOT.version}",
@@ -84,7 +82,6 @@ def fixed_calibration_smoke() -> Preset:
     sync = RecipePatch(trainer=sections.Trainer(rollout_buffer=sections.RolloutBuffer(max_staleness_steps=0)))
     return replace(
         base,
-        revision="2026.11.25.4",
         recipe=replace(base.recipe, config=base.recipe.config.merge(CHUNKED_PROJECTION).merge(sync)),
         evaluations=(replace(base.evaluations[0], every=None),),
         checkpoint_every=None,
@@ -106,7 +103,6 @@ SAMPLER = ModelPresets(
         ),
         fixed_calibration_smoke(),
     ),
-    control_pins={},
 )
 
 if __name__ == "__main__":
