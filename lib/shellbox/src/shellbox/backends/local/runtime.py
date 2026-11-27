@@ -8,6 +8,7 @@ import logging
 import os
 import signal
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
 from shellbox.backends.local import sandbox
@@ -16,7 +17,13 @@ from shellbox.backends.local.commands import command_config, execute_command, st
 from shellbox.backends.local.disk import LocalDisk
 from shellbox.backends.local.images import PreparedLocalImage
 from shellbox.backends.local.keeper import allocate_keeper
-from shellbox.backends.local.transfers import unpack_local_archive
+from shellbox.backends.local.transfers import (
+    ARCHIVE_LIMIT_BYTES,
+    ARCHIVE_SCRIPT,
+    EXTRACT_SCRIPT,
+    _archive,
+    unpack_local_archive,
+)
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     Command,
@@ -125,7 +132,7 @@ class LocalMachine:
         if self._closed:
             raise MachineTerminated("Machine is closed")
 
-    async def _start_keeper(self, peer: "LocalMachine | None" = None) -> None:
+    def _prepare_keeper_cgroup(self) -> None:
         if self._cgroup_parent is not None:
             self._cgroup = MachineCgroup.create(self._cgroup_parent, cpus=self.spec.cpus, memory_mb=self.spec.memory_mb)
             self._keeper_cgroup = self._cgroup.create_child()
@@ -135,6 +142,8 @@ class LocalMachine:
                 self.spec.cpus,
                 self.spec.memory_mb,
             )
+
+    def _keeper_arguments(self, peer: "LocalMachine | None") -> list[str]:
         if self.image is None:
             arguments = sandbox._sandbox_argv(
                 self._bwrap,
@@ -180,6 +189,11 @@ class LocalMachine:
             arguments.insert(1, "--unshare-user")
         if self.image is None and os.geteuid() != 0:
             arguments[1:1] = ["--uid", str(os.geteuid()), "--gid", str(os.getegid())]
+        return arguments
+
+    async def _start_keeper(self, peer: "LocalMachine | None" = None) -> None:
+        self._prepare_keeper_cgroup()
+        arguments = self._keeper_arguments(peer)
         block_read, block_write = os.pipe()
         allocation = asyncio.create_task(allocate_keeper(self, arguments, peer, block_read, block_write))
         try:
@@ -256,10 +270,9 @@ class LocalMachine:
             # handle. The launcher closes them before executing guest code.
             try:
                 group = self._new_command_cgroup()
-                config["cgroup"] = None if group is None else str(group.path / "cgroup.procs")
+                launch_config = replace(config, cgroup=None if group is None else str(group.path / "cgroup.procs"))
                 process = await start_process(
-                    self,
-                    config,
+                    launch_config,
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
@@ -376,8 +389,8 @@ class LocalMachine:
             ):
                 raise UnsupportedMachineSpec(f"The local backend's {target} is a read-only host path")
         name = "." if source.is_dir() else path.name
-        stream = await asyncio.to_thread(sandbox._archive, source, name)
-        result = await self._control(sandbox.EXTRACT_SCRIPT, path if source.is_dir() else path.parent, stdin=stream)
+        stream = await asyncio.to_thread(_archive, source, name)
+        result = await self._control(EXTRACT_SCRIPT, path if source.is_dir() else path.parent, stdin=stream)
         if result.exit_code != 0:
             raise RuntimeError(f"Cannot upload to {target}: {result.stderr.decode(errors='replace').strip()}")
 
@@ -386,11 +399,11 @@ class LocalMachine:
         path = sandbox._absolute_path(source)
         if self.image is None and path == PurePosixPath("/"):
             raise UnsupportedMachineSpec("A host-program machine cannot download its entire system root")
-        result = await self._control(sandbox.ARCHIVE_SCRIPT, path, output_limit_bytes=sandbox.ARCHIVE_LIMIT_BYTES)
+        result = await self._control(ARCHIVE_SCRIPT, path, output_limit_bytes=ARCHIVE_LIMIT_BYTES)
         if result.exit_code != 0:
             raise RuntimeError(result.stderr.decode(errors="replace").strip())
         if result.stdout_truncated:
-            raise RuntimeError(f"{source} exceeds the {sandbox.ARCHIVE_LIMIT_BYTES}-byte download limit")
+            raise RuntimeError(f"{source} exceeds the {ARCHIVE_LIMIT_BYTES}-byte download limit")
         await asyncio.to_thread(unpack_local_archive, result.stdout, target, source_name=path.name)
 
     async def close(self) -> None:

@@ -3,14 +3,10 @@
 
 """Build private host filesystem layouts and bubblewrap arguments."""
 
-import io
 import os
-import pwd
 import re
-import resource
 import shutil
 import sys
-import tarfile
 import tempfile
 from collections.abc import Iterable
 from enum import StrEnum
@@ -26,9 +22,6 @@ from shellbox.machine import (
 )
 
 DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-# Resolve the program through sh, as the container backends do: a missing or unexecutable program
-# or working directory becomes a failed command (127 or 126 for the program) rather than an exception.
-RUN_SCRIPT = 'cd "$1" || exit; shift; exec "$@"'
 LAUNCH_SOURCE = Path(launch.__file__).read_text()
 KEEPER_PAYLOAD = """\
 read -r ready && [ "$ready" = shellbox-ready ] || exit 1
@@ -55,9 +48,6 @@ does on the Docker backend's ``--init``. The init also keeps the sleeper
 spare exactly that argv, and an init that would exit when the sleeper dies
 would close the machine mid-grading.
 """
-NPROC_HEADROOM = 256
-"""Tasks a command may add beyond the host's task count when it starts; RLIMIT_NPROC counts all of a user's tasks."""
-FILE_SIZE_LIMIT = 1 << 30
 PROCESS_STOP_TIMEOUT = 1
 # Reserve program directories and private configuration paths from caller-supplied mounts.
 SYSTEM_DIRECTORIES = (
@@ -88,16 +78,6 @@ RUNTIME_CONFIGURATION = (
     "/etc/ssl/certs",
 )
 MOUNTINFO = Path("/proc/self/mountinfo")
-# Transfers that reach an overlaid directory pass through the sandbox as a tar stream, so they see the machine's
-# layer. A file that is a symlink is archived as the file it leads to inside the sandbox, not as the link.
-EXTRACT_SCRIPT = 'mkdir -p -- "$1" && exec tar -xof - -C "$1"'
-ARCHIVE_SCRIPT = (
-    '[ -e "$1" ] || { echo "No such file or directory: $1" >&2; exit 2; }; '
-    'if [ -d "$1" ]; then exec tar -cf - -C "$1" .; fi; '
-    'exec tar -chf - -C "$(dirname -- "$1")" -- "$(basename -- "$1")"'
-)
-ARCHIVE_LIMIT_BYTES = 1 << 30
-"""The largest download from an overlaid directory, as a tar stream."""
 SHARED_MEMORY = "/dev/shm"
 """Python's multiprocessing creates its semaphores here."""
 SCRATCH = PurePosixPath("/tmp")
@@ -273,31 +253,6 @@ def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
     return (bwrap_path(), *(() if system is None else (Path(system),)))
 
 
-def _resource_limits(file_size_limit: int = FILE_SIZE_LIMIT) -> list[tuple[int, int]]:
-    host_tasks = int(Path("/proc/loadavg").read_text().split()[3].split("/")[1])
-    return [
-        (resource.RLIMIT_NPROC, host_tasks + NPROC_HEADROOM),
-        (resource.RLIMIT_FSIZE, file_size_limit),
-        (resource.RLIMIT_CORE, 0),
-    ]
-
-
-def _command_account(user: str | None) -> pwd.struct_passwd | None:
-    """The host account a command switches to, or None to run as this process's user."""
-    uid = os.geteuid()
-    if user is None or user == str(uid):
-        return None
-    try:
-        account = pwd.getpwuid(int(user)) if user.isdigit() else pwd.getpwnam(user)
-    except KeyError as error:
-        raise UnsupportedMachineSpec(f"The local backend found no host account for user {user}") from error
-    if account.pw_uid == uid:
-        return None
-    if uid != 0:
-        raise UnsupportedMachineSpec(f"The local backend runs as uid {uid}; only root can run a command as {user}")
-    return account
-
-
 def _prepare_root(root: Path, workdir: PurePosixPath | None) -> None:
     root.chmod(ROOT_MODE)
     for directory in (*PRIVATE_SYSTEM_DIRECTORIES, "/opt"):
@@ -313,18 +268,6 @@ def _prepare_root(root: Path, workdir: PurePosixPath | None) -> None:
         path.chmod(STICKY_WORLD_WRITABLE)
     if workdir is not None:
         (root / workdir.relative_to("/")).mkdir(parents=True, exist_ok=True)
-
-
-def _archive(source: Path, name: str) -> bytes:
-    """A tar stream of ``source`` under ``name``; ``name`` "." takes a directory's contents.
-
-    As ``_copy`` does, a ``source`` that is a symlink contributes what it leads to, and symlinks inside a
-    directory stay symlinks.
-    """
-    stream = io.BytesIO()
-    with tarfile.open(fileobj=stream, mode="w") as archive:
-        archive.add(os.path.realpath(source), arcname=name)
-    return stream.getvalue()
 
 
 def _check_mounts(mounts: tuple[Mount, ...]) -> None:

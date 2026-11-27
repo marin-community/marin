@@ -12,10 +12,11 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from shellbox.backends.local.commands import NPROC_HEADROOM
 from shellbox.backends.local.launch import COMMAND_NICENESS
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.backends.local.runtime import LocalMachine
-from shellbox.backends.local.sandbox import NPROC_HEADROOM, SandboxUnavailable
+from shellbox.backends.local.sandbox import SandboxUnavailable
 from shellbox.machine import (
     Command,
     DockerImage,

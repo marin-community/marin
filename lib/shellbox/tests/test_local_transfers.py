@@ -12,8 +12,7 @@ from pathlib import Path
 
 import pytest
 from shellbox.backends.local.runtime import LocalMachine
-from shellbox.backends.local.sandbox import _archive
-from shellbox.backends.local.transfers import unpack_local_archive
+from shellbox.backends.local.transfers import _archive, unpack_local_archive
 from shellbox.machine import (
     Command,
     HostImage,
