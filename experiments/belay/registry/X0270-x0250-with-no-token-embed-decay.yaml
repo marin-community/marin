@@ -1,0 +1,12 @@
+id: X0270
+slug: x0250-with-no-token-embed-decay
+name: X0250 with no token_embed decay
+category: Embeddings and inputs
+summary: 🤖 Posted on behalf of @armorfaye.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-7228103459
+  author: armorfaye
+  approved_by: armorfaye (trusted)
