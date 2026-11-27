@@ -1,5 +1,11 @@
 // Small presentational helpers shared across pages.
 
+const VALUE_FORMATTER = new Intl.NumberFormat('en-US', {
+  notation: 'standard',
+  useGrouping: false,
+  maximumSignificantDigits: 2,
+})
+
 export function formatTimestamp(iso: string | null | undefined): string {
   if (!iso) return '—'
   const d = new Date(iso)
@@ -21,21 +27,14 @@ export function formatScore(value: number | null | undefined): string {
   return value.toFixed(3)
 }
 
-// A raw metric value at 2 significant digits, in plain decimal notation like the rest of the
-// dashboard (12345 reads 12000, not 1.2e4). Display only; stored values stay exact. Rounding can
-// cross a magnitude (0.996 rounds to 1), so the printed decimals follow the rounded value, and
-// trailing zeros trim — but never past the first decimal of a rounded fraction.
+// Raw metric display with at most two significant digits and no exponent notation.
 export function formatValue(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return '—'
+  if (!Number.isFinite(value)) return String(value)
   if (value === 0) return '0'
-  const rounded = Number(value.toPrecision(2))
-  const magnitude = Math.floor(Math.log10(Math.abs(rounded)))
-  let text = rounded.toFixed(Math.max(0, 1 - magnitude))
-  if (text.includes('.')) {
-    text = text.replace(/0+$/, '')
-    if (text.endsWith('.')) text += '0'
-  }
-  return text
+  const text = VALUE_FORMATTER.format(value)
+  // Keep the existing decimal for a rounded single-digit integer (0.996 → 1.0).
+  return /^-?[1-9]$/.test(text) ? `${text}.0` : text
 }
 
 export function shortSha(sha: string | null | undefined): string {
