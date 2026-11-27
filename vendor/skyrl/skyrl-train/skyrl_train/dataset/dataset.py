@@ -13,6 +13,18 @@ def dataset_num_proc(row_count: int, num_workers: int) -> int | None:
     return num_workers if row_count >= PARALLEL_DATASET_MIN_ROWS else None
 
 
+def concatenate_prompt_datasets(loaded: list[datasets.Dataset]) -> datasets.Dataset:
+    """Combine inputs after widening top-level Arrow text columns, without coercing other types."""
+    aligned = []
+    for data in loaded:
+        features = data.features.copy()
+        for name, feature in data.features.items():
+            if feature == datasets.Value("string"):
+                features[name] = datasets.Value("large_string")
+        aligned.append(data.cast(features) if features != data.features else data)
+    return datasets.concatenate_datasets(aligned)
+
+
 def read_prompt_files(
     sources: list[str], *, prepare_source: Callable[[str, datasets.Dataset], datasets.Dataset] | None = None
 ) -> datasets.Dataset:
@@ -34,7 +46,7 @@ def read_prompt_files(
                 )
             data = available[split]
         loaded.append(prepare_source(source, data) if prepare_source is not None else data)
-    return datasets.concatenate_datasets(loaded)
+    return concatenate_prompt_datasets(loaded)
 
 
 class PromptDataset:
