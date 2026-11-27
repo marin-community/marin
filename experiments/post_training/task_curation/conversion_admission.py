@@ -141,6 +141,11 @@ def bind_conversion_admission(source: RlDataSource, receipt: ConversionAdmission
         census.dataset_revision,
     ):
         raise ValueError("The census receipt binds another release pin")
+    # The population record reads through S3: configure the routed filesystem in
+    # this process (the credential-setup war story — the caller may not have).
+    from rigging.filesystem.s3_compat import configure_coreweave_s3  # noqa: PLC0415 — beside its only use
+
+    configure_coreweave_s3()
     population = SourceTextPopulation.raw_load(receipt.population_record)
     if (
         population.dataset_id,
