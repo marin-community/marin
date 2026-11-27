@@ -28,10 +28,17 @@ if TYPE_CHECKING:
     from experiments.evaluation.pipeline import EvaluationResult
 
 
-def run_eval_lite(config: tuple[str, SkyRLRunConfig, RLAttemptRef | None], *, version: str) -> EvaluationResult:
+@dataclass(frozen=True)
+class EvalLiteConfig:
+    output_path: str
+    native: SkyRLRunConfig
+    rl_attempt: RLAttemptRef | None
+
+
+def run_eval_lite(config: EvalLiteConfig, *, version: str) -> EvaluationResult:
     from experiments.evaluation.pipeline import EvaluationResult  # noqa: PLC0415
 
-    output_path, skyrl, producing_attempt = config
+    skyrl = config.native
     terminal = StoragePath(skyrl.output.terminal_manifest_uri)
     if terminal.exists():
         receipt = LaunchReceipt.model_validate_json(terminal.read_bytes())
@@ -57,7 +64,7 @@ def run_eval_lite(config: tuple[str, SkyRLRunConfig, RLAttemptRef | None], *, ve
                 name=launch.model_name or "eval-lite", location=launch.model_uri, backend=launch.engine.backend
             ),
             rows=rows,
-            rl_attempt=producing_attempt,
+            rl_attempt=config.rl_attempt,
             score=score if score is not None and math.isfinite(score) else None,
         ),
         version=version,
@@ -65,7 +72,7 @@ def run_eval_lite(config: tuple[str, SkyRLRunConfig, RLAttemptRef | None], *, ve
     if record.status is not RunStatus.SUCCEEDED:
         raise ValueError(f"EvalLite {record.run_id} failed: {record.error}")
     return EvaluationResult(
-        path=output_path,
+        path=config.output_path,
         group_id=record.group_id,
         records_prefix=str(StoragePath(record.results_path).parent.parent),
         run_ids=(record.run_id,),
@@ -94,11 +101,11 @@ class EvalLite:
         spec = rl_compose.run_spec(preset, name=name, init=model, model_name=self.model_name)
         native = rl_compose.run_step(preset, replace(spec, version=version))
 
-        def build(context: StepContext) -> tuple[str, SkyRLRunConfig, RLAttemptRef | None]:
+        def build(context: StepContext) -> EvalLiteConfig:
             output_path = context.output_path
             if is_mutable_version(version) and not context.is_fingerprint:
                 context = replace(context, output_path=str(StoragePath(output_path) / "attempts" / uuid.uuid4().hex))
-            return output_path, native.build_config(context), model_rl_attempt(model, context)
+            return EvalLiteConfig(output_path, native.build_config(context), model_rl_attempt(model, context))
 
         return ArtifactStep(
             name=name,

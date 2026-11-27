@@ -133,7 +133,7 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
         with monkeypatch.context() as capture:
             capture.setattr(gate, "compose_configs", collect_plan)
             result = CliRunner().invoke(
-                snowball.command(table, argv=tuple(arguments), evaluation_presets=snowball_model.evaluation_presets),
+                snowball.command(table, argv=tuple(arguments), evaluation_preset=snowball_model.evaluation_preset),
                 arguments,
             )
         assert result.exit_code == 0, (preset.name, result.output, result.exception)

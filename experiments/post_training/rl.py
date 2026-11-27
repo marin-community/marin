@@ -1007,7 +1007,7 @@ def command(
     argv: tuple[str, ...],
     init: SkyRLModelSource | None = None,
     sft_presets: Callable[[], Sequence[SFTModelPreset]] | None = None,
-    evaluation_presets: Callable[[str], ExportEvaluationPreset] | None = None,
+    evaluation_preset: Callable[[str], ExportEvaluationPreset] | None = None,
     entry_module: str | None = None,
     forward_env: tuple[str, ...] = (),
 ) -> click.Command:
@@ -1293,7 +1293,7 @@ def command(
             return (initializer.step,)
         provenance = _provenance(control=bool(control))
         from_launcher = get_job_info() is None
-        after_run = _selected_evaluations((*preset.after_run, *then_eval), evaluation_presets)
+        after_run = _selected_evaluations((*preset.after_run, *then_eval), evaluation_preset)
         if after_run and preset.export == "none":
             raise click.BadParameter("After-run evaluations require a policy export")
         run = build_experiment(
@@ -1439,7 +1439,7 @@ def _selected_evaluations(
 
 def _evaluate_command(
     table: presets.ModelPresets,
-    evaluation_presets: Callable[[str], ExportEvaluationPreset] | None,
+    evaluation_preset: Callable[[str], ExportEvaluationPreset] | None,
     *,
     entry_module: str | None,
     argv: tuple[str, ...],
@@ -1464,7 +1464,7 @@ def _evaluate_command(
     @click.option("--evals", "evaluation_name", required=True, metavar="NAME")
     def build(init_name: str, evaluation_name: str) -> ArtifactStep:
         configure_coreweave_s3()
-        (evaluation,) = _selected_evaluations((evaluation_name,), evaluation_presets)
+        (evaluation,) = _selected_evaluations((evaluation_name,), evaluation_preset)
         model = recipe.published_model(init_name, preset=preset, initializers=table.initializers)
         version = resolve_version(export_evaluation_name(model, evaluation.name), None)
         return export_evaluation_step(evaluation, model, version=version)
@@ -1515,7 +1515,7 @@ def main(
     argv: Sequence[str] | None = None,
     init: SkyRLModelSource | None = None,
     sft_presets: Callable[[], Sequence[SFTModelPreset]] | None = None,
-    evaluation_presets: Callable[[str], ExportEvaluationPreset] | None = None,
+    evaluation_preset: Callable[[str], ExportEvaluationPreset] | None = None,
     entry_module: str | None = None,
     forward_env: tuple[str, ...] = (),
 ) -> int:
@@ -1532,7 +1532,7 @@ def main(
             selected = (rl_gate if args[0] == "compare" else rl_publication).command(table)
             args = args[1:]
         elif args and args[0] == "evaluate":
-            selected = _evaluate_command(table, evaluation_presets, entry_module=entry_module, argv=tuple(args))
+            selected = _evaluate_command(table, evaluation_preset, entry_module=entry_module, argv=tuple(args))
             args = args[1:]
         else:
             selected = command(
@@ -1540,7 +1540,7 @@ def main(
                 argv=tuple(args),
                 init=init,
                 sft_presets=sft_presets,
-                evaluation_presets=evaluation_presets,
+                evaluation_preset=evaluation_preset,
                 entry_module=entry_module,
                 forward_env=forward_env,
             )

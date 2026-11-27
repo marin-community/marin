@@ -555,7 +555,7 @@ SNOWBALL = ModelPresets(
 )
 
 
-def evaluation_presets(name: str) -> ExportEvaluationPreset:
+def evaluation_preset(name: str) -> ExportEvaluationPreset:
     if name == "eval-lite":
         return EvaluationPreset(name, EvalLite(_EVAL_LITE, SNOWBALL.model))
     from experiments.evaluation.models import models  # noqa: PLC0415
@@ -579,7 +579,7 @@ def main() -> int:
     return rl.main(
         SNOWBALL,
         sft_presets=sft_presets,
-        evaluation_presets=evaluation_presets,
+        evaluation_preset=evaluation_preset,
         entry_module="experiments.post_training.snowball_rl",
     )
 

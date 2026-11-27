@@ -9,6 +9,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from functools import cache, partial
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal
 
 import pyarrow.parquet as pq
@@ -67,13 +68,13 @@ class Cohort:
 
 
 COHORTS = (Cohort("micro210-chat", "single-turn", 340, (0,)), Cohort("micro210-pi", "pi", 94, (1, 12)))
-POPULATIONS = {cohort.name: cohort.population for cohort in COHORTS}
+POPULATIONS = MappingProxyType({cohort.name: cohort.population for cohort in COHORTS})
 FULL_POPULATION = sum(POPULATIONS.values())
 FULL_PROTOCOL = "sealed"
 SOURCE_FAMILY = "micro210_family"
 IMAGE_LOCK = Path(__file__).parents[1] / "micro210_images.json"
 CORPUS_REVISION = f"{POLICY_REFERENCE.revision}-launcher.1"
-STOP_TOKEN_CONTENT = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
+STOP_TOKEN_CONTENT = MappingProxyType({128001: "<|end_of_text|>", 128009: "<|eot_id|>"})
 
 
 def native_binding_code_sha256() -> str:

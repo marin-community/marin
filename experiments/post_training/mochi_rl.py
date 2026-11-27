@@ -364,7 +364,7 @@ MOCHI = ModelPresets(
 )
 
 
-def evaluation_presets(name: str) -> ExportEvaluationPreset:
+def evaluation_preset(name: str) -> ExportEvaluationPreset:
     if name == "eval-lite":
         return EvaluationPreset(name, EvalLite(_EVAL_LITE, MOCHI.model))
     engine = _EVAL_SERVING.to_skyrl()["generator"]["engine_init_kwargs"]
@@ -407,7 +407,7 @@ def main() -> int:
     return rl.main(
         MOCHI,
         sft_presets=sft_presets,
-        evaluation_presets=evaluation_presets,
+        evaluation_preset=evaluation_preset,
         entry_module="experiments.post_training.mochi_rl",
     )
 

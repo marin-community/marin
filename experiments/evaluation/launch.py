@@ -41,7 +41,13 @@ from fray.types import ResourceConfig
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client.client import IrisClient
 from iris.cluster.config import load_config
-from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
+from iris.cluster.constraints import (
+    CLUSTER_CONSTRAINT_KEY,
+    Constraint,
+    ConstraintOp,
+    any_region_constraint,
+    region_constraint,
+)
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import job_pb2
 from marin.evaluation.dataset_evaluator import DatasetEvaluator
@@ -656,7 +662,9 @@ def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluat
                 key=CLUSTER_CONSTRAINT_KEY,
                 op=ConstraintOp.EQ,
                 value=batch.accelerator.target_cluster,
-            )
+            ),
+            # The target peer can be in a different region from the parent coordinator.
+            region_constraint([batch.accelerator.region]) if batch.accelerator.region else any_region_constraint(),
         ]
     elif batch.accelerator.region:
         constraints = [region_constraint([batch.accelerator.region])]

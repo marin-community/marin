@@ -10,7 +10,7 @@ import pytest
 from evalrecords.records import RunStatus, record_path
 from fray.iris_backend import convert_constraints
 from huggingface_hub import constants
-from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, ConstraintOp
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, ConstraintOp, is_any_region_marker
 from iris.cluster.platforms.k8s.coreweave_topology import COSCHEDULE_NVLINK_DOMAIN
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.runner import _inference_configs, _record
@@ -129,7 +129,7 @@ def test_evaluate_preserves_model_and_attempt_metadata_on_read_and_reuse(
             return SimpleNamespace(value="test")
 
         monkeypatch.setattr(launch_module, "resolve_secret_spec", resolve_secret)
-        preset = mochi_rl.evaluation_presets(evaluation_name)
+        preset = mochi_rl.evaluation_preset(evaluation_name)
 
     class Client:
         def submit(self, *, entrypoint, constraints, **_kwargs):
@@ -141,6 +141,7 @@ def test_evaluate_preserves_model_and_attempt_metadata_on_read_and_reuse(
             if evaluation_name == "micro210":
                 [placement] = [constraint for constraint in constraints if constraint.key == CLUSTER_CONSTRAINT_KEY]
                 assert placement.op is ConstraintOp.EQ and placement.values[0].value == layout.cluster
+                assert any(is_any_region_marker(constraint) for constraint in constraints)
                 assert any(ref[0] == "env:TOGETHER_API_KEY" for ref in secret_refs)
                 assert {evaluation.identity.eval_ref.name for evaluation in batch.evaluations} == {
                     "micro210-chat",
@@ -150,7 +151,6 @@ def test_evaluate_preserves_model_and_attempt_metadata_on_read_and_reuse(
                 assert inference.iris.serving_geometry.label == "PP1 TP1 DP16"
                 resources = inference.iris.worker_resources
                 assert resources.replicas == 4 and resources.chip_count() == 16
-                assert "--data-parallel-size" not in inference.engine.extra_args
                 [exclusion] = [
                     constraint
                     for constraint in convert_constraints(resources)

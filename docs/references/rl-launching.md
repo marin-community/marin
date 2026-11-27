@@ -523,4 +523,4 @@ sampling settings.
 
 The `micro210-smoke` catalog selection exercises CRUXEval, BixBench, and BFCL on
 sealed rows 0, 1, and 12. Pi uses Daytona task machines and the Together judge
-uses the task-local relay. See the [launcher guide](../../experiments/evaluation/README.md#micro210-judge-policy).
+uses the task-local relay.

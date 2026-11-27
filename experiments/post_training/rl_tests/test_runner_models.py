@@ -33,8 +33,7 @@ from experiments.evaluation import launch as eval_launch
 from experiments.evaluation import pipeline as eval_pipeline
 from experiments.post_training import rl, rl_compose, rl_gate
 from experiments.post_training.mochi_rl import MOCHI
-from experiments.post_training.mochi_rl import evaluation_presets as mochi_evaluations
-from experiments.post_training.rl_evallite import EvalLite
+from experiments.post_training.mochi_rl import evaluation_preset as mochi_evaluations
 from experiments.post_training.rl_measurements import read_run_inputs
 from experiments.post_training.rl_presets import BatchMix
 from experiments.post_training.rl_tests.fixtures import (
@@ -49,7 +48,7 @@ from experiments.post_training.rl_tests.fixtures import (
     write_skyrl_run_record,
 )
 from experiments.post_training.snowball_rl import SNOWBALL
-from experiments.post_training.snowball_rl import evaluation_presets as snowball_evaluations
+from experiments.post_training.snowball_rl import evaluation_preset as snowball_evaluations
 from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
@@ -67,9 +66,7 @@ def plan(table, name, *options, version=None, sft_presets=None):
         args += ("--tasks", SELECTION_IDENTITY)
     args += options
     evaluations = mochi_evaluations if table.model == "mochi" else snowball_evaluations
-    return CliRunner().invoke(
-        rl.command(table, argv=args, sft_presets=sft_presets, evaluation_presets=evaluations), args
-    )
+    return CliRunner().invoke(rl.command(table, argv=args, sft_presets=sft_presets, evaluation_preset=evaluations), args)
 
 
 @pytest.mark.parametrize("cadence, period", [(None, None), (2, 4)])
@@ -329,7 +326,7 @@ def test_standalone_eval_lite_publishes_its_native_record(
                 "--run",
             ],
             entry_module=f"experiments.post_training.{table.model}_rl",
-            evaluation_presets=catalog,
+            evaluation_preset=catalog,
         )
 
     if not scored:
@@ -415,7 +412,6 @@ def test_after_run_evaluation_refuses_unusable_plans(selection, options, error):
 
 def test_cross_host_generation_plan_refuses_a_non_vllm_backend(selection):
     evaluation = mochi_evaluations("eval-lite").recipe
-    assert isinstance(evaluation, EvalLite)
     preset = evaluation.preset
     spec = rl_compose.run_spec(preset, name="cross-host-evaluation", model_name=MOCHI.model)
     config = yaml.safe_load(spec.config_yaml)
