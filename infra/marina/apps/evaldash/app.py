@@ -47,7 +47,6 @@ from evalrecords.eval_stats import (
     Completeness,
     MissingPolicy,
     SelectionRequest,
-    declared_protocols,
 )
 from evalrecords.records import (
     DEFAULT_SCAN_PREFIXES,
@@ -71,16 +70,16 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from . import review, samples
+from . import playground_reports, review, samples
 from .db_migrations import apply_migrations
 from .metrics import (
     ALL_COHORTS,
     RUN_FACETS,
     build_comparison,
+    build_history,
     build_meta,
     build_model_detail,
     build_panel,
-    dashboard_measurements,
     display_status,
     panel_request,
     record_headline,
@@ -122,6 +121,7 @@ DEFAULT_REVALIDATE_AFTER = 86400.0
 DEFAULT_REVIEW_MODEL = "claude-haiku-4-5-20251001"
 
 PREFIXES_ENV = "RECORDS_PREFIXES"
+REPORT_PREFIXES_ENV = "PLAYGROUND_REPORT_PREFIXES"
 STORE_ENV = "EVALDASH_STORE"
 INGEST_INTERVAL_ENV = "EVALDASH_INGEST_INTERVAL"
 REVALIDATE_AFTER_ENV = "EVALDASH_REVALIDATE_AFTER"
@@ -287,6 +287,7 @@ class EvaldashConfig:
     """Everything the environment decides, resolved once when the kernel mounts the app."""
 
     prefixes: tuple[str, ...]
+    report_prefixes: tuple[str, ...]
     store: StoreMode
     ingest_interval: float
     revalidate_after: float
@@ -297,6 +298,7 @@ class EvaldashConfig:
     def from_env(cls, environ: Mapping[str, str]) -> EvaldashConfig:
         """Resolve the configuration, failing on an unknown store rather than guessing one."""
         raw_prefixes = environ.get(PREFIXES_ENV) or ",".join(DEFAULT_SCAN_PREFIXES)
+        raw_report_prefixes = environ.get(REPORT_PREFIXES_ENV, ",".join(playground_reports.DEFAULT_REPORT_PREFIXES))
         store = environ.get(STORE_ENV, StoreMode.POSTGRES).strip().lower()
         if store not in tuple(StoreMode):
             raise ValueError(f"unknown {STORE_ENV}={store!r}; expected one of {[mode.value for mode in StoreMode]}")
@@ -308,6 +310,7 @@ class EvaldashConfig:
             raise ValueError(f"{INGEST_INTERVAL_ENV} is only supported with {StoreMode.LOCAL.value!r} storage")
         return cls(
             prefixes=tuple(part.strip() for part in raw_prefixes.split(",") if part.strip()),
+            report_prefixes=tuple(part.strip() for part in raw_report_prefixes.split(",") if part.strip()),
             store=mode,
             ingest_interval=float(environ.get(INGEST_INTERVAL_ENV, DEFAULT_INGEST_INTERVAL)),
             revalidate_after=float(environ.get(REVALIDATE_AFTER_ENV, DEFAULT_REVALIDATE_AFTER)),
@@ -568,38 +571,22 @@ class RecordStore:
         groups.sort(key=lambda group: group["created_at"] or "", reverse=True)
         return groups[:limit]
 
-    def history(self, model: str, task: str) -> list[dict]:
-        """Every run's headline score for one ``(model, eval)`` over time, oldest first.
+    def history(self, model: str, task: str, request: SelectionRequest) -> list[dict]:
+        """Admitted headline scores for one ``(model, eval)`` over time, oldest first.
 
-        ``task`` is a panel column, i.e. a registry eval name. One point per run that produced a
-        primary metric, each carrying its interval, coverage, and provenance for the tooltip.
+        ``task`` is a panel column, i.e. a registry eval name. Each point has a primary metric
+        matching the column's protocol, with its interval, coverage, and provenance for the tooltip.
         """
         records, _by_id = self._snapshot()
-        task_records = [
-            record
-            for record in records
-            if record.model.name == model and record.evaluation.name == task and not record_policy_violations(record)
-        ]
-        protocol_records = [
-            record for record in records if record.evaluation.name == task and not record_policy_violations(record)
-        ]
-        protocols = declared_protocols(dashboard_measurements(protocol_records))
-        points = []
-        for record in task_records:
-            headline = record_headline(record, protocols.get(task))
-            if headline is None:
-                continue
-            points.append({**headline, "status": record.status.value})
-        points.sort(key=lambda point: point["created_at"] or "")
-        return points
+        return build_history(records, model, task, request)
 
-    def model_detail(self, model: str) -> dict | None:
+    def model_detail(self, model: str, request: SelectionRequest) -> dict | None:
         """One model's aggregated detail view: cohorts, per-eval history, and every run.
 
         ``None`` when the model has no records, so the route can answer 404.
         """
         records, _by_id = self._snapshot()
-        return build_model_detail(records, model)
+        return build_model_detail(records, model, request)
 
     def group_siblings(self, group_id: str, exclude_run_id: str) -> list[dict]:
         records, _by_id = self._snapshot()
@@ -1340,7 +1327,8 @@ def _analysis_router(store: RecordStore) -> APIRouter:
 
     @router.get("/models/{model_name}")
     async def api_model_detail(request: Request) -> JSONResponse:
-        detail = await asyncio.to_thread(store.model_detail, request.path_params["model_name"])
+        selection = panel_request(cohort=request.query_params.get("cohort") or ALL_COHORTS)
+        detail = await asyncio.to_thread(store.model_detail, request.path_params["model_name"], selection)
         if detail is None:
             return JSONResponse({"error": "unknown model"}, status_code=404)
         return JSONResponse(detail)
@@ -1424,10 +1412,10 @@ def _analysis_router(store: RecordStore) -> APIRouter:
         response_model=HistoryResponse,
         openapi_extra=operation_extension(OperationRisk.READ),
     )
-    async def api_history(model: str, task: str) -> HistoryResponse | JSONResponse:
+    async def api_history(model: str, task: str, cohort: str = ALL_COHORTS) -> HistoryResponse | JSONResponse:
         if not model or not task:
             return JSONResponse({"error": "model and task are required"}, status_code=400)
-        points = await asyncio.to_thread(store.history, model, task)
+        points = await asyncio.to_thread(store.history, model, task, panel_request(cohort=cohort))
         return HistoryResponse(model=model, task=task, points=points)
 
     @router.get("/meta")
@@ -1473,6 +1461,29 @@ def _control_router(
     return router
 
 
+def _reports_router(engine: Engine | None) -> APIRouter:
+    """Playground report list and detail; the local store has no database to serve them from."""
+    router = APIRouter()
+    unavailable = JSONResponse({"detail": "playground reports require the postgres store"}, status_code=503)
+
+    @router.get("/playground-reports")
+    async def api_reports() -> JSONResponse:
+        if engine is None:
+            return unavailable
+        return JSONResponse(await asyncio.to_thread(playground_reports.fetch_report_summaries, engine))
+
+    @router.get("/playground-reports/{report_id}")
+    async def api_report(report_id: str) -> JSONResponse:
+        if engine is None:
+            return unavailable
+        report = await asyncio.to_thread(playground_reports.fetch_report, engine, report_id)
+        if report is None:
+            return JSONResponse({"detail": "unknown report_id"}, status_code=404)
+        return JSONResponse(report)
+
+    return router
+
+
 def build_api(
     store: RecordStore,
     gateway: ClusterGatewayLike,
@@ -1489,6 +1500,7 @@ def build_api(
     api.include_router(_run_router(store, gateway, config))
     api.include_router(_analysis_router(store))
     api.include_router(_control_router(store, ingestor, trigger_ingest))
+    api.include_router(_reports_router(store.engine if isinstance(store, PgRecordStore) else None))
     mounted_api: ASGIApp = api if local_loop is None else ApiWithBackgroundLoops(api, (local_loop,))
     return registered_api(api, mounted_app=mounted_api)
 

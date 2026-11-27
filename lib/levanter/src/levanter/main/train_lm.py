@@ -6,7 +6,7 @@ import functools
 import logging
 import os
 from dataclasses import dataclass, field, replace
-from typing import Optional
+from typing import Any, Optional
 
 import equinox as eqx
 import haliax as hax
@@ -74,6 +74,7 @@ class TrainLmConfig:
     hf_save_chat_template: Optional[str] = None
     """Chat template embedded in the HF export's tokenizer instead of the tokenizer's own."""
     hf_generation_eos_token_ids: Optional[list[int]] = None
+    hf_generation_config_defaults: dict[str, Any] | None = None
 
     adapter: AdaptorConfig = field(default_factory=NoAdaptorConfig)
     peft_save_path: Optional[str] = None
@@ -125,6 +126,8 @@ def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmC
     return replace(
         reloaded,
         router_dot_fp32=requested.router_dot_fp32,
+        router_combine_fp32=requested.router_combine_fp32,
+        attention_implementation=requested.attention_implementation,
         moe_implementation=requested.moe_implementation,
         moe_capacity_factor=requested.moe_capacity_factor,
         fp32_activations=requested.fp32_activations,
@@ -235,7 +238,7 @@ def main(config: TrainLmConfig):
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
     def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
-        return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
+        return model.next_token_loss_and_metrics(example, key=key, logsumexp_weight=config.z_loss_weight)
 
     # Using the trainer as a context manager does 3 things:
     # 1. Sets the device mesh
@@ -419,6 +422,7 @@ def main(config: TrainLmConfig):
                 hf_save_steps=config.hf_save_steps,
                 hf_save_dtype=config.hf_save_dtype,
                 generation_config=build_generation_config(tokenizer, config.hf_generation_eos_token_ids),
+                generation_config_defaults=config.hf_generation_config_defaults,
                 chat_template=config.hf_save_chat_template,
                 peft_save_path=config.peft_save_path,
                 peft_hf_upload=config.peft_hf_upload,

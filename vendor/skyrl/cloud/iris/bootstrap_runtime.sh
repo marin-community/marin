@@ -13,14 +13,6 @@ runtime_file="$3"
 profile="$4"
 install_mode="$5"
 
-case "$profile" in
-  megatron|megatron-export) ;;
-  *)
-    echo "unsupported runtime profile: $profile" >&2
-    exit 2
-    ;;
-esac
-
 case "$install_mode" in
   production) dependency_group=(--no-group dev) ;;
   development) dependency_group=(--group dev) ;;
@@ -30,25 +22,34 @@ case "$install_mode" in
     ;;
 esac
 
-if [[ "$profile" == *-export ]]; then
-  strategy="${profile%-export}"
-  runtime_extras=(--extra "$strategy")
-else
-  runtime_extras=(--extra "$profile" --extra vllm --extra telemetry)
-fi
-
-required_python_minor="3.12"
+required_python_minor="$(cat "$project_root/.python-version")"
 system_python="$(command -v "python$required_python_minor" || true)"
 if [[ -z "$system_python" ]]; then
   echo "required system interpreter python$required_python_minor is unavailable ($(uv --version))" >&2
   exit 1
 fi
 
-system_python_version="$($system_python -c 'import platform; print(platform.python_version())')"
-if [[ "$system_python_version" != "$required_python_minor".* ]]; then
-  echo "required system interpreter Python $required_python_minor, found Python $system_python_version at $system_python ($(uv --version))" >&2
+system_python_version="$("$system_python" --version)"
+if [[ "$system_python_version" != "Python $required_python_minor".* ]]; then
+  echo "required system interpreter Python $required_python_minor, found $system_python_version at $system_python ($(uv --version))" >&2
   exit 1
 fi
+
+runtime_link_mode=symlink
+device=cuda
+case "$profile" in
+  megatron) runtime_extras=(--extra megatron --extra vllm --extra telemetry) ;;
+  megatron-export) runtime_extras=(--extra megatron) ;;
+  hub-publish)
+    runtime_extras=(--extra cpu)
+    runtime_link_mode="${UV_LINK_MODE:-copy}"
+    device=cpu
+    ;;
+  *)
+    echo "unsupported runtime profile: $profile" >&2
+    exit 2
+    ;;
+esac
 
 uv_version="$(cat "$project_root/.uv-version")"
 UV_PROJECT_ENVIRONMENT="$environment" uv tool run --from "uv==$uv_version" \
@@ -57,15 +58,19 @@ UV_PROJECT_ENVIRONMENT="$environment" uv tool run --from "uv==$uv_version" \
   --python "$system_python" \
   --no-python-downloads \
   --frozen \
-  --link-mode symlink \
+  --link-mode "$runtime_link_mode" \
   "${dependency_group[@]}" \
   "${runtime_extras[@]}"
 
 python="$environment/bin/python"
-"$python" "$project_root/marinskyrl/environment_contract.py" write-frozen-cuda-runtime "$runtime_file"
-# Native JITs invoke tools such as ninja by name after bootstrap completes.
-printf 'export PATH=%q${PATH:+:$PATH}\n' "$environment/bin" >> "$runtime_file"
-source "$runtime_file"
+check_script="$project_root/cloud/iris/runtime_checks.py"
+"$python" -I "$project_root/marinskyrl/environment_contract.py" write-task-runtime "$runtime_file" "$device" "$project_root"
+if [[ "$device" == cpu ]]; then
+  "$python" -I "$check_script" hub-publish
+  exit 0
+fi
+source "$project_root/cloud/iris/load_runtime_environment.sh"
+load_runtime_environment "$runtime_file"
 # FlashInfer's CUDA 13 JIT still links through CUDA_HOME/lib64, while the
 # NVIDIA wheel installs its libraries in CUDA_HOME/lib.
 if [[ ! -e "$CUDA_HOME/lib64" ]]; then
@@ -87,23 +92,13 @@ run_check() {
   check_logs+=("$workdir/check-$name.log")
 }
 
-run_check flash-attention "$python" -c '
-import platform
-
-# Check the attention package selected by the locked profile before starting Ray.
-if platform.machine() == "aarch64":
-    from flash_attn.cute.interface import flash_attn_varlen_func
-else:
-    from flash_attn_interface import flash_attn_varlen_func
-'
-if [[ "$profile" == megatron || "$profile" == megatron-export ]]; then
-  run_check megatron "$python" -c "import transformer_engine.common; from megatron.bridge import AutoBridge"
-fi
-if [[ "$profile" == *-export ]]; then
-  run_check export "$python" -c "import ray, torch; from skyrl_train.checkpoint_exporter import CheckpointExporter"
+run_check flash-attention "$python" -I "$check_script" flash-attention
+run_check megatron "$python" -I "$check_script" megatron
+if [[ "$profile" == megatron-export ]]; then
+  run_check export "$python" -I "$check_script" export
 else
-  run_check agents "$python" -c "import memray; from shellbox.backends.daytona.machine import DaytonaMachineFactory; from shellbox.backends.shellsim.machine import ShellSimMachineFactory; from rolloutengine.engine import RolloutEngine"
-  run_check vllm "$python" -c "import quack.activation, torch, vllm; import vllm._C_stable_libtorch, vllm.cumem_allocator; from skyrl_train.models.grug_moe import GRUG_MOE_ARCHITECTURE; from vllm.model_executor.models import ModelRegistry; assert GRUG_MOE_ARCHITECTURE in ModelRegistry.get_supported_archs(); print('[rl-iris] frozen runtime ready:', torch.__version__, vllm.__version__)"
+  run_check agents "$python" -I "$check_script" agents
+  run_check vllm "$python" -I "$check_script" vllm
 fi
 
 check_status=0

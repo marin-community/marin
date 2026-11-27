@@ -6,7 +6,7 @@ the same Marina service.
 
 Cloud Run has a `marina` web service and a separate `marina-evaldash` job.
 The job is the scheduled ingestion worker; it scans evaluation records and
-updates the serving catalog. It serves no web traffic. Both use the Marina
+playground reports and updates the serving catalog. It serves no web traffic. Both use the Marina
 base image, while the released EvalDash package supplies the UI, API and
 ingestion module.
 
@@ -90,6 +90,18 @@ selector, an opt-in qualified aggregate, and archive controls), runs (a "by laun
 expanding each serve group to its evals, plus a flat filterable table), run detail (grade with its
 interval and ungraded-item breakdown, metrics, version + description, live iris job/attempt status,
 live finelog logs, a per-sample browser, and group siblings), and status (per-prefix ingest probes).
+A Playground Reports tab lists the reports described below.
+
+Playground reports are the model-feedback reports that the marin-serve dashboard's Report issue
+button saves, one immutable JSON object per report under `{prefix}/{YYYY-MM-DD}/{id}.json` in
+`gs://marin-eval-metadata/model-feedback` and `s3://marin-us-east-02a/marin/model-feedback`. The
+writer is `marin.inference.model_feedback`; EvalDash cannot import marin at runtime, so it keeps its
+own copy of the format, and a test ingests a report saved by that writer. Each ingest pass, before
+the record pass, copies objects it has not seen into the `playground_reports` table and never rereads
+one it has. An object that fails validation is skipped with a warning on every pass; a listing or
+read failure is logged and reported as a failed prefix, and the other reports are still copied.
+The list shows the newest 1,000 reports and says when older ones were left out. The local store has
+no database for reports, so their endpoints return 503 there.
 
 Run filters search the full catalog before applying the result limit. Model and eval pickers
 search the catalog's names by case-insensitive word fragments and support arrow keys, Enter,
@@ -146,14 +158,16 @@ GET  /runs/{run_id}/samples?task=&offset=&limit=&correct=   paged sample rows
 GET  /runs/{run_id}/samples/artifact?uri=   one run-local sample artifact (the trajectory) as text
 POST /runs/{run_id}/samples/review   LLM failure-mode review of up to n sampled task rows ({task, filter, n})
 GET  /runs/{run_id}/group          sibling runs sharing the run's group_id
-GET  /models/{model}    one model configuration's aggregated detail (identity, version cohorts, current cohort cells, per-eval history, all runs; 404 if absent)
+GET  /models/{model}?cohort=   one model configuration's aggregated detail (identity, version cohorts, per-eval history, all runs; 404 if absent)
 GET  /panel?benchmarks=&cohort=&complete=&min_coverage=&aggregate=&model=&<facet>=&include_archived=   the model x benchmark panel: per-cell measurements with intervals, explained gaps, the benchmark families its columns group into, and an optional qualified aggregate
 GET  /compare?models=a,b[,c,d]&<panel filters>   head-to-head: per-benchmark cells, each model's difference interval against that benchmark's leader, and each model's aggregate over the shared benchmarks
-GET  /history?model=&task=   every run's headline score for one cell, over time
+GET  /history?model=&task=&cohort=   every admitted run's headline score for one cell, over time
 GET  /meta              distinct models / evals / suites / families / users / statuses / versions + filter facets + archived_models + current_user
 GET  /status            store info + per-prefix ingest probes (last probe/success/error)
 POST /refresh           queue the EvalDash Cloud Run rescan; returns 202 + operation + /status
 POST /models/{model_name}/archive   set a model's archive flag ({"archived": bool})
+GET  /playground-reports            the newest playground reports without conversations, and whether older ones were left out
+GET  /playground-reports/{report_id}   one stored report with its source URL (404 if absent)
 ```
 
 `/panel` answers one selection request against the statistics engine in
@@ -177,9 +191,12 @@ grader, and reporting a collapse on that basis would be the same error as hiding
 names the flag and links the run, and `include_flagged=1` admits it, starred.
 
 Several settings of one benchmark can share a leaderboard column. The launcher writes explicit
-groupings to each run's `eval.family`. Harbor runs without an explicit family use their dataset as the
-family, so policies and dataset versions over the same benchmark group automatically. Other runs
-without a family keep their own column. `/panel` returns each family, its requested variants, and the
+groupings to each run's `eval.family`. Curated runs use their selected benchmark. Harbor runs without
+an explicit family use the curated benchmark that replaced their dataset
+(`evalrecords.historical_protocols.HISTORICAL_HARBOR_BENCHMARKS`), else the dataset itself, so policies,
+dataset versions and curated agent runs over the same benchmark group automatically. Their cells stay
+distinct by mechanism and corpus identity. Harbor's `mean_reward` and a curated protocol's `reward`
+share the canonical `reward` metric. Other runs without a family keep their own column. `/panel` returns each family, its requested variants, and the
 selected variant. It selects the variant with the most admitted cells for that request, breaking ties
 by eval name. Requesting one variant pins it.
 
@@ -204,6 +221,11 @@ their columns remain populated alongside native results.
 The scored `/panel` and `/compare` APIs default to `cohort=all`, the newest admissible run per
 benchmark across cohorts. Results from that default may mix evaluation settings; callers that need
 a verified cohort pass it explicitly, for example `cohort=eval-policy-2026-09-24-verified`.
+Policy violations exclude runs and appear in `policy_rejections` only when a named cohort is selected;
+the all-cohorts view can show their scores.
+Model detail and score history use the same policy admission rule. Model detail retains each run's
+`policy_violations` and shows a violating run without a headline when a named cohort is selected.
+Their timelines span cohorts so earlier scores remain visible; `cohort` controls policy admission.
 The home screen reads and writes `cohort` in the URL, including the resolved default. Navigation
 and model-detail links preserve it. Model rows, benchmark protocols, and missing-cell explanations
 belong to the selected cohort. Compare offers only models with at least one admitted non-zero score
@@ -293,6 +315,7 @@ Resolved once when the kernel mounts the app, from the environment:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `RECORDS_PREFIXES` | the four roots above | Comma-separated record roots, highest precedence first. |
+| `PLAYGROUND_REPORT_PREFIXES` | the two report prefixes above | Comma-separated playground report roots. |
 | `EVALDASH_STORE` | `postgres` | `local` serves from the record snapshot with no database. |
 | `EVALDASH_INGEST_INTERVAL` | `600` | Local-store polling cadence. Production uses the manifest's ten-minute schedule. |
 | `EVALDASH_INGEST_JOB` | unset | Full Cloud Run job resource queued by `POST /refresh`; Marina derives it from the manifest in production. |
@@ -312,6 +335,7 @@ results_db.py           serving catalog, source inventory, and transactional pro
 db_migrations.py        the migration runner and its schema ledger
 migrations/             frozen numbered database migrations
 record_reconciliation.py  version checks and record validation
+playground_reports.py   playground report ingest, list, and detail
 metrics.py              panel and comparison views over the shared statistics engine
 discovery.py            resolve a VM internal IP from a GCE list filter
 cluster.py              Iris and finelog generated Connect clients over Direct VPC egress

@@ -86,7 +86,7 @@ def _k8s_env(req: job_pb2.RunTaskRequest, controller_address: str | None = None)
     config = PodConfig(
         namespace="test", default_image="img:latest", controller_address=controller_address, local_queue="iris-lq"
     )
-    manifest = _build_pod_manifest(req, config)
+    manifest = _build_pod_manifest(req, config, worker_region=None)
     env_list = manifest["spec"]["containers"][0]["env"]
     return {e["name"]: e["value"] for e in env_list if "value" in e}
 

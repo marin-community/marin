@@ -4,9 +4,11 @@ import json
 import os
 import shlex
 import shutil
+import stat
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -22,6 +24,7 @@ from harbor.agents.installed.pi import Pi
 from harbor.llms.base import ContextLengthExceededError
 from harbor.literal.proxy import CORRELATION_ID_HEADER
 from harbor.models.agent.context import AgentContext
+from harbor.models.task.config import MCPServerConfig
 from harbor.models.trajectories.trajectory import Trajectory
 from harbor.utils.artifact_writer import get_artifact_writer
 
@@ -32,10 +35,12 @@ def temp_dir(tmp_path):
 
 
 def _local_pi_shell(temp_dir, monkeypatch, pi_script):
-    endpoint_path = temp_dir / "harbor-pi-endpoint.env"
-    extension_path = temp_dir / "harbor-pi-context-budget.js"
-    monkeypatch.setattr(Pi, "_ENDPOINT_ENV_PATH", str(endpoint_path))
-    monkeypatch.setattr(Pi, "_CONTEXT_BUDGET_EXTENSION_PATH", str(extension_path))
+    uploads = []
+    file_metadata = {}
+    shared_tmp = temp_dir / "tmp"
+    shared_tmp.mkdir()
+    shared_tmp.chmod(0o1777)
+    monkeypatch.setattr(Pi, "_STAGING_DIR_TEMPLATE", str(shared_tmp / "harbor-pi.XXXXXXXX"))
 
     fake_bin = temp_dir / "fake-bin"
     artifact_dir = temp_dir / "pi-artifacts"
@@ -43,7 +48,11 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
         directory.mkdir()
 
     node = shutil.which("node")
+    bash = shutil.which("bash")
+    tee = shutil.which("tee")
     assert node is not None
+    assert bash is not None
+    assert tee is not None
     scripts = {
         fake_bin / "node": f'#!/bin/sh\nexec {shlex.quote(node)} "$@"\n',
         fake_bin / "pi": pi_script,
@@ -52,7 +61,7 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
         / "tee": (
             "#!/bin/sh\n"
             'mkdir -p "$HOME/pi-artifacts"\n'
-            'exec /usr/bin/tee "$HOME/pi-artifacts/$(basename "$1")"\n'
+            f'exec {shlex.quote(tee)} "$HOME/pi-artifacts/$(basename "$1")"\n'
         ),
     }
     for path, contents in scripts.items():
@@ -61,13 +70,20 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
     class LocalShellEnvironment:
         async def upload_file(self, source_path, target_path):
             shutil.copyfile(source_path, target_path)
+            uploads.append(Path(target_path))
 
         async def exec(self, command, **kwargs):
+            if kwargs.get("user") != "root":
+                file_metadata.update(
+                    (path.name, (path.stat().st_uid, stat.S_IMODE(path.stat().st_mode)))
+                    for path in uploads
+                    if path.exists()
+                )
             completed = subprocess.run(
-                ["/bin/bash", "-c", command],
+                [bash, "-c", command],
                 capture_output=True,
                 text=True,
-                env={"HOME": str(temp_dir), "PATH": f"{fake_bin}:/usr/bin:/bin"},
+                env={"HOME": str(temp_dir), "PATH": f"{fake_bin}:{os.environ['PATH']}"},
             )
             return SimpleNamespace(
                 return_code=completed.returncode,
@@ -78,9 +94,35 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
     return SimpleNamespace(
         environment=LocalShellEnvironment(),
         artifact_dir=artifact_dir,
-        endpoint_path=endpoint_path,
-        extension_path=extension_path,
+        uploads=uploads,
+        file_metadata=file_metadata,
     )
+
+
+@pytest.mark.asyncio
+async def test_interrupted_staging_keeps_endpoint_capabilities_out_of_logs(temp_dir, monkeypatch):
+    shell = _local_pi_shell(temp_dir, monkeypatch, "#!/bin/sh\nexit 0\n")
+    upload_file = shell.environment.upload_file
+
+    async def interrupted_upload(source_path, target_path):
+        await upload_file(source_path, target_path)
+        if len(shell.uploads) == 2:
+            raise OSError("upload interrupted")
+
+    monkeypatch.setattr(shell.environment, "upload_file", interrupted_upload)
+    agent = Pi(
+        logs_dir=temp_dir,
+        model_name="hosted_vllm/served-model",
+        api_base="https://model.example.test/proxy/t/endpoint-capability-canary/v1",
+        api_key="EMPTY",
+        thinking_format="chat-template",
+    )
+    with pytest.raises(OSError, match="upload interrupted"):
+        await agent.run("Complete the task", shell.environment, AgentContext())
+
+    for path in shell.uploads:
+        assert not path.is_relative_to(temp_dir / "logs")
+        assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
 
 
 @pytest.mark.asyncio
@@ -95,6 +137,29 @@ async def test_image_pi_preserves_requested_version(temp_dir, monkeypatch, reque
     else:
         await agent.install(shell.environment)
         assert agent.version() == "0.87.0"
+
+
+@pytest.mark.asyncio
+async def test_pi_ignores_mcp_adapter_pin_without_servers(temp_dir, monkeypatch):
+    shell = _local_pi_shell(temp_dir, monkeypatch, '#!/bin/sh\nprintf "0.87.0\\n"\n')
+    agent = Pi(logs_dir=temp_dir, mcp_adapter_version="7.0.0")
+
+    await agent.install(shell.environment)
+
+    assert agent.version() == "0.87.0"
+
+
+@pytest.mark.asyncio
+async def test_pi_rejects_mcp_adapter_pin_with_servers(temp_dir):
+    agent = Pi(
+        logs_dir=temp_dir,
+        mcp_adapter_version="7.0.0",
+        mcp_servers=[MCPServerConfig(name="tools", transport="sse", url="http://mcp-server:8000/sse")],
+    )
+
+    with pytest.raises(RuntimeError, match="pi-mcp-adapter version 7.0.0") as error:
+        await agent.install(AsyncMock())
+    assert "image-provided pi-mcp-extension" in str(error.value)
 
 
 class TestPiAgent:
@@ -217,7 +282,9 @@ class TestPiAgent:
         )
         settings_path = temp_dir / ".pi/agent/settings.json"
         settings_path.parent.mkdir(parents=True)
-        settings_path.write_text(json.dumps({"theme": "dark"}))
+        settings_path.write_text(
+            json.dumps({"theme": "dark", "httpIdleTimeoutMs": 120000})
+        )
         agent = Pi(
             logs_dir=temp_dir,
             model_name="openai/test-model",
@@ -232,6 +299,7 @@ class TestPiAgent:
         settings = json.loads(settings_path.read_text())
         assert settings == {
             "theme": "dark",
+            "httpIdleTimeoutMs": 120000,
             "compaction": {
                 "enabled": True,
                 "reserveTokens": max_tokens,
@@ -285,8 +353,9 @@ class TestPiAgent:
             )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("http_idle_timeout", [None, 360])
     async def test_run_without_model_limits_preserves_pi_compaction_settings(
-        self, temp_dir, monkeypatch
+        self, temp_dir, monkeypatch, http_idle_timeout
     ):
         shell = _local_pi_shell(
             temp_dir,
@@ -301,14 +370,22 @@ class TestPiAgent:
         settings_path = temp_dir / ".pi/agent/settings.json"
         settings_path.parent.mkdir(parents=True)
         original_settings = {
-            "compaction": {"reserveTokens": 12000, "keepRecentTokens": 18000}
+            "compaction": {"reserveTokens": 12000, "keepRecentTokens": 18000},
+            "theme": "dark",
         }
         settings_path.write_text(json.dumps(original_settings))
-        agent = Pi(logs_dir=temp_dir, model_name="openai/test-model")
+        agent = Pi(
+            logs_dir=temp_dir,
+            model_name="openai/test-model",
+            http_idle_timeout=http_idle_timeout,
+        )
 
         await agent.run("Fix the bug", shell.environment, AgentContext())
 
-        assert json.loads(settings_path.read_text()) == original_settings
+        expected_settings = dict(original_settings)
+        if http_idle_timeout is not None:
+            expected_settings["httpIdleTimeoutMs"] = 360000
+        assert json.loads(settings_path.read_text()) == expected_settings
 
 
 @pytest.mark.asyncio
@@ -335,7 +412,8 @@ async def test_hosted_vllm_endpoint_registers_pi_provider(
         thinking_format=thinking_format,
     )
     mock_env = AsyncMock()
-    mock_env.exec.return_value = SimpleNamespace(return_code=0, stdout="", stderr="")
+    staging_dir = temp_dir / "private"
+    mock_env.exec.return_value = SimpleNamespace(return_code=0, stdout=f"{staging_dir}\n", stderr="")
     uploaded_files = {}
 
     async def capture_endpoint(source_path, target_path):
@@ -395,10 +473,9 @@ async def test_hosted_vllm_endpoint_registers_pi_provider(
     assert run_tokens[run_tokens.index("--provider") + 1] == "hosted_vllm"
     assert run_tokens[run_tokens.index("--model") + 1] == served_id
     assert run_call.kwargs["env"] == {}
-    assert uploaded_files[Pi._ENDPOINT_ENV_PATH] == (
+    assert (
         f"export HARBOR_PI_API_BASE={endpoint}\nexport HARBOR_PI_API_KEY=EMPTY\n"
-    )
-    assert Pi._CONTEXT_BUDGET_EXTENSION_PATH in uploaded_files
+    ) in uploaded_files.values()
     assert "host-provider-private-canary" not in json.dumps(uploaded_files)
     assert all(
         endpoint not in call.kwargs["command"] for call in mock_env.exec.call_args_list
@@ -422,14 +499,14 @@ async def test_hosted_vllm_request_budget_uses_exact_server_token_count(
         thinking_format="chat-template",
     )
     environment = AsyncMock()
+    environment.exec.return_value = SimpleNamespace(return_code=0, stdout="", stderr="")
 
     async def copy_extension(source_path, target_path):
         assert target_path == str(extension_path)
         shutil.copyfile(source_path, target_path)
 
     environment.upload_file.side_effect = copy_extension
-    with patch.object(Pi, "_CONTEXT_BUDGET_EXTENSION_PATH", str(extension_path)):
-        await agent._stage_context_budget_extension(environment)
+    await agent._stage_context_budget_extension(environment, extension_path)
 
     payload = {
         "model": "served-model",
@@ -496,14 +573,14 @@ async def test_hosted_vllm_request_budget_truncates_token_dense_tool_output(
         thinking_format="chat-template",
     )
     environment = AsyncMock()
+    environment.exec.return_value = SimpleNamespace(return_code=0, stdout="", stderr="")
 
     async def copy_extension(source_path, target_path):
         assert target_path == str(extension_path)
         shutil.copyfile(source_path, target_path)
 
     environment.upload_file.side_effect = copy_extension
-    with patch.object(Pi, "_CONTEXT_BUDGET_EXTENSION_PATH", str(extension_path)):
-        await agent._stage_context_budget_extension(environment)
+    await agent._stage_context_budget_extension(environment, extension_path)
 
     dense_output = "row,value\n" + "x,1234567890\n" * 4000
     payload = {
@@ -605,7 +682,7 @@ async def test_hosted_vllm_command_classifies_authentication_and_cleans_provider
 
     captured_output = (shell.artifact_dir / "pi.txt").read_text()
     assert endpoint in captured_output
-    assert not shell.endpoint_path.exists()
+    assert not any((temp_dir / "tmp").iterdir())
     assert not (temp_dir / ".pi/agent/models.json").exists()
 
 
@@ -619,11 +696,12 @@ async def test_hosted_vllm_command_classifies_authentication_and_cleans_provider
             "16385 input tokens, for a total of at least 32769 tokens.",
             ContextLengthExceededError,
         ),
+        ('400: {"message":"Generation stopped: max_turns","type":"generation_stopped","code":400}', None),
     ],
-    ids=["connection", "context-overflow"],
+    ids=["connection", "context-overflow", "generation-stopped"],
 )
 @pytest.mark.asyncio
-async def test_hosted_vllm_failure_is_classified(
+async def test_hosted_vllm_request_end_is_classified(
     temp_dir, monkeypatch, error_message, expected_error
 ):
     endpoint = "https://iris.example/proxy/t/scoped-token/eval/v1"
@@ -657,6 +735,10 @@ async def test_hosted_vllm_failure_is_classified(
         thinking_format="qwen-chat-template",
     )
 
+    if expected_error is None:
+        # A normal return lets Harbor keep the verifier score when generation reaches its turn limit.
+        assert await agent.run("Fix the bug", shell.environment, AgentContext()) is None
+        return
     with pytest.raises(expected_error) as error:
         await agent.run("Fix the bug", shell.environment, AgentContext())
 
@@ -796,6 +878,12 @@ fetch(`${provider.baseUrl}/chat/completions`, {
         {"type": "text", "text": "roundtrip complete"}
     ]
     assert event["message"]["stopReason"] == "stop"
+    assert shell.file_metadata == {
+        "harbor-pi-endpoint.env": (os.getuid(), 0o600),
+        "harbor-pi-context-budget.js": (os.getuid(), 0o600),
+    }
+    assert not any((temp_dir / "tmp").iterdir())
+    assert not (temp_dir / ".pi/agent/models.json").exists()
 
     shutil.copyfile(output_path, temp_dir / "pi.txt")
     context = AgentContext()

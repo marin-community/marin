@@ -1,11 +1,12 @@
 import json
+import math
 import shlex
 import tempfile
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from upath import UPath
@@ -65,8 +66,9 @@ class Pi(BaseInstalledAgent):
     _SUPPORTED_THINKING_FORMATS = frozenset({"chat-template", "qwen-chat-template"})
     _API_BASE_ENV = "HARBOR_PI_API_BASE"
     _API_KEY_ENV = "HARBOR_PI_API_KEY"
-    _ENDPOINT_ENV_PATH = "/tmp/harbor-pi-endpoint.env"
-    _CONTEXT_BUDGET_EXTENSION_PATH = "/tmp/harbor-pi-context-budget.js"
+    _STAGING_DIR_TEMPLATE = "/tmp/harbor-pi.XXXXXXXX"
+    _ENDPOINT_ENV_FILENAME = "harbor-pi-endpoint.env"
+    _CONTEXT_BUDGET_EXTENSION_FILENAME = "harbor-pi-context-budget.js"
     _MCP_EXTENSION_PATH = "/opt/harbor-pi/node_modules/pi-mcp-extension/src/index.ts"
     _MCP_CONFIGURE_PATH = "/installed-agent/pi_configure_mcp.cjs"
     _PROVIDER_CONFIG_RELATIVE_PATH = ".pi/agent/models.json"
@@ -95,6 +97,10 @@ lines.on("line", (line) => {
 });
 lines.on("close", () => {
   if (lastAssistantStopReason !== "error") return;
+  try {
+    const response = JSON.parse((lastAssistantErrorMessage ?? "").replace(/^400: */, ""));
+    if (response?.type === "generation_stopped") return;
+  } catch {}
   if (/authentication required|authenticationerror/i.test(lastAssistantErrorMessage ?? "")) {
     process.stderr.write("__AUTHENTICATION_FAILURE_MARKER__\\n");
   } else if (/maximum context length|context_length_exceeded/i.test(lastAssistantErrorMessage ?? "")) {
@@ -122,14 +128,17 @@ const configPath = path.join(process.env.HOME, configRelativePath);
 fs.mkdirSync(path.dirname(configPath), { recursive: true });
 fs.writeFileSync(configPath, JSON.stringify(config));
 """.strip()
-    _REGISTER_COMPACTION_SCRIPT = """
+    _REGISTER_SETTINGS_SCRIPT = """
 const fs = require("fs");
 const path = require("path");
-const compaction = JSON.parse(process.argv[1]);
+const updates = JSON.parse(process.argv[1]);
 const configPath = path.join(process.env.HOME, process.argv[2]);
 let settings = {};
 if (fs.existsSync(configPath)) settings = JSON.parse(fs.readFileSync(configPath, "utf8"));
-settings.compaction = { ...(settings.compaction ?? {}), ...compaction };
+if (updates.compaction !== undefined) {
+  settings.compaction = { ...(settings.compaction ?? {}), ...updates.compaction };
+}
+if (updates.httpIdleTimeoutMs !== undefined) settings.httpIdleTimeoutMs = updates.httpIdleTimeoutMs;
 fs.mkdirSync(path.dirname(configPath), { recursive: true });
 fs.writeFileSync(configPath, JSON.stringify(settings));
 """.strip()
@@ -310,7 +319,9 @@ export default function (pi) {
         compaction_reserve_tokens: int | None = None,
         model_info: dict[str, Any] | None = None,
         thinking_format: str | None = None,
+        http_idle_timeout: float | None = None,
         mcp_excluded_tools: Sequence[str] = (),
+        mcp_adapter_version: str | None = None,
         **kwargs,
     ) -> None:
         if api_base is not None and (not isinstance(api_base, str) or not api_base):
@@ -335,6 +346,12 @@ export default function (pi) {
                 "collect_rollout_details requires api_base so Pi can stamp every "
                 "model request with a trial correlation ID"
             )
+        if http_idle_timeout is not None and (
+            isinstance(http_idle_timeout, bool)
+            or not math.isfinite(http_idle_timeout)
+            or http_idle_timeout <= 0
+        ):
+            raise ValueError("http_idle_timeout must be finite and positive")
 
         self._api_base = api_base
         self._api_key = api_key or "EMPTY"
@@ -343,7 +360,9 @@ export default function (pi) {
             uuid.uuid4().hex if collect_rollout_details else None
         )
         self._thinking_format = thinking_format
+        self._http_idle_timeout = http_idle_timeout
         self._mcp_excluded_tools = tuple(mcp_excluded_tools)
+        self._mcp_adapter_version = mcp_adapter_version
         model_info = model_info or {}
         self._configure_compaction = (
             api_base is not None
@@ -465,13 +484,16 @@ export default function (pi) {
         if provider_command is None:
             raise RuntimeError("Pi provider registration command was not created")
 
-        await self._stage_endpoint_env(environment)
-        endpoint_path = shlex.quote(self._ENDPOINT_ENV_PATH)
+        staging_dir = await self._create_staging_dir(environment)
+        endpoint_file = staging_dir / self._ENDPOINT_ENV_FILENAME
+        await self._stage_endpoint_env(environment, endpoint_file)
+        endpoint_path = shlex.quote(str(endpoint_file))
+        staging_path = shlex.quote(str(staging_dir))
         await self.exec_as_agent(
             environment,
             command=(
                 "set -euo pipefail; "
-                f"trap 'rm -f {endpoint_path}' EXIT; "
+                f"trap 'rm -rf {staging_path}' EXIT; "
                 f". {endpoint_path}; {provider_command}; rm -f {endpoint_path}"
             ),
         )
@@ -481,6 +503,11 @@ export default function (pi) {
 
     async def install(self, environment: BaseEnvironment) -> None:
         """Check the Pi runtime supplied by the environment image."""
+        if self.mcp_servers and self._mcp_adapter_version is not None:
+            raise RuntimeError(
+                f"Pi cannot honor pi-mcp-adapter version {self._mcp_adapter_version} with MCP servers: "
+                "this agent loads the image-provided pi-mcp-extension"
+            )
         result = await self.exec_as_agent(environment, command="pi --version")
         installed_version = self.parse_version(result.stdout)
         if self._version is not None and installed_version != self._version:
@@ -553,22 +580,36 @@ export default function (pi) {
             f"{shlex.quote(self._PROVIDER_CONFIG_RELATIVE_PATH)}"
         )
 
-    def _build_register_compaction_command(self) -> str | None:
-        if not self._configure_compaction:
+    def _build_register_settings_command(self) -> str | None:
+        settings: dict[str, Any] = {}
+        if self._configure_compaction:
+            settings["compaction"] = {
+                "enabled": True,
+                "reserveTokens": self._model_limits.compaction_reserve_tokens,
+                "keepRecentTokens": self._model_limits.compaction_keep_recent_tokens,
+            }
+        if self._http_idle_timeout is not None:
+            settings["httpIdleTimeoutMs"] = math.ceil(self._http_idle_timeout * 1000)
+        if not settings:
             return None
-        compaction = {
-            "enabled": True,
-            "reserveTokens": self._model_limits.compaction_reserve_tokens,
-            "keepRecentTokens": (self._model_limits.compaction_keep_recent_tokens),
-        }
-        serialized = json.dumps(compaction, separators=(",", ":"))
+        serialized = json.dumps(settings, separators=(",", ":"))
         return (
-            f"node -e {shlex.quote(self._REGISTER_COMPACTION_SCRIPT)} "
+            f"node -e {shlex.quote(self._REGISTER_SETTINGS_SCRIPT)} "
             f"{shlex.quote(serialized)} "
             f"{shlex.quote(self._SETTINGS_CONFIG_RELATIVE_PATH)}"
         )
 
-    async def _stage_endpoint_env(self, environment: BaseEnvironment) -> None:
+    async def _create_staging_dir(self, environment: BaseEnvironment) -> PurePosixPath:
+        # Create as the agent so it can unlink provider-owned uploads. Keep
+        # capability URLs outside collected logs even when cleanup is killed.
+        result = await self.exec_as_agent(
+            environment, command=f"mktemp -d {shlex.quote(self._STAGING_DIR_TEMPLATE)}"
+        )
+        return PurePosixPath(result.stdout.strip())
+
+    async def _stage_endpoint_env(
+        self, environment: BaseEnvironment, target_path: PurePosixPath
+    ) -> None:
         """Upload the endpoint variables without placing their values in a command."""
         if self._api_base is None:
             raise ValueError("api_base is required to stage the endpoint environment")
@@ -580,10 +621,24 @@ export default function (pi) {
         with tempfile.TemporaryDirectory() as temp_dir:
             local_path = Path(temp_dir) / "endpoint.env"
             local_path.write_text(contents)
-            await environment.upload_file(local_path, self._ENDPOINT_ENV_PATH)
+            await self._upload_staged_file(environment, local_path, target_path)
+
+    async def _upload_staged_file(
+        self, environment: BaseEnvironment, source_path: Path, target_path: PurePosixPath
+    ) -> None:
+        await environment.upload_file(source_path, str(target_path))
+        # The parent was created by the task user; uploads can be root-owned.
+        quoted_path = shlex.quote(str(target_path))
+        await self.exec_as_root(
+            environment,
+            command=(
+                f"chown --reference={shlex.quote(str(target_path.parent))} -- {quoted_path} && "
+                f"chmod 600 -- {quoted_path}"
+            ),
+        )
 
     async def _stage_context_budget_extension(
-        self, environment: BaseEnvironment
+        self, environment: BaseEnvironment, target_path: PurePosixPath
     ) -> None:
         """Stage exact vLLM request budgeting for the hosted Pi provider."""
         if self._api_base is None:
@@ -597,11 +652,9 @@ export default function (pi) {
             + "\n"
         )
         with tempfile.TemporaryDirectory() as temp_dir:
-            local_path = Path(temp_dir) / "harbor-pi-context-budget.js"
+            local_path = Path(temp_dir) / self._CONTEXT_BUDGET_EXTENSION_FILENAME
             local_path.write_text(extension)
-            await environment.upload_file(
-                local_path, self._CONTEXT_BUDGET_EXTENSION_PATH
-            )
+            await self._upload_staged_file(environment, local_path, target_path)
 
     @with_prompt_template
     async def run(
@@ -671,27 +724,31 @@ export default function (pi) {
             cli_flags += " "
 
         provider_command = self._build_register_provider_command(provider, model_id)
-        compaction_command = self._build_register_compaction_command()
+        settings_command = self._build_register_settings_command()
         skills_command = self._build_register_skills_command()
         if skills_command:
             await self.exec_as_agent(environment, command=skills_command)
 
         runtime_prelude = "set -e -o pipefail; "
-        if compaction_command is not None:
-            runtime_prelude += f"{compaction_command}; "
+        if settings_command is not None:
+            runtime_prelude += f"{settings_command}; "
         if self._api_base is not None:
             if provider_command is None:
                 raise ValueError(
                     "Provider registration command is required with api_base"
                 )
-            await self._stage_endpoint_env(environment)
-            await self._stage_context_budget_extension(environment)
-            endpoint_path = shlex.quote(self._ENDPOINT_ENV_PATH)
-            extension_path = shlex.quote(self._CONTEXT_BUDGET_EXTENSION_PATH)
+            staging_dir = await self._create_staging_dir(environment)
+            endpoint_file = staging_dir / self._ENDPOINT_ENV_FILENAME
+            extension_file = staging_dir / self._CONTEXT_BUDGET_EXTENSION_FILENAME
+            await self._stage_endpoint_env(environment, endpoint_file)
+            await self._stage_context_budget_extension(environment, extension_file)
+            endpoint_path = shlex.quote(str(endpoint_file))
+            extension_path = shlex.quote(str(extension_file))
+            staging_path = shlex.quote(str(staging_dir))
             provider_path = f'"$HOME/{self._PROVIDER_CONFIG_RELATIVE_PATH}"'
             runtime_prelude = (
                 "set -e; "
-                f"trap 'rm -f {endpoint_path} {extension_path} {provider_path}' EXIT; "
+                f"trap 'rm -rf {staging_path} {provider_path}' EXIT; "
                 f"{runtime_prelude}"
                 f". {endpoint_path}; {provider_command}; rm -f {endpoint_path}; "
             )

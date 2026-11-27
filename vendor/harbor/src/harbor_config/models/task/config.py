@@ -79,6 +79,10 @@ class SolutionConfig(BaseModel):
 
 class AgentConfig(BaseModel):
     timeout_sec: float | None = None
+    env: dict[str, str] = Field(
+        default_factory=dict,
+        description="Environment overrides for agent processes only; never passed to the verifier.",
+    )
     user: str | int | None = Field(
         default=None,
         description="Username or UID to run the agent as. None uses the environment's default USER (e.g., root).",
@@ -159,6 +163,15 @@ class TpuSpec(BaseModel):
         return math.prod(int(axis) for axis in self.topology.split("x"))
 
 
+class EnvironmentSetupConfig(BaseModel):
+    """Bounded initialization before any actor access."""
+
+    model_config = {"extra": "forbid"}
+
+    command: str = Field(min_length=1)
+    timeout_sec: float = Field(gt=0)
+
+
 class EnvironmentConfig(BaseModel):
     build_timeout_sec: float = 600.0  # 10 minutes default
     docker_image: str | None = Field(
@@ -207,6 +220,7 @@ class EnvironmentConfig(BaseModel):
         description="Healthcheck to run after environment start to verify readiness. "
         "Mirrors Docker HEALTHCHECK semantics.",
     )
+    setup: EnvironmentSetupConfig | None = None
     workdir: str | None = Field(
         default=None,
         description="Default working directory for command execution. "
@@ -428,6 +442,14 @@ class StepConfig(BaseModel):
     )
 
 
+    @field_validator("agent")
+    @classmethod
+    def reject_step_agent_env(cls, agent: AgentConfig) -> AgentConfig:
+        if agent.env:
+            raise ValueError("Per-step agent.env is unsupported; use top-level [agent.env].")
+        return agent
+
+
 class MultiStepRewardStrategy(str, Enum):
     """Strategy for deriving a trial-level reward from per-step verifier results."""
 
@@ -436,7 +458,7 @@ class MultiStepRewardStrategy(str, Enum):
 
 
 class TaskConfig(BaseModel):
-    schema_version: str = "1.2"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.2"
     task: PackageInfo | None = Field(
         default=None,
         description="Package information for the task, parsed from the [task] section of task.toml.",

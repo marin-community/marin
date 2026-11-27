@@ -39,6 +39,7 @@ dependencies = [
     "marin-marina",
     # top level deps. try to keep these small.
     "watchdog",
+    "tabulate>=0.9.0",
     # Codehealth's weekly review workbench persists into the shared metadata database.
     "cloud-sql-python-connector[pg8000]>=1.9",
     "sqlalchemy>=2",
@@ -67,7 +68,7 @@ pipeline = [
     "marin-levanter",
     "jax[cuda13]==0.11.0",
     "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
-    "nvidia-nccl-cu13>=2.31.2; sys_platform == 'linux'",
+    "nvidia-nccl-cu13>=2.32.6; sys_platform == 'linux'",
     "nvidia-cutlass-dsl[cu13]==4.6.2; sys_platform == 'linux'",
     "flash-attn-4[cu13]>=4.0.0b28,<4.1; sys_platform == 'linux'",
     "quack-kernels[cu13]==0.6.4; sys_platform == 'linux'",
@@ -75,7 +76,7 @@ pipeline = [
     "triton>=3.6.0,<3.7; sys_platform == 'linux'",
     # Flash Attention's Python helpers import Torch, but the Grug kernels execute
     # through JAX/CuTe. Keep the pipeline environment on one CUDA runtime.
-    "torch==2.11.0+cpu; sys_platform == 'linux'",
+    "torch==2.13.0+cpu; sys_platform == 'linux'",
 ]
 
 [tool.uv]
@@ -107,6 +108,8 @@ constraint-dependencies = [
     "dnspython>=2.9.0",
     "msgpack>=1.2.3",
     "nltk>=3.10.4",
+    # Opt in to FlashAttention betas across uv splits because its GPU requirements are Linux-only.
+    "flash-attn-4>=4.0.0b27,<4.1",
     # Enable pre-releases for transitive deps that publish no stable release at
     # all. A constraint intersects (rather than replaces) the upstream
     # specifier, so the resolved version still follows whatever requires them;
@@ -121,6 +124,9 @@ constraint-dependencies = [
     "opentelemetry-semantic-conventions>=0.1b0",
 ]
 override-dependencies = [
+    # Torch pins an older NCCL; 2.32.6 fixes NVLSTree buffer corruption.
+    # https://github.com/NVIDIA/nccl/issues/2625
+    "nvidia-nccl-cu13>=2.32.6; sys_platform == 'linux'",
     "omegaconf>=2.4.0.dev4",
     "aiofiles>=24.1.0",
     "anthropic>=0.71.0",
@@ -322,6 +328,7 @@ marin-finestore = { workspace = true }
 marin-iac = { workspace = true }
 jaxpp = { git = "https://github.com/NVIDIA/jaxpp.git", rev = "46b8443eed01f54688dd24ae451203a504b1cff8" }
 torch = [{ index = "pytorch-cpu", extra = "pipeline", marker = "sys_platform == 'linux'" }]
+torchcodec = { index = "pytorch-cpu" }
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
@@ -528,6 +535,9 @@ ignore-missing-imports = [
     "jaxlib.*",
     "kubernetes",
     "kubernetes.*",
+    # The harness grader image installs langdetect; the lint workspace does not.
+    "langdetect",
+    "langdetect.*",
     "librosa",
     "librosa.*",
     "lm_eval",
@@ -560,8 +570,7 @@ ignore-missing-imports = [
 
 # Exclude non-production code from type checking
 project-excludes = [
-    # Canonical upstream instruction checkers; wrappers remain checked.
-    "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifeval/**",
+    # Vendored IFBench instruction checkers; wrappers remain checked.
     "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifbench/**",
     "vendor/skyrl/**",
     "vendor/harbor/**",

@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import functools
+import math
 
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -14,6 +16,8 @@ from jax.sharding import PartitionSpec as P
 from levanter.grug.attention import (
     xla_flash_attention,
     AttentionMask,
+    RotaryConfig,
+    apply_rotary_embedding,
     attention,
     fa4_cute_segment_bounds,
     reference_attention,
@@ -23,6 +27,12 @@ from levanter.grug.attention import (
 from levanter.testing.devices import use_cpu_devices
 
 
+from levanter.layers.attention import AttentionMask as NamedAttentionMask
+from levanter.layers.attention import _tpu_splash_attention as named_splash_attention
+from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
+from levanter.layers.rotary_native import apply_rotary
+
+
 def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 4, kv_heads: int = 2):
     key = jax.random.PRNGKey(0)
     q_key, k_key, v_key = jax.random.split(key, 3)
@@ -30,6 +40,21 @@ def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 
     k = jax.random.normal(k_key, (batch, k_len, kv_heads, 8), dtype=jnp.float32)
     v = jax.random.normal(v_key, (batch, k_len, kv_heads, 8), dtype=jnp.float32)
     return q, k, v
+
+
+@pytest.mark.parametrize("per_batch", [False, True])
+def test_rotary_embedding_at_absolute_positions_matches_full_sequence(per_batch):
+    q, k, _ = _make_qkv(q_len=12, k_len=12)
+    rope = RotaryConfig()
+    head_dim = q.shape[-1]
+    full = apply_rotary_embedding(q, k, seq_len=12, head_dim=head_dim, rope=rope)
+    positions = jnp.array([[3, 8, 9], [4, 7, 11]]) if per_batch else jnp.array([3, 8, 9])
+    batch = jnp.arange(q.shape[0])[:, None]
+    cropped = apply_rotary_embedding(
+        q[batch, positions], k[batch, positions], seq_len=3, head_dim=head_dim, rope=rope, position_ids=positions
+    )
+    for actual, expected in zip(cropped, full, strict=True):
+        np.testing.assert_allclose(actual, expected[batch, positions], atol=1e-6, rtol=1e-6)
 
 
 def test_reference_attention_matches_manual_segment_mask():
@@ -123,6 +148,31 @@ def test_reference_attention_eval_shape_supports_model_sharded_grouped_query_hea
     assert output.sharding == q_sharding
 
 
+@pytest.mark.multidevice
+def test_splash_head_sharding_partitions_sparse_mask_metadata():
+    if len(jax.devices()) < 2:
+        pytest.skip("Sparse metadata partitioning needs two devices.")
+    mesh = jax.sharding.Mesh(np.asarray(jax.devices()[:2]), ("model",), axis_types=(AxisType.Explicit,))
+    qkv = jax.ShapeDtypeStruct(
+        (1, 128, 4, 128), jnp.bfloat16, sharding=NamedSharding(mesh, P(None, None, "model", None))
+    )
+    segments = jax.ShapeDtypeStruct((1, 128), jnp.int32, sharding=NamedSharding(mesh, P()))
+    with jax.set_mesh(mesh):
+        traced = jax.make_jaxpr(
+            lambda q, k, v, ids: attention(
+                q, k, v, AttentionMask.causal().with_segment_ids(ids), implementation="tpu_splash"
+            )
+        )(qkv, qkv, qkv, segments)
+    mapped = next(eqn for eqn in traced.jaxpr.eqns if eqn.primitive.name == "shard_map")
+    metadata = [
+        var.aval for var in mapped.params["jaxpr"].invars if var.aval.dtype == jnp.int8 and len(var.aval.shape) == 3
+    ]
+    # Identical causal heads need one sparse mask group on each head shard. Global
+    # mask groups must not reach a shard-local Splash invocation.
+    assert metadata
+    assert all(aval.shape[0] == 1 for aval in metadata)
+
+
 @pytest.mark.tpu
 def test_real_tpu_splash_local_and_global_masks_match_reference():
     if jax.default_backend() != "tpu":
@@ -149,6 +199,146 @@ def test_real_tpu_splash_local_and_global_masks_match_reference():
             expected_outputs.append(expected)
 
     assert not np.allclose(expected_outputs[0], expected_outputs[1], atol=1e-3, rtol=1e-3)
+
+
+@pytest.mark.tpu
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+@pytest.mark.parametrize("sequence_length", [256, 1024])
+@pytest.mark.parametrize("segmented", [False, True])
+def test_real_tpu_splash_attention_matches_reference(dtype, sequence_length, segmented):
+    if jax.default_backend() != "tpu":
+        pytest.skip("Splash attention requires a TPU backend.")
+
+    mesh = jax.sharding.Mesh(
+        np.asarray(jax.devices()).reshape(1, -1),
+        ("data", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
+    )
+    sharding = NamedSharding(mesh, P(None, None, "model", None))
+    q_key, k_key, v_key = jax.random.split(jax.random.PRNGKey(0), 3)
+    shape = (1, sequence_length, 8, 128)
+    q, k, v = (
+        jax.device_put((jax.random.normal(key, shape) * 0.02).astype(dtype), sharding) for key in (q_key, k_key, v_key)
+    )
+    mask = AttentionMask.causal()
+    if segmented:
+        ids = jax.device_put(jnp.arange(sequence_length, dtype=jnp.int32) // 64, NamedSharding(mesh, P()))
+        mask = mask.with_segment_ids(ids)
+
+    with jax.set_mesh(mesh), jax.default_matmul_precision("default"):
+        actual = jax.jit(lambda q, k, v: attention(q, k, v, mask, implementation="tpu_splash"))(q, k, v)
+        expected = jax.jit(lambda q, k, v: reference_attention(q, k, v, mask, logits_dtype=jnp.float32))(q, k, v)
+
+    np.testing.assert_allclose(actual, expected, atol=1e-3, rtol=1e-3)
+
+
+@pytest.mark.tpu
+def test_real_tpu_splash_attention_gradients_match_reference():
+    if jax.default_backend() != "tpu":
+        pytest.skip("Splash attention requires a TPU backend.")
+    mesh = jax.sharding.Mesh(np.asarray(jax.devices()), ("model",), axis_types=(AxisType.Explicit,))
+    sharding = NamedSharding(mesh, P(None, None, "model", None))
+    keys = jax.random.split(jax.random.PRNGKey(114), 3)
+    q, k, v = (jax.device_put(jax.random.normal(key, (1, 128, 32, 128)) * 0.5, sharding) for key in keys)
+    ids = jax.device_put(jnp.arange(128, dtype=jnp.int32) // 64, NamedSharding(mesh, P()))
+    mask = AttentionMask.causal().with_segment_ids(ids)
+
+    def objective(q, k, v, implementation):
+        output = attention(q, k, v, mask, implementation=implementation)
+        return jnp.sum(jnp.sin(output))
+
+    with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
+        actual = jax.jit(jax.grad(lambda q, k, v: objective(q, k, v, "tpu_splash"), argnums=(0, 1, 2)))(q, k, v)
+        expected = jax.jit(jax.grad(lambda q, k, v: objective(q, k, v, "reference"), argnums=(0, 1, 2)))(q, k, v)
+    for observed, reference in zip(actual, expected, strict=True):
+        np.testing.assert_allclose(observed, reference, atol=1e-3, rtol=1e-3)
+
+
+@pytest.mark.tpu
+@pytest.mark.timeout(180)
+@pytest.mark.parametrize("cotangent_scale", [1.0, 1e-6])
+def test_splash_rotary_bfloat16_q_gradient_matches_named(cotangent_scale):
+    if jax.default_backend() != "tpu":
+        pytest.skip("Splash attention requires a TPU backend.")
+    devices = np.asarray(jax.devices()).reshape(1, -1)
+    explicit = jax.sharding.Mesh(devices, ("data", "model"), axis_types=(AxisType.Explicit, AxisType.Explicit))
+    auto = jax.sharding.Mesh(devices, ("data", "model"), axis_types=(AxisType.Auto, AxisType.Auto))
+    batch, sequence, heads, width = 1, 128, 32, 128
+    B, S, K, H, G, D = (
+        hax.Axis(name, size)
+        for name, size in (
+            ("batch", batch),
+            ("position", sequence),
+            ("key_position", sequence),
+            ("kv_head", heads),
+            ("q_heads_per_group", 1),
+            ("head_size", width),
+        )
+    )
+    shape = (batch, sequence, heads, width)
+    qkey, kkey, vkey, ckey = jax.random.split(jax.random.PRNGKey(141), 4)
+    q, k, v = (jax.random.normal(key, shape).astype(jnp.bfloat16) for key in (qkey, kkey, vkey))
+    cotangent = (jax.random.normal(ckey, shape) * jnp.float32(cotangent_scale)).astype(jnp.bfloat16)
+    ids = jnp.broadcast_to(jnp.arange(sequence, dtype=jnp.int32) // 64, (batch, sequence))
+    mapping = {"batch": "data", "kv_head": "model"}
+
+    def native_vjp(q, k, v, cotangent, ids):
+        positions = jnp.broadcast_to(jnp.arange(sequence, dtype=jnp.int32), (batch, sequence))
+        k = apply_rotary(k, positions, DefaultRotaryEmbeddingsConfig())
+        mask = AttentionMask.causal().with_segment_ids(ids)
+
+        def endpoint(q):
+            q = apply_rotary(q, positions, DefaultRotaryEmbeddingsConfig())
+            return attention(q, k, v, mask, implementation="tpu_splash")
+
+        output, pullback = jax.vjp(endpoint, q)
+        return output, pullback(cotangent)[0]
+
+    def named_vjp(q, k, v, cotangent, ids):
+        rotary = DefaultRotaryEmbeddingsConfig().build(D)
+        k = rotary(k, hax.arange(S)).astype(k.dtype).rearrange((B, H, S, D)).rename({"position": "key_position"})
+        v = v.rearrange((B, H, S, D)).rename({"position": "key_position"})
+        mask = NamedAttentionMask.causal().with_segment_ids(ids)
+
+        def endpoint(q):
+            q = rotary(q, hax.arange(S)).astype(q.dtype).rearrange((B, H, G, S, D))
+            output = named_splash_attention(
+                S, K, D, q, k, v, mask, attention_dtype=q.dtype, scaling_factor=1.0 / math.sqrt(width)
+            )
+            return output.rearrange((B, S, H, G, D)).flatten_axes((H, G), H)
+
+        output, pullback = jax.vjp(endpoint, q)
+        return output, pullback(cotangent)[0].flatten_axes((H, G), H)
+
+    spec = P(None, None, "model", None)
+    # Compare the BF16 rounding stages used by training on both TPU generations.
+    compiler_options = {"xla_allow_excess_precision": False}
+    with jax.default_matmul_precision("default"):
+        with jax.set_mesh(explicit):
+            raw_args = tuple(
+                jax.device_put(value, NamedSharding(explicit, spec)) for value in (q, k, v, cotangent)
+            ) + (
+                jax.device_put(ids, NamedSharding(explicit, P())),
+            )
+            actual = jax.jit(native_vjp, compiler_options=compiler_options)(*raw_args)
+        with jax.set_mesh(auto), hax.axis_mapping(mapping):
+            raw_args = tuple(jax.device_put(value, NamedSharding(auto, spec)) for value in (q, k, v, cotangent)) + (
+                jax.device_put(ids, NamedSharding(auto, P())),
+            )
+            named_args = (
+                hax.named(raw_args[0].reshape(batch, sequence, heads, 1, width), (B, S, H, G, D)),
+                hax.named(raw_args[1], (B, S, H, D)),
+                hax.named(raw_args[2], (B, S, H, D)),
+                hax.named(raw_args[3], (B, S, H, D)),
+                hax.named(raw_args[4], (B, S)),
+            )
+            expected = hax.named_jit(
+                named_vjp, axis_resources=mapping, out_axis_resources=mapping, compiler_options=compiler_options
+            )(*named_args)
+    for observed, reference in zip(actual, expected, strict=True):
+        assert np.isfinite(np.asarray(observed, dtype=np.float32)).all()
+        # Numerical equality permits the signed-zero differences of the inverse rotation.
+        np.testing.assert_array_equal(observed, reference.array)
 
 
 def test_token_validity_uses_padding_ids_without_excluding_packed_boundaries():

@@ -136,20 +136,6 @@ def get_model_size(model: nn.Module, scale="auto"):
     return n_params, scale
 
 
-def freeze_moe_router(model):
-    for layer in model.decoder.layers:
-        if hasattr(layer.mlp, "router"):
-            if hasattr(layer.mlp.router, "weight"):
-                layer.mlp.router.weight.requires_grad = False
-            if hasattr(layer.mlp.router, "bias"):
-                layer.mlp.router.bias.requires_grad = False
-        if hasattr(layer.mlp, "shared_experts"):
-            if hasattr(layer.mlp.shared_experts, "gate_weight"):
-                layer.mlp.shared_experts.gate_weight.requires_grad = False
-            if hasattr(layer.mlp.shared_experts, "gate_bias"):
-                layer.mlp.shared_experts.gate_bias.requires_grad = False
-
-
 @torch.no_grad()
 def offload_megatron_grads_to_cpu(models):
     for model_chunk in models:

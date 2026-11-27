@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from copy import deepcopy
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -10,28 +11,47 @@ from transformers import PreTrainedTokenizerBase
 
 
 SINGLE_TOOL_CALL_TEMPLATE_ERROR = "This template expects exactly one tool call per assistant turn."
+# Follows an assistant prefix's content while rendering; distinct from Hugging Face's own continuation tag.
+PREFIX_END_MARKER = "ASSISTANT_PREFIX_END"
 
 
 def assistant_prefix_token_ids(
     tokenizer: PreTrainedTokenizerBase, messages: list[dict[str, Any]], options: dict[str, Any]
 ) -> list[int]:
-    """Render an unfinished assistant message with the serving chat template."""
+    """Render an unfinished assistant message with the serving chat template.
+
+    The prompt keeps the prefix's trailing whitespace because graders score the stored prefix joined with the
+    continuation.
+    """
     template = dict(options["extra_body"])
     if template.pop("continue_final_message") is not True or template.pop("add_generation_prompt") is not False:
         raise ValueError("Assistant prefix rendering requires continuation without a new generation prompt")
     template_kwargs = {**options.get("chat_template_kwargs", {}), **template.pop("chat_template_kwargs", {})}
     if template:
         raise ValueError(f"Unsupported assistant prefix rendering fields: {sorted(template)}")
-    rendered = tokenizer.apply_chat_template(
-        messages,
+    render = partial(
+        tokenizer.apply_chat_template,
         tools=options.get("tools"),
-        tokenize=True,
         return_dict=False,
         add_generation_prompt=False,
         continue_final_message=True,
         **template_kwargs,
     )
-    return cast(list[int], rendered)
+    prefix = messages[-1]["content"]
+    body = prefix.rstrip()
+    trailing_whitespace = prefix[len(body) :]
+    if not trailing_whitespace:
+        return cast(list[int], render(messages, tokenize=True))
+    # Hugging Face's continuation drops the prefix's trailing whitespace when the template trims message content, and
+    # for a prefix of whitespace alone also the whitespace that the template puts after the message header. Rendering
+    # the body followed by a marker keeps everything that precedes the trailing whitespace.
+    marked = [*messages[:-1], {**messages[-1], "content": body + PREFIX_END_MARKER}]
+    text = cast(str, render(marked, tokenize=False))
+    # Leading whitespace may stay trimmed; it does not border the continuation.
+    if not text.endswith(body.lstrip() + PREFIX_END_MARKER):
+        raise ValueError("The chat template changed the assistant prefix beyond trimming its whitespace")
+    # Tokenize the restored text as a whole: the whitespace can merge with the preceding characters into one token.
+    return tokenizer.encode(text.removesuffix(PREFIX_END_MARKER) + trailing_whitespace, add_special_tokens=False)
 
 
 def template_error_from_exception(error: BaseException) -> TemplateError | None:

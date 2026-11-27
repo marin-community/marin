@@ -12,7 +12,6 @@ validation error in the detail.
 import datetime
 import json
 import math
-import tomllib
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -20,6 +19,7 @@ import yaml
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 
+from verifyit.compat import tomllib
 from verifyit.file_ops.read import read_text
 from verifyit.grade import InvalidTask, Reward, empty_output_policy, read_output, scored
 from verifyit.modes.extract import unwrap_fence

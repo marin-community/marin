@@ -20,8 +20,8 @@ from click.testing import CliRunner
 from marina.applets import AppletManifest, AppletNotFound, AppletStore, applet_role, package_applet, read_applet_package
 from marina.cli import cli
 from marina.database_setup import APPLET_READER_ROLE, ensure_applet_provisioning
-from marina.db import UrlDatabase, grant_read
-from marina.releases import require_current_main
+from marina.db import UrlDatabase, grant_read_on_connection
+from marina.releases import require_release_checkout
 from marina.server import MarinaConfig, MarinaSurface, create_app
 from marina.table_load import read_table, table_statements
 from marina.testing import isolated_database
@@ -331,9 +331,9 @@ def test_release_rejects_ignored_files_in_static_package(
 
 
 @pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
-def test_require_current_main_allows_detached_ci_checkout(release_checkout: Path) -> None:
+def test_release_checkout_main_requires_exact_origin_main(release_checkout: Path) -> None:
     subprocess.run(["git", "checkout", "--detach"], cwd=release_checkout, check=True, capture_output=True)
-    commit = require_current_main(release_checkout)
+    commit = require_release_checkout(release_checkout)
     assert subprocess.check_output(["git", "show", f"{commit}:demo/dist/index.html"], cwd=release_checkout) == (
         b"<h1>Released app</h1>"
     )
@@ -341,7 +341,7 @@ def test_require_current_main_allows_detached_ci_checkout(release_checkout: Path
 
 @pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
 @pytest.mark.parametrize("change", ["untracked", "modified", "staged", "unmerged", "old_ci_rerun"])
-def test_require_current_main_rejects_unreleased_source(release_checkout: Path, change: str) -> None:
+def test_release_checkout_rejects_unreleased_main_source(release_checkout: Path, change: str) -> None:
     if change == "untracked":
         (release_checkout / "extra.txt").write_text("unreviewed")
     else:
@@ -362,7 +362,7 @@ def test_require_current_main_rejects_unreleased_source(release_checkout: Path, 
         for command in arguments:
             subprocess.run(["git", *command], cwd=release_checkout, check=True, capture_output=True)
     with pytest.raises(RuntimeError):
-        require_current_main(release_checkout)
+        require_release_checkout(release_checkout)
 
 
 @pytest.mark.parametrize("release_checkout", ["build"], indirect=True)
@@ -559,7 +559,7 @@ def test_publish_demo_serves_files_schema_query_and_python_api(tmp_path: Path, d
         connection.execute(text("CREATE SCHEMA shared_read"))
         connection.execute(text("CREATE TABLE shared_read.values (value INTEGER)"))
         connection.execute(text("INSERT INTO shared_read.values VALUES (17)"))
-    grant_read(store.engine, "shared_read", APPLET_READER_ROLE)
+        grant_read_on_connection(connection, "shared_read", APPLET_READER_ROLE)
     shared = client.post(
         f"/a/{applet_id}/query",
         json={"sql": "SELECT value FROM shared_read.values", "parameters": {}},
@@ -762,6 +762,28 @@ def test_public_applet_surface_serves_only_public_reads(tmp_path: Path, database
     assert updated.status_code == 201
     assert updated.json()["mode"] == "public"
 
+    for suffix in ("", "app.js", "api/problems", "api/identity"):
+        for method in ("GET", "HEAD"):
+            assert public_client.request(method, f"{revision_path}{suffix}").status_code == 404
+    assert public_client.get(f"/a/{applet_id}/v/2/").status_code == 200
+    assert public_client.get(f"/a/{applet_id}/v/2/api/problems").status_code == 200
+    assert public_client.get(f"/a/{applet_id}/api/problems").status_code == 200
+    assert publisher.get(revision_path).status_code == 200
+    assert publisher.get(f"{revision_path}api/problems").status_code == 200
+
+    # The selected revision, rather than the greatest published number, controls
+    # public access after a rollback too.
+    assert (
+        publisher.put(f"/api/marina/applets/{applet_id}/current", json={"version": 1, "base_version": 2}).status_code
+        == 200
+    )
+    assert public_client.get(revision_path).status_code == 200
+    assert public_client.get(f"/a/{applet_id}/v/2/api/problems").status_code == 404
+    assert (
+        publisher.put(f"/api/marina/applets/{applet_id}/current", json={"version": 2, "base_version": 1}).status_code
+        == 200
+    )
+
     revoked = publisher.put(
         f"/api/marina/applets/{applet_id}/mode",
         json={"mode": "private", "base_version": 2},
@@ -816,6 +838,63 @@ def test_named_applet_host_pins_revisions_and_isolates_routes(tmp_path: Path, da
     assert publisher.delete(f"/api/marina/applets/{applet_id}").status_code == 204
     assert named.get("/").status_code == 404
     assert named.get("/v/1/").status_code == 404
+
+
+def test_public_named_host_serves_its_app_only_while_the_app_is_public(tmp_path: Path, database_url: str) -> None:
+    publisher, store = applet_client_and_store(tmp_path, database_url)
+    published = publisher.post("/api/marina/applets", content=package_applet(DEMO_APPLET)).json()
+    applet_id = published["id"]
+    store.bind_host("atlas.example", uuid.UUID(applet_id))
+    public_config = MarinaConfig(
+        data_root=str(tmp_path / "data"),
+        iap_audience=None,
+        database=store.database,
+        public_applet_origin="https://public.applets.example",
+        surface=MarinaSurface.PUBLIC_APPLETS,
+        applet_domains=frozenset({"atlas.example", "unbound.example"}),
+    )
+    reader = TestClient(create_app(public_config), base_url="https://atlas.example", client=("10.0.0.7", 40000))
+    shared_path = f"https://public.applets.example/a/{applet_id}/v/1/"
+    named_paths = ("/", "/v/1/", "/v/1/app.js", "/v/1/api/problems")
+
+    assert published["mode"] == "private"
+    for path in named_paths:
+        assert reader.get(path).status_code == 404
+
+    publisher.put(f"/api/marina/applets/{applet_id}/mode", json={"mode": "public", "base_version": 1})
+    root = reader.get("/", follow_redirects=False)
+    assert root.status_code == 307
+    assert root.headers["location"] == "/v/1/"
+    for named, shared in (("/v/1/", shared_path), ("/v/1/app.js", f"{shared_path}app.js")):
+        named_response = reader.get(named)
+        shared_response = reader.get(shared)
+        assert named_response.status_code == 200
+        assert named_response.content == shared_response.content
+        assert named_response.headers["cache-control"] == shared_response.headers["cache-control"]
+        assert named_response.headers["content-security-policy"] == shared_response.headers["content-security-policy"]
+    assert reader.get("/v/1/api/identity").json() == {"user": None}
+    assert reader.post("/v/1/query", json={"sql": "SELECT 1"}).status_code == 404
+    assert reader.post("/v/1/api/problems").status_code == 404
+    assert reader.get(f"/a/{applet_id}/v/1/").status_code == 404
+    assert reader.get("https://unbound.example/").status_code == 404
+    assert reader.get(f"https://unbound.example/a/{applet_id}/v/1/").status_code == 404
+
+    assert (
+        publisher.post(
+            f"/api/marina/applets/{applet_id}", params={"base_version": 1}, content=package_applet(DEMO_APPLET)
+        ).status_code
+        == 201
+    )
+    for suffix in ("", "app.js", "api/problems"):
+        assert reader.get(f"/v/1/{suffix}").status_code == 404
+        assert reader.get(f"/v/2/{suffix}").status_code == 200
+    assert reader.get("/", follow_redirects=False).headers["location"] == "/v/2/"
+
+    publisher.put(f"/api/marina/applets/{applet_id}/mode", json={"mode": "private", "base_version": 2})
+    for path in named_paths:
+        assert reader.get(path).status_code == 404
+    # The public origin itself also stops serving the app; the binding alone grants nothing.
+    assert reader.get(shared_path).status_code == 404
 
 
 @pytest.mark.parametrize(
@@ -1384,3 +1463,194 @@ def test_package_ignores_generated_python_bytecode(tmp_path: Path) -> None:
         "server/__init__.py",
         "server/app.py",
     ]
+
+
+@pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
+def test_require_landed_release_accepts_the_branch_tip_and_ancestors(release_checkout: Path) -> None:
+    """A declared release branch accepts its tip and any commit origin already contains."""
+    subprocess.run(["git", "push", "origin", "HEAD:integration"], cwd=release_checkout, check=True, capture_output=True)
+    commit = require_release_checkout(release_checkout, branch="integration")
+    assert (
+        commit
+        == subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=release_checkout, check=True, capture_output=True, text=True
+        ).stdout.strip()
+    )
+    # The branch tip moves ahead; the release cut stays landed as an ancestor.
+    (release_checkout / "extra.txt").write_text("reviewed")
+    for arguments in (
+        ["add", "."],
+        ["commit", "-m", "advance"],
+        ["push", "origin", "HEAD:integration"],
+    ):
+        subprocess.run(["git", *arguments], cwd=release_checkout, check=True, capture_output=True)
+    subprocess.run(["git", "checkout", "-q", "HEAD^"], cwd=release_checkout, check=True, capture_output=True)
+    assert require_release_checkout(release_checkout, branch="integration") == commit
+
+
+@pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
+def test_require_landed_release_rejects_unlanded_source(release_checkout: Path) -> None:
+    subprocess.run(["git", "push", "origin", "HEAD:integration"], cwd=release_checkout, check=True, capture_output=True)
+    (release_checkout / "extra.txt").write_text("unreviewed")
+    for arguments in (["add", "."], ["commit", "-m", "unlanded"]):
+        subprocess.run(["git", *arguments], cwd=release_checkout, check=True, capture_output=True)
+    with pytest.raises(RuntimeError, match="not landed on origin/integration"):
+        require_release_checkout(release_checkout, branch="integration")
+
+
+@pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
+def test_release_with_release_branch_records_the_branch_and_refuses_unlanded(
+    release_checkout: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The declared branch drives the guard, and the provenance names what was cut."""
+    metadata: dict | None = None
+    requests: list[str] = []
+
+    def http_request(method: str, url: str, **kwargs: object) -> RequestsResponse:
+        nonlocal metadata
+        requests.append(method)
+        if method == "GET":
+            if url.endswith("marina-release.json") and metadata is None:
+                not_found = json_response({"detail": "applet file not found"})
+                not_found.status_code = 404
+                return not_found
+            return json_response(
+                {
+                    "current_version": 7,
+                    "authenticated_url": "http://localhost:8080/a/00000000-0000-0000-0000-000000000001",
+                }
+            )
+        package = read_applet_package(kwargs["data"])
+        metadata = json.loads(package.files["dist/marina-release.json"])
+        return json_response({"id": "00000000-0000-0000-0000-000000000001", "version": 8, "path": "/a/id/v/8/"})
+
+    monkeypatch.setattr("marina.client.requests.request", http_request)
+    for arguments in (["checkout", "-q", "-b", "integration"], ["push", "origin", "HEAD:integration"]):
+        subprocess.run(["git", *arguments], cwd=release_checkout, check=True, capture_output=True)
+    args = [
+        "release",
+        str(release_checkout),
+        "--base-version",
+        "7",
+        "--url",
+        "http://localhost:8080",
+        "--release-branch",
+        "integration",
+    ]
+    result = CliRunner().invoke(cli, args)
+    assert result.exit_code == 0, result.output
+    assert [method for method in requests if method == "POST"] == ["POST"]
+    assert metadata is not None and metadata["branch"] == "integration"
+
+    # A commit the branch does not contain refuses before any publish.
+    (release_checkout / "extra.txt").write_text("unreviewed")
+    for arguments in (["add", "."], ["commit", "-m", "unlanded"]):
+        subprocess.run(["git", *arguments], cwd=release_checkout, check=True, capture_output=True)
+    unlanded = CliRunner().invoke(cli, args)
+    assert unlanded.exit_code == 1
+    assert "not landed on origin/integration" in unlanded.output
+    assert [method for method in requests if method == "POST"] == ["POST"]
+
+
+@pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
+def test_release_rejects_allow_dirty_with_release_branch(release_checkout: Path) -> None:
+    """The mutual exclusion is a usage error: the release never starts."""
+    result = CliRunner().invoke(
+        cli,
+        [
+            "release",
+            str(release_checkout),
+            "--base-version",
+            "7",
+            "--allow-dirty",
+            "--release-branch",
+            "integration",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "--release-branch" in result.output and "--allow-dirty" in result.output
+
+
+@pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
+def test_require_release_checkout_prefers_the_branch_over_a_same_named_tag(release_checkout: Path) -> None:
+    """A tag sharing the branch's name must not shadow the ancestry check."""
+    subprocess.run(["git", "push", "origin", "HEAD:integration"], cwd=release_checkout, check=True, capture_output=True)
+    tip = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=release_checkout, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    # An unlanded descendant commit, tagged with the branch's name on origin.
+    (release_checkout / "extra.txt").write_text("unlanded")
+    for arguments in (
+        ["add", "."],
+        ["commit", "-m", "unlanded"],
+        ["tag", "integration"],
+        ["push", "origin", "integration"],
+    ):
+        subprocess.run(["git", *arguments], cwd=release_checkout, check=True, capture_output=True)
+    with pytest.raises(RuntimeError, match="not landed on origin/integration"):
+        require_release_checkout(release_checkout, branch="integration")
+    subprocess.run(["git", "checkout", "-q", tip], cwd=release_checkout, check=True, capture_output=True)
+    assert require_release_checkout(release_checkout, branch="integration") == tip
+
+
+@pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
+def test_release_refuses_a_checkout_behind_the_live_release(
+    release_checkout: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale checkout on the same branch cannot republish older source as landed."""
+    metadata: dict | None = None
+    requests: list[str] = []
+
+    def http_request(method: str, url: str, **kwargs: object) -> RequestsResponse:
+        nonlocal metadata
+        if method == "POST":
+            requests.append(method)
+            package = read_applet_package(kwargs["data"])
+            metadata = json.loads(package.files["dist/marina-release.json"])
+            return json_response({"id": "00000000-0000-0000-0000-000000000001", "version": 8, "path": "/a/id/v/8/"})
+        if url.endswith("marina-release.json"):
+            if metadata is None:
+                not_found = json_response({"detail": "applet file not found"})
+                not_found.status_code = 404
+                return not_found
+            return json_response(metadata)
+        return json_response(
+            {
+                "current_version": 8,
+                "authenticated_url": "http://localhost:8080/a/00000000-0000-0000-0000-000000000001",
+            }
+        )
+
+    monkeypatch.setattr("marina.client.requests.request", http_request)
+    (release_checkout / "extra.txt").write_text("released")
+    for arguments in (
+        ["add", "."],
+        ["commit", "-m", "released"],
+        ["checkout", "-q", "-b", "integration"],
+        ["push", "origin", "HEAD:integration"],
+    ):
+        subprocess.run(["git", *arguments], cwd=release_checkout, check=True, capture_output=True)
+    args = [
+        "release",
+        str(release_checkout),
+        "--base-version",
+        "8",
+        "--url",
+        "http://localhost:8080",
+        "--release-branch",
+        "integration",
+    ]
+    released = CliRunner().invoke(cli, args)
+    assert released.exit_code == 0, released.output
+    live_commit = metadata["commit"]
+    # Move the branch forward on origin, then check out the released commit: a stale
+    # worktree on the same branch must refuse before publishing.
+    (release_checkout / "extra.txt").write_text("newer")
+    for arguments in (["add", "."], ["commit", "-m", "newer"], ["push", "origin", "HEAD:integration"]):
+        subprocess.run(["git", *arguments], cwd=release_checkout, check=True, capture_output=True)
+    subprocess.run(["git", "checkout", "-q", f"{live_commit}^"], cwd=release_checkout, check=True, capture_output=True)
+    stale = CliRunner().invoke(cli, args)
+    assert stale.exit_code == 1
+    assert "ahead of this checkout" in stale.output
+    assert len(requests) == 1
+    assert metadata["branch"] == "integration"

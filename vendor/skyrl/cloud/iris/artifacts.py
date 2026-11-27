@@ -69,7 +69,7 @@ def read_json(uri: str) -> dict[str, Any] | None:
 
 
 def terminal_checkpoint_step(checkpoint_root: str) -> int:
-    """Return the latest committed checkpoint step."""
+    """Return the recovery step named by the checkpoint marker."""
     marker_uri = join_resource_path(checkpoint_root, CHECKPOINT_MARKER_FILENAME)
     filesystem, marker_path = fs_and_path(marker_uri)
     if not filesystem.exists(marker_path):

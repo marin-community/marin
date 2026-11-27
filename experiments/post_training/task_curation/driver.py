@@ -13,6 +13,7 @@ from typing import cast
 
 import click
 from finestore.rl.curation import SourceDeclaration
+from finestore.rl.source_identity import canonical_source_id
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
@@ -37,6 +38,7 @@ from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewM
 from zephyr.context import ZephyrContext
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL
+from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT
 from experiments.post_training.task_curation.assessment import (
     AssessmentSettings,
     assessment_paths,
@@ -62,15 +64,15 @@ from experiments.post_training.task_curation.embedding import (
     DescriptionEndpoint,
     curation_embedding_pipeline,
 )
-from experiments.post_training.task_curation.inventory import (
+from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
+from experiments.post_training.task_curation.pipeline import CampaignMachines
+from experiments.post_training.task_curation.selection import (
     SELECTION_INPUT_PREFIX,
     EvalLiteRecipe,
     SelectionRecipe,
     eval_lite_step,
     task_selection_step,
 )
-from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
-from experiments.post_training.task_curation.pipeline import CampaignMachines
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
 from experiments.post_training.task_curation.sources import all_sources, runnable_sources
 from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURRICULUM
@@ -81,7 +83,6 @@ LOCAL_NORMALIZED_SHARDS = 4
 WORKER_CONTAINER_PROFILE = "CONTAINER_PROFILE_PRIVILEGED"
 IRIS_JOB_TTL = 1800
 CORPUS_CONVERSION_VERSION = "2026.10.14.1"
-CANONICAL_ARTIFACT_ROOT = "s3://marin-us-east-02a/marin"
 TASK_SELECTION_KEY = "task_selection"
 EMBEDDING_STAGES = (
     "inputs",
@@ -264,7 +265,7 @@ def _corpus_inputs(corpus: _CorpusSources, population: str, name: str, version: 
     if corpus.population != population:
         raise click.UsageError("EvalLite requires a converted corpus; training selection requires an admitted corpus")
     return {
-        source_id: ArtifactStep.adopt(f"{SELECTION_INPUT_PREFIX}/{name}/{source_id}", version, root)
+        canonical_source_id(source_id): ArtifactStep.adopt(f"{SELECTION_INPUT_PREFIX}/{name}/{source_id}", version, root)
         for source_id, root in sorted(corpus.roots.items())
     }
 
@@ -411,11 +412,11 @@ def _embedding_pass(
 @click.option(
     "--image-backend",
     type=click.Choice([Backend.GVISOR.value, Backend.DAYTONA.value]),
-    help="Image controls: gvisor via Iris or daytona. Omit for local and simulator controls only.",
+    help="Image controls: gvisor (an Iris SANDBOX job) or daytona. Omit for local and simulator controls only.",
 )
 @click.option(
     "--controller-url",
-    help="Controller for --image-backend gvisor; defaults to the current Iris job's controller.",
+    help="Controller for --image-backend gvisor (Iris SANDBOX jobs); defaults to the current Iris job's controller.",
 )
 @click.option(
     "--simulator-catalog",
@@ -655,7 +656,11 @@ def main(
         restored = _corpus_sources(corpus)
         assert embedding is not None
         # Refresh recorded inventory entries by ID while retaining entries no longer in the catalog.
-        corpus_inventory = {row.id: row for row in restored.inventory}
+        corpus_inventory: dict[str, SourceDeclaration] = {}
+        for row in restored.inventory:
+            key = canonical_source_id(row.id)
+            if key not in corpus_inventory or row.id == key:
+                corpus_inventory[key] = row
         corpus_inventory.update({row.id: row for row in inventory})
         embedding(
             restored.roots,

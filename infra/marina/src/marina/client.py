@@ -3,6 +3,7 @@
 
 """Authenticated HTTP client helpers for Marina's command line."""
 
+import os
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlparse
@@ -43,6 +44,8 @@ def _cached_login_provider() -> TokenProvider | None:
 
 def marina_token_provider() -> TokenProvider:
     """Resolve an expiring-token provider for reuse across a sequence of requests."""
+    if credentials_file := os.environ.get("MARINA_GOOGLE_APPLICATION_CREDENTIALS"):
+        return IapServiceAccountTokenProvider(MARIN_DESKTOP_OAUTH_CLIENT.client_id, credentials_file=credentials_file)
     return _cached_login_provider() or IapServiceAccountTokenProvider(MARIN_DESKTOP_OAUTH_CLIENT.client_id)
 
 
@@ -99,6 +102,12 @@ def marina_request(
     return response.json()
 
 
+def applet_origin(service_url: str, authenticated_url: str) -> str:
+    """Return the applet's authenticated origin, using the service for relative URLs."""
+    parsed = urlparse(authenticated_url)
+    return f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else service_url.rstrip("/")
+
+
 def applet_query(
     service_url: str,
     applet_id: str,
@@ -115,8 +124,7 @@ def applet_query(
         token_provider=token_provider,
     )
     assert isinstance(details, dict)
-    parsed = urlparse(details["authenticated_url"])
-    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else service_url.rstrip("/")
+    origin = applet_origin(service_url, details["authenticated_url"])
 
     def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
         result = marina_request(

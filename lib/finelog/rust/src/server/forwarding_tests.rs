@@ -362,7 +362,6 @@ async fn read_all(client: &LogServiceClient<TestTransport>) -> Vec<(String, Stri
     response
         .into_view()
         .to_owned_message()
-        .unwrap()
         .entries
         .iter()
         .map(|e| {
@@ -651,6 +650,102 @@ fn forwarding_read_window_is_bounded_by_ordered_segment_ranges() {
 }
 
 #[test]
+fn prepare_forward_batches_preserves_a_read_larger_than_the_string_offset_limit() {
+    let data = Arc::new(StringArray::from(vec!["x".repeat(1 << 20)]));
+    let schema = Arc::new(ArrowSchema::new(vec![
+        Field::new(IMPLICIT_SEQ_COLUMN, DataType::Int64, false),
+        Field::new("data", DataType::Utf8, false),
+        Field::new(IMPLICIT_CLUSTER_COLUMN, DataType::Utf8, true),
+    ]));
+    // Share a small buffer across source batches. Concatenating this read would
+    // require a Utf8 array above 2 GiB, while each source batch remains valid.
+    let batches = (1..=2049)
+        .map(|seq| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![seq])),
+                    data.clone(),
+                    Arc::new(StringArray::from(vec![None::<&str>])),
+                ],
+            )
+            .unwrap()
+        })
+        .collect();
+    let shipped = prepare_forward_batches(
+        QueryResult {
+            schema,
+            batches,
+            timings: Default::default(),
+        },
+        SOURCE_CLUSTER,
+    )
+    .unwrap();
+    let mut bytes = 0;
+    for (index, (batch, seqs)) in shipped.iter().enumerate() {
+        assert!(batch.column_by_name(IMPLICIT_SEQ_COLUMN).is_none());
+        assert_eq!(seqs.values(), &[(index + 1) as i64]);
+        let body = batch.column_by_name("data").unwrap().as_string::<i32>();
+        assert_eq!(body.value(0), data.value(0));
+        bytes += body.value(0).len();
+        assert_eq!(
+            batch
+                .column_by_name(IMPLICIT_CLUSTER_COLUMN)
+                .unwrap()
+                .as_string::<i32>()
+                .value(0),
+            SOURCE_CLUSTER
+        );
+    }
+    assert!(bytes > i32::MAX as usize);
+}
+
+#[test]
+fn bounded_batch_coalescing_preserves_rows_and_sequence_order() {
+    let column = "data";
+    let payload = "x".repeat(400);
+    let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+        column,
+        DataType::Utf8,
+        false,
+    )]));
+    let batches = (0..12)
+        .map(|index| {
+            let data = format!("{index}:{payload}");
+            (
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(StringArray::from(vec![data]))],
+                )
+                .unwrap(),
+                Int64Array::from(vec![(index + 1) * 10]),
+            )
+        })
+        .collect();
+    let max_bytes = 4096;
+    let chunks = chunk_batches_by_bytes(batches, max_bytes).unwrap();
+    assert!(chunks.len() > 1);
+    assert!(
+        chunks.len() < 12,
+        "small batches must share durable hub writes"
+    );
+    let mut received = Vec::new();
+    for (ipc, last_seq) in chunks {
+        assert!(ipc.len() <= max_bytes);
+        let batch = decode_one_record_batch(&ipc).unwrap();
+        let data = batch.column_by_name(column).unwrap().as_string::<i32>();
+        received.extend(data.iter().map(|value| value.unwrap().to_string()));
+        assert_eq!(last_seq, received.len() as i64 * 10);
+    }
+    assert_eq!(
+        received,
+        (0..12)
+            .map(|index| format!("{index}:{payload}"))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn chunk_by_bytes_splits_and_pairs_each_chunk_with_its_last_seq() {
     let batch = RecordBatch::try_new(
         Arc::new(ArrowSchema::new(vec![Field::new(
@@ -904,7 +999,6 @@ async fn hub_log_count_for_cluster(fx: &Fixture, cluster: &str) -> usize {
         .unwrap()
         .into_view()
         .to_owned_message()
-        .unwrap()
         .entries
         .len()
 }
@@ -1551,6 +1645,64 @@ async fn a_non_log_table_is_registered_on_the_hub_and_stamped_with_its_origin() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_declared_cluster_column_forwards_own_and_unnamed_rows() {
+    // The Iris controller's iris.controller_db__* rows declare `cluster`, so registration
+    // keeps it as the origin column. A row named for the forwarding cluster, or left
+    // empty, reaches the hub under that name; a row naming another cluster is taken as
+    // already relayed and passed by for good.
+    let fx = Fixture::new("declared_cluster").await;
+    let namespace = "iris.controller_db__jobs";
+    let schema = Schema::new(
+        vec![
+            Column::new("cluster", ColumnType::COLUMN_TYPE_STRING, false),
+            Column::new("root_job_id", ColumnType::COLUMN_TYPE_STRING, false),
+        ],
+        "root_job_id",
+    );
+    fx.source
+        .register_table(namespace, schema, StoragePolicy::default())
+        .unwrap();
+    let batch = RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![
+            Field::new("cluster", DataType::Utf8, false),
+            Field::new("root_job_id", DataType::Utf8, false),
+        ])),
+        vec![
+            Arc::new(StringArray::from(vec!["", "other-cluster", SOURCE_CLUSTER])),
+            Arc::new(StringArray::from(vec!["/u/empty", "/u/other", "/u/own"])),
+        ],
+    )
+    .unwrap();
+    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+    let (_, last_seq) = fx.source.write_rows(namespace, &ipc, None).unwrap();
+    fx.source
+        .await_persisted(namespace, last_seq, Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    fx.forward_from_start(namespace).await;
+    fx.drain(PRIV_A, namespace).await;
+
+    assert_eq!(
+        hub_column(fx.target_store(), namespace, "root_job_id").await,
+        vec![Some("/u/empty".to_string()), Some("/u/own".to_string())],
+        "the row naming another cluster never reaches the hub"
+    );
+    assert_eq!(
+        hub_column(fx.target_store(), namespace, "cluster").await,
+        vec![
+            Some(SOURCE_CLUSTER.to_string()),
+            Some(SOURCE_CLUSTER.to_string())
+        ],
+    );
+    assert_eq!(
+        fx.cursor(namespace),
+        Some(fx.tip(namespace)),
+        "the cursor moves past the skipped row"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn schema_evolution_is_registered_before_forwarding_new_rows() {
     let fx = Fixture::new("schema-evolution").await;
     write_id_rows(&fx.source, "events", 1).await;
@@ -2069,5 +2221,68 @@ async fn a_hub_migration_under_live_forwarding_loses_nothing() {
         .await,
         250,
         "a hub migration under live forwarding must not duplicate or drop rows"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_sender_without_catalog_bounds_forwards_to_a_hub_that_has_them() {
+    // A staged deploy upgrades servers one at a time, so a sender's schema may lack
+    // a `catalog_bounds` flag the hub already has. Its registration must neither
+    // conflict nor turn the hub's flag off.
+    let fx = Fixture::new("catalog-bounds-skew").await;
+    let namespace = "iris.bounded";
+    let schema = |catalog_bounds: bool| {
+        let ts = Column::new("ts", ColumnType::COLUMN_TYPE_INT64, false);
+        let ts = if catalog_bounds {
+            ts.with_catalog_bounds()
+        } else {
+            ts
+        };
+        Schema::new(
+            vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false), ts],
+            "id",
+        )
+    };
+    fx.target_store()
+        .register_table(namespace, schema(true), StoragePolicy::default())
+        .unwrap();
+    fx.source
+        .register_table(namespace, schema(false), StoragePolicy::default())
+        .unwrap();
+    let arrow_schema = Arc::new(ArrowSchema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("ts", DataType::Int64, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&arrow_schema),
+        vec![
+            Arc::new(StringArray::from(vec!["a", "b", "c"])),
+            Arc::new(arrow::array::Int64Array::from(vec![10, 20, 30])),
+        ],
+    )
+    .unwrap();
+    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+    let (_, last_seq) = fx.source.write_rows(namespace, &ipc, None).unwrap();
+    fx.source
+        .await_persisted(namespace, last_seq, Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    fx.forward_from_start(namespace).await;
+    fx.drain(PRIV_A, namespace).await;
+
+    assert_eq!(
+        scalar_i64(fx.target_store(), "SELECT count(*) FROM \"iris.bounded\"").await,
+        3
+    );
+    assert!(
+        fx.target_store()
+            .get_table_schema(namespace)
+            .unwrap()
+            .column("ts")
+            .unwrap()
+            .index
+            .catalog_bounds,
+        "the sender's registration must not turn the hub's catalog bounds off"
     );
 }

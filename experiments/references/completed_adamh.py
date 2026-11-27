@@ -32,7 +32,6 @@ from levanter.models.qwen import Qwen3Config
 from levanter.optim.adamh import AdamHConfig
 from marin.processing.tokenize.data_configs import get_vocab_size_for_tokenizer
 from marin.scaling_laws import CandidateConfig
-from marin.scaling_laws.tpu_utils import V4_SPEC
 
 # --- Constants ---
 SEQ_LEN: int = 4096
@@ -44,35 +43,6 @@ def _round_to_power_of_two(x: float) -> int:
     if x <= 1:
         return 1
     return 2 ** math.ceil(math.log2(x))
-
-
-def _compute_tensor_parallel_size(tpu_type: str, batch_size: int, hidden_dim: int, max_tp: int = 4) -> int:
-    """Compute TP degree when batch_size < num_chips on the selected TPU."""
-    cores = int(tpu_type.split("-")[1])
-    num_chips = cores // V4_SPEC.cores_per_chip
-    min_tp = 1 if batch_size >= num_chips else _round_to_power_of_two(math.ceil(num_chips / batch_size))
-    tp = min_tp
-
-    while tp <= max_tp:
-        if num_chips % tp == 0 and hidden_dim % (num_chips // tp) == 0:
-            return tp
-        tp *= 2
-
-    raise ValueError(
-        f"Could not find valid tensor_parallel_size for tpu_type={tpu_type}, "
-        f"batch_size={batch_size}, hidden_dim={hidden_dim}, max_tp={max_tp}"
-    )
-
-
-def _format_run_name(
-    budget: float,
-    hidden_size: int,
-    num_layers: int,
-    batch_size: int,
-    experiment_name: str,
-) -> str:
-    """Format run name: isoflop-{budget}-d{hidden}-L{layers}-B{batch}-{experiment_name}"""
-    return f"isoflop-{budget:.0e}-d{hidden_size}-L{num_layers}-B{batch_size}-{experiment_name}"
 
 
 @dataclass(frozen=True)

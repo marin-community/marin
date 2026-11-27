@@ -12,15 +12,20 @@ import re
 import string
 from collections.abc import Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 
+from verifyit.adapters.completion import final_text
+from verifyit.compat import StrEnum
 from verifyit.grade import InvalidTask, Reward, empty_output_policy, read_output, scored
-from verifyit.spec import McqSpec
+from verifyit.spec import McqExtraction, McqSpec
+from verifyit.supergpqa_extraction import SUPERGPQA_LETTERS, supergpqa_reference_answer
 
 ANSWER = re.compile(r"Answer\s*:\s*(?!Answer)\s*([A-Za-z0-9])(?![A-Za-z0-9])\s*")
 BOXED_LETTER = re.compile(r"\\boxed\{\s*([A-Za-z0-9])\s*\}")
 WRAPPERS = re.compile(r"[*`_()\[\]]")
+# lm-eval-harness `medmcqa_cot` (MIT, d6de81643928d653435c431bae19945d41d32520): the first match is the answer.
+# The trailing boundary is Marin's: lm-eval reads `Final Answer: Bone marrow` as B.
+MEDMCQA_FINAL_ANSWER = re.compile(r"Final Answer:\s*(?:\*\*)?\s*([A-D])(?![A-Za-z0-9])")
 MAX_OPTIONS = len(string.ascii_uppercase)
 
 
@@ -147,13 +152,27 @@ def validate_mcq(spec: McqSpec) -> None:
     expected = spec.expected.strip().upper()
     if expected not in letters:
         raise InvalidTask(f"mcq expected {spec.expected!r} is not one of {letters!r}")
+    if spec.extraction is McqExtraction.SUPERGPQA_REFERENCE:
+        if spec.options > len(SUPERGPQA_LETTERS):
+            raise InvalidTask(f"SuperGPQA reference extraction supports at most {len(SUPERGPQA_LETTERS)} options")
+        if len(spec.option_texts) != spec.options or not all(isinstance(text, str) for text in spec.option_texts):
+            raise InvalidTask("SuperGPQA reference extraction requires one option text per option")
+    if spec.extraction is McqExtraction.MEDMCQA_COT_REFERENCE and spec.options != 4:
+        raise InvalidTask(f"MedMCQA reference extraction requires 4 options, got {spec.options}")
 
 
 def grade_mcq_candidate(spec: McqSpec, candidate: str) -> Reward:
-    """Score an extracted MCQ option letter against a validated task spec."""
+    """Score an extracted MCQ option letter, or the full response under a reference extraction."""
     validate_mcq(spec)
     letters = tuple(string.ascii_uppercase[: spec.options])
     expected = spec.expected.strip().upper()
+    if spec.extraction is McqExtraction.SUPERGPQA_REFERENCE:
+        answer = supergpqa_reference_answer(final_text(candidate), spec.option_texts)
+        return scored(float(answer == expected), extracted=answer, expected=expected)
+    if spec.extraction is McqExtraction.MEDMCQA_COT_REFERENCE:
+        match = MEDMCQA_FINAL_ANSWER.search(final_text(candidate))
+        answer = match.group(1) if match else None
+        return scored(float(answer == expected), extracted=answer, expected=expected)
     extracted = candidate.strip().upper()
     if not extracted:
         return scored(0.0, reason="no_answer_line", expected=expected)
@@ -167,6 +186,8 @@ def grade(spec: McqSpec, tests_dir: Path, workspace: Path) -> Reward:
     text = read_output(spec, workspace)
     if text is None:
         return scored(0.0, reason="no_output")
+    if spec.extraction in (McqExtraction.SUPERGPQA_REFERENCE, McqExtraction.MEDMCQA_COT_REFERENCE):
+        return grade_mcq_candidate(spec, text)
     matches = answer_letters(text)
     if matches:
         return grade_mcq_candidate(spec, matches[-1])

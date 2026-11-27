@@ -23,7 +23,7 @@ from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
-from haliax.jax_utils import tree_checkpoint_name
+from haliax.jax_utils import is_amd_instinct, tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
 from jaxtyping import Array, Bool, Float, Int
 
@@ -34,7 +34,15 @@ from levanter.grug._moe.common import (
     CapacityDrops,
 )
 from levanter.grug._moe.ep_common import _assignment_sources, _combine_gather_sum_impl
-from levanter.grug._moe.ep_ring import _combine_rows, _dispatch_rows, _select_local_assignments
+from levanter.grug._moe.ep_ring import (
+    XLA_ROW_GATHERS,
+    RowGathers,
+    _combine_rows,
+    _dispatch_rows,
+    _select_local_assignments,
+    _take_valid_rows,
+)
+from levanter.grug._moe.pallas_gather_sum import gather_sum_rows, gather_valid_rows, pallas_gather_supported
 
 
 def destination_hit_fraction(*, num_experts: int, local_experts: int, topk: int) -> float:
@@ -127,6 +135,39 @@ def _down_project_combine_bwd(residual, cotangent):
 _down_project_combine.defvjp(_down_project_combine_fwd, _down_project_combine_bwd)
 
 
+def _gather_sum_slots_clamped(rows: Float[Array, "P H"], slots: Int[Array, "T K"]) -> Float[Array, "T H"]:
+    """``ep_ring._gather_sum_slots`` for non-negative slots (``P`` and above read zero): same terms, same order,
+    same bits."""
+    num_rows = rows.shape[0]
+    # A clamped index with every slot's validity in one small kernel; jnp.take(mode="fill") builds one mask kernel
+    # per slot.
+    keep = jax.lax.optimization_barrier(slots < num_rows)
+    out = jnp.zeros((slots.shape[0], rows.shape[1]), dtype=jnp.float32)
+    for k in range(slots.shape[1]):
+        taken = rows.at[jnp.minimum(slots[:, k], num_rows - 1)].get(mode="promise_in_bounds")
+        out += jnp.where(keep[:, k, None], taken, 0).astype(jnp.float32)
+    return out.astype(rows.dtype)
+
+
+# The sender's gathers move token rows into its send buffer and sum the returned rows per token; the expert side's
+# move received rows to the dispatch rows. Each Pallas-Triton entry was measured faster on MI355X at the June shape.
+# The sender's token sum stays the clamped XLA fusion: a Pallas sum with the residual and shared-expert terms did not
+# beat it. The expert side's forward gather stays XLA; the kernel has not been measured there.
+_XLA_SENDER_GATHERS = RowGathers(take_valid=_take_valid_rows, gather_sum=_gather_sum_slots_clamped)
+_PALLAS_SENDER_GATHERS = RowGathers(take_valid=gather_valid_rows, gather_sum=_gather_sum_slots_clamped)
+_PALLAS_EXPERT_GATHERS = RowGathers(take_valid=_take_valid_rows, gather_sum=gather_sum_rows)
+
+
+def _row_gathers(hidden: int) -> tuple[RowGathers, RowGathers]:
+    """The sender-side and expert-side row gathers for rows of width ``hidden``.
+
+    Pallas-Triton on AMD Instinct when the kernel can tile the width, XLA otherwise. Both give the same bits.
+    """
+    if is_amd_instinct() and pallas_gather_supported(hidden):
+        return _PALLAS_SENDER_GATHERS, _PALLAS_EXPERT_GATHERS
+    return _XLA_SENDER_GATHERS, XLA_ROW_GATHERS
+
+
 def _moe_mlp_ep_ring_filtered_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -162,6 +203,7 @@ def _moe_mlp_ep_ring_filtered_local(
     if transport_capacity_factor <= 0:
         raise ValueError("transport_capacity_factor must be positive")
     ep_size = num_experts // local_experts
+    sender_gathers, expert_gathers = _row_gathers(hidden_dim)
 
     hit_fraction = destination_hit_fraction(num_experts=num_experts, local_experts=local_experts, topk=topk)
     pair_capacity = min(tokens, max(1, math.ceil(transport_capacity_factor * hit_fraction * tokens)))
@@ -212,7 +254,7 @@ def _moe_mlp_ep_ring_filtered_local(
         received_metadata = jax.lax.all_to_all(metadata, "expert", split_axis=0, concat_axis=0, tiled=True)
         received_metadata = tree_checkpoint_name(received_metadata, _CHECKPOINT_DISPATCH_INPUT)
 
-        send_x = _dispatch_rows(x_local, safe_source, slot_valid, slot)
+        send_x = _dispatch_rows(x_local, safe_source, slot_valid, slot, sender_gathers)
         received_x = jax.lax.all_to_all(
             send_x.reshape(ep_size, pair_capacity, hidden_dim), "expert", split_axis=0, concat_axis=0, tiled=True
         ).reshape(send_rows, hidden_dim)
@@ -243,7 +285,9 @@ def _moe_mlp_ep_ring_filtered_local(
         # position[r, j]: the dispatch row of received row r's j-th assignment, or the sentinel.
         position = _assignment_sources(picked, send_size=received_assignments).reshape(send_rows, topk)
 
-        x_dispatch = _dispatch_rows(received_x, jnp.minimum(dispatch_row, send_rows - 1), dispatch_valid, position)
+        x_dispatch = _dispatch_rows(
+            received_x, jnp.minimum(dispatch_row, send_rows - 1), dispatch_valid, position, expert_gathers
+        )
         x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
 
     with jax.named_scope("moe_up_down"):
@@ -262,6 +306,6 @@ def _moe_mlp_ep_ring_filtered_local(
             concat_axis=0,
             tiled=True,
         ).reshape(send_rows, hidden_dim)
-        out_local = _combine_rows(returned, safe_source, slot_valid, slot).astype(x_local.dtype)
+        out_local = _combine_rows(returned, safe_source, slot_valid, slot, sender_gathers).astype(x_local.dtype)
         drops = jax.lax.psum(jnp.stack([sender_dropped, receiver_dropped]), token_sharding_axes)
     return out_local, CapacityDrops(sender_dropped=drops[0], receiver_dropped=drops[1])

@@ -608,9 +608,30 @@ stage start or shard completion, then remains pending for five minutes. The
 execution ID separates concurrent pipelines under one root job. The stuck-pod
 rule groups by node and links the cordon-first
 recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
-The CoreWeave storage-telemetry freshness warning and `TrainingRunHealthDegraded`
+The CoreWeave storage-telemetry freshness and growth warnings and `TrainingRunHealthDegraded`
 carry the explicit `notification=slack` exception, so they announce in Slack
 and open a session on the default `operator` channel.
+`CoreWeaveStorageQuotaPredicted` projects 24 hours ahead using the faster
+positive 24-hour or 72-hour usage trend against the live zone quota. These
+windows tolerate the observed 4–10-hour collection gaps; the projection
+includes the latest sample's age. The critical quota page reads measured
+usage from the same deduplicated query, and the telemetry warning fires
+after twelve hours without a collection.
+`CoreWeaveStorageHeadroomLow` uses `notification=storage-daily` to warn above
+80% current or projected quota use in `#marin-alerts` during the daily 15:00–16:00
+`America/Los_Angeles` window. Its 23-hour repeat interval permits a reminder
+the next afternoon across spring daylight saving time. The
+[CoreWeave viewer](https://cw-s3.oa.dev/?v=time) link in the alert shows bucket
+sizes and growth from its latest scan. The storage operator investigates growing
+prefixes and asks verified owners to review them in the alert thread. The
+[storage runbook](../../scripts/ops/storage/README.md#coreweave-storage-telemetry)
+describes sampling requirements and forecast limits.
+If Loom delivery fails, the bridge keeps returning an error so Grafana retries,
+but reports the failure only once in the alert thread until delivery recovers.
+The policy's five-minute group interval bounds each notification attempt; it
+does not impose a lifetime retry limit on a firing alert. The daily active
+window suppresses storage notifications outside 15:00–16:00 Pacific.
+
 `B200ClusterUnderutilized` uses the same route when a cluster's Ready GB200
 GPUs stay idle for 30 minutes; the thresholds are the constants in
 `src/b200_utilization_alert.py`. A cluster with incomplete telemetry or an

@@ -7,10 +7,13 @@ import datetime as dt
 import json
 import shutil
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import sqlalchemy
+from click.testing import CliRunner
 from sqlalchemy.pool import StaticPool
 
 from infra.codehealth import refinement_sync, refinement_tools, review_store, rule_probe
@@ -27,6 +30,53 @@ from infra.lint.catalog import DEFAULT_CATALOG_DIR, load_catalog, render_lane
 
 REPOSITORY = "marin-community/marin"
 NOW = dt.datetime(2026, 8, 31, 12, tzinfo=dt.UTC)
+
+
+def test_rule_activity_excludes_other_review_tools_and_unselected_lanes(monkeypatch: pytest.MonkeyPatch) -> None:
+    catalog = load_catalog()
+    sha = refinement_tools.catalog_sha(catalog)
+    invocations = [
+        SimpleNamespace(
+            invocation_id=invocation_id,
+            tool=tool,
+            lint_catalog_sha=sha,
+            variant=variant,
+            diff_added_lines=1,
+            diff_removed_lines=0,
+        )
+        for invocation_id, tool, variant in (
+            ("catalog", "pre-commit-review", "compose"),
+            ("prose-only", "pre-commit-review", "lane:prose"),
+            ("other-review", "review-pr", None),
+        )
+    ]
+    findings = [
+        SimpleNamespace(code="ml-slop-test", invocation_id=invocation_id)
+        for invocation_id in ("catalog", "other-review")
+    ]
+
+    @contextmanager
+    def fake_engine(_config: object):
+        yield object()
+
+    monkeypatch.setattr(refinement_tools, "database_config_from_environment", lambda: None)
+    monkeypatch.setattr(refinement_tools, "database_engine", fake_engine)
+    monkeypatch.setattr(
+        refinement_tools,
+        "lint_activity",
+        lambda *_args, **_kwargs: SimpleNamespace(invocations=invocations, findings=findings),
+    )
+    monkeypatch.setattr(refinement_tools, "catalog_snapshot_shas", lambda _engine: {sha})
+
+    result = CliRunner().invoke(refinement_tools.cli, ["rule-activity"])
+
+    assert result.exit_code == 0, result.output
+    activity = json.loads(result.output)
+    rules = {rule["code"]: rule for rule in activity["rules"]}
+    assert activity["successful_runs_current_catalog"] == 2
+    assert rules["ml-slop-test"]["current_catalog_eligible_runs"] == 1
+    assert rules["ml-slop-test"]["current_catalog_findings"] == 1
+    assert rules["ml-impl-narration-docstring"]["current_catalog_eligible_runs"] == 2
 
 
 @pytest.fixture

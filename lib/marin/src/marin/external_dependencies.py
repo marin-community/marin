@@ -10,7 +10,9 @@ come from the root ``uv.lock``.
 """
 
 from dataclasses import dataclass
-from types import MappingProxyType
+
+from marin.inference.vllm_release_schema import CUDA_TOOLCHAIN_VERSION_BY_BACKEND as CUDA_TOOLCHAIN_VERSION_BY_BACKEND
+from marin.inference.vllm_release_schema import VllmGpuRelease, VllmGpuWheel
 
 
 @dataclass(frozen=True)
@@ -32,40 +34,10 @@ class ExternalDependency:
         return f"{distribution} @ git+{self.repository}@{self.commit}"
 
 
-@dataclass(frozen=True)
-class VllmGpuWheel:
-    """One architecture-specific wheel from a promoted vLLM GPU release."""
-
-    architecture: str
-    sm_targets: tuple[str, ...]
-    url: str
-    sha256: str
-
-
-@dataclass(frozen=True)
-class VllmGpuRelease:
-    """Immutable artifacts and ABI for a promoted vLLM GPU release."""
-
-    release_tag: str
-    source_commit: str
-    version: str
-    torch_backend: str
-    torch_version: str
-    wheels: tuple[VllmGpuWheel, ...]
-
-
-CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
-    {
-        "cu130": "13.0.88",
-        "cu132": "13.2.86",
-    }
-)
-
-
 VLLM_GPU_RELEASE = VllmGpuRelease(
-    release_tag="marin-vllm-gpu-20261113-0ac9dcb157ee",
-    source_commit="0ac9dcb157ee86ccb447bc717259159c41ad456a",
-    version="0.0.0.dev20261113+marin.0ac9dcb157ee.cu132",
+    release_tag="marin-vllm-gpu-20261118-47a8e415bff1",
+    source_commit="47a8e415bff17b9376f02d9b92edcc67e962eaee",
+    version="0.0.0.dev20261118+marin.47a8e415bff1.cu132",
     torch_backend="cu132",
     torch_version="2.14.1+cu132",
     wheels=(
@@ -74,20 +46,20 @@ VLLM_GPU_RELEASE = VllmGpuRelease(
             sm_targets=("10.0",),
             url=(
                 "https://github.com/marin-community/vllm/releases/download/"
-                "marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113%2Bmarin.0ac9dcb157ee.cu132-"
+                "marin-vllm-gpu-20261118-47a8e415bff1/vllm-0.0.0.dev20261118%2Bmarin.47a8e415bff1.cu132-"
                 "cp38-abi3-manylinux_2_28_aarch64.whl"
             ),
-            sha256="e0a2b9e2bb6b16ba6d4e1821770123cc74f04b86128536c2744e91b59c6e4b6a",
+            sha256="d013b4815e17d0e642ec5965c09f73fc8703f068010240c9e0457d989768db17",
         ),
         VllmGpuWheel(
             architecture="x86_64",
             sm_targets=("9.0",),
             url=(
                 "https://github.com/marin-community/vllm/releases/download/"
-                "marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113%2Bmarin.0ac9dcb157ee.cu132-"
+                "marin-vllm-gpu-20261118-47a8e415bff1/vllm-0.0.0.dev20261118%2Bmarin.47a8e415bff1.cu132-"
                 "cp38-abi3-manylinux_2_28_x86_64.whl"
             ),
-            sha256="b8897bde70bf353a08f37450fb89fca5ebf50d768d6756807a43867ef11134f4",
+            sha256="fc2a147c5d068d389f8094ed137b9f731d2fa81cfe143af575a4c3d2ce8a7962",
         ),
     ),
 )

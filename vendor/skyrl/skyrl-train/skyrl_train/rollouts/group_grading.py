@@ -9,7 +9,7 @@ from taskcompendium.models import TaskSpec
 from skyrl_train.rollouts.genrm_grading import grade_genrm_rollouts
 from skyrl_train.rollouts.group_grader import GENRM_GROUP_GRADER, GroupGraderSpec
 from skyrl_train.rollouts.task_projections import rollout_loss_eligible
-from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
+from skyrl_train.task_error_handling import ErrorHandlingConfig
 
 GroupGrader = Callable[
     [TaskSpec, GroupGraderSpec, Sequence[TrainingRollout], Sequence[bool], str], Sequence[TrainingRollout]
@@ -24,7 +24,7 @@ async def grade_groups(
     group_ids: Sequence[str],
     graders: Mapping[str, GroupGrader],
     phase: str,
-    error_handling: Sequence[ErrorHandlingConfig],
+    error_handling: ErrorHandlingConfig,
     *,
     logprobs_required: bool,
 ) -> list[TrainingRollout]:
@@ -51,10 +51,7 @@ async def grade_groups(
             raise ValueError(f"Task group {task.id!r} contains different group graders")
         grader = graders[specification.name]
         records = [rollouts[index] for index in indices]
-        eligible = [
-            rollout_loss_eligible(rollouts[index], error_handling[index], logprobs_required=logprobs_required)
-            for index in indices
-        ]
+        eligible = [rollout_loss_eligible(record, error_handling, logprobs_required=logprobs_required) for record in records]
         graded = await asyncio.to_thread(grader, task, specification, records, eligible, phase)
         for index, record in zip(indices, graded, strict=True):
             if record.task_id != task.id:

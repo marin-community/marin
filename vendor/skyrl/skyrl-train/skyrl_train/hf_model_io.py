@@ -4,24 +4,107 @@ from __future__ import annotations
 
 import json
 import time
-from contextlib import contextmanager
+from collections.abc import Callable, Iterable
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from loguru import logger
-from marinskyrl.hf_model import normalize_fast_tokenizer_metadata
+from marinskyrl.hf_model import (
+    GENERATION_CONFIG_NAME,
+    GenerationConfigTokenizer,
+    export_generation_config,
+    normalize_fast_tokenizer_metadata,
+    write_generation_config,
+)
+from marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 from marinskyrl.model_manifest import (
     HF_WEIGHT_INDEX_FILENAME,
-    MODEL_MANIFEST_FILENAME,
     ModelManifest,
     build_safetensors_weight_index,
     read_safetensors_header,
     write_local_model_manifest,
 )
 from marinskyrl.resource_locator import join_resource_path
+from safetensors.torch import save_file
+from torch import Tensor, contiguous_format
+from transformers.utils import cached_file
 
 from skyrl_train.io import io
 
 HF_WEIGHT_FILENAME = "model.safetensors"
+
+
+def save_megatron_hf_model(
+    bridge,
+    model,
+    output_dir: str,
+    *,
+    rank_zero: bool,
+    local_state_source_type: type,
+    save_configs: Callable[[str], None],
+) -> None:
+    """Export a Megatron model and publish its completed HF files on rank zero."""
+    source = getattr(getattr(bridge.hf_pretrained, "state", None), "source", None)
+    use_bridge_writer = isinstance(source, local_state_source_type) and bool(source.key_to_filename_map)
+    weights = None if use_bridge_writer else bridge.export_hf_weights(model, cpu=True)
+    if rank_zero:
+        model_dir = local_hf_model_dir(output_dir)
+    elif weights is None:
+        # Bridge's save is collective even when only rank zero publishes.
+        model_dir = TemporaryDirectory() if io.is_cloud_path(output_dir) else nullcontext(output_dir)
+    else:
+        for _ in weights:
+            pass
+        return
+
+    with model_dir as work_dir:
+        if weights is None:
+            bridge.save_hf_weights(model, work_dir)
+        else:
+            write_hf_weight_shards(weights, work_dir)
+        if rank_zero:
+            save_configs(work_dir)
+
+
+def write_hf_weight_shards(
+    weights: Iterable[tuple[str, Tensor]], output_dir: str, *, shard_size_bytes: int = 5_000_000_000
+) -> None:
+    """Write a stream of CPU weights as Safetensors shards for the export finalizer."""
+    directory = Path(output_dir)
+    shard = {}
+    size = 0
+    shard_number = 1
+
+    def flush():
+        nonlocal size, shard_number
+        save_file(shard, directory / f"model-{shard_number:05d}.safetensors", metadata={"format": "pt"})
+        shard.clear()
+        size = 0
+        shard_number += 1
+
+    for name, tensor in weights:
+        tensor_bytes = tensor.numel() * tensor.element_size()
+        if shard and size + tensor_bytes > shard_size_bytes:
+            flush()
+        shard[name] = tensor.clone(memory_format=contiguous_format)
+        size += tensor_bytes
+    if shard:
+        flush()
+
+
+def write_export_generation_config(
+    work_dir: str, source_model: str | None, tokenizer: GenerationConfigTokenizer, chat_template: str | None
+) -> None:
+    """Write ``generation_config.json``, preserving explicit values from the source model's generation config."""
+    source_config = None
+    if source_model:
+        source_path = cached_file(source_model, GENERATION_CONFIG_NAME, _raise_exceptions_for_missing_entries=False)
+        if source_path is not None:
+            source_config = json.loads(Path(source_path).read_text())
+    config = export_generation_config(tokenizer, chat_template=chat_template, explicit=source_config)
+    write_generation_config(work_dir, config)
+    logger.info(f"Wrote {GENERATION_CONFIG_NAME} to {work_dir}: {config}")
 
 
 def verify_hf_model_export(export_path: str) -> None:

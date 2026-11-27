@@ -3,6 +3,7 @@
 
 """remote_inference mirrors uncached Hugging Face weights on CPU before reserving accelerators."""
 
+import io
 import os
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
@@ -18,7 +19,7 @@ from click.testing import CliRunner
 from fray.types import ANY_REGION, CpuConfig, JobStatus, ResourceConfig, create_environment
 from iris.resources.state import JobState
 from levanter.model_cache import DEFAULT_COMPLETE_MARKER
-from marin.evaluation.runner import _inference_session
+from marin.evaluation.runner import _inference_session, _prepare_all, _RoleStartupError
 from marin.inference.config import (
     IrisConfig,
     RemoteInferenceConfig,
@@ -32,6 +33,7 @@ from marin.inference.iris import InferenceStartupPhase, RemoteInferenceStartupEr
 from marin.inference.model_preparation import resolve_model_path
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import secret_file_contents, secret_file_environment
+from rigging.timing import Duration
 
 REVISION = "a" * 40
 DRAFT_REVISION = "b" * 40
@@ -129,11 +131,15 @@ def _seed(model: str, revision: str, ttl: int = 14) -> StoragePath:
 
 
 def test_cold_model_is_mirrored_on_cpu_before_the_accelerator_job(serving, monkeypatch):
-    with remote_inference(_config(REVISION)):
+    config = _config(REVISION)
+    timeout = Duration.from_hours(72)
+    config = replace(config, iris=replace(config.iris, task_timeout=timeout))
+    with remote_inference(config):
         pass
 
     assert serving.events == ["prepare", "gpu"]
     (request,) = serving.requests
+    assert request.timeout == timeout
     assert isinstance(request.resources.device, CpuConfig)
     assert request.resources.regions == ["us-east1"]
     assert request.resources.target_cluster == "cw-rno2a"
@@ -220,16 +226,37 @@ def test_prepare_failure_never_reserves_accelerators(serving, monkeypatch, failu
         assert exc_info.value.jobs == ()
 
 
-def test_prepare_timeout_is_not_retried_as_a_serving_readiness_timeout(serving):
+def test_prepare_timeout_fails_its_role_without_a_retry(serving):
     serving.timeout_prepare = True
     config = _config(REVISION)
     config = replace(config, iris=replace(config.iris, max_retries_failure=1))
-    with ExitStack() as stack, pytest.raises(RemoteInferenceStartupError) as caught:
-        _inference_session(stack, config)
-    assert caught.value.phase is InferenceStartupPhase.PREPARATION
-    assert isinstance(caught.value.__cause__.__cause__, TimeoutError)
+    with pytest.raises(_RoleStartupError) as caught:
+        _prepare_all({"judge": config})
+    assert caught.value.role == "judge"
+    assert caught.value.error.phase is InferenceStartupPhase.PREPARATION
     assert serving.events == ["prepare", "prepare stopped"]
     assert len(serving.requests) == 1
+
+
+def test_warm_candidate_serves_only_after_cold_judge_is_prepared(serving):
+    _seed("org/candidate", REVISION)
+    serving.downloads.clear()
+    serving.worker_prefix = os.environ["MARIN_PREFIX"]
+    warm = _config(REVISION)
+    warm = replace(
+        warm, iris=replace(warm.iris, worker_resources=replace(warm.iris.worker_resources, target_cluster=None))
+    )
+    cold = replace(_config(REVISION), model=ServedModelConfig(weights="org/judge", revision=REVISION))
+
+    prepared = _prepare_all({"inference": warm, "judge": cold})
+    with ExitStack() as stack:
+        _inference_session(stack, prepared["inference"])
+        _inference_session(stack, prepared["judge"])
+
+    assert serving.events == ["prepare", "gpu", "gpu"]
+    assert len(serving.requests) == 1
+    assert [download[0] for download in serving.downloads] == ["org/judge"]
+    assert [served.model.model_id for served in serving.served] == ["org/candidate", "org/judge"]
 
 
 @pytest.mark.parametrize(
@@ -269,7 +296,7 @@ def test_root_unpinned_accelerator_does_not_submit_a_prepare_job(serving, monkey
         else ResourceConfig.with_tpu("v4-8")
     )
     config = replace(config, iris=replace(config.iris, worker_resources=resources))
-    iris_module._prepared_inference_config(config)
+    iris_module.prepare_inference(config)
     assert serving.requests == []
     assert serving.downloads == []
 
@@ -369,19 +396,18 @@ def test_cli_private_model_uses_explicit_secret_through_preparation(monkeypatch,
         events.append("list")
         return [huggingface_hub.RepoFile(path="config.json", size=2, oid="0" * 40)]
 
-    def download(repo, filename, *, revision, local_dir):
-        assert huggingface_hub.get_token() == token
-        assert repo == "org/private" and revision == REVISION
-        events.append("download")
-        if failure == "download":
-            raise OSError("private download access denied")
-        path = Path(local_dir) / filename
-        path.write_text("{}")
-        return str(path)
+    class Hub:
+        def open(self, path, mode="rb", *, revision, block_size):
+            assert huggingface_hub.get_token() == token
+            assert path == "org/private/config.json" and revision == REVISION
+            events.append("download")
+            if failure == "download":
+                raise OSError("private download access denied")
+            return io.BytesIO(b"{}")
 
     monkeypatch.setattr("levanter.model_cache.model_info", model_info)
     monkeypatch.setattr("levanter.model_cache.list_repo_tree", list_repo_tree)
-    monkeypatch.setattr("levanter.model_cache.hf_hub_download", download)
+    monkeypatch.setattr("levanter.model_cache.HfFileSystem", Hub)
 
     class Job:
         job_id = "/test/private-prepare"

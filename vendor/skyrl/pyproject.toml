@@ -97,10 +97,9 @@ vllm = [
     "torch==2.14.1 ; sys_platform == 'linux'",
     "torchdata ; sys_platform == 'linux'",
     "torchvision==0.29.1 ; sys_platform == 'linux'",
-    "vllm==0.0.0.dev20261113+marin.0ac9dcb157ee.cu132 ; sys_platform == 'linux'",
+    "vllm==0.0.0.dev20261124+marin.36cef9c0caf3.cu132 ; sys_platform == 'linux'",
 ]
 megatron = [
-    "harbor ; sys_platform == 'linux'",
     "cuda-toolkit[nvcc,cccl]==13.2.2 ; sys_platform == 'linux'",
     "accelerate>=1.14,<2 ; sys_platform == 'linux'",
     "causal-conv1d==1.7.0+marin.cu132torch2141.1 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -154,7 +153,6 @@ dev = [
     "pytest-xdist",
     "universal-pathlib",
 ]
-harbor-test = ["harbor"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["marinskyrl", "cloud", "skyrl-gym/skyrl_gym", "skyrl-train/skyrl_train"]
@@ -183,6 +181,9 @@ no-build-isolation-package = [
     "transformer-engine-torch",
 ]
 override-dependencies = [
+    # Torch pins older NCCL builds; 2.32.6 fixes NVLSTree buffer corruption.
+    # https://github.com/NVIDIA/nccl/issues/2625
+    "nvidia-nccl-cu13>=2.32.6; sys_platform == 'linux'",
     # Use Rigging from this checkout; its static 0.2.0 label is below
     # Taskcompendium's and Finestore's published version floors.
     "marin-rigging[secrets,prometheus]",
@@ -236,7 +237,6 @@ pycosat = { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu-wh
 torchaudio = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
 torchcodec = { index = "pytorch-cu132", extra = "vllm", marker = "sys_platform == 'linux'" }
 flash-attn-3 = { index = "pytorch-cu132", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }
-harbor = { path = "../harbor", editable = true }
 # Matching packages built normally from source; recipe, hashes and checks accompany the release.
 # https://github.com/marin-community/speculators/releases/tag/v0.8.0%2Bmarin.1
 hs-connectors = { url = "https://github.com/marin-community/speculators/releases/download/v0.8.0%2Bmarin.1/hs_connectors-0.8.0%2Bmarin.1-py3-none-any.whl" }
@@ -254,8 +254,8 @@ torchvision = [
 ]
 flashinfer-cubin = { index = "flashinfer", marker = "sys_platform == 'linux'" }
 vllm = [
-    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
-    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261124-36cef9c0caf3/vllm-0.0.0.dev20261124+marin.36cef9c0caf3.cu132-cp38-abi3-manylinux_2_28_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261124-36cef9c0caf3/vllm-0.0.0.dev20261124+marin.36cef9c0caf3.cu132-cp38-abi3-manylinux_2_28_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
 ]
 transformer-engine-torch = [
     { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },

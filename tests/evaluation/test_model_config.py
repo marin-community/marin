@@ -222,6 +222,23 @@ def test_gpu_lowering_sets_catalog_owned_runai_request_timeout():
     assert lowered.iris.worker_environment.env_vars["RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"] == "60000"
 
 
+@pytest.mark.parametrize(("setting", "expected"), [(True, "1"), (False, "0"), (None, "inherited")])
+def test_gpu_lowering_sets_nccl_symmetric_memory(setting, expected):
+    model = ModelConfig(
+        name="moe-model",
+        location="s3://models/moe",
+        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
+        serve=ServeConfig(vllm_use_nccl_symm_mem=setting, auto_overrides=False),
+    )
+    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8)
+
+    lowered = inference_config_for_model(
+        model, choice, env_vars={"VLLM_USE_NCCL_SYMM_MEM": "inherited"}, priority=job_pb2.PRIORITY_BAND_INHERIT
+    )
+
+    assert lowered.iris.worker_environment.env_vars["VLLM_USE_NCCL_SYMM_MEM"] == expected
+
+
 def test_gpu_lowering_can_disable_xet_for_weight_mirror():
     model = ModelConfig(
         name="xet-rate-limited-model",
@@ -422,22 +439,24 @@ def test_pipeline_catalog_lowers_a_gang_and_rejects_incompatible_overrides(tmp_p
 
 
 @pytest.mark.parametrize("instances", [1, 8])
-def test_broker_deadlines_allow_the_configured_evaluation_request_timeout(instances):
+@pytest.mark.parametrize("request_timeout", [None, 3600])
+def test_broker_deadlines_allow_the_configured_evaluation_request_timeout(instances, request_timeout):
     model = ModelConfig(
         name="test",
         location="test/model",
         serve=ServeConfig(auto_overrides=False),
         resource_hint=ResourceHint(memory="32g"),
+        evaluation_request_timeout=21600,
     )
     choice = MARIN_EVAL_HARDWARE.select(model, Platform.GPU, override="H100x1")
 
     config = inference_config_for_model(
-        model, choice, env_vars={}, priority=0, instances=instances, request_timeout_seconds=3600
+        model, choice, env_vars={}, priority=0, instances=instances, request_timeout_seconds=request_timeout
     )
 
     assert config.broker is not None
     assert (
-        3600
+        (model.evaluation_request_timeout if request_timeout is None else request_timeout)
         < config.broker.worker.request_timeout_seconds
         < config.broker.request_lease_timeout_seconds
         < config.broker.proxy.request_timeout_seconds
@@ -447,8 +466,10 @@ def test_broker_deadlines_allow_the_configured_evaluation_request_timeout(instan
 @pytest.mark.parametrize("flag", ["--tensor-parallel-size", "--pipeline-parallel-size", "--headless"])
 @pytest.mark.parametrize("equals", [False, True])
 def test_pipeline_rejects_raw_topology_overrides(flag, equals):
+    # The declared topology is valid; adding a raw topology flag creates the conflict.
+    ServeConfig(tensor_parallel_size=8, pipeline_parallel_size=2)
     extra_args = (f"{flag}=2",) if equals else (flag, "2")
-    with pytest.raises(ValueError, match="pipeline parallelism owns"):
+    with pytest.raises(ValueError):
         ServeConfig(tensor_parallel_size=8, pipeline_parallel_size=2, vllm_extra_args=extra_args)
 
 

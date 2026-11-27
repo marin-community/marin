@@ -27,7 +27,7 @@ from daytona import (
     Resources,
 )
 from daytona_api_client_async import SnapshotState
-from shellbox.backends.daytona.connection import DaytonaConnection, DEFAULT_DAYTONA_API_URL
+from shellbox.backends.daytona.connection import DaytonaConnection
 from harbor.agents.terminus_2.tmux_session import (
     TmuxCommandError,
     TmuxKeystrokeBatch,
@@ -45,18 +45,53 @@ from harbor.models.trial.paths import TrialPaths
 from harbor.verifier.verifier import Verifier
 from shellbox.http_service import HttpRequest, serve_http
 from shellbox.image import DockerfileSource, RegistryImage
-from shellbox.machine import Command, MachineSpec, NetworkPolicy, PackageSpec, UnsupportedMachineSpec
+from shellbox.machine import Command, MachineSpec, NetworkPolicy, PackageSpec, Result, UnsupportedMachineSpec
 from tests.unit.environments.transport import ProcessMachine, available_port
 
 
 class ProcessFactory:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, machine_type: type[ProcessMachine] = ProcessMachine):
         self.root = root
+        self.machine_type = machine_type
         self.machine = None
 
     async def create(self, spec):
-        self.machine = ProcessMachine(self.root, spec)
+        self.machine = self.machine_type(self.root, spec)
         return self.machine
+
+
+class UserRecordingMachine(ProcessMachine):
+    def __init__(self, root: Path, spec: MachineSpec):
+        super().__init__(root, spec)
+        self.requests: list[Command] = []
+
+    async def run(self, command: Command) -> Result:
+        self.requests.append(command)
+        return await super().run(command)
+
+
+async def test_daytona_provisions_artifact_mounts_as_root_before_actor_access(tmp_path):
+    factory = ProcessFactory(tmp_path / "guest", UserRecordingMachine)
+    environment_dir = tmp_path / "environment"
+    environment_dir.mkdir()
+    adapter = DaytonaEnvironment(
+        environment_dir=environment_dir,
+        environment_name="task",
+        session_id="trial",
+        trial_paths=TrialPaths(tmp_path / "trial"),
+        task_env_config=EnvironmentConfig(docker_image="test/nonroot-image", workdir="/workspace"),
+        mounts=[{"source": str(tmp_path / "artifacts"), "target": "/logs/verifier"}],
+        client_factory=lambda: pytest.fail("Unexpected provider access"),
+    )
+    adapter.factory = factory
+    async with asyncio.TaskGroup() as service_tasks:
+        await adapter.start(False, service_tasks=service_tasks)
+        try:
+            assert (factory.machine.path("/logs/verifier")).is_dir()
+            assert factory.machine.requests
+            assert all(command.user == "root" for command in factory.machine.requests)
+        finally:
+            await adapter.stop(True)
 
 
 @pytest.mark.parametrize(
@@ -211,8 +246,6 @@ def test_shellbox_daytona_runs_verifier_through_host_only_judge_relay(
                 host_capabilities=HostCapabilities(
                     daytona=DaytonaConnection(
                         api_key="host-daytona-private",
-                        api_url=DEFAULT_DAYTONA_API_URL,
-                        target="test-target",
                     ),
                     model_authentication={
                         "https://api.together.xyz/v1": "host-provider-private"
@@ -620,6 +653,7 @@ def test_host_connection_prevents_sdk_ambient_auth_and_destination_fallback(
 ):
     monkeypatch.setenv("DAYTONA_JWT_TOKEN", "ambient-jwt-must-not-be-used")
     monkeypatch.setenv("DAYTONA_API_URL", "https://ambient.invalid/api")
+    monkeypatch.setenv("DAYTONA_TARGET", "ambient-target")
     protected = {
         "DAYTONA_API_KEY",
         "DAYTONA_JWT_TOKEN",
@@ -643,8 +677,6 @@ def test_host_connection_prevents_sdk_ambient_auth_and_destination_fallback(
                 host_capabilities=HostCapabilities(
                     daytona=DaytonaConnection(
                         api_key="explicit-key",
-                        api_url=DEFAULT_DAYTONA_API_URL,
-                        target="test-target",
                     ),
                     model_authentication={},
                 ),

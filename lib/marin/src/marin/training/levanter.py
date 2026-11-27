@@ -25,6 +25,7 @@ from rigging.filesystem.cluster_config import (
 )
 from rigging.filesystem.storage_path import prefix_join
 
+from marin.inference.generation_config import MARIN_GENERATION_CONFIG_DEFAULTS
 from marin.processing.tokenize import read_tokenized_cache_stats
 from marin.training.run_environment import add_run_env_variables
 from marin.training.training import (
@@ -64,7 +65,8 @@ def resolve_checkpointer_output_path(checkpointer: CheckpointerConfig, output_pa
 def apply_output_path(train_config: TrainConfigT, output_path: str) -> TrainConfigT:
     """Set every run-scoped path on ``train_config`` from ``output_path``.
 
-    Points the checkpointer at ``output_path`` and sets ``hf_save_path`` to ``<output_path>/hf``.
+    Points the checkpointer at ``output_path``, sets ``hf_save_path`` to ``<output_path>/hf``, and applies
+    Marin's generation defaults when LM or DPO callers did not provide their own.
     Adapter LM/DPO exports PEFT rather than a merged HF model, so for those the merged ``hf_save_path``
     is cleared and ``peft_save_path`` takes the HF location.
     """
@@ -80,6 +82,9 @@ def apply_output_path(train_config: TrainConfigT, output_path: str) -> TrainConf
         ),
         hf_save_path=prefix_join(output_path, DEFAULT_HF_CHECKPOINTS_PATH),
     )
+
+    if isinstance(config, (TrainDpoConfig, TrainLmConfig)) and config.hf_generation_config_defaults is None:
+        config = replace(config, hf_generation_config_defaults=dict(MARIN_GENERATION_CONFIG_DEFAULTS))
 
     if isinstance(config, (TrainDpoConfig, TrainLmConfig)) and not isinstance(config.adapter, NoAdaptorConfig):
         peft_save_path = config.peft_save_path
@@ -418,13 +423,6 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
     _apply_env_to_process(env)
     importlib.import_module("levanter.main.train_lm").main(train_config)
-
-
-def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
-    """Run the Levanter DPO training main function in the current process."""
-    config, train_config, env = _prepare_training_run(config)
-    _apply_env_to_process(env)
-    importlib.import_module("levanter.main.train_dpo").main(train_config)
 
 
 def check_train_config_paths(train_config: object, resources: ResourceConfig) -> None:

@@ -99,11 +99,9 @@ def _drop_absent_mesh_axes(mesh: Mesh | jax.sharding.AbstractMesh, spec: Partiti
     return P(*(keep(entry) for entry in spec))
 
 
-def _reshard_for_init(x: jax.Array, spec: PartitionSpec) -> jax.Array:
+def _current_sharding(spec: PartitionSpec) -> NamedSharding | None:
     mesh = _current_mesh()
-    if mesh is None or mesh.empty:
-        return x
-    return reshard(x, NamedSharding(mesh, _drop_absent_mesh_axes(mesh, spec)))
+    return None if mesh.empty else NamedSharding(mesh, _drop_absent_mesh_axes(mesh, spec))
 
 
 def _reshard_for_shard_map(
@@ -112,6 +110,23 @@ def _reshard_for_shard_map(
     if mesh is not None and not mesh.empty:
         return reshard(x, NamedSharding(mesh, spec))
     return x
+
+
+def keep_reduced(spec: PartitionSpec, x: jax.Array) -> PartitionSpec:
+    """Preserve ``x``'s reduced mesh axes unless ``spec`` shards over them.
+
+    Without them, the gradient is all-reduced over those axes (by the shard_map transpose) instead of left unreduced.
+    """
+    x_spec = partition_spec_of(x)
+    if x_spec is None:
+        return spec
+    sharded = {name for entry in spec for name in _axis_names(entry)}
+    return spec.update(reduced=x_spec.reduced - sharded)
+
+
+def replicate_keeping_reduced(x: jax.Array) -> jax.Array:
+    """Replicate ``x`` while preserving its reduced mesh axes."""
+    return reshard(x, keep_reduced(P(*(None,) * x.ndim), x))
 
 
 _GRUG_MESH_AXIS_NAMES: tuple[str, ...] = ("replica_dcn", "data", "expert", "context", "model")

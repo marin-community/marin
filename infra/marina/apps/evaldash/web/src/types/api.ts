@@ -298,6 +298,7 @@ export interface RunMetricRow {
 // the run-detail endpoint computes it (the rolled-up primary metric) and attaches it to the response.
 export interface EvalRecord {
   run_id: string
+  rl_attempt?: { run_id: string; attempt_id: string } | null
   group_id: string
   version: string | null
   description: string | null
@@ -656,4 +657,64 @@ export interface LaunchGroup {
   n_evals: number
   n_succeeded: number
   evals: GroupMember[]
+}
+
+// Playground reports: model feedback saved by the marin-serve dashboard's Report issue button.
+// One row of /api/playground-reports, newest first.
+export interface ReportSummary {
+  report_id: string
+  created_at: string
+  model: string
+  reporter: string
+  description: string
+  has_conversation: boolean
+}
+
+// /api/playground-reports: the newest reports; truncated when older ones were left out.
+export interface ReportListing {
+  reports: ReportSummary[]
+  truncated: boolean
+}
+
+// The serve dashboard's saved chat (marin.inference dashboard `Conversation`); only rendered fields.
+export interface PlaygroundToolCall {
+  id: string
+  name: string
+  arguments: Record<string, unknown>
+}
+
+export type PlaygroundMessage =
+  | { role: 'user'; content: string }
+  | {
+      role: 'assistant'
+      content: string
+      thinking?: string
+      error?: string | null
+      toolCalls?: PlaygroundToolCall[]
+      finishReason?: string
+    }
+  | { role: 'tool'; name: string; result: unknown; toolCallId?: string }
+
+export interface PlaygroundConversation {
+  title?: string
+  system?: string
+  customInstructions?: string
+  thinkingMode?: string
+  pythonTools?: string
+  webSearch?: boolean
+  messages: PlaygroundMessage[]
+}
+
+// /api/playground-reports/{id}: the stored report object plus its source.
+export interface ReportDetail {
+  report_id: string
+  source_url: string
+  created_at: string
+  serving: Record<string, unknown>
+  report: {
+    description: string
+    reporter: string
+    model: string
+    conversation: PlaygroundConversation | null
+  }
 }

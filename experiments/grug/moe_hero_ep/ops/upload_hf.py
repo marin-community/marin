@@ -22,6 +22,9 @@ import draccus
 from huggingface_hub import CommitInfo, CommitOperationAdd, HfApi, RepoFile, hf_hub_download, snapshot_download
 from huggingface_hub.errors import HfHubHTTPError
 from levanter.compat.hf_export import HFShardRecord
+from levanter.compat.hf_generation_config import export_generation_config, write_generation_config
+from levanter.tokenizers import load_tokenizer
+from marin.inference.generation_config import MARIN_GENERATION_CONFIG_DEFAULTS
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
@@ -424,6 +427,26 @@ def _commit_shards(
         (scratch / record.filename).unlink()
 
 
+def write_tokenizer_metadata(metadata: Path, *, repo_id: str, revision: str, token: str | None = None) -> None:
+    """Write the pinned tokenizer files and generation settings for a Hero export."""
+    snapshot_download(
+        repo_id,
+        revision=revision,
+        token=token,
+        local_dir=metadata,
+        allow_patterns=["tokenizer*", "special_tokens_map.json", "added_tokens.json", "chat_template*"],
+    )
+    tokenizer = load_tokenizer(str(metadata))
+    write_generation_config(
+        str(metadata),
+        export_generation_config(
+            tokenizer,
+            chat_template=tokenizer.chat_template,
+            sampling_defaults=MARIN_GENERATION_CONFIG_DEFAULTS,
+        ),
+    )
+
+
 def _complete_upload(
     api: HfApi, config: UploadConfig, plan: _UploadPlan, scratch: Path, committer: _HubCommitter
 ) -> dict:
@@ -455,13 +478,7 @@ def _complete_upload(
     _status(config, "finalizing", verified_shards=len(records))
     metadata = scratch / "metadata"
     metadata.mkdir()
-    snapshot_download(
-        config.tokenizer,
-        revision=config.tokenizer_revision,
-        token=api.token,
-        local_dir=metadata,
-        allow_patterns=["tokenizer*", "special_tokens_map.json", "added_tokens.json", "chat_template*"],
-    )
+    write_tokenizer_metadata(metadata, repo_id=config.tokenizer, revision=config.tokenizer_revision, token=api.token)
     (metadata / "README.md").write_bytes(card)
     (metadata / "LICENSE").write_bytes(license_text)
     (metadata / "config.json").write_text(config_text)

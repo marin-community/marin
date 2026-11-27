@@ -16,10 +16,9 @@ from pathlib import Path
 from typing import Literal
 
 from evalrecords.records import BenchmarkMetadataRef, EvalTaskRef, ModelConfigRef, RunStatus, TaskCoverage
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from marin.evaluation.eval_env import DAYTONA_RUNTIME_ENV_KEYS
 from marin.evaluation.harbor.agent_context import CANDIDATE_API_KEY_ENV
 from marin.evaluation.harbor.dataset import local_harbor_dataset_path
 from marin.evaluation.harbor.driver_config import (
@@ -181,6 +180,12 @@ class HarborResumeIdentity(BaseModel):
     model: ModelConfigRef
     judge: ModelConfigRef | None
     evaluator_identity: str
+
+    @field_validator("model", "judge")
+    @classmethod
+    def omit_request_deadline(cls, config: ModelConfigRef | None) -> ModelConfigRef | None:
+        """Deadlines may increase when resuming the same scoring configuration."""
+        return None if config is None else config.model_copy(update={"evaluation_request_timeout": None})
 
 
 def validate_harbor_resume_root(output_dir: str, identity: HarborResumeIdentity) -> None:
@@ -552,7 +557,6 @@ class HarborExecutor:
     ) -> EvaluationOutcome:
         """Run Harbor with candidate inference and an optional hosted judge."""
         driver_env = {key: env_vars[key] for key in self.secret_env_keys}
-        driver_env.update({key: env_vars[key] for key in DAYTONA_RUNTIME_ENV_KEYS if key in env_vars})
         driver_env[CANDIDATE_API_KEY_ENV] = session.model.endpoint.api_key or "EMPTY"
         hf_token = env_vars.get("HF_TOKEN")
         if hf_token:

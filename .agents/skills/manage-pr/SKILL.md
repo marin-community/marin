@@ -15,8 +15,8 @@ until the change is ready to publish. `review-pr` owns independent assessment;
 Before authoring a commit or PR title or body, read:
 
 - `docs/dev-guide/writing-style/index.md`
+- `docs/dev-guide/writing-style/drafting.md`
 - `docs/dev-guide/writing-style/pull-requests.md`
-- `docs/dev-guide/writing-style/ai-writing-donts.md`
 
 Clean and format the diff, commit it, then run advisory review and independent
 validation concurrently. Resolve their results before pushing and publishing,
@@ -115,6 +115,11 @@ review can exit successfully while reporting findings or an incomplete run.
 Confirm it actually reviewed the branch and inspect its findings and failures.
 Resolve every finding, checking the matching `infra/lint` rule, and fix failed
 checks. Put fixes in a new commit after validating the affected behavior.
+
+For a design finding, revisit the caller or maintenance cost the reviewer
+identified. If the design stays because a real constraint justifies that
+cost, explain the constraint briefly in the PR description so the next
+reviewer can evaluate the decision.
 
 Do not recursively rerun `--review` after small, targeted touch-ups made in
 response to its findings. Validate behavioral edits with the normal mechanical

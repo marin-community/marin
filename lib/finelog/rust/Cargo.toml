@@ -10,10 +10,15 @@ resolver = "2"
 # DataFusion/Arrow dependency graph makes even thin LTO add several minutes to
 # small server changes, while ordinary opt-level 3 remains representative for
 # deployment. The Python wheel selects its own size-oriented profile below.
+#
+# Nothing is stripped here, so `perf` and gdb report function names on a
+# deployed server; the symbol table is not loaded at run time. The deploy
+# Dockerfile removes the debug info afterwards. `strip = "debuginfo"` cannot do
+# that in the image: mold 1.10.1 drops the symbol table on `--strip-debug`.
 [profile.release]
 lto = false
 codegen-units = 16
-strip = "symbols"
+strip = "none"
 
 # Even-faster iteration profile for dev/test deploys (e.g. marin-dev): lowers
 # opt-level to 2 on top of release's parallel codegen. Still optimized enough
@@ -53,10 +58,10 @@ name = "finelog"
 path = "src/lib.rs"
 
 [dependencies]
-connectrpc = { version = "0.8.1", features = ["axum", "gzip", "zstd"] }
+connectrpc = { version = "0.9.1", features = ["axum", "gzip", "zstd"] }
 zstd = "0.13"
-buffa = { version = "0.8.1", features = ["json"] }
-buffa-types = { version = "0.8.1", features = ["json"] }
+buffa = { version = "0.9.2", features = ["json"] }
+buffa-types = { version = "0.9.2", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # EdDSA (Ed25519) JWT verification for the authenticated ingress front. The
@@ -111,29 +116,26 @@ tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-# Phase 1: ColumnType<->Arrow DataType map (datafusion 53 lands in Phase 3; pin
-# arrow 58 now to avoid a mid-stream bump). Phase 2 adds the Arrow IPC decode +
-# the parquet L0 writer/footer reader; the parquet `async`/`object_store`
-# features are declared now (used by Phase 4/6 remote footer reads) so the
-# feature set stays stable across the data-engine phases.
-arrow = "58"
-parquet = { version = "58", features = ["async", "object_store"] }
+# Arrow and Parquet must match the major that DataFusion depends on (59 for
+# DataFusion 55), so the finelog binary has EXACTLY ONE arrow version. The
+# parquet `async`/`object_store` features serve remote footer reads.
+arrow = "59"
+parquet = { version = "59", features = ["async", "object_store"] }
 bytes = "1"
 futures = "0.3"
-# Phase 3: the DataFusion read engine. DataFusion 53 re-exports arrow/parquet
-# 58 (matching the pins above), so the finelog binary keeps EXACTLY ONE arrow
-# version. `object_store` is the same version datafusion uses internally; the
-# `gcp` feature is for Phase 4/6 remote reads. `async-trait` is required to impl
-# datafusion's `#[async_trait] TableProvider`; `url` is for register_object_store.
-datafusion = "53"
+# The DataFusion read engine. `object_store` is the version DataFusion uses
+# internally; the `gcp` feature is for remote reads. `async-trait` is required to
+# impl DataFusion's `#[async_trait] TableProvider`; `url` is for
+# register_object_store.
+datafusion = "55"
 # Internal DataFusion crates, reached directly only for the trigram row-group
 # prune: `PartitionedFile`/`ParquetAccessPlan` (the "advanced parquet index"
 # seam) are not re-exported by the `datafusion` umbrella. Same major as
-# `datafusion` so cargo unifies them to its pinned 53.x — keeping EXACTLY ONE
+# `datafusion` so cargo unifies them to its pinned 55.x — keeping EXACTLY ONE
 # copy of these types (a mismatched version would make the opener's
-# `downcast_ref::<ParquetAccessPlan>()` silently miss).
-datafusion-datasource = "53"
-datafusion-datasource-parquet = "53"
+# `ParquetAccessPlan` extension lookup silently miss).
+datafusion-datasource = "55"
+datafusion-datasource-parquet = "55"
 object_store = { version = "0.13", features = ["gcp", "aws"] }
 async-trait = "0.1.92"
 url = "2"
@@ -156,8 +158,8 @@ libc = "0.2"
 tikv-jemallocator = { version = "0.6", features = ["background_threads"] }
 
 [build-dependencies]
-buffa-codegen = "0.8.1"
-connectrpc-build = "0.8.0"
+buffa-codegen = "0.9.2"
+connectrpc-build = "0.9.0"
 # Vendors a pinned protoc so the build needs no system protoc. connectrpc-build
 # shells out to protoc to parse the .proto files, and our protos use
 # `edition = "2023"`, which requires protoc >= 27.

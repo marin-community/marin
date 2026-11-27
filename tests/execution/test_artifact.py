@@ -14,6 +14,7 @@ import logging
 
 import pytest
 from marin.execution.artifact import (
+    EXECUTOR_INFO_FILENAME,
     Artifact,
     FingerprintMismatchError,
     StepRecordIdentity,
@@ -22,7 +23,8 @@ from marin.execution.artifact import (
     write_artifact,
     write_step_record,
 )
-from marin.execution.lazy import ArtifactStep, run
+from marin.execution.lazy import ArtifactStep, lower, run
+from marin.execution.step_runner import StepRunner
 from pydantic import BaseModel
 
 # A frozen calendar version for the toy artifacts these tests build.
@@ -77,6 +79,17 @@ def test_same_recipe_rerun_is_cache_hit(tmp_path, monkeypatch):
     run(_toy(V, "a"))
     # Identical recipe + version: a cache hit, no error.
     run(_toy(V, "a"))
+
+
+def test_cold_step_ignores_incomplete_executor_info(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    output_path = tmp_path / "datasets" / "toy" / V
+    output_path.mkdir(parents=True)
+    (output_path / EXECUTOR_INFO_FILENAME).write_text('{"name":')
+
+    result = run(_toy(V, "a"))
+
+    assert result[0].payload == "a"
 
 
 # --- advisory drift (no more ImmutableArtifactError) ---------------------------
@@ -235,6 +248,37 @@ def test_read_artifact_adopts_pre_6649_bare_payload(tmp_path):
     assert loaded == _EmbedPayload(
         version="v1", output_dir="gs://bucket/datakit/embed/cp/peps_52c03790", counters={"rows": 128}
     )
+
+
+def test_read_record_treats_a_legacy_null_as_missing(tmp_path):
+    """An older executor's bare ``null`` record reads as no record, falling back to ``.executor_info``."""
+    (tmp_path / ".artifact.json").write_text("null")
+    assert read_record(tmp_path.as_posix()) is None
+
+    (tmp_path / ".executor_info").write_text(_EXECUTOR_INFO)
+    record = read_record(tmp_path.as_posix())
+    assert record is not None
+    assert record.config == json.loads(_EXECUTOR_INFO)["config"]
+
+
+def test_pinned_step_with_a_legacy_null_record_is_served(tmp_path, monkeypatch):
+    """A finished pinned output whose record is ``null`` is served from cache, not rebuilt."""
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    builds = []
+    pinned = ArtifactStep(
+        name="models/toy",
+        version=V,
+        artifact_type=Artifact,
+        run=lambda config: builds.append(config),
+        build_config=lambda ctx: {"out": ctx.output_path},
+        override_path="models/toy--abc",
+    )
+    StepRunner().run([lower(pinned)])
+    (tmp_path / "models/toy--abc/.artifact.json").write_text("null")
+
+    StepRunner().run([lower(pinned)])
+
+    assert len(builds) == 1
 
 
 def test_read_record_leaves_a_genuine_data_record_untouched(tmp_path):

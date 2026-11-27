@@ -19,17 +19,36 @@ import dataclasses
 from enum import Enum
 from functools import partial
 from pathlib import Path
+from datetime import datetime, timezone
 from types import TracebackType
-from typing import Any, Dict, List, Self, Union
+from typing import Any, Dict, Self
+from collections.abc import Sequence
+from uuid import uuid4
 from loguru import logger
 from rigging.secrets import require_secret
-from omegaconf import DictConfig, OmegaConf
+from rigging.provenance import launch_provenance
+from omegaconf import DictConfig, OmegaConf, open_dict
 import pprint
 import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
-
+from finestore.rl.run_records import (
+    METRIC_ATTEMPT_IDS,
+    METRIC_METADATA_KEYS,
+    METRICS_TABLE,
+    AttemptRecord,
+    write_attempt,
+    CheckpointReference,
+    MetricRow,
+    RunIndexIdentity,
+    read_attempt,
+    register_run_tables,
+    run_records_root,
+    update_attempt,
+)
+from finestore.store import DataStore
 
 _WANDB_STEP_METRIC = "trainer/global_step"
+# Bound SDK uploads too: timing out a Ray get alone leaves the primary finish unbounded.
 _WANDB_LOGGER_SHUTDOWN_TIMEOUT = 30
 
 
@@ -57,6 +76,8 @@ class WandbNodeLogger:
                 x_primary=False,
                 x_update_finish_state=False,
                 x_label=x_label,
+                finish_timeout=_WANDB_LOGGER_SHUTDOWN_TIMEOUT,
+                finish_timeout_raises=True,
             ),
         )
         self.wandb = run
@@ -67,21 +88,59 @@ class WandbNodeLogger:
 
 # TODO(tgriggs): Test all backends.
 class Tracking:
-    supported_backends = ["wandb", "mlflow", "swanlab", "tensorboard", "console"]
+    supported_backends = ["wandb", "mlflow", "swanlab", "tensorboard", "console", "records"]
 
-    def __init__(self, project_name, experiment_name, backends: Union[str, List[str]] = "console", config=None):
-        if isinstance(backends, str):
-            backends = [backends]
+    def __init__(self, project_name, experiment_name, backends: Sequence[str] = ("console",), config=None):
         for backend in backends:
             assert backend in self.supported_backends, f"{backend} is not supported"
 
         self.logger = {}
         self.remote_loggers = []
+        tracking_config = OmegaConf.to_container(config, resolve=True) if config is not None else {}
+        runtime = tracking_config.get("runtime", {})
+        tracking_config.update(
+            run_id=runtime.get("run_id", experiment_name),
+            attempt_id=runtime.get("attempt_id", uuid4().hex[:12]),
+            source_commit=launch_provenance().base_commit,
+            iris_job_id=runtime.get("iris_job_id"),
+            coordinator_iris_job_id=runtime.get("coordinator_iris_job_id"),
+        )
+
+        model = runtime.get("model")
+        if model is not None:
+            tracking_config["model"] = model
+
+        if config is not None:
+            with open_dict(config):
+                config.runtime = {
+                    **runtime,
+                    "run_id": tracking_config["run_id"],
+                    "attempt_id": tracking_config["attempt_id"],
+                }
+            write_attempt(
+                str(config.trainer.export_path),
+                AttemptRecord(
+                    run_id=tracking_config["run_id"],
+                    attempt_id=tracking_config["attempt_id"],
+                    evaluation_storage_version=1,
+                ),
+            )
+
+        if "records" in backends:
+            self.logger["records"] = _RecordsAdapter(
+                str(config.trainer.export_path), tracking_config["run_id"], tracking_config["attempt_id"]
+            )
 
         if "wandb" in backends:
             import wandb
-            from omegaconf import OmegaConf
 
+            raw_index = runtime.get("run_index")
+            index = RunIndexIdentity.model_validate(raw_index) if raw_index is not None else None
+            project = index.wandb_project if index is not None else project_name
+            wandb_name = index.run_id if index is not None else experiment_name
+            wandb_group = index.run_id if index is not None else tracking_config["run_id"]
+            if index is not None:
+                tracking_config["run_index"] = index.model_dump(mode="json")
             current_node_ip = "head"
             if ray.is_initialized():
                 try:
@@ -90,16 +149,20 @@ class Tracking:
                     logger.warning(f"Failed to get node IP address, defaulting to 'head'. Error: {e}")
 
             run = wandb.init(
-                project=project_name,
-                name=experiment_name,
-                config=OmegaConf.to_container(config, resolve=True),
-                group=experiment_name,
+                project=project,
+                name=wandb_name,
+                id=tracking_config["attempt_id"],
+                config=tracking_config,
+                group=wandb_group,
+                tags=index.wandb_tags if index is not None else [model] if model is not None else None,
                 resume="allow",
                 settings=wandb.Settings(
                     api_key=require_secret("WANDB_API_KEY"),
                     mode="shared",  # mainly for multi-node training's systems metrics aggregation
                     x_primary=True,
                     x_label=f"node-{current_node_ip}",
+                    finish_timeout=_WANDB_LOGGER_SHUTDOWN_TIMEOUT,
+                    finish_timeout_raises=True,
                 ),
             )
             run_id = run.id
@@ -107,7 +170,7 @@ class Tracking:
             run.define_metric("*", step_metric=_WANDB_STEP_METRIC)
             self.logger["wandb"] = run
             self._prepare_worker_nodes_systems_logging_wandb(
-                project_name, experiment_name, run_id, config, current_node_ip
+                project, wandb_name, run_id, wandb_group, tracking_config, current_node_ip
             )
 
         if "mlflow" in backends:
@@ -140,7 +203,7 @@ class Tracking:
             self.logger["console"] = self.console_logger
 
     def _prepare_worker_nodes_systems_logging_wandb(
-        self, project_name, experiment_name, run_id, config, current_node_ip
+        self, project_name, experiment_name, run_id, group_name, config, current_node_ip
     ):
         """
         In multi-node training, we spawn WandbNodeLogger actors on each worker node to capture system metrics like
@@ -174,9 +237,9 @@ class Tracking:
                         ).remote(
                             project_name=project_name,
                             experiment_name=experiment_name,
-                            config=OmegaConf.to_container(config, resolve=True),
+                            config=config,
                             run_id=run_id,
-                            group_name=experiment_name,
+                            group_name=group_name,
                             x_label=f"node-{node_ip}",
                         )
                         self.remote_loggers.append(logger_actor)
@@ -188,6 +251,11 @@ class Tracking:
                 logger.warning(f"Failed to setup distributed wandb logging: {e}")
         else:
             logger.warning("Ray is not initialized, skipping distributed wandb logging")
+
+    def start(self, *, resumed_step: int | None, checkpoint: CheckpointReference | None = None) -> None:
+        """Record the checkpoint boundary for this execution's metric history."""
+        if records := self.logger.get("records"):
+            records.start(resumed_step=resumed_step, checkpoint=checkpoint)
 
     def log(self, data, step, commit=True):
         for logger_name, logger_instance in self.logger.items():
@@ -222,6 +290,47 @@ class Tracking:
                     backend.finish()
             except Exception as error:
                 logger.warning("Tracker backend {} shutdown failed: {}", name, error)
+
+
+class _RecordsAdapter:
+    def __init__(self, export_root: str, run_id: str, attempt_id: str):
+        self.export_root = export_root
+        self.run_id = run_id
+        self.attempt_id = attempt_id
+        self.store = DataStore.open(run_records_root(export_root))
+        self.metrics = register_run_tables(self.store)[METRICS_TABLE]
+
+    def start(self, *, resumed_step: int | None, checkpoint: CheckpointReference | None) -> None:
+        record = read_attempt(self.export_root, self.attempt_id)
+        if record is not None and record.metrics_started_at is not None:
+            raise ValueError(f"Records execution requires a fresh attempt_id: {self.attempt_id}")
+        update_attempt(
+            self.store,
+            AttemptRecord(
+                run_id=self.run_id,
+                attempt_id=self.attempt_id,
+                metrics_started_at=datetime.now(timezone.utc).isoformat(),
+                resumed_step=resumed_step,
+                parent=checkpoint,
+            ),
+        )
+
+    def log(self, data: dict[str, Any], step: int) -> None:
+        rows = []
+        for name, value in data.items():
+            if name in METRIC_METADATA_KEYS:
+                if name == METRIC_ATTEMPT_IDS:
+                    raise ValueError(f"{METRIC_ATTEMPT_IDS} is reserved for metric provenance")
+                expected = step if name == "step" else self.attempt_id
+                if value != expected:
+                    raise ValueError(f"Metric metadata {name} differs from the active execution")
+                continue
+            rows.append(MetricRow(attempt_id=self.attempt_id, step=step, name=name, value=float(value)).model_dump())
+        self.metrics.extend(rows)
+        self.store.flush()
+
+    def finish(self) -> None:
+        self.store.close()
 
 
 class ConsoleLogger:
@@ -335,87 +444,3 @@ def _flatten_dict(raw: Dict[str, Any], *, sep: str) -> Dict[str, Any]:
     ans = pd.json_normalize(raw, sep=sep).to_dict(orient="records")[0]
     assert isinstance(ans, dict)
     return ans
-
-
-@dataclasses.dataclass
-class ValidationGenerationsLogger:
-    def log(self, loggers, samples, step):
-        if "wandb" in loggers:
-            self.log_generations_to_wandb(samples, step)
-        if "swanlab" in loggers:
-            self.log_generations_to_swanlab(samples, step)
-        if "mlflow" in loggers:
-            self.log_generations_to_mlflow(samples, step)
-
-    def log_generations_to_wandb(self, samples, step):
-        """Log samples to wandb as a table"""
-        import wandb
-
-        # Create column names for all samples
-        columns = ["step"] + sum(
-            [[f"input_{i + 1}", f"output_{i + 1}", f"score_{i + 1}"] for i in range(len(samples))], []
-        )
-
-        if not hasattr(self, "validation_table"):
-            # Initialize the table on first call
-            self.validation_table = wandb.Table(columns=columns)
-
-        # Create a new table with same columns and existing data
-        # Workaround for https://github.com/wandb/wandb/issues/2981#issuecomment-1997445737
-        new_table = wandb.Table(columns=columns, data=self.validation_table.data)
-
-        # Add new row with all data
-        row_data = []
-        row_data.append(step)
-        for sample in samples:
-            row_data.extend(sample)
-
-        new_table.add_data(*row_data)
-
-        # Update reference and log
-        wandb.log({"val/generations": new_table, _WANDB_STEP_METRIC: step})
-        self.validation_table = new_table
-
-    def log_generations_to_swanlab(self, samples, step):
-        """Log samples to swanlab as text"""
-        import swanlab
-
-        swanlab_text_list = []
-        for i, sample in enumerate(samples):
-            row_text = f"""
-            input: {sample[0]}
-            
-            ---
-            
-            output: {sample[1]}
-            
-            ---
-            
-            score: {sample[2]}
-            """
-            swanlab_text_list.append(swanlab.Text(row_text, caption=f"sample {i + 1}"))
-
-        # Log to swanlab
-        swanlab.log({"val/generations": swanlab_text_list}, step=step)
-
-    def log_generations_to_mlflow(self, samples, step):
-        """Log validation generation to mlflow as artifacts"""
-        # https://mlflow.org/docs/latest/api_reference/python_api/mlflow.html?highlight=log_artifact#mlflow.log_artifact
-
-        import json
-        import tempfile
-
-        import mlflow
-
-        try:
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                validation_gen_step_file = Path(tmp_dir, f"val_step{step}.json")
-                row_data = []
-                for sample in samples:
-                    data = {"input": sample[0], "output": sample[1], "score": sample[2]}
-                    row_data.append(data)
-                with open(validation_gen_step_file, "w") as file:
-                    json.dump(row_data, file)
-                mlflow.log_artifact(validation_gen_step_file)
-        except Exception as e:
-            logger.warning(f"save validation generation file to mlflow failed with error {e}")

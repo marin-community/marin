@@ -22,6 +22,7 @@ from taskcompendium.convert.answers import unsupported
 from taskcompendium.models import (
     EnvironmentRequirements,
     FileReward,
+    GraderMachine,
     ResourceGroups,
     RewardFile,
     RewardFileFormat,
@@ -172,7 +173,7 @@ def archive_script_grader(
         argv=("bash", f"{TESTS_MOUNT}/test.sh"),
         cwd="/",
         env=dict(env or {}),
-        environment=environment,
+        placement=GraderMachine(environment=environment),
         answer_path=answer_path,
         reward=TEST_SH_REWARD,
         timeout=float(tomllib.loads(task_toml.decode())["verifier"]["timeout_sec"]),

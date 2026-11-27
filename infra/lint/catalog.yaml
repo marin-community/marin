@@ -234,6 +234,7 @@ lanes:
   - ml-slop-test
   - ml-time-sleep-in-test
   - ml-unittest-class-wrapper
+  - ml-committed-data
 - name: prose
   prompt: |-
     # Marin lint rules — Prose lane
@@ -284,8 +285,10 @@ lanes:
       overloaded function, a swallowed exception), stay silent — its lane will catch
       it. Fire only where a hunk-scoped pass structurally cannot see the problem: it
       spans files, lives in an unchanged file, or is a property of the whole change.
-    - **This lane runs only on larger diffs** (>100 changed lines). On small PRs it
-      does not run at all, so do not worry about tiny changes here.
+    - **Start at a consumer.** Work out what it needs before assessing the shape
+      the diff gives it.
+      When context could settle a design concern, trace a real use before
+      deciding whether to report it.
 
     These rules are higher-judgment than the local lanes; lean hard on each rule's
     confidence floor and its suppressors, and where a rule says so, phrase the finding

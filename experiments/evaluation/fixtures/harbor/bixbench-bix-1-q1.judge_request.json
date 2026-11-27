@@ -1,0 +1,36 @@
+{
+  "max_tokens": 1024,
+  "messages": [
+    {
+      "content": "Return only a JSON object matching this schema: {\"properties\": {\"binary_score\": {\"title\": \"Binary Score\", \"type\": \"boolean\"}}, \"required\": [\"binary_score\"], \"title\": \"JudgeResponse\", \"type\": \"object\"}",
+      "role": "developer"
+    },
+    {
+      "content": "\nHere is a question, the correct answer to the question, and a proposed answer.\nQuestion: Using the provided RNA-seq count data and metadata files, perform DESeq2 differential expression analysis to identify significant DEGs (padj < 0.05), then run enrichGO analysis with clusterProfiler::simplify() (similarity > 0.7). What is the approximate adjusted p-value (rounded to 4 decimal points) for \"regulation of T cell activation\" in the resulting simplified GO enrichment results?\nCorrect answer: 0.0002\nProposed answer: 0.0002\nYou must respond with a binary score for whether the proposed answer is equivalent  to the correct answer.\n\nNothing else is permitted.\n",
+      "role": "user"
+    }
+  ],
+  "model": "MiniMaxAI/MiniMax-M3-MXFP8",
+  "response_format": {
+    "json_schema": {
+      "name": "JudgeResponse",
+      "schema": {
+        "additionalProperties": false,
+        "properties": {
+          "binary_score": {
+            "title": "Binary Score",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "binary_score"
+        ],
+        "title": "JudgeResponse",
+        "type": "object"
+      },
+      "strict": true
+    },
+    "type": "json_schema"
+  },
+  "stream": false
+}
