@@ -286,6 +286,11 @@ Grader profiles bind to source ID, dataset ID/revision, converter version/revisi
 TaskSpec digest and population size. Unbound profiles show Pending. Mixed is one
 chip; the complete type counts, judge profile and receipt are in Evidence.
 
+For sources with a current actor census, the declaration audit checks the served
+pin, derived contract and curriculum against that census. Archived retention
+drift does not add a permanent failure after these projections match. A drifted
+source without a bound actor census still fails the audit.
+
 For a new confidence export, run the curriculum loader in the export's storage
 region. Supply the exact release, coverage and hashed confidence sidecar:
 

@@ -558,9 +558,11 @@ def main() -> None:
     from experiments.post_training.task_curation.sample_qc_binding import SAMPLE_BINDING_DRIFTS  # noqa: PLC0415
     from experiments.post_training.task_curation.sources import RETAINED_BINDING_DRIFTS  # noqa: PLC0415
 
-    # A retained release whose conversion pin drifted from the configured declaration is
-    # a serving-projection gap at the receipt's pinned revision: reported, waivable under
-    # the ruling-60b rule, and never a crash (ruling 2026-11-19).
+    # Once the current actor census is bound, projection_gaps checks its served pin,
+    # derived contract and curriculum directly. An archived retention drift must not
+    # add a permanent failure after those projections have been refreshed. Without
+    # that census, preserve the explicit drift finding (ruling 2026-11-19).
+    measured_sources = {pin.source_id for pin in projection_pins if pin.measured}
     projection_findings.extend(
         ProjectionGap(
             source_id=source_id,
@@ -569,6 +571,7 @@ def main() -> None:
             last_computed_revision=pinned_revision,
         )
         for source_id, pinned_revision in sorted(RETAINED_BINDING_DRIFTS.items())
+        if source_id not in measured_sources
     )
     projection_findings.extend(
         ProjectionGap(
@@ -578,6 +581,7 @@ def main() -> None:
             last_computed_revision=pinned_revision,
         )
         for source_id, pinned_revision in sorted(SAMPLE_BINDING_DRIFTS.items())
+        if source_id not in measured_sources
     )
     waiver_result = apply_projection_waivers(
         projection_findings,
