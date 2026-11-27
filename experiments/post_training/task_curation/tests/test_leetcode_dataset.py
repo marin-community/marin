@@ -61,11 +61,12 @@ def grader_config(task):
     return json.loads(resource_bytes(config))
 
 
-def test_context_is_the_native_prompt_with_the_completion_instruction_recorded():
+def test_context_is_the_native_query_framing_with_the_completion_instruction_recorded():
     result = converted(NATIVE)
     task = result.task
     (user,) = task.context.events
-    assert user.role == "user" and user.content == NATIVE["prompt"] + leetcode_dataset.COMPLETION_INSTRUCTION
+    assert user.role == "user" and user.content == NATIVE["query"] + leetcode_dataset.COMPLETION_INSTRUCTION
+    assert NATIVE["problem_description"] in user.content  # the framing carries the actual problem
     assert len(result.changes) == 1 and "completion format instruction" in result.changes[0].reason
     assert task.labels["native_task_id"] == "two-sum" and task.labels["difficulty"] == "Easy"
     assert not task.resources.worker and not task.resources.oracle
@@ -75,18 +76,43 @@ def test_the_source_harness_is_the_grader_and_the_reference_stays_out():
     task = converted(NATIVE).task
     assert isinstance(task.grader, ScriptGrader) and task.grader.judge is None
     config = grader_config(task)
-    assert config["starter_code"] == NATIVE["starter_code"]
+    assert config["preamble"] == NATIVE["prompt"]
+    assert config["starter_code"] == NATIVE["starter_code"]  # provenance; the runner never execs it
     assert config["entry_point"] == "Solution().twoSum"
     assert config["test_source"] == NATIVE["test"]
     assert "reference solution" not in json.dumps(config)
     grade = next(resource for resource in task.resources.verifier if resource.path == "grade.py")
     script = resource_bytes(grade).decode()
-    assert ("check(candidate)" in script and "assert" not in script.split("def main")[0].split("namespace")[-1]) or True
-    assert "print(1)" in script and "raise SystemExit(0)" in script
+    assert "harness_reward" in script and "/tests/config.json" in script
+
+
+def test_context_carries_the_problem_statement():
+    """Coordinator-required regression: the context must carry the actual problem statement.
+
+    The v1 converter bound the boilerplate prompt field, which contains the problem in 0/2,869
+    native rows; this test fails if the context ever loses the problem statement again.
+    """
+    (user,) = converted(NATIVE).task.context.events
+    assert NATIVE["problem_description"] in user.content
+    assert "Given an array of integers" in user.content
+
+
+def test_the_reference_qualification_rejects_a_broken_harness():
+    broken = {**NATIVE, "test": "def check(candidate):\n    this is not python ==="}
+    result = rejected(broken)
+    assert result.reason.startswith("harness_defect")
+    assert "two-sum" in leetcode_dataset.REFERENCE_QUALIFICATION_EVIDENCE
+
+
+def test_the_reference_qualification_rejects_when_the_reference_fails():
+    failing = {**NATIVE, "test": NATIVE["test"] + "\n    assert candidate([1, 2], 3) == [99]\n"}
+    result = rejected(failing)
+    assert result.reason.startswith("harness_rejects_reference_solution")
+    assert "two-sum" in leetcode_dataset.REFERENCE_QUALIFICATION_EVIDENCE
 
 
 def test_contract_defects_fail_closed():
-    assert rejected({**NATIVE, "prompt": ""}).reason.startswith("incomplete_leetcode_contract")
+    assert rejected({**NATIVE, "query": ""}).reason.startswith("incomplete_leetcode_contract")
     assert rejected({**NATIVE, "test": ""}).reason.startswith("incomplete_leetcode_contract")
     assert rejected(
         {
@@ -96,7 +122,7 @@ def test_contract_defects_fail_closed():
         }
     ).reason.startswith("entry_point_not_in_starter")
     assert rejected({**NATIVE, "test": "def verify(x):\n    pass"}).reason.startswith("missing_check_harness")
-    assert rejected({"prompt": NATIVE["prompt"]}).reason.startswith("incomplete_leetcode_contract")
+    assert rejected({"prompt": NATIVE["prompt"]}).reason.startswith("incomplete_leetcode_contract")  # no query
 
 
 def test_source_module_binds_the_train_split():
