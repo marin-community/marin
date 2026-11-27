@@ -38,16 +38,4 @@ DOCKER_IMAGE_NAME = "tpu-ci"
 DOCKER_IMAGE_TAG = "latest"
 DOCKER_IMAGE = f"ghcr.io/{GITHUB_REPOSITORY}/{DOCKER_IMAGE_NAME}:{DOCKER_IMAGE_TAG}"
 
-
-def get_all_regions() -> list[str]:
-    """Extract unique regions from TPU_ZONES_CONFIG."""
-    regions = set()
-    for zone in TPU_ZONES_CONFIG.keys():
-        # Zone format: us-west4-a -> region: us-west4
-        region = zone.rsplit("-", 1)[0]
-        regions.add(region)
-    return sorted(regions)
-
-
-INFRA_DIR = "infra/tpu-ci"
 DOCKERFILE_TPU_CI_PATH = "docker/marin/Dockerfile.tpu-ci"

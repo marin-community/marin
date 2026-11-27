@@ -18,6 +18,7 @@ from typing import Any, Literal
 import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.curation import CurationMode
+from finestore.rl.source_identity import canonical_source_id
 from finestore.rl.strata import (
     DifficultyBands,
     MembershipState,
@@ -43,15 +44,16 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.importers.evalchemy.assets.code_protocol import mbpp_example
 from taskcompendium.models import (
-    SCHEMA_VERSION,
+    UPGRADABLE_SCHEMA_VERSION,
     ConversationInput,
     EnvironmentRequirements,
+    GraderMachine,
     NoGrader,
     ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
-    VerifyitGrader,
+    grader_environment,
     grades_in_process,
     grades_with_judge,
 )
@@ -310,7 +312,8 @@ def validation_task(row: dict[str, Any], grader_environments: Mapping[str, Envir
         if not isinstance(converted, NormalizedTask):
             raise ValueError(f"Native structure-closure import failed for {original['id']}: {converted}")
         return converted.task
-    task = TaskSpec.model_validate({**original, "schema_version": SCHEMA_VERSION})
+    # The pinned heldout graders keep the 0.30 shape, so they enter through the 0.30 upgrade.
+    task = TaskSpec.model_validate({**original, "schema_version": UPGRADABLE_SCHEMA_VERSION})
     if document["runtime"]["task_machine"] is not None:
         raise ValueError("Heldout source machine contract changed")
     if document["session"]["task_session"] != "shellbox" or document["session"]["max_turns"] != 1:
@@ -323,9 +326,10 @@ def validation_task(row: dict[str, Any], grader_environments: Mapping[str, Envir
             )
 
             raise ValueError(f"No admitted grader environment for {BLENDS[HELDOUT_BLEND][dataset].id}")
-        task = task.model_copy(
-            update={"grader": task.grader.model_copy(update={"environment": grader_environments[dataset]})}
-        )
+        placement = task.grader.placement
+        assert isinstance(placement, GraderMachine)
+        placement = placement.model_copy(update={"environment": grader_environments[dataset]})
+        task = task.model_copy(update={"grader": task.grader.model_copy(update={"placement": placement})})
     return task
 
 
@@ -515,12 +519,16 @@ def _released_records(source: ReleasedSource, attempts: list[dict[str, Any]]) ->
     _check_release_admission(source, released, attempts)
 
 
-def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, EnvironmentRequirements]:
+def _heldout_catalog_ids() -> dict[str, str]:
     from experiments.post_training.task_curation.datasets.nemotron_ultra.components import (  # noqa: PLC0415 - curation-only dependency
         BLENDS,
     )
 
-    components = {BLENDS[HELDOUT_BLEND][dataset].id: dataset for dataset in HELDOUT_FAMILIES}
+    return {dataset: BLENDS[HELDOUT_BLEND][dataset].id for dataset in HELDOUT_FAMILIES}
+
+
+def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, EnvironmentRequirements]:
+    components = {source_id: dataset for dataset, source_id in _heldout_catalog_ids().items()}
     environments = {}
     for source in sources:
         if source.source_id not in components:
@@ -531,7 +539,9 @@ def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, Envir
         task, _ = record
         if not isinstance(task.grader, ScriptGrader) or _grader_kind(task) != GraderKind.PACKAGE:
             raise ValueError(f"Admitted component needs a local script grader: {source.source_id}")
-        environments[components[source.source_id]] = task.grader.environment
+        environment = grader_environment(task.grader)
+        assert environment is not None
+        environments[components[source.source_id]] = environment
     return environments
 
 
@@ -542,9 +552,9 @@ def _grader_kind(task: TaskSpec) -> GraderKind:
         return GraderKind.REMOTE_JUDGE
     if grades_in_process(task.grader):
         return GraderKind.IN_PROCESS
-    if not isinstance(task.grader, ScriptGrader | VerifyitGrader) or task.grader.environment is None:
+    environment = grader_environment(task.grader)
+    if environment is None:
         raise ValueError(f"Task has no runnable grader: {task.id}")
-    environment = task.grader.environment
     return (
         GraderKind.PACKAGE
         if environment.packages_lock is not None or environment.package_spec is not None
@@ -553,14 +563,26 @@ def _grader_kind(task: TaskSpec) -> GraderKind:
 
 
 def _manifest_records(tasks: tuple[TaskSpec, ...], active: set[str]) -> Iterator[dict[str, Any]]:
+    from experiments.post_training.task_curation.datasets import structure_closure  # noqa: PLC0415
+
+    structural_catalog_id = next(
+        source.info.id for source in structure_closure.sources() if source.info.subset == "validation"
+    )
+    catalog_ids = _heldout_catalog_ids()
     for task in tasks:
         family = validation_family(task)
+        structural = family == STRUCTURAL_FAMILY
+        contract = {} if structural else _grader_contract(task)
         row = _selection_row(
             task,
-            TaskStrata(family=family, aai_category=AAII_CATEGORIES[family], source=task.source.dataset),
+            TaskStrata(
+                family=family,
+                aai_category=AAII_CATEGORIES[family],
+                source=structural_catalog_id if structural else catalog_ids[contract["dataset"]],
+            ),
             state=MembershipState.ACTIVE if task.id in active else MembershipState.CANDIDATE,
         )
-        upstream = None if family == STRUCTURAL_FAMILY else _grader_contract(task).get("pass_rate")
+        upstream = contract.get("pass_rate")
         yield row.model_copy(update={"measured_difficulty": 1 - upstream if upstream is not None else None}).model_dump(
             mode="json"
         )
@@ -658,7 +680,7 @@ def write_training(
                     **TaskStrata(
                         family=family,
                         aai_category=AAII_CATEGORIES.get(family, "untagged"),
-                        source=task.source.dataset,
+                        source=row.source_id,
                         difficulty="unrated" if row.source_id in releases else "untagged",
                         agentic="agentic" in task.tags,
                     ).model_dump(),
@@ -773,8 +795,36 @@ def _resolved(
     )
 
 
+def _canonical_ids(sources: dict[str, str]) -> dict[str, str]:
+    """Resolve historical recipe source keys to generated identities, refusing a silent collapse."""
+    canonical: dict[str, str] = {}
+    for key, family in sources.items():
+        resolved = canonical_source_id(key)
+        if resolved in canonical:
+            raise ValueError(f"Selection sources collapse onto one identity: {resolved}")
+        canonical[resolved] = family
+    return canonical
+
+
+def _canonical_eval_lite_sources(parts: tuple[EvalLiteSource, ...]) -> tuple[EvalLiteSource, ...]:
+    """Resolve historical panel source keys to generated identities, refusing a silent collapse."""
+    canonical: dict[str, EvalLiteSource] = {}
+    for part in parts:
+        resolved = canonical_source_id(part.source_id)
+        if resolved in canonical:
+            raise ValueError(f"Panel sources collapse onto one identity: {resolved}")
+        canonical[resolved] = part.model_copy(update={"source_id": resolved})
+    return tuple(canonical.values())
+
+
 def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecipe) -> ArtifactStep[Artifact]:
     """Bind admitted sources and fixed evaluation exclusions to a versioned training selection."""
+    limits = (
+        {canonical_source_id(source_id): limit for source_id, limit in recipe.source_limits.items()}
+        if recipe.source_limits is not None
+        else None
+    )
+    recipe = recipe.model_copy(update={"sources": _canonical_ids(recipe.sources), "source_limits": limits})
     missing = recipe.sources.keys() - curated.keys()
     if missing:
         raise ValueError(f"Selection requires curation sources: {', '.join(sorted(missing))}")
@@ -958,9 +1008,7 @@ def prepare_eval_lite(config: EvalLiteConfig) -> None:
     for task, part in selection.tasks:
         row = _selection_row(
             task,
-            TaskStrata(
-                family=part.family, aai_category=part.aaii_category, source=task.source.dataset, topic=part.topic
-            ),
+            TaskStrata(family=part.family, aai_category=part.aaii_category, source=part.source_id, topic=part.topic),
             state=MembershipState.CANDIDATE,
         ).model_copy(update={"license": part.license})
         if task.id in rows:
@@ -1055,6 +1103,7 @@ def prepare_eval_lite(config: EvalLiteConfig) -> None:
 
 def eval_lite_step(curated: dict[str, ArtifactStep], recipe: EvalLiteRecipe) -> ArtifactStep[Artifact]:
     """Bind panel sources and training/development exclusions to their versioned artifacts."""
+    recipe = recipe.model_copy(update={"sources": _canonical_eval_lite_sources(recipe.sources)})
     missing = {part.source_id for part in recipe.sources} - curated.keys()
     if missing:
         raise ValueError(f"Panel requires corpus sources: {', '.join(sorted(missing))}")

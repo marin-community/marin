@@ -24,6 +24,7 @@ from harbor.agents.installed.pi import Pi
 from harbor.llms.base import ContextLengthExceededError
 from harbor.literal.proxy import CORRELATION_ID_HEADER
 from harbor.models.agent.context import AgentContext
+from harbor.models.task.config import MCPServerConfig
 from harbor.models.trajectories.trajectory import Trajectory
 from harbor.utils.artifact_writer import get_artifact_writer
 
@@ -136,6 +137,29 @@ async def test_image_pi_preserves_requested_version(temp_dir, monkeypatch, reque
     else:
         await agent.install(shell.environment)
         assert agent.version() == "0.87.0"
+
+
+@pytest.mark.asyncio
+async def test_pi_ignores_mcp_adapter_pin_without_servers(temp_dir, monkeypatch):
+    shell = _local_pi_shell(temp_dir, monkeypatch, '#!/bin/sh\nprintf "0.87.0\\n"\n')
+    agent = Pi(logs_dir=temp_dir, mcp_adapter_version="7.0.0")
+
+    await agent.install(shell.environment)
+
+    assert agent.version() == "0.87.0"
+
+
+@pytest.mark.asyncio
+async def test_pi_rejects_mcp_adapter_pin_with_servers(temp_dir):
+    agent = Pi(
+        logs_dir=temp_dir,
+        mcp_adapter_version="7.0.0",
+        mcp_servers=[MCPServerConfig(name="tools", transport="sse", url="http://mcp-server:8000/sse")],
+    )
+
+    with pytest.raises(RuntimeError, match="pi-mcp-adapter version 7.0.0") as error:
+        await agent.install(AsyncMock())
+    assert "image-provided pi-mcp-extension" in str(error.value)
 
 
 class TestPiAgent:

@@ -58,6 +58,13 @@ A controller restart deploys the current working tree, including uncommitted
 files, and leaves workers running. A full `iris cluster restart` destroys
 workers and jobs; never run it without express approval.
 
+For GCE controller rollouts, the operator needs the `marinInfra` project role
+alongside `marindev`, Token Creator on `iris-controller`, and Service Account
+User on the default Compute service account attached to the hub VM. The
+`marinInfra` role covers VM metadata writes, administrator OS Login, and IAP
+tunnels. Image pushes use GHCR credentials with `write:packages`; GCP IAM does
+not grant GHCR access. See [image deployment](docs/image-push.md#authentication).
+
 ```bash
 uv run --package marin-iris --extra controller iris \
   --cluster=<name> cluster controller restart
@@ -87,6 +94,23 @@ An unreachable controller may need [manual checkpoint recovery](docs/controller-
 Restarting alone reuses the local database. Preserve the existing database and
 obtain recovery authorization before restoring older state. For Kubernetes,
 check [controller storage and placement](docs/coreweave.md#controller-state).
+
+### Controller checkpoint storage
+
+`IrisControllerCheckpointFailed` pages when the latest periodic checkpoint
+outcome reported by a CoreWeave controller in the last three hours failed. The
+controller retries at its configured interval; the next successful upload clears
+the alert. Missing telemetry does not fire this rule; check controller liveness
+and Finelog health separately.
+
+Check the controller log for the exception under `Periodic checkpoint failed`, then verify
+the controller's storage credentials and write access to `storage.remote_state_dir`
+in its cluster config. The node storage health probe may use a different bucket,
+so a healthy node probe does not establish checkpoint write access.
+If a Secret refresh restores checkpoint uploads but bundle handoffs still fail,
+the bundle store may retain its startup S3 client. Follow the authorized
+[controller rollout](../../.agents/skills/use-iris/references/controller-rollout.md)
+to replace that client.
 
 ## Job Management
 

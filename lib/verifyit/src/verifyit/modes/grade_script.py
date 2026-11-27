@@ -20,13 +20,11 @@ import logging
 import math
 import os
 import tempfile
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from verifyit.compat import StrEnum
 from verifyit.execution.command import run_command
-from verifyit.execution.worker import call_bounded
 from verifyit.file_ops.read import read_regular_bytes
 from verifyit.grade import (
     REWARD_JSON,
@@ -35,8 +33,6 @@ from verifyit.grade import (
     Reward,
     Status,
     _validated_reward,
-    infra_error,
-    invalid_task,
     scored,
 )
 from verifyit.json_objects import unique_object
@@ -70,21 +66,6 @@ class Reported:
     value: float
     channel: Channel
     metrics: dict[str, float] | None = None
-
-
-def grade_script_callable(function: Callable[..., Reward], *args: object, timeout: float, **kwargs: object) -> Reward:
-    """Run a trusted importable Python grader under the Script verdict contract.
-
-    The callable is client-owned grading code, never candidate-provided code.
-    Timeouts and runtime failures return unscored infrastructure errors; malformed
-    references return invalid-task verdicts. Descendant processes are stopped.
-    """
-    try:
-        return _validated_reward(call_bounded(function, *args, timeout=timeout, **kwargs))
-    except InvalidTask as error:
-        return invalid_task(str(error))
-    except Exception as error:
-        return infra_error(f"{type(error).__name__}: {error}")
 
 
 def grade(spec: Spec, tests_dir: Path, workspace: Path) -> Reward:

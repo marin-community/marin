@@ -18,6 +18,8 @@ from iris.cluster.types import JobName
 from omegaconf import OmegaConf
 from safetensors.numpy import save
 
+from skyrl_train.hf_export_schema import ExportFailed
+
 from cloud.iris import export_hf_checkpoint, hf_model_cache, launch, task_runtime
 from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
 from cloud.iris.task_runtime import prepare_draft_model
@@ -146,6 +148,7 @@ class LocalLaunchBackend:
     outcome: LaunchOutcome = LaunchOutcome("/user/training", "succeeded", 0)
     checkpoint_marker: str | None = "3\n"
     export_step: int = 3
+    export_fails: bool = False
 
     def validate(self, _config_path: Path) -> None:
         raise AssertionError("this lifecycle test submits training")
@@ -168,6 +171,8 @@ class LocalLaunchBackend:
         return supervise_iris_job(SimpleNamespace(job_id=self.outcome.job_id, wait=lambda **_kwargs: status))
 
     def export_terminal_policy(self, config_path: Path) -> None:
+        if self.export_fails:
+            raise ExportFailed("Hub job did not finish")
         config = yaml.safe_load(config_path.read_text())
         checkpoint_root = config["artifacts"]["checkpoint_root"]
         assert (Path(checkpoint_root) / CHECKPOINT_MARKER_FILENAME).read_text().strip() == "3"
@@ -180,17 +185,18 @@ class LocalLaunchBackend:
 
 
 @pytest.mark.parametrize(
-    "export_hf,outcome,own_tokenizer",
+    "export_hf,outcome,own_tokenizer,export_fails",
     [
-        (None, LaunchOutcome("/user/training", "succeeded", 0), False),
-        (True, LaunchOutcome("/user/training", "succeeded", 0), False),
-        (True, LaunchOutcome("/user/training", "succeeded", 0), True),
-        (None, LaunchOutcome("/user/training", "failed", 1), False),
+        (None, LaunchOutcome("/user/training", "succeeded", 0), False, False),
+        (True, LaunchOutcome("/user/training", "succeeded", 0), False, False),
+        (True, LaunchOutcome("/user/training", "succeeded", 0), True, False),
+        (None, LaunchOutcome("/user/training", "failed", 1), False, False),
+        (True, LaunchOutcome("/user/training", "succeeded", 0), False, True),
     ],
-    ids=["default-native", "explicit-hf", "embedded-tokenizer-hf", "failed-native"],
+    ids=["default-native", "explicit-hf", "embedded-tokenizer-hf", "failed-native", "failed-hub"],
 )
 def test_launch_persists_attempt_result_and_exports_only_on_opt_in(
-    tmp_path: Path, export_hf: bool | None, outcome, own_tokenizer: bool
+    tmp_path: Path, export_hf: bool | None, outcome, own_tokenizer: bool, export_fails: bool
 ):
     path = _config_path(tmp_path)
     config = yaml.safe_load(path.read_text())
@@ -202,7 +208,7 @@ def test_launch_persists_attempt_result_and_exports_only_on_opt_in(
         config["inputs"]["model"].update(tokenizer_uri=None, tokenizer_revision=None)
     config["skyrl"]["trainer"].update(max_steps=3, eval_interval=3, ckpt_interval=3)
     path.write_text(yaml.safe_dump(config))
-    backend = LocalLaunchBackend(outcome=outcome)
+    backend = LocalLaunchBackend(outcome=outcome, export_fails=export_fails)
 
     result = execute_launch(path, backend=backend)
     saved = read_attempt(str(tmp_path / "exports"), "attempt-1")
@@ -218,6 +224,11 @@ def test_launch_persists_attempt_result_and_exports_only_on_opt_in(
         assert attempt["result"]["failure"] == "Iris job reached failed"
         assert not (tmp_path / "terminal.json").exists()
         assert backend.export_jobs == []
+        return
+    if export_fails:
+        assert result.state is LaunchState.FAILED and attempt["result"]["state"] == "failed"
+        assert attempt["result"]["failure"] == "Terminal policy export failed: Hub job did not finish"
+        assert not (tmp_path / "terminal.json").exists()
         return
     assert result.state is LaunchState.SUCCEEDED
     terminal = json.loads((tmp_path / "terminal.json").read_text())

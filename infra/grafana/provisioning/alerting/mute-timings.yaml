@@ -7,6 +7,12 @@ apiVersion: 1
 
 muteTimes:
   - orgId: 1
+    name: storage-afternoon
+    time_intervals:
+      - times:
+          - { start_time: "15:00", end_time: "16:00" }
+        location: America/Los_Angeles
+  - orgId: 1
     name: dashboard-only
     time_intervals:
       - times:

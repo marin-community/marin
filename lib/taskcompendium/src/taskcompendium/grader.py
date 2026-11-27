@@ -10,7 +10,7 @@ from typing import Any
 
 from verifyit.spec import Spec, spec_to_table
 
-from taskcompendium.models import EnvironmentRequirements, Grader, NoGrader, TaskResource, TaskSpec, VerifyitGrader
+from taskcompendium.models import Grader, GraderPlacement, NoGrader, TaskResource, TaskSpec, VerifyitGrader
 from taskcompendium.runtime.resources import resource_bytes
 
 
@@ -23,12 +23,12 @@ class GraderPackage:
 
 
 def verifyit_package(
-    spec: Spec, resources: tuple[TaskResource, ...] = (), environment: EnvironmentRequirements | None = None
+    spec: Spec, resources: tuple[TaskResource, ...] = (), placement: GraderPlacement | None = None
 ) -> GraderPackage:
-    """Package a verifyit specification; ``environment`` selects grading in a fresh machine."""
+    """Package a verifyit specification; ``placement`` selects grading in a machine rather than in process."""
     parameters = spec_to_table(spec)
     mode = parameters.pop("mode")
-    return GraderPackage(VerifyitGrader(mode=mode, parameters=parameters, environment=environment), resources)
+    return GraderPackage(VerifyitGrader(mode=mode, parameters=parameters, placement=placement), resources)
 
 
 def grader_config(task: TaskSpec) -> dict[str, Any]:

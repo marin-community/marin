@@ -125,7 +125,7 @@ def test_runner_resolves_and_records_training_and_validation_selectors(monkeypat
             "run": {"mode": "train"},
             "inputs": {"data_kind": "parquet"},
             "skyrl": {
-                "data": {"train_data": [], "val_data": [], "terminal_bench_data": []},
+                "data": {"train_data": [], "val_data": []},
             },
         }
     )

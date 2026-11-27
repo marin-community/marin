@@ -98,9 +98,7 @@ def resolve_rl_train_data_with_sources(
     ``sources`` preserves local inputs and replaces Hub inputs with canonical
     selectors pinned to their resolved commit.
 
-    ``kind="tasks"`` (default, terminal_bench agentic RL): SkyRL's
-    TerminalBenchTaskDataset expects local directory paths where each subdirectory is a
-    task containing an ``instruction.md`` file. HuggingFace dataset identifiers are
+    ``kind="tasks"`` resolves task package sources. HuggingFace dataset identifiers are
     extracted to ``$SCRATCH/tasks/<repo-name>/`` via
     ``cloud.iris.extract_tasks_from_parquet``, permissions fixed, and local paths returned.
     Object-store parquet URIs resolve to local directories containing the extracted tasks.

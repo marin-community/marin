@@ -8,11 +8,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from functools import partial
 
+from evalrecords.records import TaskEvidence
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import MANIFEST_FILENAME, ItemBuilder, chat_variant_item
-from taskcompendium.evaluation.spec import EvaluationProtocol, OperationKind
+from taskcompendium.evaluation.spec import AgentEpisode, EvaluationItem, EvaluationProtocol, OperationKind
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.fingerprints import callable_identity
 from taskcompendium.pipeline.models import SourceStatus
@@ -54,11 +56,17 @@ class EvaluationCorpusRecipe:
     item_builder: ItemBuilder
     protocol_name: str = "evalchemy"
     partition: str | None = None
+    task_evidence: TaskEvidence = TaskEvidence.EMBEDDED
+    """What attempt evidence keeps of each task when the launch does not choose."""
+    agent: AgentEpisode | None = None
+    """The operation of every item in an agent-episode corpus, which launchers plan and record."""
 
     def __post_init__(self) -> None:
         for source in (self.recipe.source, *self.recipe.inputs.values()):
             if isinstance(source, HfSource) and re.fullmatch(r"[0-9a-f]{40}", source.revision) is None:
                 raise ValueError(f"Evaluation source requires an immutable Hugging Face commit: {source.repo}")
+        if (self.protocol.operation == OperationKind.AGENT_EPISODE) != (self.agent is not None):
+            raise ValueError(f"Exactly the agent-episode protocols declare an agent operation: {self.name}")
 
     @property
     def name(self) -> str:
@@ -95,6 +103,14 @@ def chat_source(
     )
 
 
+def agent_episode_item(task: TaskSpec, *, item_builder: ItemBuilder, agent: AgentEpisode) -> EvaluationItem:
+    """Build an agent corpus item, which must run the corpus's declared agent operation."""
+    item = item_builder(task)
+    if item.operation != agent:
+        raise ValueError(f"Item {task.id} does not run its corpus's declared agent operation")
+    return item
+
+
 @dataclass(frozen=True)
 class EvaluationRun:
     source_input: str
@@ -126,10 +142,13 @@ def _publish(
     if dataset.recipe.grader is not None:
         built = EnvironmentArtifact.raw_load(run.grader_artifact) if run.grader_artifact is not None else None
         grader_environment = environment_requirements(dataset.recipe.grader, built)
+    item_builder = dataset.item_builder
+    if dataset.agent is not None:
+        item_builder = partial(agent_episode_item, item_builder=item_builder, agent=dataset.agent)
     publish_evaluation_corpus(
         source_recipe(dataset.recipe, run.inputs, grader_environment),
         dataset.protocol,
-        dataset.item_builder,
+        item_builder,
         options.runtime.context,
         run.source_input,
         run.output_path,
@@ -193,6 +212,8 @@ def prepare_evaluation(
         "protocol": dataset.protocol.model_dump(mode="json"),
         "protocol_name": dataset.protocol_name,
         "input_overrides": input_overrides_identity(dataset.recipe, options.inputs),
+        # Added only for agent corpora so the identities of published chat corpora stay unchanged.
+        **({"agent": dataset.agent.model_dump(mode="json")} if dataset.agent is not None else {}),
     }
     return ArtifactStep(
         name=f"data/eval/{dataset.name}-{canonical_sha256(identity)[:16]}",

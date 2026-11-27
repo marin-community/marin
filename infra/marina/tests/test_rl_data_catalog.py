@@ -40,9 +40,16 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
 
-from infra.marina.apps.rl_data_catalog.load import load_catalog
+from infra.marina.apps.rl_data_catalog.load import assessment_belongs_to_source, load_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
+
+
+def test_a_selected_assessment_may_carry_its_source_historical_id():
+    """The Atlas load matches a stored assessment through the alias table, so a
+    renamed source's published row keeps its pre-rewrite assessment."""
+    assert assessment_belongs_to_source("MarinSkyRL:verifiable_code", "Open-R1:verifiable_code")
+    assert not assessment_belongs_to_source("MarinSkyRL:eurus2_code", "Open-R1:verifiable_code")
 
 
 @pytest.fixture

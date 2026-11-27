@@ -26,6 +26,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory, TemporaryFile
 from typing import Any
 
+from finestore.rl.status_taxonomy import DataRestriction
 from pydantic import BaseModel, ValidationError
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_defect, unsupported
@@ -36,6 +37,7 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    GraderMachine,
     PlainText,
     ResourceGroups,
     TaskSpec,
@@ -62,7 +64,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
     tasktrove_source,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, UrlSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 HERE = Path(__file__).parent
 GENERATE = HERE / "generate.py"
@@ -324,7 +326,7 @@ def convert_tasktrove(row: RawRow, context: ConversionContext) -> TaskSpec | Nor
     package = verifyit_package(
         ReasoningGymSpec(dataset=dataset),
         (inline_resource("entry.json", json.dumps(data).encode()),),
-        environment=required_grader_environment(context),
+        placement=GraderMachine(environment=required_grader_environment(context)),
     )
     task = TaskSpec(
         id=row.id,
@@ -357,9 +359,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="MarinSkyRL:reasoning_gym",
-                title="open-thought/reasoning-gym",
-                origin="MarinSkyRL",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="reasoning_gym",
+                upstream_name="open-thought/reasoning-gym",
+                subset=None,
+                build_path="MarinSkyRL",
+                origin=SourceOrigin.REASONING_GYM,
                 family="reasoning-gym",
                 tags=("rlvr", "single-turn", "generator", "gym/reasoning_gym"),
             ),
@@ -373,7 +378,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     parts=GeneratedRows(GENERATOR_VERSION, EXCLUDED_GENERATORS, PYTHON_HASH_SEED, GENERATOR_PARTS),
                 ),
                 convert=convert_generated,
-                version="3",
+                version="4",
                 intended_use=IntendedUse.TRAIN,
                 rubric=GENERATED_RUBRIC,
                 controls=GENERATED_CONTROLS,
@@ -383,9 +388,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="Task Trove:laion__nemotron-gym-reasoning-gym-v2",
-                title="laion/nemotron-gym-reasoning-gym-v2",
-                origin="Task Trove",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="laion__nemotron-gym-reasoning-gym-v2",
+                upstream_name="laion/nemotron-gym-reasoning-gym-v2",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="reasoning-gym",
                 tags=("agentic", "multi-turn"),
                 count=14259,
