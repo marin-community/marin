@@ -86,7 +86,7 @@ def _generate(model, tokenizer, mesh, prompts, measured_rounds):
                                 expected_policy_id=_POLICY_ID,
                                 expected_logprob_mode=inference_pb2.LOGPROB_MODE_POLICY,
                             ),
-                            timeout=240,
+                            timeout=480 if model.config.num_layers == 26 else 240,
                         )
                         for row, prompt in enumerate(prompts)
                     )
@@ -199,6 +199,13 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path, laye
     key = jax.random.key(19)
     with jax.set_mesh(mesh):
         model = SnowballLMHeadModel.init(vocab, cfg, key=key)
+        if layers == 26:
+            # Retain one packed copy of the expert gate/up weights before compiling decode.
+            for index in range(layers):
+                transformer = model.transformer
+                block = jax.block_until_ready(transformer.blocks[index].with_packed_experts())
+                blocks = (*transformer.blocks[:index], block, *transformer.blocks[index + 1 :])
+                model = dataclasses.replace(model, transformer=dataclasses.replace(transformer, blocks=blocks))
         generations, strict_rounds = _generate(
             model, tokenizer, mesh, prompts, measured_rounds=3 if production_width else 0
         )

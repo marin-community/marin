@@ -151,7 +151,7 @@ layers and a 256-token context. The full-depth case uses 26 layers and requires
 the v5p HBM budget.
 
 ```bash
-uv run --package marin-levanter --extra tpu --extra serve --extra test pytest \
+uv run --package marin-levanter --extra tpu --extra serve --group test pytest \
     -n 0 -s -m 'tpu and manual' -k production-width lib/levanter/tests/inference/test_snowball_zero_kl_replay.py
 ```
 
