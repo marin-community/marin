@@ -104,7 +104,6 @@ def write_json(path: Path, value) -> None:
 
 
 def cli(table, preset, *options, **kwargs):
-    """Drive a model launcher with the test's preset and explicit options."""
     args = ("--preset", preset, "--version", recipe.RUN_ARTIFACT_VERSION, *options)
     return CliRunner().invoke(runner.command(table, argv=args, **kwargs), args)
 

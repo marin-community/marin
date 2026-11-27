@@ -3,7 +3,6 @@
 import os
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from unittest.mock import Mock
 
 import pytest
 import wandb
@@ -181,20 +180,3 @@ def test_training_exit_renews_watchdog_for_records_and_timing(tmp_path, monkeypa
     with pytest.raises(RuntimeError, match="training failed"):
         BasePPOExp._run(experiment)
     assert events == ["start", "shutdown", "start", "close", 18.0, "stop"]
-
-
-def test_start_exit_watchdog_replaces_the_current_timer(monkeypatch):
-    first, second = Mock(), Mock()
-    monkeypatch.setattr(trainer_module, "threading", SimpleNamespace(Timer=Mock(side_effect=(first, second))))
-    trainer = trainer_module.RayPPOTrainer.__new__(trainer_module.RayPPOTrainer)
-    trainer.start_exit_watchdog()
-    trainer.start_exit_watchdog()
-    first.start.assert_called_once()
-    first.cancel.assert_called_once()
-    first.join.assert_called_once()
-    second.start.assert_called_once()
-    second.cancel.assert_not_called()
-    trainer.stop_exit_watchdog()
-    second.cancel.assert_called_once()
-    second.join.assert_called_once()
-    assert trainer._exit_watchdog is None

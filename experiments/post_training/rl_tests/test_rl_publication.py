@@ -350,9 +350,7 @@ def test_nightly_distinguishes_interruptions_and_failures(
                 iris.set_job(root + "/training", state, tasks=tasks, **message)
             if state is not None:
                 iris.set_job(root, JobState.KILLED if state == JobState.KILLED else JobState.FAILED)
-            pending = directory / (
-                "snowball-speed-medium.migration.json" if scenario == "evicted" else "snowball-speed-medium.json"
-            )
+            pending = directory / "snowball-speed-medium.json"
             pending.write_text(publication.ControlSubmission(job=root, outputs=(str(output),)).model_dump_json())
             assert nightly_tick(patch, directory, "reconcile", "snowball/learning-medium") == expected
             assert not pending.exists()

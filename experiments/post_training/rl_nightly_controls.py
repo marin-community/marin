@@ -113,52 +113,49 @@ def _run_controls(batch: str, selected: Sequence[tuple[str, Preset]], state_dir:
     with open_iris_client(config_file=Path(IRIS_HUB_CLUSTER_CONFIG), workspace=rl_compose.REPO_ROOT) as client:
         for model, preset in select_presets(""):
             target = (model, preset.name)
-            for suffix in (".json", ".migration.json"):
-                path = state_dir / f"{model}-{preset.name}{suffix}"
+            path = state_dir / f"{model}-{preset.name}.json"
+            try:
                 try:
-                    try:
-                        submission = rl_publication.ControlSubmission.model_validate_json(path.read_text())
-                    except FileNotFoundError:
-                        continue
-                    job = JobName.from_wire(submission.job)
-                    try:
-                        state = client.job_state(job)
-                    except ConnectError as error:
-                        if error.code != Code.NOT_FOUND:
-                            raise
-                        state = None
-                    if state is not None and not is_job_finished(state):
-                        blocked.add(target)
-                        published = set()
-                        for output in submission.outputs:
-                            rl_publication.publish_running(
-                                output, preset, _TABLES[model], submission.job, None, published
-                            )
-                        continue
-                    result = rl_publication.publish_runs(
-                        submission.outputs,
-                        preset,
-                        table=_TABLES[model],
-                        coordinator=submission.job,
-                        interrupted=True,
-                        allow_unprepared=True,
-                    )
-                    print(result.model_dump_json(), flush=True)
-                    if result.unserved_records:
-                        raise RuntimeError(f"Publication remains pending for {submission.job}")
-                    path.rm()
-                    check_coordinator = not result.attempts
-                    for attempt in result.ineligible_controls:
-                        native = attempt.native.result
-                        if native.state.is_terminal:
-                            failed |= _failed_job(client, native.iris_job_state, native.iris_job_id)
-                        else:
-                            check_coordinator = True
-                    failed |= check_coordinator and state is not None and _failed_job(client, state, submission.job)
-                except Exception as error:
-                    print(f"{model}/{preset.name}: {error}", file=sys.stderr)
+                    submission = rl_publication.ControlSubmission.model_validate_json(path.read_text())
+                except FileNotFoundError:
+                    continue
+                job = JobName.from_wire(submission.job)
+                try:
+                    state = client.job_state(job)
+                except ConnectError as error:
+                    if error.code != Code.NOT_FOUND:
+                        raise
+                    state = None
+                if state is not None and not is_job_finished(state):
                     blocked.add(target)
-                    failed = True
+                    published = set()
+                    for output in submission.outputs:
+                        rl_publication.publish_running(output, preset, _TABLES[model], submission.job, None, published)
+                    continue
+                result = rl_publication.publish_runs(
+                    submission.outputs,
+                    preset,
+                    table=_TABLES[model],
+                    coordinator=submission.job,
+                    interrupted=True,
+                    allow_unprepared=True,
+                )
+                print(result.model_dump_json(), flush=True)
+                if result.unserved_records:
+                    raise RuntimeError(f"Publication remains pending for {submission.job}")
+                path.rm()
+                check_coordinator = not result.attempts
+                for attempt in result.ineligible_controls:
+                    native = attempt.native.result
+                    if native.state.is_terminal:
+                        failed |= _failed_job(client, native.iris_job_state, native.iris_job_id)
+                    else:
+                        check_coordinator = True
+                failed |= check_coordinator and state is not None and _failed_job(client, state, submission.job)
+            except Exception as error:
+                print(f"{model}/{preset.name}: {error}", file=sys.stderr)
+                blocked.add(target)
+                failed = True
         records = rl_index.list_attempts()
         for model, preset in selected:
             try:
