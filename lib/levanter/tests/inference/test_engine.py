@@ -144,8 +144,7 @@ def test_paged_decode_projects_selected_rows_and_keeps_the_full_cache(config_typ
         selected, selected_cache = decode(input_ids, cache, batch, positions, logit_positions=logit_positions)
 
     assert selected.axes == (*logit_positions.axes, model.Vocab)
-    np.testing.assert_allclose(
-        selected.array, np.take(full.array, logit_positions.array, axis=0), atol=1e-5, rtol=1e-5
-    )
+    expected = np.asarray(full.array)[np.asarray(logit_positions.array)]
+    np.testing.assert_allclose(selected.array, expected, atol=1e-5, rtol=1e-5)
     for full_pages, selected_pages in zip(jax.tree.leaves(full_cache), jax.tree.leaves(selected_cache), strict=True):
         np.testing.assert_array_equal(full_pages, selected_pages)
