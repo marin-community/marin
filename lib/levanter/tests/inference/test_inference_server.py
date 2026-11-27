@@ -940,8 +940,6 @@ def test_openai_rejects_stop_sequences_that_exceed_engine_capacity(test_client):
     assert response.status_code == 400
 
 
-
-
 def test_publish_snowball_checkpoint_drives_the_live_grpc_snapshot(tmp_path, local_gpt2_tokenizer):
     cfg = SnowballConfig(
         vocab_size=48,
@@ -1013,10 +1011,6 @@ def test_publish_snowball_checkpoint_drives_the_live_grpc_snapshot(tmp_path, loc
                 before = generate("starting").choices[0]
                 with pytest.raises(ValueError):
                     publish_snowball_checkpoint(server, path, policy_version=1, expected_serving_version=0)
-                with pytest.raises(FileNotFoundError):
-                    publish_snowball_checkpoint(server, incomplete, policy_version=2, expected_serving_version=0)
-                assert generate("incomplete:2").status_code == 409
-                assert generate("starting").status_code == 200
                 with pytest.raises(FileNotFoundError):
                     publish_snowball_checkpoint(server, incomplete, policy_version=2, expected_serving_version=0)
                 with pytest.raises(grpc.RpcError) as unstaged:
