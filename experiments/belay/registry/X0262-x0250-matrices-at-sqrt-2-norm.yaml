@@ -4,7 +4,7 @@ name: X0250 matrices at sqrt(2) norm, same rotation
 category: Optimizers
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7208904313
@@ -29,3 +29,10 @@ trials:
     muonc_matrix_lr_mult: '1.414214'
   commit: c43f574bd9
   priority: interactive
+  loss:
+  - 3.027
+  delta:
+  - -0.0203
+  steps: 3030
+  baseline: belay-X0262-control 3.0473 (same commit, seed 0)
+  step_time_change: -1%
