@@ -4,11 +4,14 @@
 """Pool verification must not stall concurrent trials or repeat the host probe."""
 
 import asyncio
+import shutil
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from itertools import count
 from types import SimpleNamespace
 
 import pytest
-from shellbox.backends.local import disk
+from shellbox.backends.local import disk, disk_lifecycle
 
 
 @pytest.mark.asyncio
@@ -45,3 +48,47 @@ async def test_pool_verification_keeps_loop_responsive_and_reuses_concurrent_res
     first_pool, second_pool = await asyncio.gather(first, second)
     assert first_pool is second_pool
     assert await disk.verified_local_disk_pool(tmp_path / ".") is first_pool
+
+
+def test_concurrent_guardian_cleanup_of_same_allocation_is_idempotent(tmp_path, monkeypatch):
+    directory = tmp_path / "sandbox-concurrent"
+    directory.mkdir()
+    entered = threading.Barrier(2)
+    removed = threading.Event()
+    order = count()
+    remove = shutil.rmtree
+
+    def concurrent_remove(path):
+        # Synchronize at the filesystem boundary so both guardians reach the
+        # same allocation before either removes it. No mounts need substitution.
+        position = next(order)
+        entered.wait(timeout=5)
+        if position:
+            assert removed.wait(timeout=5)
+            remove(path)
+        else:
+            try:
+                remove(path)
+            finally:
+                removed.set()
+
+    monkeypatch.setattr(disk_lifecycle.shutil, "rmtree", concurrent_remove)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(disk_lifecycle.reclaim, directory) for _ in range(2)]
+        for future in futures:
+            future.result(timeout=5)
+    assert not directory.exists()
+
+
+@pytest.mark.parametrize("error", [PermissionError("denied"), FileNotFoundError("missing child")])
+def test_guardian_cleanup_propagates_errors_while_allocation_remains(tmp_path, monkeypatch, error):
+    directory = tmp_path / "sandbox-incomplete"
+    directory.mkdir()
+
+    def failed_remove(path):
+        raise error
+
+    monkeypatch.setattr(disk_lifecycle.shutil, "rmtree", failed_remove)
+    with pytest.raises(type(error)):
+        disk_lifecycle.reclaim(directory)
+    assert directory.is_dir()

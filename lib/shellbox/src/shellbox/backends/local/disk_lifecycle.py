@@ -47,7 +47,13 @@ def reclaim(directory: Path) -> None:
         # this exact backing file, including a crash between loop setup and mount.
         for row in run("losetup", "--associated", str(image), "--noheadings", "--output", "NAME").splitlines():
             run("losetup", "--detach", row.strip())
-    shutil.rmtree(directory)
+    try:
+        shutil.rmtree(directory)
+    except FileNotFoundError:
+        # Concurrent recovery may finish removal while this guardian unmounts.
+        # Missing children in a still-present allocation are not successful cleanup.
+        if directory.exists():
+            raise
 
 
 def guard(directory: Path, storage_mb: int) -> None:
