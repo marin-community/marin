@@ -78,7 +78,13 @@ from omegaconf import DictConfig
 from pathlib import Path
 import time
 from skyrl_train.batch_assembly import BatchPlan, assemble_rank_slice, forward_input, install_plan_advantages
-from skyrl_train.batch_metrics import advantage_metrics, forward_metrics, install_correction, token_staleness_metrics
+from skyrl_train.batch_metrics import (
+    advantage_metrics,
+    forward_metrics,
+    install_correction,
+    policy_credit_metrics,
+    token_staleness_metrics,
+)
 from skyrl_train.rollouts.payloads import RolloutReader
 from skyrl_train.utils.advantage_estimators import apply_loop_advantages, drop_advantage_inputs
 from skyrl_train.metric_reduction import WorldReduction
@@ -912,7 +918,9 @@ class PolicyWorkerBase(Worker):
                 group_scores=(plan.uids, scores[:, None]),
             )
         )
-        drop_advantage_inputs(apply_loop_advantages(batch))
+        apply_loop_advantages(batch)
+        metrics.update(policy_credit_metrics(batch, plan.uids, rows=rows, reduction=reduction))
+        drop_advantage_inputs(batch)
         output = TrainingOutputBatch({})
         output.metadata = {"batch_metrics": metrics}
         return output

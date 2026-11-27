@@ -333,6 +333,7 @@ def install_plan_advantages(
             grpo_norm_by_std=algorithm.grpo_norm_by_std,
             exclude_from_baseline=np.concatenate([facts.exclude_from_baseline for facts in plan.facts]),
             group_advantage_invariant=invariant,
+            accounting=batch.metadata.setdefault("accounting", {}),
         )
         batch["advantages"] = advantages[rows.start : rows.stop] * batch["response_mask"]
     else:

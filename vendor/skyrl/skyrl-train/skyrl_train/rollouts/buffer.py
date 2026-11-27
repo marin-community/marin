@@ -14,7 +14,7 @@ import collections
 import time
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Protocol
 
@@ -288,6 +288,12 @@ class RolloutContentPolicy:
             )
         batch = group.trajectory_batch
         work = GeneratedWork.from_batch(batch["response_ids"], batch.get("is_last_step"))
+        work = replace(
+            work,
+            prompt_token_count=sum(len(row) for row in batch["prompt_token_ids"]),
+            loss_token_count=sum(int(np.asarray(mask).sum()) for mask in batch["loss_masks"]),
+            graded_sample_count=len(graded_row_indices(batch)),
+        )
         if not decision.accepted:
             return RolloutVerdict(group.uid, decision.rejections, None, None, work)
         facts = RowFacts.from_batch(batch)
@@ -341,6 +347,7 @@ class GroupDisposition:
     disposition: str
     tokens: int
     dwell_seconds: float | None
+    work: GeneratedWork | None = None
 
 
 @dataclass(frozen=True)
@@ -723,7 +730,9 @@ class RolloutBuffer:
     def _dispose(self, rollout: ReadyRollout, disposition: str) -> None:
         dwell = None if rollout.committed_at is None else time.monotonic() - rollout.committed_at
         self._dispositions.append(
-            GroupDisposition(rollout.verdict.uid, disposition, rollout.verdict.work.generated_token_count, dwell)
+            GroupDisposition(
+                rollout.verdict.uid, disposition, rollout.verdict.work.generated_token_count, dwell, rollout.verdict.work
+            )
         )
 
     def _batch_complete(self) -> bool:

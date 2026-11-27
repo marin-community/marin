@@ -158,6 +158,7 @@ from skyrl_train.trajectory_runners.trajectory_reward_shaping import refresh_tra
 from marinskyrl.runtime_options import BatchBuilder
 from skyrl_train.batch_assembly import BatchPlan, assemble_slice, forward_input, plan_worker_batch
 from skyrl_train.batch_metrics import (
+    policy_credit_metrics,
     install_correction,
     advantage_metrics,
     forward_metrics,
@@ -1690,7 +1691,9 @@ class RayPPOTrainer:
             step_wall.start("advantages")
         with Timer("compute_advantages_and_returns", self.all_timings):
             training_input = self.compute_advantages(training_input)
+            accounting_uids = training_input.metadata["uids"]
             training_input = self.finalize_advantages_for_training(training_input)
+            self.all_metrics.update(policy_credit_metrics(training_input, accounting_uids))
 
         if self.cfg.trainer.dump_data_batch:
             if step_wall is not None:

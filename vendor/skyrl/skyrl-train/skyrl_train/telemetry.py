@@ -290,6 +290,9 @@ class GeneratedWork:
     rollout_count: int
     sample_count: int
     generated_token_count: int
+    prompt_token_count: int | None = None
+    loss_token_count: int | None = None
+    graded_sample_count: int | None = None
 
     @classmethod
     def from_batch(cls, response_ids: Sequence[Sequence[int]], is_last_step: Sequence[bool] | None) -> "GeneratedWork":
@@ -299,6 +302,32 @@ class GeneratedWork:
             sample_count=sample_count,
             generated_token_count=sum(len(response) for response in response_ids),
         )
+
+
+def rollout_work_metrics(works: Sequence[GeneratedWork | None], prefix: str) -> dict[str, float]:
+    """Summarize observed groups without treating unavailable row facts as zero.
+
+    Generated groups belong to the observation window, not necessarily the
+    training batch or policy version that will eventually consume them.
+    """
+    metrics = {f"{prefix}/groups": float(len(works))}
+    for name, field in (
+        ("sequences", "sample_count"),
+        ("response_tokens", "generated_token_count"),
+        ("prompt_tokens", "prompt_token_count"),
+        ("loss_mask_tokens", "loss_token_count"),
+        ("graded_sequences", "graded_sample_count"),
+    ):
+        values = [None if work is None else getattr(work, field) for work in works]
+        available = all(value is not None for value in values)
+        metrics[f"{prefix}/{name}_available"] = float(available)
+        if available:
+            metrics[f"{prefix}/{name}"] = float(sum(value for value in values if value is not None))
+    graded = [None if work is None else work.graded_sample_count for work in works]
+    metrics[f"{prefix}/graded_groups_available"] = float(all(value is not None for value in graded))
+    if all(value is not None for value in graded):
+        metrics[f"{prefix}/graded_groups"] = float(sum(value is not None and value > 0 for value in graded))
+    return metrics
 
 
 def record_generated_work(work: GeneratedWork, weights_step: int) -> None:

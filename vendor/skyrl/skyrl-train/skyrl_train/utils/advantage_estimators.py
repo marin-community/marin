@@ -63,6 +63,7 @@ def batch_advantages(
         exclude_from_baseline=data.metadata.get("exclude_from_baseline"),
         token_level_shaping=data.get("token_level_shaping"),
         group_advantage_invariant=invariant,
+        accounting=data.metadata.setdefault("accounting", {}),
     )
 
 
@@ -184,6 +185,7 @@ def compute_rloo_n_outcome_advantage(
     exclude_from_baseline: Optional[np.ndarray] = None,
     group_advantage_invariant: GroupAdvantageInvariant | None = None,
     config=None,
+    accounting: dict[str, float] | None = None,
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
@@ -312,6 +314,17 @@ def compute_rloo_n_outcome_advantage(
         n_groups_all_excluded = sum(1 for group_id in set(index) if len(id2included_scores[group_id]) == 0)
         n_groups_below_min = sum(1 for group_id in set(index) if 0 < len(id2included_scores[group_id]) < min_group_size)
         n_total_groups = len(set(index))
+        if accounting is not None:
+            accounting.update({
+                "accounting/rloo_n/groups": float(n_total_groups),
+                "accounting/rloo_n/sequences": float(bsz),
+                "accounting/rloo_n/excluded_sequences": float(n_excluded),
+                "accounting/rloo_n/all_excluded_groups": float(n_groups_all_excluded),
+                "accounting/rloo_n/below_minimum_groups": float(n_groups_below_min),
+                "accounting/rloo_n/zero_variance_filtered_groups": float(n_no_variance_groups),
+                "accounting/rloo_n/zero_variance_filtered_sequences": float(n_no_variance_samples),
+                "accounting/rloo_n/zero_variance_filter_enabled": float(filter_zero_reward_groups),
+            })
         if n_excluded > 0 or n_groups_below_min > 0 or n_no_variance_groups > 0:
             loguru.logger.info(
                 f"RLOO-N: {n_excluded}/{bsz} samples excluded from baseline, "

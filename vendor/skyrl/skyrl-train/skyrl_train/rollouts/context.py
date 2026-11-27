@@ -47,7 +47,7 @@ from skyrl_train.rollouts.payloads import MemoryPayloads, ObjectStorePayloads, P
 from skyrl_train.rollouts.payloads import RolloutReader, PAYLOAD_IO_THREADS
 from skyrl_train.rollout_observability import dispatch_wait, observe_rollout_call, record_group_disposition
 from skyrl_train.rollouts.workers import RolloutWorkers
-from skyrl_train.telemetry import record_generated_work, record_rollout_buffer
+from skyrl_train.telemetry import record_generated_work, record_rollout_buffer, rollout_work_metrics
 from skyrl_train.trajectory_runners.trajectory_processing import prepare_trajectory_request
 from skyrl_train.trajectory_runners.types import TrajectoryRequestBatch
 from skyrl_train.config.objective_spec import rollout_logprobs_required
@@ -286,6 +286,8 @@ class TrainingContext:
         """Wait for a selected batch without reading its trajectory payloads."""
         loop = asyncio.get_running_loop()
         groups: list[AdmittedRollout] = []
+        generated = []
+        dispositions = []
         deadline = loop.time() + stall_timeout
         while True:
             timeout = max(deadline - loop.time(), 0.0)
@@ -293,6 +295,8 @@ class TrainingContext:
             await self._release(admission)
             for policy_step, work in admission.generated:
                 record_generated_work(work, policy_step)
+                generated.append(work)
+            dispositions.extend(admission.dispositions)
             if self._rollout_spans:
                 for outcome in admission.dispositions:
                     record_group_disposition(
@@ -313,10 +317,20 @@ class TrainingContext:
                     raise ValueError(f"selected batch has {len(groups)} groups, expected {self.config.batch_size}")
                 if any(group.index != index for index, group in enumerate(groups)):
                     raise ValueError("selected batch group indices are not ordered from zero")
+                accounting = rollout_work_metrics(generated, "accounting/generated")
+                accounting.update(rollout_work_metrics(
+                    [row.work for row in dispositions if row.disposition == "consumed"], "accounting/admitted"
+                ))
+                rejected = [row for row in dispositions if row.disposition != "consumed"]
+                accounting.update(rollout_work_metrics([row.work for row in rejected], "accounting/rejected"))
+                for reason in sorted({row.disposition for row in rejected}):
+                    accounting.update(rollout_work_metrics(
+                        [row.work for row in rejected if row.disposition == reason], f"accounting/rejected/{reason}"
+                    ))
                 return RolloutBatchMetadata(
                     self._policy_step,
                     tuple(groups),
-                    {**admission.selection.metrics, **self.loader.observe(admission.selection.judged)},
+                    {**admission.selection.metrics, **self.loader.observe(admission.selection.judged), **accounting},
                 )
 
     async def state_dict(self) -> TrainingContextState:

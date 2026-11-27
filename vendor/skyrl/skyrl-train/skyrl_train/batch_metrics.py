@@ -273,7 +273,7 @@ def advantage_metrics(
     group_scores: tuple[Sequence[str], Tensor] | None = None,
 ) -> dict[str, float]:
     """Report reward and advantage diagnostics for finalized training credit."""
-    metrics = {}
+    metrics = dict(batch.metadata.get("accounting", {}))
     rows = batch.batch_size - batch.metadata.get("pad_size", 0)
     uids, group_rewards = (
         (batch.metadata["uids"][:rows], batch["rewards"][:rows]) if group_scores is None else group_scores
@@ -300,6 +300,55 @@ def advantage_metrics(
             "loss/avg_raw_advantages_abs": average_absolute,
         }
     )
+    return metrics
+
+
+@torch.no_grad()
+def policy_credit_metrics(
+    batch: TrainingInputBatch,
+    uids: Sequence[str],
+    *,
+    reduction: MetricReduction = LocalReduction(),
+    rows: range | None = None,
+) -> dict[str, float]:
+    """Count final nonzero policy credit, excluding DP padding and zero masks.
+
+    Loss-bearing means nonzero finalized advantage at a loss-mask-positive
+    position with nonzero correction weight. It does not establish a nonzero
+    gradient or account for separate entropy, KL, FTPO or distillation terms.
+    Worker slices contribute row flags at their global offsets, so groups split
+    across DP ranks count once. Replicated model ranks use the same reduction
+    ownership as other batch metrics.
+    """
+    if "ftpo_weights" in batch:
+        return {"accounting/credit/available": 0.0}
+    count = batch.batch_size - batch.metadata.get("pad_size", 0)
+    start = 0 if rows is None else rows.start
+    ids = uids[:count] if rows is None else uids
+    eligible = batch["loss_mask"][:count] > 0
+    active = eligible & (batch["advantages"][:count] != 0)
+    if batch.get("correction_weights") is not None:
+        active = active & (batch["correction_weights"][:count] != 0)
+    flags = torch.zeros((len(ids), 2), dtype=torch.int64, device=active.device)
+    flags[start : start + count, 0] = eligible.any(-1)
+    flags[start : start + count, 1] = active.any(-1)
+    flags = reduction.combine(flags, "sum").cpu()
+    metrics = {
+        "accounting/credit/available": 1.0,
+        "accounting/consumed/groups": float(len(set(ids))),
+        "accounting/consumed/sequences": float(len(ids)),
+        "accounting/consumed/response_tokens": reduction.sum(batch["response_mask"][:count]).item(),
+        "accounting/consumed/prompt_tokens": reduction.sum(
+            batch["attention_mask"][:count]
+        ).item() - reduction.sum(batch["response_mask"][:count]).item(),
+        "accounting/consumed/loss_mask_tokens": reduction.sum(batch["loss_mask"][:count]).item(),
+        "accounting/credit/eligible_tokens": reduction.sum(eligible).item(),
+        "accounting/credit/loss_bearing_tokens": reduction.sum(active).item(),
+    }
+    for column, name in enumerate(("eligible", "loss_bearing")):
+        indices = torch.nonzero(flags[:, column], as_tuple=False).flatten().tolist()
+        metrics[f"accounting/credit/{name}_sequences"] = float(len(indices))
+        metrics[f"accounting/credit/{name}_groups"] = float(len({ids[index] for index in indices}))
     return metrics
 
 
