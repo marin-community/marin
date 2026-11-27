@@ -1982,6 +1982,24 @@
       "reasons": []
     },
     {
+      "id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+      "display_name": "Nemotron \u00b7 nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_rlvr2",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
       "id": "Anthropic:hh_rlhf/harmless-base",
       "display_name": "Anthropic \u00b7 hh_rlhf/harmless-base",
       "status": "Excluded",
