@@ -10,7 +10,7 @@ from jaxtyping import PRNGKeyArray
 
 import haliax as hax
 from haliax import AxisSelector, NamedArray
-from levanter.kernels.logsumexp import batch_invariant_logsumexp
+from levanter.kernels.logsumexp import batch_invariant_selected_logprobs, selected_token_logits
 
 __all__ = ["Sampler", "LogprobMode"]
 
@@ -94,16 +94,13 @@ class Sampler(eqx.Module):
         vocab_axis = score_logits.resolve_axis(self.Vocab)
         vocab_axis_index = score_logits.axes.index(vocab_axis)
         score_logits_array = jnp.moveaxis(score_logits.array, vocab_axis_index, -1)
-        selected_logits = jnp.take_along_axis(
-            score_logits_array,
-            jnp.expand_dims(tokens.array.astype(jnp.int32), axis=-1),
-            axis=-1,
-        ).squeeze(-1)
+        token_ids = tokens.array.astype(jnp.int32)
         if self.logprob_mode == LogprobMode.POLICY:
-            log_z = batch_invariant_logsumexp(score_logits_array)
+            selected_log_probs = batch_invariant_selected_logprobs(score_logits_array, token_ids)
         else:
-            log_z = jax.nn.logsumexp(score_logits_array, axis=-1)
-        log_prob_tokens = hax.named(selected_logits - log_z, tokens.axes)
+            selected_logits = selected_token_logits(score_logits_array, token_ids)
+            selected_log_probs = selected_logits - jax.nn.logsumexp(score_logits_array, axis=-1)
+        log_prob_tokens = hax.named(selected_log_probs, tokens.axes)
 
         return tokens, log_prob_tokens
 

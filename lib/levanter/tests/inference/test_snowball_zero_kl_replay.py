@@ -5,8 +5,6 @@ import asyncio
 import dataclasses
 
 import haliax as hax
-import grpc
-from fastapi.testclient import TestClient
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -15,15 +13,22 @@ from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.inference import inference_pb2, inference_pb2_grpc
 from levanter.inference.engine import InferenceEngineConfig
-from levanter.inference.openai import InferenceServer, InferenceServerConfig
-from levanter.inference.policy_replay import RolloutChoice, prepare_rollout_policy_batch
 from levanter.layers.sampler import LogprobMode
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.policy import ClippedPolicyConfig
 from levanter.policy_model import PolicyBatch, policy_model_loss, response_logprobs
 from levanter.tokenizers import load_tokenizer
+
+try:
+    import grpc
+    from fastapi.testclient import TestClient
+except ImportError:
+    pytest.skip("The strict gRPC fixture requires the serve extra", allow_module_level=True)
+
+from levanter.inference import inference_pb2, inference_pb2_grpc  # noqa: E402
+from levanter.inference.openai import InferenceServer, InferenceServerConfig  # noqa: E402
+from levanter.inference.policy_replay import RolloutChoice, prepare_rollout_policy_batch  # noqa: E402
 
 
 @pytest.mark.tpu

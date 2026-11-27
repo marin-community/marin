@@ -43,12 +43,7 @@ def prepare_rollout_policy_batch(
     attended = np.asarray(batch.attention_mask.rearrange((batch_axis, position)).array)
     if np.any((attended != 0) & (attended != 1)):
         raise ValueError("Rollout replay requires a binary attention mask")
-    if model.config.replay_precision == "zero_kl":
-        position_ids = np.asarray(batch.position_ids.rearrange((batch_axis, position)).array)
-        sequence_positions = np.arange(position.size)
-        prefix = sequence_positions < attended.sum(axis=1, keepdims=True)
-        if not np.array_equal(attended, prefix) or np.any(prefix & (position_ids != sequence_positions)):
-            raise ValueError("Snowball zero-KL replay requires right padding and positions starting from zero")
+    position_ids = np.asarray(batch.position_ids.rearrange((batch_axis, position)).array)
     response_mask = np.asarray(batch.response_mask.rearrange((batch_axis, response)).array).astype(bool)
     response_start = position.size - response.size
     expert_ids = np.zeros((*tokens.shape, model.config.num_layers, model.config.num_experts_per_token), dtype=np.int32)
@@ -65,6 +60,12 @@ def prepare_rollout_policy_batch(
         if result.logprob_mode != inference_pb2.LOGPROB_MODE_POLICY:
             raise ValueError("Learner replay requires raw policy log probabilities")
         positions = np.flatnonzero(attended[row])
+        if np.any(np.diff(positions) != 1) or not np.array_equal(
+            position_ids[row, positions], np.arange(positions.size)
+        ):
+            raise ValueError("Rollout replay requires contiguous tokens with position IDs starting from zero")
+        if model.config.replay_precision == "zero_kl" and positions.size and positions[0] != 0:
+            raise ValueError("Snowball zero-KL replay requires right-padded trajectories")
         ids, route_valid = read_router_replay(result, rollout.choice, tokens[row, positions])
         if ids.shape != (model.config.num_layers, positions.size, model.config.num_experts_per_token):
             raise ValueError("Captured expert routes do not match the Snowball model dimensions")
