@@ -6,6 +6,7 @@
 import base64
 import hashlib
 import json
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -178,7 +179,7 @@ def test_registry_reference_pins_its_digest(monkeypatch):
 
     calls = []
 
-    def fake_run(command, check, capture_output, text):
+    def fake_run(command, check, capture_output, text, timeout):
         calls.append(command)
         return SimpleNamespace(stdout="sha256:" + "e" * 64 + "\n", returncode=0, stderr="")
 
@@ -197,7 +198,7 @@ def test_registry_reference_pins_its_digest(monkeypatch):
 def test_registry_reference_reports_the_skopeo_failure(monkeypatch):
     pinned_registry_reference.cache_clear()
 
-    def fake_run(command, check, capture_output, text):
+    def fake_run(command, check, capture_output, text, timeout):
         return SimpleNamespace(stdout="", returncode=1, stderr='time="..." level=fatal msg="boom"')
 
     monkeypatch.setattr("subprocess.run", fake_run)
@@ -207,6 +208,72 @@ def test_registry_reference_reports_the_skopeo_failure(monkeypatch):
         raise AssertionError("expected the digest lookup to raise")
     except ValueError as error:
         assert "rc=1" in str(error) and "boom" in str(error)
+
+
+def test_registry_lookup_recovers_from_transient_failure_and_caches_only_success(monkeypatch):
+    pinned_registry_reference.cache_clear()
+    responses = iter(
+        [
+            SimpleNamespace(
+                stdout="", returncode=1, stderr="received unexpected HTTP status: 500 Internal Server Error"
+            ),
+            SimpleNamespace(stdout="sha256:" + "a" * 64, returncode=0, stderr=""),
+        ]
+    )
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: next(responses))
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    reference = "ghcr.io/marin-community/rollout-images:transient-test"
+    expected = reference + "@sha256:" + "a" * 64
+    assert pinned_registry_reference(reference) == expected
+    # A cached success must not invoke the exhausted registry fixture again.
+    assert pinned_registry_reference(reference) == expected
+
+
+@pytest.mark.parametrize("failure", ["http_500", "timeout"])
+def test_registry_lookup_exhausts_transient_failures_without_caching_them(monkeypatch, failure):
+    pinned_registry_reference.cache_clear()
+    requests = []
+    delays = []
+
+    def run(command, **kwargs):
+        requests.append(kwargs["timeout"])
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return SimpleNamespace(
+            stdout="", returncode=1, stderr="received unexpected HTTP status: 500 Internal Server Error"
+        )
+
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr("time.sleep", delays.append)
+    reference = "ghcr.io/marin-community/rollout-images:unavailable-test"
+    with pytest.raises(ValueError, match="Registry digest lookup"):
+        pinned_registry_reference(reference)
+    assert requests == [30, 30, 30]
+    assert delays == [1, 2]
+    monkeypatch.setattr(
+        subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout="sha256:" + "b" * 64, returncode=0, stderr="")
+    )
+    assert pinned_registry_reference(reference) == reference + "@sha256:" + "b" * 64
+
+
+@pytest.mark.parametrize("status", [401, 403, 404])
+def test_registry_lookup_does_not_retry_permanent_errors(monkeypatch, status):
+    pinned_registry_reference.cache_clear()
+    responses = iter([SimpleNamespace(stdout="", returncode=1, stderr=f"received unexpected HTTP status: {status}")])
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: next(responses))
+    monkeypatch.setattr("time.sleep", lambda _: pytest.fail("Permanent registry errors must not retry"))
+    with pytest.raises(ValueError, match=f"HTTP status: {status}"):
+        pinned_registry_reference("ghcr.io/marin-community/rollout-images:permanent-test")
+
+
+def test_registry_lookup_rejects_malformed_success_without_retry(monkeypatch):
+    pinned_registry_reference.cache_clear()
+    monkeypatch.setattr(
+        subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout="sha256:not-a-digest", returncode=0, stderr="")
+    )
+    monkeypatch.setattr("time.sleep", lambda _: pytest.fail("Malformed successful output must fail closed"))
+    with pytest.raises(ValueError, match="sha256:not-a-digest"):
+        pinned_registry_reference("ghcr.io/marin-community/rollout-images:malformed-test")
 
 
 def _spec_with_verifier_resources(*contents: str) -> dict:
