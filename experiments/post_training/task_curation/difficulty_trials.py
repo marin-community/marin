@@ -13,7 +13,6 @@ import os
 import re
 import subprocess
 import tarfile
-import time
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -49,6 +48,7 @@ from pydantic import ValidationError
 from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import copy
 from rigging.secrets import require_secret
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 from shellbox.machine import UnsupportedMachineSpec
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.grading_result import GradingFailure
@@ -197,6 +197,14 @@ def task_spec_actor_image(task: PreparedTask) -> str | None:
     return ((spec.get("environment_requirements") or {}).get("docker_image")) or None
 
 
+def _registry_lookup_retryable(error: Exception) -> bool:
+    if isinstance(error, subprocess.TimeoutExpired):
+        return True
+    return isinstance(error, subprocess.CalledProcessError) and bool(
+        re.search(r"HTTP status: (?:429|5\d\d)\b", error.stderr or error.stdout or "")
+    )
+
+
 @cache
 def pinned_registry_reference(reference: str, authfile: str | None = None) -> str:
     """Resolve a registry tag to its immutable digest reference.
@@ -214,27 +222,33 @@ def pinned_registry_reference(reference: str, authfile: str | None = None) -> st
     # The wave's skopeo rejects a bare registry reference as an unknown
     # transport; the explicit docker:// transport parses everywhere.
     command.append(f"docker://{reference}")
-    for attempt in range(REGISTRY_LOOKUP_ATTEMPTS):
-        try:
-            completed = subprocess.run(
-                command, check=False, capture_output=True, text=True, timeout=REGISTRY_LOOKUP_TIMEOUT_SEC
-            )
-        except subprocess.TimeoutExpired as error:
-            if attempt + 1 == REGISTRY_LOOKUP_ATTEMPTS:
-                raise ValueError(f"Registry digest lookup timed out for {reference}") from error
-        else:
-            digest = completed.stdout.strip()
-            if completed.returncode == 0 and re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
-                return f"{reference}@{digest}"
-            diagnostic = (completed.stderr or completed.stdout).strip()
-            transient = completed.returncode != 0 and re.search(r"HTTP status: (?:429|5\d\d)\b", diagnostic)
-            if not transient or attempt + 1 == REGISTRY_LOOKUP_ATTEMPTS:
-                raise ValueError(
-                    f"Registry digest lookup failed for {reference} (rc={completed.returncode}): {diagnostic[:400]}"
-                )
-        LOGGER.warning("Retrying registry digest lookup for %s after attempt %s", reference, attempt + 1)
-        time.sleep(2**attempt)
-    raise AssertionError("Registry lookup exhausted without a result")
+
+    def lookup() -> str:
+        completed = subprocess.run(
+            command, check=False, capture_output=True, text=True, timeout=REGISTRY_LOOKUP_TIMEOUT_SEC
+        )
+        if completed.returncode != 0:
+            raise subprocess.CalledProcessError(completed.returncode, command, completed.stdout, completed.stderr)
+        digest = completed.stdout.strip()
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+            raise ValueError(f"Registry digest lookup returned a malformed digest for {reference}: {digest[:400]}")
+        return f"{reference}@{digest}"
+
+    try:
+        return retry_with_backoff(
+            lookup,
+            retryable=_registry_lookup_retryable,
+            max_attempts=REGISTRY_LOOKUP_ATTEMPTS,
+            backoff=ExponentialBackoff(initial=1, maximum=2, factor=2, jitter=0),
+            operation=f"Registry digest lookup for {reference}",
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ValueError(f"Registry digest lookup timed out for {reference}") from error
+    except subprocess.CalledProcessError as error:
+        diagnostic = (error.stderr or error.stdout or "").strip()
+        raise ValueError(
+            f"Registry digest lookup failed for {reference} (rc={error.returncode}): {diagnostic[:400]}"
+        ) from error
 
 
 def actor_phase_gap_reason(task: PreparedTask, result) -> str | None:
@@ -851,6 +865,7 @@ def run_task(
         copy(str(archive), str(archive_target), no_clobber=True)
         raw_receipt = {
             "task_id": task.task_id,
+            **({"solver_protocol_id": config.solver_protocol_id} if config.solver_protocol_id != PROTOCOL_ID else {}),
             **(
                 {"resource_deviation": dataclasses.asdict(task.resource_deviation)}
                 if task.resource_deviation is not None

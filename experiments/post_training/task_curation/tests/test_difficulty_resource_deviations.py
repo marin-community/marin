@@ -8,7 +8,7 @@ import json
 from dataclasses import asdict, replace
 
 import pytest
-from finestore.rl.difficulty import Solver
+from finestore.rl.difficulty import PROTOCOL_ID, Solver
 from pydantic import TypeAdapter, ValidationError
 from rigging.filesystem.storage_path import StoragePath
 
@@ -190,7 +190,7 @@ def test_resource_condition_is_recorded_even_when_provider_construction_fails(na
         worker.execute_task(
             task,
             source,
-            SimpleNamespace(solver=Solver.SMALL),
+            SimpleNamespace(solver=Solver.SMALL, solver_protocol_id=PROTOCOL_ID),
             "relay",
             tmp_path / "local",
             output,

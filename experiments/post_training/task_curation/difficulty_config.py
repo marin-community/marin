@@ -7,9 +7,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from finestore.rl.difficulty import SamplingSettings, Solver, SolverIdentity
-from pydantic import BaseModel, ConfigDict
+from finestore.rl.difficulty import PROTOCOL_ID, SamplingSettings, Solver, SolverIdentity, require_protocol_settings
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from experiments.post_training.task_curation.difficulty_output_budget import require_solver_protocol
 from experiments.post_training.task_curation.difficulty_provider import ProviderLimits
 
 DATA_ACCOUNT = "data"
@@ -138,6 +139,7 @@ class JudgeRun(BaseModel):
 class CandidateRun(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     solver: Solver
+    solver_protocol_id: str = Field(default=PROTOCOL_ID, exclude_if=lambda value: value == PROTOCOL_ID)
     identity: SolverIdentity
     settings: SamplingSettings
     endpoint: str
@@ -153,3 +155,12 @@ class CandidateRun(BaseModel):
     workers: int
     gpu_count: int
     attempts_per_task: int
+
+    @model_validator(mode="after")
+    def _solver_protocol(self) -> "CandidateRun":
+        require_solver_protocol(self.solver, self.solver_protocol_id)
+        if self.solver_protocol_id != PROTOCOL_ID:
+            require_protocol_settings(self.solver_protocol_id, self.solver, self.identity.model, self.settings)
+        elif self.settings.dynamic_output is not None:
+            raise ValueError("Dynamic output requires its explicit solver protocol")
+        return self

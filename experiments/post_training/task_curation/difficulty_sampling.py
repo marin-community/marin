@@ -8,8 +8,8 @@ from typing import Any
 from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS, SamplingSettings, Solver, ThinkingPolicy
 
 
-def sampling_settings(solver: Solver, deviations: list[str]) -> SamplingSettings:
-    protocol = PROTOCOLS[PROTOCOL_ID]
+def sampling_settings(solver: Solver, deviations: list[str], protocol_id: str = PROTOCOL_ID) -> SamplingSettings:
+    protocol = PROTOCOLS[protocol_id]
     context, input_tokens, output_tokens, top_p, top_k, min_p, repetition, presence, frequency = protocol.sampling
     return SamplingSettings(
         context_tokens=int(context),
@@ -24,6 +24,7 @@ def sampling_settings(solver: Solver, deviations: list[str]) -> SamplingSettings
         frequency_penalty=frequency,
         thinking=protocol.thinking[solver],
         deviations=deviations,
+        dynamic_output=protocol.dynamic_output,
     )
 
 

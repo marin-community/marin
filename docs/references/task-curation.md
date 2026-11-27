@@ -2716,8 +2716,27 @@ ceilings do not allocate CPU capacity; ramp owned workers against observed
 throughput and retain the slice cleanup guard.
 
 Solver readiness probes retain pinned tokenization, tools and sampling while
-limiting diagnostic output to 512 tokens. Graded trials retain their original
-16,384-token completion budget. Probe receipts record the diagnostic request.
+limiting diagnostic output to 512 tokens. Probe receipts record the diagnostic
+request separately from graded trials. The default `atlas-difficulty-v3`
+contract retains its 16,384-token completion budget.
+
+The Large-only protocol `large-context-minus-prompt-20261127-v2` is registered
+for runtime testing. It preserves the `atlas-difficulty-v3` Large model,
+thinking ON and sampling settings. For each graded
+request, its `SamplingSettings.dynamic_output` policy grants 65,536 minus the
+exact prompt token count minus 64 output tokens. Prompts leaving fewer than
+16,384 output tokens fail closed as `input_budget_unserved`; prompts are never
+truncated to meet this floor. The settings' input and output limits (49,088
+and 65,472) are independent upper bounds, not a reserved context split.
+
+Dynamic Large actions and `CandidateRun` configurations must carry the same
+`solver_protocol_id`. The worker rejects a mismatch before creating the batch
+output directory. Trial receipts, serving receipts and ledger rows retain the
+selected protocol; receipt imports reject a score lacking
+`solver_protocol_id` inside a v2 run. Historical settings omit the optional dynamic policy, preserving the
+frozen campaign identity and old JSON. Registering this contract does not
+activate it: native full-turn context handling, empty-stop grading, canary
+qualification and a controlled controller cutover remain required.
 
 The versioned `swe-rebench-daytona-cap-20261125-v1` exception runs the pinned
 SWE-rebench native tasks on Daytona at 4 vCPU, 8 GiB RAM and 10 GiB disk,
@@ -2979,19 +2998,23 @@ the controller began dispatching. Workers automatically invoke `python -m shellb
 through `DATA_ADMISSION_COMMAND` in `difficulty/launch.py`; operators do not run
 it separately. It reserves two-thirds of DATA organization capacity as headroom.
 
-Configure launchd to invoke the read-only failure-pattern monitor every ten
-minutes (`StartInterval=600`, `RunAtLoad=true`), from this checkout:
+Run the failure-pattern monitor in the ledger's region, or register it with
+the coordinator's shared job watchdog. The former Mac launchd schedule was
+removed after the 2026-11-27 reboot. Do not install launchd, cron or boot-time
+agents, run a long-running local poller, or scan GCS ledgers from the Mac in a
+loop without the coordinator's express permission.
+
+The monitor's existing one-shot entry point is:
 
 ```bash
 uv run --no-sync python -m scripts.ops.difficulty_failure_watch \
-  --ledger s3://marin-us-east-02a/marin/rl-data/atlas/difficulty-ledger \
+  --ledger "$DIFFICULTY_LEDGER" \
   --credentials-env /path/to/private-controller.env
 ```
 
-The watchdog root is `~/Documents/experiments/active/job-watchdog/`; alerts
-append to `alerts.jsonl`, and persistent monitor state lives under `state/`.
-The deployed schedule is `~/Library/LaunchAgents/dev.oa.difficulty-failure-patterns.plist`;
-load it with `launchctl bootstrap gui/$(id -u) <plist-path>`.
+Place its alert and persistent-state paths on the regional worker or shared
+watchdog. Register the replacement failure-pattern monitor with the
+coordinator before reporting it as active.
 
 It merges Finelog `DIFFICULTY_OUTCOME` events with newly published ledger
 partitions, including older workers whose `Recorded` lines omit attempt IDs.

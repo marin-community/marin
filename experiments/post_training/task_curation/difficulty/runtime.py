@@ -54,6 +54,7 @@ from experiments.post_training.task_curation.difficulty_config import (
     JudgeRun,
 )
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
+from experiments.post_training.task_curation.difficulty_output_budget import require_solver_protocol
 from experiments.post_training.task_curation.difficulty_preparation import PreparedSource, prepare_source
 from experiments.post_training.task_curation.difficulty_prepared import attempt_judge_model
 from experiments.post_training.task_curation.difficulty_protocol import (
@@ -501,6 +502,8 @@ def run_batch(args: argparse.Namespace) -> None:
     sources = load_queue_sources(args.sources, args.sources_sha256, tuple(args.source_id or ()))
     pin = PINS[args.solver]
     action = json.loads(StoragePath(args.action_manifest).read_text())
+    solver_protocol_id = action.get("solver_protocol_id", PROTOCOL_ID)
+    require_solver_protocol(args.solver, solver_protocol_id)
     campaign = campaign_record(args.ledger)
     if campaign is not None and args.solver_pool is None:
         raise ValueError("The TPU campaign requires its qualified regional pool registry")
@@ -564,7 +567,7 @@ def run_batch(args: argparse.Namespace) -> None:
         if args.solver == Solver.HOSTED
         else []
     )
-    settings = sampling_settings(args.solver, deviations)
+    settings = sampling_settings(args.solver, deviations, solver_protocol_id)
     provider_limits = ProviderLimits(
         max_in_flight=4 if args.solver == Solver.HOSTED and args.solver_pool is None else args.workers,
         attempts=6 if args.solver == Solver.HOSTED else 1,
@@ -767,7 +770,8 @@ def run_batch(args: argparse.Namespace) -> None:
             receipt = write_json_evidence(
                 output / "serving.json",
                 {
-                    "protocol": PROTOCOL_ID,
+                    "protocol": solver_protocol_id,
+                    **({"dynamic_output": asdict(settings.dynamic_output)} if settings.dynamic_output else {}),
                     "solver": args.solver.value,
                     "model": SOLVER_MODELS[args.solver],
                     "requested_revision": pin.revision,
@@ -806,6 +810,7 @@ def run_batch(args: argparse.Namespace) -> None:
             )
             config = {
                 "solver": args.solver,
+                **({"solver_protocol_id": solver_protocol_id} if solver_protocol_id != PROTOCOL_ID else {}),
                 "identity": {
                     "model": SOLVER_MODELS[args.solver],
                     "revision": revision,

@@ -20,6 +20,7 @@ from finestore.schema import SHA256_PATTERN, arrow_schema
 from finestore.store import DataStore
 
 PROTOCOL_ID = "atlas-difficulty-v3"
+LARGE_DYNAMIC_OUTPUT_PROTOCOL_ID = "large-context-minus-prompt-20261127-v2"
 MEASUREMENTS = "difficulty_measurements"
 
 
@@ -38,11 +39,28 @@ class ThinkingPolicy(StrEnum):
 
 
 @dataclass(frozen=True)
+class DynamicOutputBudget:
+    """Large v2 grants all remaining context while retaining its admission floor."""
+
+    protocol_id: str = LARGE_DYNAMIC_OUTPUT_PROTOCOL_ID
+    context_tokens: int = 65536
+    safety_margin_tokens: int = 64
+    minimum_output_tokens: int = 16384
+
+    def output_capacity(self, prompt_tokens: int) -> int:
+        capacity = self.context_tokens - prompt_tokens - self.safety_margin_tokens
+        if prompt_tokens <= 0 or capacity < self.minimum_output_tokens:
+            raise ValueError("Exact prompt leaves less than the Large v2 minimum output allowance")
+        return capacity
+
+
+@dataclass(frozen=True)
 class DifficultyProtocol:
     models: Mapping[Solver, str]
     thinking: Mapping[Solver, ThinkingPolicy]
     temperature: float
     sampling: tuple[int | float, ...]
+    dynamic_output: DynamicOutputBudget | None = None
 
 
 # Add a new entry for a new protocol; keep existing contracts readable indefinitely.
@@ -51,6 +69,15 @@ SAMPLE_SIZE = 100
 
 PROTOCOLS = MappingProxyType(
     {
+        LARGE_DYNAMIC_OUTPUT_PROTOCOL_ID: DifficultyProtocol(
+            MappingProxyType({Solver.LARGE: "Qwen/Qwen3.5-122B-A10B"}),
+            MappingProxyType({Solver.LARGE: ThinkingPolicy.ON}),
+            0.7,
+            # Input/output are independent upper bounds; the exact prompt selects
+            # each output allowance. They are not a reserved context split.
+            (65536, 49088, 65472, 0.95, 20, 0.0, 1.0, 0.0, 0.0),
+            DynamicOutputBudget(),
+        ),
         "atlas-difficulty-v3": DifficultyProtocol(
             MappingProxyType(
                 {
@@ -573,10 +600,21 @@ class SamplingSettings(CatalogRecord):
     frequency_penalty: float
     thinking: ThinkingPolicy
     deviations: list[str]
+    dynamic_output: DynamicOutputBudget | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def _protocol(self) -> "SamplingSettings":
-        if self.input_tokens + self.output_tokens > self.context_tokens:
+        if self.dynamic_output is not None:
+            policy = self.dynamic_output
+            if policy != PROTOCOLS[LARGE_DYNAMIC_OUTPUT_PROTOCOL_ID].dynamic_output:
+                raise ValueError("Dynamic output differs from the registered Large v2 policy")
+            if (self.context_tokens, self.input_tokens, self.output_tokens) != (
+                policy.context_tokens,
+                policy.context_tokens - policy.safety_margin_tokens - policy.minimum_output_tokens,
+                policy.context_tokens - policy.safety_margin_tokens,
+            ):
+                raise ValueError("Dynamic token upper bounds differ from their admission policy")
+        elif self.input_tokens + self.output_tokens > self.context_tokens:
             raise ValueError("Input and output budgets exceed the served context")
         return self
 
@@ -592,6 +630,25 @@ class SamplingSettings(CatalogRecord):
             self.presence_penalty,
             self.frequency_penalty,
         )
+
+
+def require_protocol_settings(protocol_id: str, solver: Solver, model: str, settings: SamplingSettings) -> None:
+    """Bind a measurement or worker to its registered model and request contract."""
+    if protocol_id not in PROTOCOLS:
+        raise ValueError(f"Unknown difficulty protocol: {protocol_id!r}")
+    if solver not in PROTOCOLS[protocol_id].models:
+        raise ValueError(f"Unknown difficulty solver protocol: {solver}/{protocol_id}")
+    protocol = PROTOCOLS[protocol_id]
+    if model != protocol.models[solver] or settings.thinking != protocol.thinking[solver]:
+        raise ValueError("Solver model or thinking policy differs from its protocol")
+    if settings.temperature != protocol.temperature:
+        raise ValueError("Solver temperature differs from its protocol")
+    if settings.dynamic_output != protocol.dynamic_output:
+        raise ValueError("Solver output policy differs from its protocol")
+    if settings.sampling_values() != protocol.sampling and (
+        protocol.dynamic_output is not None or not settings.deviations
+    ):
+        raise ValueError("Record every deviation from the protocol token and sampling settings")
 
 
 class DifficultyObservation(CatalogRecord):
@@ -641,15 +698,7 @@ class DifficultyObservation(CatalogRecord):
             return self
         if self.sample is None or self.sample_receipt is None or self.model is None or self.settings is None:
             raise ValueError("Pending and measured results require pinned sample, model and settings")
-        if self.protocol_id not in PROTOCOLS:
-            raise ValueError(f"Unknown difficulty protocol: {self.protocol_id!r}")
-        protocol = PROTOCOLS[self.protocol_id]
-        if self.model.model != protocol.models[self.solver] or self.settings.thinking != protocol.thinking[self.solver]:
-            raise ValueError("Solver model or thinking policy differs from its protocol")
-        if self.settings.temperature != protocol.temperature:
-            raise ValueError("Solver temperature differs from its protocol")
-        if self.settings.sampling_values() != protocol.sampling and not self.settings.deviations:
-            raise ValueError("Record every deviation from the protocol token and sampling settings")
+        require_protocol_settings(self.protocol_id, self.solver, self.model.model, self.settings)
         if (self.source_id, self.release, self.converter_version) != (
             self.sample.source_id,
             self.sample.release,

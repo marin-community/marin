@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from finestore.rl.difficulty import SampleTask, Solver
+from finestore.rl.difficulty import PROTOCOL_ID, SampleTask, Solver
 from fray.iris_backend import convert_constraints
 from iris.cli.job import run as iris_run_command
 from iris.client.client import NamespacedEndpointRegistry
@@ -334,7 +334,7 @@ def test_runtime_rejects_non_unit_reward_without_changing_raw_attempt(tmp_path, 
     ledger_worker.record_attempt(
         path,
         source=source,
-        config=SimpleNamespace(solver=Solver.SMALL),
+        config=SimpleNamespace(solver=Solver.SMALL, solver_protocol_id=PROTOCOL_ID),
         output=StoragePath(str(tmp_path / "run/trials")),
         ledger=str(tmp_path / "ledger"),
         meter=meter,

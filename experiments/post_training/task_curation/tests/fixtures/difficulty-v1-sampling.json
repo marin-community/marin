@@ -1,0 +1,62 @@
+{
+  "baseline_commit": "d6bfa2d520d26f718c0675814a136626d06bff1b",
+  "campaign_identity_sha256": "d7cb5dc7f21b1584dfc849aa646aaac7bb1b37ba8d9dbd6aa45f530e974fb579",
+  "sampling": {
+    "hosted": {
+      "context_tokens": 65536,
+      "deviations": [],
+      "frequency_penalty": 0.0,
+      "input_tokens": 49152,
+      "min_p": 0.0,
+      "output_tokens": 16384,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "temperature": 0.7,
+      "thinking": "low",
+      "top_k": 20,
+      "top_p": 0.95
+    },
+    "large": {
+      "context_tokens": 65536,
+      "deviations": [],
+      "frequency_penalty": 0.0,
+      "input_tokens": 49152,
+      "min_p": 0.0,
+      "output_tokens": 16384,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "temperature": 0.7,
+      "thinking": "on",
+      "top_k": 20,
+      "top_p": 0.95
+    },
+    "small": {
+      "context_tokens": 65536,
+      "deviations": [],
+      "frequency_penalty": 0.0,
+      "input_tokens": 49152,
+      "min_p": 0.0,
+      "output_tokens": 16384,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "temperature": 0.7,
+      "thinking": "off",
+      "top_k": 20,
+      "top_p": 0.95
+    },
+    "snowball": {
+      "context_tokens": 65536,
+      "deviations": [],
+      "frequency_penalty": 0.0,
+      "input_tokens": 49152,
+      "min_p": 0.0,
+      "output_tokens": 16384,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "temperature": 0.7,
+      "thinking": "checkpoint",
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  }
+}

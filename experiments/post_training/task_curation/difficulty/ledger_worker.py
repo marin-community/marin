@@ -85,6 +85,7 @@ def record_attempt(
     row = replace(
         row,
         gpu_hours=hours,
+        solver_protocol_id=config.solver_protocol_id,
         outcome=Outcome.OBSERVATION if row.reason == GapReason.PROVIDER_CAPACITY_WAIT else row.outcome,
     )
     if row.outcome == Outcome.SCORED and (
@@ -159,6 +160,7 @@ def execute_task(
                     task_id=task.task_id,
                     evidence_uri=str(deviation_path),
                     resource_deviation=task.resource_deviation,
+                    solver_protocol_id=config.solver_protocol_id,
                 )
             ],
         )
@@ -192,6 +194,7 @@ def execute_task(
             str(output.parent),
             hours,
             datetime.now(UTC).isoformat(),
+            solver_protocol_id=config.solver_protocol_id,
         )
     else:
         gaps = legacy_gaps(outcome.pending_reason or task.reason)
@@ -215,6 +218,7 @@ def execute_task(
             secondary_gaps=gaps[1:],
             evidence_uri=str(destination / task_key),
             resource_deviation=task.resource_deviation,
+            solver_protocol_id=config.solver_protocol_id,
         )
     append_rows(ledger, [row])
 
@@ -233,7 +237,11 @@ def main() -> None:
     config = CandidateRun.model_validate_json(Path(args.config).read_text())
     sources = [PreparedSource.model_validate(row) for row in json.loads(Path(args.sources).read_text())]
     action = load_action(args.action_manifest)
-    if not isinstance(action, AttemptBatch) or action.solver != config.solver:
+    if (
+        not isinstance(action, AttemptBatch)
+        or action.solver != config.solver
+        or action.solver_protocol_id != config.solver_protocol_id
+    ):
         raise ValueError("Worker does not match its action")
     if args.local_root.exists() or StoragePath(args.output_root).exists():
         raise FileExistsError("Batch outputs are immutable; select a new action")
@@ -277,6 +285,7 @@ def main() -> None:
             ),
             provider_limits=config.provider_limits,
             receipts=args.local_root / "model-requests",
+            dynamic_output=config.settings.dynamic_output,
         ) as relay,
         (
             budget_relay(
@@ -334,6 +343,7 @@ def main() -> None:
                         str(output.parent),
                         meter.idle_gpu_hours(),
                         datetime.now(UTC).isoformat(),
+                        solver_protocol_id=config.solver_protocol_id,
                     )
                 ],
             )

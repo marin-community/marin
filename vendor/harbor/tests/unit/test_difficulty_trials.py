@@ -154,7 +154,7 @@ def deadline_fixture(root, source_id="fixture:hardmath", task_id="hardmath"):
         thinking="low", deviations=[],
     )
     config = SimpleNamespace(
-        attempts_per_task=6, settings=settings, environment_options={},
+        attempts_per_task=6, settings=settings, environment_options={}, solver_protocol_id=PROTOCOL_ID,
         daytona_provisioning="snapshot",
         identity=SimpleNamespace(model="fixture", revision="pin"), api_model="fixture",
     )
