@@ -313,6 +313,35 @@ def _front_heavy_matrix_lr(
     return schedule, q
 
 
+def _air_matrix_lr(learning_rate_schedule, num_train_steps: int, warmup_steps: int, floor: float):
+    """``muonh_air``'s matrix LR: ``learning_rate_schedule``'s warmup, then the AIR path over the ``K`` post-warmup
+    steps, ``eta(k) = floor + (peak - floor) f(k)`` with ``f(k) = (q(k) - q(K)) / (1 - q(K))``, ``q(k) = (1 + k /
+    alpha)^(-1/2)`` and ``alpha = AIR_ALPHA_FRAC K``. ``peak`` is solved so the LR summed over every step (warmup
+    included) is ``AIR_CUMULATIVE_MULT`` x that of ``learning_rate_schedule``. Returns the schedule and ``peak``."""
+    steps = np.arange(num_train_steps, dtype=np.float64)
+    base = np.asarray(jax.vmap(learning_rate_schedule)(jnp.arange(num_train_steps)), np.float64)
+    post_steps = max(num_train_steps - warmup_steps, 1)
+    alpha = AIR_ALPHA_FRAC * post_steps
+    q_end = (1.0 + post_steps / alpha) ** -0.5
+
+    def shape(k):
+        return ((1.0 + k / alpha) ** -0.5 - q_end) / (1.0 - q_end)
+
+    post_warmup = steps >= warmup_steps
+    f = shape(np.clip(steps - warmup_steps, 0.0, None))[post_warmup]
+    target = AIR_CUMULATIVE_MULT * float(np.sum(base))
+    warmup_sum = float(np.sum(base[~post_warmup]))
+    peak = floor + (target - warmup_sum - floor * f.size) / float(np.sum(f))
+
+    def schedule(step):
+        lr = learning_rate_schedule(step)
+        step = jnp.asarray(step, jnp.float32)
+        air = floor + (peak - floor) * shape(jnp.maximum(step - warmup_steps, 0.0))
+        return jnp.where(step < warmup_steps, lr, air)
+
+    return schedule, peak
+
+
 def scale_with_grug_muonh(
     momentum: float,
     nesterov: bool,
@@ -711,7 +740,8 @@ LAW_CAP_LAMBDA = 0.2
 ``kappa = sqrt(LAW_CAP_TAU lr_max / (2 LAW_CAP_LAMBDA))``, the size MuonC's matrices settle at for decay
 ``LAW_CAP_LAMBDA`` (arXiv 2506.02285)."""
 WN_STAR_INIT_MULT = math.sqrt(8.0)
-"""``muonh_wn_star``: the matrices of the ``muonh`` and ``kda_beta`` groups start at this multiple of their init."""
+"""``muonh_wn_star`` and ``muonh_air``: the matrices of the ``muonh`` and ``kda_beta`` groups start at this multiple
+of their init."""
 WN_STAR_HOLD_FRAC = 0.2
 """``muonh_wn_star``: the matrix LR holds at its peak until this post-warmup progress."""
 WN_STAR_Q_BRACKET = (1e-3, 1e3)
@@ -723,6 +753,10 @@ TRUNCATED_NORMAL_STD = 0.98658
 """``muonh_wn_star``'s head logit multiplier ``c = K / min(K, exp(HEAD_LOGIT_LAW_A) S_A^HEAD_LOGIT_LAW_B)`` with
 ``K = sqrt(2 (ln V - HEAD_LOGIT_LAW_LOSS_OFFSET)) / (sigma0 sqrt(d))``, ``S_A`` the run's summed Adam LR and
 ``sigma0 = initializer_std TRUNCATED_NORMAL_STD`` the head's init RMS (a normal truncated at +-3 std)."""
+AIR_ALPHA_FRAC = 0.25
+AIR_CUMULATIVE_MULT = 1.05
+"""``muonh_air``: the AIR decay's ``alpha`` as a fraction of the post-warmup steps, and the matrix LR summed over the
+run as a multiple of the recipe's."""
 _INIT_SCALED_GROUPS = ("muonh", "kda_beta", "muonh_radial", "kda_beta_radial")
 _ADAM_LEAVES = re.compile(
     r"(?:^|\.)(value_embed|ve_lambda|ve_gate|head_ve_lambda|head_ve_gate|head_ve_gain|qk_mult"
@@ -875,6 +909,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     solved so the mean annealed matrix LR is unchanged; the late anneal applies on top. The radius and head LRs keep
     ``muonh_nonsi_anneal``'s. (3) The model's ``head_logit_mult`` is set to ``head_logit_mult(...)`` (the train
     loop sets it)."""
+    muonh_air: bool = False
+    """AIR-scheduled softcap radial MuonH, with ``muonh_radial_softcap``. (1) Every rank >= 2 leaf of the ``muonh`` and
+    ``kda_beta`` groups starts at ``WN_STAR_INIT_MULT`` x its init (``scale_initial_params``). (2) The sphere steps of
+    those groups take ``_air_matrix_lr`` (``kda_beta`` at ``KDA_BETA_LR_MULT`` x), and each softcapped log-radius steps
+    at its slice's sphere LR. (3) The ``adamh`` LR becomes ``lr_max s(t)^2``, ``s(t) = lr_t / lr_max`` of the MuonH
+    schedule. (4) The model's ``head_logit_mult`` is set to ``head_logit_mult(...)``, as under ``muonh_wn_star``."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -912,6 +952,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     self.learning_rate,
                     self.min_lr_ratio,
                 )
+        if self.muonh_air:
+            hyperparams["matrix_lr"], _ = _air_matrix_lr(
+                learning_rate_schedule,
+                num_train_steps,
+                _convert_frac_or_steps(self.warmup, num_train_steps),
+                self.min_lr_ratio * self.learning_rate,
+            )
 
         def muonh_radial_at(lr, radius_lr, softcap, b1, b2):
             return optax.chain(
@@ -1091,6 +1138,15 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 transforms["kda_beta_radial"] = muonh_radial_at(
                     learning_rate * KDA_BETA_LR_MULT, learning_rate * KDA_BETA_LR_MULT, cap, self.beta1, self.beta2
                 )
+            if self.muonh_air:
+                cap, beta_matrix_lr = self.muonh_radial_softcap, matrix_lr * KDA_BETA_LR_MULT
+                transforms["muonh"] = muonh_at(matrix_lr)
+                transforms["kda_beta"] = muonh_at(beta_matrix_lr)
+                transforms["muonh_radial"] = muonh_radial_at(matrix_lr, matrix_lr, cap, self.beta1, self.beta2)
+                transforms["kda_beta_radial"] = muonh_radial_at(
+                    beta_matrix_lr, beta_matrix_lr, cap, self.beta1, self.beta2
+                )
+                transforms["adamh"] = adamh_at(learning_rate * learning_rate / self.learning_rate)
             if self.muonh_nonsi_anneal:
                 beta_lr, beta_matrix_lr = learning_rate * KDA_BETA_LR_MULT, matrix_lr * KDA_BETA_LR_MULT
                 transforms["muonh"] = muonh_at(matrix_lr)
@@ -1235,6 +1291,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             raise ValueError("muonc_init_mult must be non-negative and needs muonc_anneal_decay")
         if self.muonh_wn_star and not self.muonh_nonsi_anneal:
             raise ValueError("muonh_wn_star needs muonh_nonsi_anneal")
+        if self.muonh_air and not self.muonh_radial_softcap:
+            raise ValueError("muonh_air needs muonh_radial_softcap")
         if self.muonh_law_cap_ball and (
             self.muonh_radial_softcap or self.muonc_decay_mult or self.muonh_nonsi_anneal or self.muonc_anneal_decay
         ):
@@ -1245,8 +1303,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
     def scale_initial_params(self, params):
         """``params`` with the ``muonh`` and ``kda_beta`` matrices scaled by ``muonc_init_mult`` (or
-        ``WN_STAR_INIT_MULT`` under ``muonh_wn_star``); ``params`` itself when both are off."""
-        mult = self.muonc_init_mult or (WN_STAR_INIT_MULT if self.muonh_wn_star else 0.0)
+        ``WN_STAR_INIT_MULT`` under ``muonh_wn_star`` or ``muonh_air``); ``params`` itself when all are off."""
+        mult = self.muonc_init_mult or (WN_STAR_INIT_MULT if self.muonh_wn_star or self.muonh_air else 0.0)
         if not mult:
             return params
 
@@ -1258,9 +1316,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         return jax.tree.map(scale, params, self.create_mask(params))
 
     def head_logit_mult(self, num_train_steps: int, *, hidden_dim: int, vocab_size: int, initializer_std: float):
-        """``muonh_wn_star``'s fixed head logit multiplier for a run of ``num_train_steps`` (see
-        ``TRUNCATED_NORMAL_STD``); 0.0 when it is off."""
-        if not self.muonh_wn_star:
+        """The fixed head logit multiplier of ``muonh_wn_star`` and ``muonh_air`` for a run of ``num_train_steps``
+        (see ``TRUNCATED_NORMAL_STD``); 0.0 when both are off."""
+        if not (self.muonh_wn_star or self.muonh_air):
             return 0.0
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
         adam_lrs = np.asarray(jax.vmap(adam_lr_schedule)(jnp.arange(num_train_steps)), np.float64)

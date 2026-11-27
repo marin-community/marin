@@ -547,8 +547,8 @@ class GrugModelConfig:
     gain, and the forward skips the QB histogram. 0: QB. Needs routed experts (no ``dense_mlp``)."""
     head_logit_mult: float = 0.0
     """Fixed multiplier ``c`` on the vocabulary logits, ``c W_head^T x``; the cross-entropy and its z-loss see the
-    scaled logits. 0: off. ``GrugMoeMuonHConfig.muonh_wn_star`` sets it for each run. Excludes the heads that read
-    the vocabulary logits elsewhere (``cplm_plus``, ``pointer_mixture``, ``ngram_cache_mixture``,
+    scaled logits. 0: off. ``GrugMoeMuonHConfig.muonh_wn_star`` and ``muonh_air`` set it for each run. Excludes the
+    heads that read the vocabulary logits elsewhere (``cplm_plus``, ``pointer_mixture``, ``ngram_cache_mixture``,
     ``entropy_skip_layers``)."""
 
     def __post_init__(self) -> None:
