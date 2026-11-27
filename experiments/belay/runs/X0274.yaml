@@ -1,0 +1,21 @@
+experiment: X0274
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: X0271 + front-heavy MuonC matrix LR (hold 0.2, q solved)
+    flags:
+    - --opt-set
+    - muonc_anneal_decay=0.2
+    - --opt-set
+    - muonc_anneal_adamc=12.5
+    - --opt-set
+    - adamc_adam_decay=0.3
+    - --opt-set
+    - muonc_anneal_embed_row_adamh=True
+    - --opt-set
+    - muonc_anneal_front_heavy=True
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
