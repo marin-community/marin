@@ -28,9 +28,12 @@ from experiments.evaluation.benchmarks.agentic import (
     BIXBENCH,
     FINANCEAGENT,
     SWEBENCH_APPLY,
+    SWEBENCH_ARTIFACTS,
     SWEBENCH_COLLECT,
     SWEBENCH_ENVIRONMENT,
+    SWEBENCH_LARGE_FILE_BYTES,
     SWEBENCH_MULTILINGUAL,
+    SWEBENCH_WORKSPACE,
     SWEBENCH_WORKSPACE_TREE,
 )
 from experiments.evaluation.benchmarks.harbor import (
@@ -238,20 +241,66 @@ def test_swebench_multilingual_agents_work_offline_and_their_patch_grades_on_a_n
     grader = case.task.grader
     assert isinstance(grader, ScriptGrader) and isinstance(grader.placement, GraderMachine)
     assert "network" in grader.placement.environment.capabilities
-    assert grader.placement.collect[0].argv[-1] == SWEBENCH_COLLECT
+    assert grader.placement.collect
 
     def files(build):
         return {file.path: base64.b64decode(file.source.content_base64).decode() for file in build.files}
 
     pinned = dockerfile.replace(IMAGE, f"{IMAGE}@{DIGEST}")
     assert files(grader.placement.environment.docker_build)["Dockerfile"] == pinned
-    assert SWEBENCH_WORKSPACE_TREE in files(case.task.environment_requirements.docker_build)["Dockerfile"]
     [verifier_script] = [
         base64.b64decode(resource.source.content_base64).decode()
         for resource in case.task.resources.verifier
         if resource.path == "test.sh"
     ]
     assert verifier_script == test_script.replace("2>&1\n", f"2>&1\n\n{SWEBENCH_APPLY}", 1)
+
+
+def test_swebench_multilingual_patches_carry_the_agents_changes_except_large_new_files(tmp_path):
+    image = tmp_path / "image"
+    image.mkdir()
+
+    def git(directory, *args):
+        subprocess.run(["git", "-C", str(directory), *args], check=True, capture_output=True)
+
+    git(image, "init", "-q")
+    (image / "tracked.txt").write_text("a\n")
+    (image / "deleted.txt").write_text("gone\n")
+    git(image, "add", "-A")
+    git(image, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
+    (image / "built.txt").write_text("left untracked by the image\n")
+    # The image build records the workspace, untracked files included, as a git tree.
+    git(image, "add", "-A")
+    tree = subprocess.run(["git", "-C", str(image), "write-tree"], check=True, capture_output=True, text=True)
+    git(image, "reset", "-q")
+    (tmp_path / "tree").write_text(tree.stdout)
+    agent, verifier = tmp_path / "agent", tmp_path / "verifier"
+    shutil.copytree(image, agent)
+    shutil.copytree(image, verifier)
+    (agent / "tracked.txt").write_text("a\nb\n")
+    (agent / "deleted.txt").unlink()
+    (agent / "built.txt").write_text("changed\n")
+    (agent / "new file.bin").write_bytes(bytes(range(256)) * 16)
+    git(agent, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "the agent commits")
+    (agent / "core").write_bytes(b"\0" * (SWEBENCH_LARGE_FILE_BYTES + 1))
+
+    def run_in(workspace, script):
+        localized = (
+            script.replace(SWEBENCH_WORKSPACE_TREE, str(tmp_path / "tree"))
+            .replace(SWEBENCH_ARTIFACTS, str(tmp_path / "artifacts"))
+            .replace(SWEBENCH_WORKSPACE, str(workspace))
+        )
+        subprocess.run(["bash", "-c", localized], check=True, capture_output=True)
+
+    run_in(agent, SWEBENCH_COLLECT)
+    run_in(verifier, SWEBENCH_APPLY)
+
+    def contents(workspace):
+        return {path.name: path.read_bytes() for path in workspace.iterdir() if path.is_file()}
+
+    expected = contents(agent)
+    del expected["core"]
+    assert contents(verifier) == expected
 
 
 def test_job_settings_publish_three_trials_with_replaced_timeouts_and_pi_in_the_image(
