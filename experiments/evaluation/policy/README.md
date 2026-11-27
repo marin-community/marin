@@ -140,7 +140,10 @@ A release pins, for each baseline and evaluation, the run that represents it:
 1. Declare the version in a PR, smoke it with `--limit 20` until `status` is clean, then launch full runs.
    Fix what breaks; a fixed evaluation bumps its benchmark's `VERSION` and reruns, and nothing else does.
 2. From a clean checkout of the newest commit on `origin/main`, run `release --dry-run`. It picks each pair's
-   compliant full run, at that commit or an earlier one in its history, and lists any pair without one.
+   compliant full run, at that commit or an earlier one in its history, and lists any pair without one. Runs
+   launched from a branch whose PRs reached `main` squashed, such as an integration branch, are outside that
+   history: name each such commit with `--runs-from`, after pushing it, and read how its evaluation code differs
+   from `main`'s before releasing.
 3. For each run from an earlier commit, it prints the commits since that changed evaluation code. Shared code,
    such as a grader several benchmarks use, can change an evaluation without changing its inputs, so read these
    for side effects, and rerun an evaluation they affect by bumping its `VERSION`.
