@@ -1,0 +1,12 @@
+id: X0265
+slug: id-balancing-router-bias
+name: ID Balancing router bias
+category: MoE and routing
+summary: 🤖 Posted on behalf of @WhenWen (drafted by a Claude Code session).
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-7209715736
+  author: WhenWen
+  approved_by: WhenWen (trusted)
