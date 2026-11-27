@@ -71,3 +71,30 @@ def test_history_discovers_later_pages_and_keeps_unmodified_prs(monkeypatch):
     incremental = asyncio.run(app.recent_prs(None, initial, cutoff, datetime(2026, 11, 26, tzinfo=UTC)))
     assert [pr["number"] for pr in incremental] == [1, 4, 2]
     assert visited == [1]
+
+
+def test_activity_distinguishes_other_humans_feedback_and_approval():
+    def event(login, kind, state=None, user_type="User"):
+        return {
+            "event": kind,
+            "state": state,
+            "user": {"login": login, "type": user_type},
+            "submitted_at": "2026-11-24T17:00:00Z",
+        }
+
+    timeline = [
+        event("Author", "commented"),
+        event("lint-bot", "reviewed", "approved", "Bot"),
+        event("Commenter", "commented"),
+        event("Approver", "reviewed", "approved"),
+        event("Approver", "commented"),
+        event("RaisedIssue", "reviewed", "approved"),
+        event("RaisedIssue", "reviewed", "changes_requested"),
+        event("PendingReviewer", "reviewed", "pending"),
+    ]
+
+    assert app.review_activity(timeline, "author") == {
+        "commenter": "feedback",
+        "approver": "approved",
+        "raisedissue": "feedback",
+    }

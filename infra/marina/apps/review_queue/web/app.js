@@ -26,24 +26,43 @@ function ageDays(pr) {
   return Math.max(0, Math.floor((Date.now() - Date.parse(pr.created_at)) / 86400000));
 }
 
-function prRow(pr) {
+function queueActivity(pr, reviewer) {
+  if (pr.activity == null) return ["checking", "Checking activity"];
+  const others = Object.entries(pr.activity).filter(([login]) => login !== reviewer);
+  if (others.some(([, kind]) => kind === "approved")) return ["other-approval", "Approved by someone else"];
+  if (others.length) return ["other-feedback", "Feedback from someone else"];
+  if (!Object.keys(pr.activity).length && pr.reviewStatus === PENDING) return ["first-review", "Needs first review"];
+  return null;
+}
+
+function statusPill(kind, label) {
+  const status = document.createElement("span");
+  status.className = `status-pill ${kind}`;
+  status.textContent = label;
+  return status;
+}
+
+function prRow(pr, reviewer) {
   const row = document.createElement("div");
   row.className = "pr-row";
   const subject = document.createElement("span");
   subject.className = "pr-subject";
   subject.append(link(pr.html_url, `#${pr.number} ${pr.title}`, "pr-title"));
-  if (pr.reviewStatus) {
-    const status = document.createElement("span");
-    status.className = `status-pill ${pr.reviewStatus}`;
-    status.textContent = pr.reviewStatus === PENDING ? "Pending" : "Reviewed";
-    subject.append(status);
+  if (reviewer) {
+    const activity = queueActivity(pr, reviewer);
+    if (activity?.[0] === "first-review") {
+      subject.append(statusPill(...activity));
+    } else {
+      subject.append(statusPill(pr.reviewStatus, pr.reviewStatus === PENDING ? "Pending" : "Reviewed"));
+      if (activity) subject.append(statusPill(...activity));
+    }
   }
   row.append(subject);
   const meta = document.createElement("span");
   meta.className = "pr-meta";
   const age = ageDays(pr);
   const size = pr.lines == null ? "" : ` · ${numberFormat.format(pr.lines)} lines`;
-  meta.textContent = `${pr.draft ? "Draft · " : ""}${age === 0 ? "opened today" : `opened ${age}d ago`}${size}`;
+  meta.textContent = `${age === 0 ? "opened today" : `opened ${age}d ago`}${size}`;
   row.append(meta);
   return row;
 }
@@ -158,7 +177,7 @@ function prDisclosure(line, handle, openPulls, history, expanded) {
   }
   for (const pr of openPulls.toSorted((a, b) => (
     Number(b.reviewStatus === PENDING) - Number(a.reviewStatus === PENDING) || a.created_at.localeCompare(b.created_at)
-  ))) requestsList.append(prRow(pr));
+  ))) requestsList.append(prRow(pr, handle));
   if (history.length) {
     const heading = document.createElement("h3");
     heading.textContent = "Recent reviews";

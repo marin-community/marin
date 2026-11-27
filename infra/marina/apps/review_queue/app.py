@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from itertools import zip_longest
-from typing import Annotated, NotRequired, TypedDict
+from typing import Annotated, Literal, NotRequired, TypedDict
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException
@@ -30,6 +30,7 @@ DISCOVERY_OVERLAP = timedelta(minutes=1)
 RETRY_SECONDS = 60
 REVIEW_STATES = frozenset({"approved", "changes_requested", "commented", "dismissed"})
 READ_SNAPSHOT = text("SELECT * FROM queue_snapshot")
+READ_METADATA = text("SELECT number, updated_at, lines, reviews, activity FROM review_metadata")
 logger = logging.getLogger(__name__)
 
 
@@ -60,11 +61,15 @@ class ReviewFact(TypedDict):
     response_at: str | None
 
 
+ReviewActivity = dict[str, Literal["approved", "feedback"]]
+
+
 class PullMetadata(TypedDict):
     number: int
     updated_at: str
     lines: int
     reviews: list[ReviewFact]
+    activity: ReviewActivity
 
 
 class ReviewedPull(TypedDict):
@@ -95,6 +100,7 @@ class SyncResult(TypedDict):
 class OpenPull(PullSummary):
     lines: int | None
     reviewed_reviewers: list[ReviewerRef]
+    activity: ReviewActivity | None
 
 
 class QueuePayload(TypedDict):
@@ -152,6 +158,7 @@ def migrate(connection: Connection) -> None:
     """
         )
     )
+    connection.execute(text("ALTER TABLE review_metadata ADD COLUMN IF NOT EXISTS activity jsonb"))
 
 
 def pr_summary(pr: dict) -> PullSummary:
@@ -169,6 +176,13 @@ def pr_summary(pr: dict) -> PullSummary:
     }
 
 
+def external_login(user: dict | None, author: str | None) -> str | None:
+    if user is None or user["type"] != "User":
+        return None
+    login = user["login"].lower()
+    return login if author is None or login != author.lower() else None
+
+
 def review_facts(timeline: list[dict], author: str | None) -> list[ReviewFact]:
     """Keep each reviewer's latest submission and most recent matched response."""
     requests = {}
@@ -181,11 +195,8 @@ def review_facts(timeline: list[dict], author: str | None) -> list[ReviewFact]:
         elif kind == "review_request_removed" and reviewer:
             requests.pop(reviewer["login"].lower(), None)
         elif kind == "reviewed" and event.get("state") in REVIEW_STATES and event.get("submitted_at"):
-            user = event.get("user")
-            if user is None or user["type"] != "User":
-                continue
-            login = user["login"].lower()
-            if author and login == author.lower():
+            login = external_login(event.get("user"), author)
+            if login is None:
                 continue
             submitted = datetime.fromisoformat(event["submitted_at"])
             requested = requests.pop(login, None)
@@ -202,6 +213,29 @@ def review_facts(timeline: list[dict], author: str | None) -> list[ReviewFact]:
                 "response_at": matched_submission_at,
             }
     return list(reviews.values())
+
+
+def review_activity(timeline: list[dict], author: str | None) -> ReviewActivity:
+    """Summarize human feedback and current approvals from the PR timeline."""
+    activity: ReviewActivity = {}
+    for event in timeline:
+        kind = event["event"]
+        if kind not in {"reviewed", "commented"}:
+            continue
+        login = external_login(event.get("user"), author)
+        if login is None:
+            continue
+        if kind == "commented":
+            activity.setdefault(login, "feedback")
+        elif event.get("submitted_at"):
+            state = event.get("state")
+            if state == "approved":
+                activity[login] = "approved"
+            elif state == "changes_requested":
+                activity[login] = "feedback"
+            elif state in {"commented", "dismissed"}:
+                activity.setdefault(login, "feedback")
+    return activity
 
 
 async def github_get(client: httpx.AsyncClient, path: str, **params: str | int) -> httpx.Response:
@@ -247,22 +281,35 @@ async def pr_metadata(client: httpx.AsyncClient, number: int) -> PullMetadata:
     timeline = []
     async for page in github_pages(client, f"issues/{number}/timeline"):
         timeline.extend(page)
+    author = detail["user"]["login"] if detail.get("user") else None
     return {
         "number": number,
         "updated_at": detail["updated_at"],
         "lines": detail["additions"] + detail["deletions"],
-        "reviews": review_facts(timeline, detail["user"]["login"] if detail.get("user") else None),
+        "reviews": review_facts(timeline, author),
+        "activity": review_activity(timeline, author),
     }
 
 
-def prs_missing_metadata(snapshot: Row, versions: dict[int, str]) -> list[int]:
+def prs_missing_metadata(snapshot: Row, metadata: dict[int, Row]) -> list[int]:
     """Return PR numbers with missing or stale metadata in sync order."""
-    pending = [pr for pr in snapshot.open_prs if pr["requested_reviewers"] or pr["requested_teams"]]
-    # Interleave requests and recently updated PRs before checking older open PRs.
-    prioritized = (pr for pair in zip_longest(pending, snapshot.history_prs) for pr in pair if pr is not None)
-    numbers = dict.fromkeys(
-        pr["number"] for pr in (*prioritized, *snapshot.open_prs) if versions.get(pr["number"], "") < pr["updated_at"]
-    )
+    opened = [pr for pr in snapshot.open_prs if not pr["draft"]]
+    individual = {
+        pr["number"]
+        for pr in opened
+        if pr["requested_reviewers"] or (pr["number"] in metadata and metadata[pr["number"]].reviews)
+    }
+    assigned = [pr for pr in opened if pr["number"] in individual or pr["requested_teams"]]
+    # Interleave active queues with recently updated PRs before checking older open PRs.
+    prioritized = (pr for pair in zip_longest(assigned, snapshot.history_prs) for pr in pair if pr is not None)
+    numbers = {}
+    for pr in (*prioritized, *opened):
+        if pr["draft"]:
+            continue
+        number = pr["number"]
+        cached = metadata.get(number)
+        if cached is None or cached.updated_at < pr["updated_at"] or (number in individual and cached.activity is None):
+            numbers[number] = None
     return list(numbers)
 
 
@@ -304,8 +351,8 @@ async def sync_prs(connection: Connection, client: httpx.AsyncClient, snapshot: 
     cutoff = datetime.now(UTC) - HISTORY_WINDOW
     if snapshot.history_since is None or not cutoff - DISCOVERY_INTERVAL < snapshot.history_since <= cutoff:
         snapshot = await refresh_snapshot(connection, client, snapshot)
-    versions = dict(connection.execute(text("SELECT number, updated_at FROM review_metadata")).tuples().all())
-    missing = prs_missing_metadata(snapshot, versions)
+    metadata = {row.number: row for row in connection.execute(READ_METADATA)}
+    missing = prs_missing_metadata(snapshot, metadata)
     for number in missing[:BATCH_SIZE]:
         save_metadata(connection, await pr_metadata(client, number))
     if len(missing) > BATCH_SIZE:
@@ -319,12 +366,12 @@ def save_metadata(connection: Connection, record: PullMetadata) -> None:
     connection.execute(
         text(
             """
-            INSERT INTO review_metadata (number, updated_at, lines, reviews)
-            VALUES (:number, :updated_at, :lines, :reviews)
+            INSERT INTO review_metadata (number, updated_at, lines, reviews, activity)
+            VALUES (:number, :updated_at, :lines, :reviews, :activity)
             ON CONFLICT (number) DO UPDATE SET updated_at = EXCLUDED.updated_at,
-                lines = EXCLUDED.lines, reviews = EXCLUDED.reviews, fetched_at = now()
+                lines = EXCLUDED.lines, reviews = EXCLUDED.reviews, activity = EXCLUDED.activity, fetched_at = now()
         """
-        ).bindparams(bindparam("reviews", type_=JSONB)),
+        ).bindparams(bindparam("reviews", type_=JSONB), bindparam("activity", type_=JSONB)),
         dict(record),
     )
 
@@ -363,12 +410,16 @@ async def sync_batch(connection: Connection) -> int:
 def enriched_open_prs(prs: list[PullSummary], metadata: dict[int, Row]) -> list[OpenPull]:
     opened: list[OpenPull] = []
     for pr in prs:
+        if pr["draft"]:
+            continue
         cached = metadata.get(pr["number"])
         author = (pr.get("author") or "").lower()
+        fresh = cached is not None and cached.updated_at >= pr["updated_at"]
         opened.append(
             {
                 **pr,
-                "lines": cached.lines if cached and cached.updated_at >= pr["updated_at"] else None,
+                "lines": cached.lines if fresh else None,
+                "activity": cached.activity if fresh else None,
                 "reviewed_reviewers": (
                     [{"login": review["login"]} for review in cached.reviews if review["login"] != author]
                     if cached
@@ -384,6 +435,8 @@ def reviewer_history(records: list[Row], pulls: dict[int, PullSummary]) -> dict[
     stats: dict[str, ReviewerHistory] = {}
     for row in records:
         pr = pulls.get(row.number)
+        if pr and pr["draft"]:
+            continue
         author = (pr.get("author") or "").lower() if pr else ""
         reviews: list[ReviewFact] = row.reviews
         for review in reviews:
@@ -410,17 +463,16 @@ def reviewer_history(records: list[Row], pulls: dict[int, PullSummary]) -> dict[
 
 def queue_payload(connection: Connection) -> QueuePayload:
     snapshot = connection.execute(READ_SNAPSHOT).one()
-    records = list(connection.execute(text("SELECT number, updated_at, lines, reviews FROM review_metadata")).all())
+    records = list(connection.execute(READ_METADATA).all())
     metadata = {row.number: row for row in records}
     pulls = {pr["number"]: pr for pr in snapshot.history_prs + snapshot.open_prs}
-    versions = {number: row.updated_at for number, row in metadata.items()}
     total = len(prs_missing_metadata(snapshot, {}))
     return {
         "refreshed_at": snapshot.refreshed_at,
         "prs": enriched_open_prs(snapshot.open_prs, metadata),
         "stats": reviewer_history(records, pulls),
         "sync": {
-            "completed": total - len(prs_missing_metadata(snapshot, versions)),
+            "completed": total - len(prs_missing_metadata(snapshot, metadata)),
             "total": total,
             "history_discovered": snapshot.history_since is not None,
         },

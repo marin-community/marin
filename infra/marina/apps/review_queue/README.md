@@ -2,7 +2,9 @@
 
 The queue groups open Marin pull requests by currently requested reviewers and
 reviewers who have submitted a review. A new request takes precedence over a
-previous review. Star a GitHub handle to pin it in this browser.
+previous review. Draft PRs are excluded. Open a reviewer to see PRs that need a
+first review and PRs that already have feedback or approval from someone else.
+Star a GitHub handle to pin it in this browser.
 
 Marina serves the last complete open PR snapshot from Postgres. While the page
 is open, it calls `POST ./api/sync` in the background. The endpoint refreshes

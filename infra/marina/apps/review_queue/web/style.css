@@ -89,8 +89,11 @@ h2 { margin: 0; font-size: 25px; letter-spacing: -.04em; font-weight: 600; }
 .pr-row { display: flex; align-items: baseline; justify-content: space-between; gap: 20px; padding: 9px 0; border-bottom: 1px solid #e8ede6; }
 .pr-row:last-child { border-bottom: 0; }
 .pr-subject { display: flex; align-items: baseline; gap: 4px 8px; flex-wrap: wrap; }
-.status-pill { padding: 1px 6px; border-radius: 8px; background: #e3eee5; color: #285d41; font-size: 10px; font-weight: 650; }
-.status-pill.pending { background: #f5ead8; color: #754c11; }
+.status-pill { padding: 2px 7px; border-radius: 8px; background: #edf0ea; color: #415b4a; font-size: 10px; font-weight: 650; }
+.status-pill.first-review { background: #f5ead8; color: #754c11; }
+.status-pill.other-approval { background: #dcefe1; color: #205938; }
+.status-pill.other-feedback { background: #e0edf8; color: #244f71; }
+.status-pill.checking { background: transparent; color: var(--muted); }
 .pr-title { overflow-wrap: anywhere; text-decoration: none; font-size: 12px; line-height: 1.4; font-weight: 600; }
 .pr-meta { flex: none; color: var(--muted); font: 10px ui-monospace, monospace; white-space: nowrap; }
 .data-note { margin: 12px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
