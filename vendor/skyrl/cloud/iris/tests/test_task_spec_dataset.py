@@ -40,8 +40,6 @@ from tests.cpu.task_specs import NATIVE_ENVIRONMENT, SHELL_ENVIRONMENT, machine_
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
-from experiments.post_training.rl_agentic_recipe import TIER_MACHINES
-
 
 class LocalAdmissionFactory:
     backend = Backend.LOCAL
@@ -289,7 +287,7 @@ def test_recorded_routes_require_a_registered_candidate(tmp_path: Path, register
     assert (None if machine is None else machine.backend) == expected
 
 
-def test_shipped_recipe_preserves_machine_binding_after_local_verification(tmp_path):
+def test_recorded_routes_keep_a_higher_admitted_backend_when_local_is_absent(tmp_path):
     task = text_task("locally-verified", source="mixed").model_copy(
         update={
             "environment_requirements": NATIVE_ENVIRONMENT,
@@ -299,7 +297,9 @@ def test_shipped_recipe_preserves_machine_binding_after_local_verification(tmp_p
     loaded = _load(
         tmp_path,
         (task,),
-        task_machine_by_tier={machine.backend: machine.model_dump(mode="json") for machine in TIER_MACHINES},
+        task_machine_by_tier={
+            backend: machine_runtime(backend).model_dump(mode="json") for backend in ("shellsim", "daytona")
+        },
     )
     assert loaded[0].spec.task_machine.backend == "daytona"
     validate_spec(loaded[0].spec, FACTORIES)

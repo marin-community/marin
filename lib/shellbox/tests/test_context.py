@@ -6,7 +6,7 @@
 from dataclasses import dataclass
 
 import pytest
-from shellbox.backends.daytona.machine import DaytonaMachineFactory
+from shellbox.backends.daytona.support import check_environment as check_daytona_environment
 from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavailable
 from shellbox.backends.local.support import check_local_environment
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -46,6 +46,16 @@ class LocalAdmissionFactory:
 
     def check_environment(self, requirements, spec):
         check_local_environment(requirements, spec)
+
+    async def create(self, spec):
+        raise AssertionError("Offline admission must not create a machine")
+
+
+class DaytonaAdmissionFactory:
+    backend = Backend.DAYTONA
+
+    def check_environment(self, requirements, spec):
+        check_daytona_environment(requirements, spec)
 
     async def create(self, spec):
         raise AssertionError("Offline admission must not create a machine")
@@ -142,7 +152,7 @@ class LocalAdmissionFactory:
     ],
 )
 def test_declared_requirements_route_to_the_satisfying_tiers(requirements: Requirements, expected: tuple):
-    factories = (ShellSimMachineFactory(), LocalAdmissionFactory(), DaytonaMachineFactory(client_factory=None))
+    factories = (ShellSimMachineFactory(), LocalAdmissionFactory(), DaytonaAdmissionFactory())
     try:
         spec = source_spec(requirements, requirements.network)
         routes = ShellboxContext(tuple(MachineRoute(factory, spec) for factory in factories)).routes(

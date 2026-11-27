@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import override
 
 import pytest
-from rolloutengine.machines import _machine_spec
+from rolloutengine.machines import machine_spec
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, Machine, MachineFactory, MachineSpec, TaskRequirements
@@ -145,9 +145,9 @@ def test_missing_workdir_resolves_before_machine_creation(directory: str | None)
     spec = lower_with_settings(task, lowering_settings(policy), {"gvisor": AvailableFactory(Backend.GVISOR)})
     assert spec.task.environment_requirements.working_directory == (directory or "/workspace")
     assert spec.task_machine is not None
-    with _machine_spec(spec.task.environment_requirements, spec.task_machine) as runtime:
+    with machine_spec(spec.task.environment_requirements, spec.task_machine) as runtime:
         assert runtime.workdir == (directory or "/workspace")
-    with _machine_spec(declared, machine_runtime(backend="gvisor")) as runtime:
+    with machine_spec(declared, machine_runtime(backend="gvisor")) as runtime:
         assert runtime.workdir == (directory or "")
 
 
