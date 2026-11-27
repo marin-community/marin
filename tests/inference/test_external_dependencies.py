@@ -6,11 +6,11 @@
 import importlib.util
 import json
 import runpy
-import tomllib
 from pathlib import Path
 
 import pytest
-from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
+import tomlkit
+from marin.external_dependencies import VLLM_GPU_RELEASE
 from rigging.config_discovery import find_project_root
 
 
@@ -19,12 +19,6 @@ def _workspace_root() -> Path:
     if root is None:
         pytest.skip("no Marin workspace checkout; nothing to compare against")
     return root
-
-
-def _descriptor_requirement(name: str) -> str:
-    config = tomllib.loads((_workspace_root() / "config" / "external" / "vllm" / "tpu.toml").read_text())
-    entry = config[name]
-    return f"{name} @ git+{entry['repository']}@{entry['commit']}"
 
 
 def _update_external():
@@ -60,9 +54,24 @@ def _promoted_manifest() -> dict:
     }
 
 
-def test_tpu_vllm_requirements_match_fork_descriptor():
-    assert VLLM_FORK_REQUIREMENT == _descriptor_requirement("vllm")
-    assert TPU_INFERENCE_FORK_REQUIREMENT == _descriptor_requirement("tpu-inference")
+def test_packaged_external_pins_are_current():
+    update_external = _update_external()
+    assert update_external.regenerate_generated_pins((), check=True)
+
+
+def test_tpu_wheel_update_preserves_packaged_pins_when_only_one_wheel_is_selected(tmp_path, monkeypatch):
+    update_external = _update_external()
+    descriptor = tomlkit.parse(update_external.TPU_FORKS_CONFIG.read_text())
+    del descriptor["tpu-inference"]["wheel"]
+    path = tmp_path / "tpu.toml"
+    path.write_text(tomlkit.dumps(descriptor))
+    packaged = tmp_path / "external_dependencies.py"
+    packaged.write_text("existing paired pins\n")
+    monkeypatch.setattr(update_external, "TPU_FORKS_CONFIG", path)
+    monkeypatch.setattr(update_external, "GENERATED_PINS", packaged)
+    with pytest.raises(ValueError, match="complete pair"):
+        update_external.regenerate_generated_pins((), check=False)
+    assert packaged.read_text() == "existing paired pins\n"
 
 
 def test_gpu_release_pin_matches_its_descriptor():

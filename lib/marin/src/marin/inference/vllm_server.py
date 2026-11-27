@@ -337,6 +337,7 @@ class IsolatedTpuVllm:
     # torch is only a dependency here (jax/libtpu do TPU compute), so resolve it from the
     # CPU index rather than dragging in a CUDA tree.
     torch_backend: str = "cpu"
+    exclude_newer: str | None = None
 
     def command(self) -> list[str]:
         return [
@@ -349,16 +350,25 @@ class IsolatedTpuVllm:
             self.python_version,
             "--torch-backend",
             self.torch_backend,
+            *(("--exclude-newer", self.exclude_newer) if self.exclude_newer is not None else ()),
             "vllm",
         ]
 
     def env(self) -> dict[str, str]:
         # vLLM targets CUDA unless VLLM_TARGET_DEVICE is set; the uvx build subprocess
         # inherits this from the launch environment.
-        return {"VLLM_TARGET_DEVICE": "tpu"}
+        # DP scheduler workers fork after JAX has warmed the parent. Single-threaded
+        # OpenMP/MKL avoids a libgomp crash while allocating structured-output masks.
+        environment = {"VLLM_TARGET_DEVICE": "tpu", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
+        if self.exclude_newer is not None:
+            environment.update(UV_PRERELEASE="allow", UV_LINK_MODE="copy", PYTHONPATH="")
+        return environment
 
     def cache_identity(self) -> str:
-        return f"tpu:{self.vllm_ref}:{self.tpu_inference_ref}:{self.python_version}:{self.torch_backend}"
+        return (
+            f"tpu:{self.vllm_ref}:{self.tpu_inference_ref}:"
+            f"{self.python_version}:{self.torch_backend}:{self.exclude_newer}"
+        )
 
 
 def _starts_nccl_ras_probe(launcher: VllmLauncher) -> bool:

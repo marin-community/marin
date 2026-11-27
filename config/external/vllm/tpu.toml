@@ -1,3 +1,4 @@
+# Interim candidate 480d505f, pending upstream merge.
 # Marin's forked TPU serving pair. vLLM is an exact source on the maintained
 # main lineage; tpu-inference is its separately refreshed backend. These run
 # from an isolated uvx env and are surfaced by config/update-external.py.
@@ -10,5 +11,17 @@ upstream_base = "9d88ceb02694c6e3df182ec3c87201284f50e2c6"
 
 [tpu-inference]
 repository = "https://github.com/marin-community/tpu-inference.git"
-commit = "2f327d385a90347681a7de86472b4bace6e940b2"
+commit = "480d505fa5279e9b3a09eea57af45124d6714b04"
 upstream_base = "34535b114a213b1e5668de2ea3b62bceb377efb1"
+
+[vllm.wheel]
+url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-tpu-candidate-fb02daf1d713-480d505fa527-36cef9c0caf3-578aca43f87d/vllm-0.0.0.dev20260929+marin.fb02daf1d713.tpu-cp312-cp312-linux_x86_64.whl"
+sha256 = "c29cd85e3e75761ba5c19a7ebd910b649c07ecc08dbd33498c3781ec2ff5f41b"
+
+[tpu-inference.wheel]
+url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-tpu-candidate-fb02daf1d713-480d505fa527-36cef9c0caf3-578aca43f87d/tpu_inference-0.30.0+marin.480d505fa527-py3-none-any.whl"
+sha256 = "a6d3b67bf3033e59a1ffa1e3fb1a62a268baa313b1b8fa687f3d59db70339fb1"
+
+[environment]
+exclude_newer = "2026-11-26T21:50:00Z"
+manifest_sha256 = "cd341f59719897d02951102274f8d2ed58ec47cd22738818adfa7ce36efc3982"

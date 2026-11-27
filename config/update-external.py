@@ -287,6 +287,7 @@ def render_pins(
     vllm_gpu_release: VllmGpuRelease,
     vllm_fork_requirement: str,
     tpu_inference_fork_requirement: str,
+    tpu_exclude_newer: str | None = None,
 ) -> str:
     """Render the packaged pin table consumed by isolated Marin runtimes."""
 
@@ -416,10 +417,9 @@ CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
     ),
 )
 
-VLLM_FORK_REQUIREMENT = "{vllm_fork_requirement}"
-TPU_INFERENCE_FORK_REQUIREMENT = (
-    "{tpu_inference_fork_requirement}"
-)
+VLLM_FORK_REQUIREMENT = {wrapped_string_literal(vllm_fork_requirement, indent="    ")}
+TPU_INFERENCE_FORK_REQUIREMENT = {wrapped_string_literal(tpu_inference_fork_requirement, indent="    ")}
+VLLM_TPU_EXCLUDE_NEWER = {json.dumps(tpu_exclude_newer) if tpu_exclude_newer is not None else "None"}
 
 EXTERNAL_DEPENDENCIES = {constants}
 '''
@@ -563,15 +563,32 @@ def regenerate_generated_pins(dependencies: tuple[LockedDependency, ...], *, che
 
 def render_generated_pins(dependencies: tuple[LockedDependency, ...], vllm_gpu_release: VllmGpuRelease) -> str:
     """Render packaged dependency pins."""
-    vllm_source = tpu_fork_source(TPU_FORKS_CONFIG, "vllm")
-    tpu_inference_source = tpu_fork_source(TPU_FORKS_CONFIG, "tpu-inference")
+    names = ("vllm", "tpu-inference")
+    sources = {name: tpu_fork_source(TPU_FORKS_CONFIG, name) for name in names}
+    requirements = {name: f"{name} @ git+{source.repository}@{source.commit}" for name, source in sources.items()}
+    descriptor = tomllib.loads(TPU_FORKS_CONFIG.read_text())
+    wheels = {name: descriptor[name]["wheel"] for name in names if "wheel" in descriptor[name]}
+    exclude_newer = descriptor.get("environment", {}).get("exclude_newer")
+    if wheels:
+        if set(wheels) != set(names) or not exclude_newer:
+            raise ValueError("TPU wheels require the complete pair and its dependency cutoff")
+        release_prefixes = set()
+        for name, wheel in wheels.items():
+            url, sha256 = wheel["url"], wheel["sha256"]
+            if not url.startswith(f"https://github.com/{GPU_RELEASE_REPOSITORY}/releases/download/"):
+                raise ValueError("TPU wheel must be an immutable Marin release asset")
+            if SHA256_PATTERN.fullmatch(sha256) is None:
+                raise ValueError("TPU wheel requires its SHA-256")
+            release_prefixes.add(url.rsplit("/", 1)[0])
+            requirements[name] = f"{name} @ {url}#sha256={sha256}"
+        if len(release_prefixes) != 1:
+            raise ValueError("TPU wheels must come from the same paired release")
     return render_pins(
         dependencies,
         vllm_gpu_release=vllm_gpu_release,
-        vllm_fork_requirement=f"vllm @ git+{vllm_source.repository}@{vllm_source.commit}",
-        tpu_inference_fork_requirement=(
-            f"tpu-inference @ git+{tpu_inference_source.repository}@{tpu_inference_source.commit}"
-        ),
+        vllm_fork_requirement=requirements["vllm"],
+        tpu_inference_fork_requirement=requirements["tpu-inference"],
+        tpu_exclude_newer=exclude_newer,
     )
 
 
