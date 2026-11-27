@@ -10,14 +10,22 @@ import socket
 import sys
 from contextlib import contextmanager
 
+import grpc
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from fastapi.testclient import TestClient
 from haliax import Axis
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.inference import inference_pb2
+from levanter.inference import inference_pb2, inference_pb2_grpc
+from levanter.inference.engine import InferenceEngineConfig
+from levanter.inference.openai import InferenceServer, InferenceServerConfig
+from levanter.inference.snowball_publication import publish_snowball_checkpoint
+from levanter.layers.sampler import LogprobMode
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+from levanter.testing.devices import use_cpu_devices
+from levanter.tokenizers import load_tokenizer
 from marin.rl.levanter_worker_protocol import LearnerProcess
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
@@ -56,6 +64,7 @@ def _hf_initializer(path):
             save_reference_code=False,
             dtype=jnp.float32,
         )
+    return model
 
 
 def _rollout_with_routes(tokens, scores, expert_ids, policy_id):
@@ -124,16 +133,10 @@ def _learner_processes(config, process_count):
             child.close()
 
 
-@pytest.mark.timeout(180)
-@pytest.mark.parametrize("process_count", [1, pytest.param(2, marks=pytest.mark.multidevice)])
-def test_native_learner_subprocess_updates_and_resumes_exactly(tmp_path, process_count):
-    initializer = tmp_path / "initializer"
-    initializer.mkdir()
-    _hf_initializer(initializer)
+def _worker_config(tmp_path, initializer, process_count):
     local_count = jax.local_device_count(backend="cpu")
     count = local_count * process_count
-    batch_size = count * 2
-    config = {
+    return {
         "runtime": {
             "mesh_axes": {"replica_dcn": 1, "replica": 1, "data": count, "expert": 1, "model": 1, "context": 1},
             "checkpoint_dir": str(tmp_path),
@@ -155,7 +158,7 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(tmp_path, process
         "seed": 41,
         "bf16": True,
         "num_training_steps": 3,
-        "mini_batch_size": batch_size,
+        "mini_batch_size": count * 2,
         "micro_batch_size_per_device": 1,
         "eps_clip_low": 0.2,
         "eps_clip_high": 0.2,
@@ -169,6 +172,17 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(tmp_path, process
             "weight_decay": 0.0,
         },
     }
+
+
+@pytest.mark.timeout(180)
+@pytest.mark.parametrize("process_count", [1, pytest.param(2, marks=pytest.mark.multidevice)])
+def test_native_learner_subprocess_updates_and_resumes_exactly(tmp_path, process_count):
+    initializer = tmp_path / "initializer"
+    initializer.mkdir()
+    _hf_initializer(initializer)
+    config = _worker_config(tmp_path, initializer, process_count)
+    count = config["runtime"]["mesh_axes"]["data"]
+    batch_size = config["mini_batch_size"]
     tokens = np.tile(np.array([0, 2, 3, 4, 5, 6], dtype=np.int32), (batch_size, 1))
     arrays = {
         "tokens": tokens,
@@ -217,8 +231,10 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(tmp_path, process
         _same_request(children, "shutdown", {})
         assert all(child.process.returncode == 0 for child in children)
 
-    with _learner_processes(config, process_count) as (children, _):
+    resumed_config = config | {"run_id": "resumed-policy-regression"}
+    with _learner_processes(resumed_config, process_count) as (children, _):
         restored = _same_request(children, "load_checkpoint", checkpoint)
+        assert [row["policy_id"] for row in restored] == [row["policy_id"] for row in saved]
         for expected_saved, actual_saved in zip(saved, restored, strict=True):
             assert actual_saved["step"] == actual_saved["version"] == 1
             assert actual_saved["state_fingerprints"] == expected_saved["state_fingerprints"]
@@ -229,3 +245,96 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(tmp_path, process
         np.testing.assert_array_equal(arrays["old_logprobs"], scores)
         _same_request(children, "shutdown", {})
         assert all(child.process.returncode == 0 for child in children)
+
+
+@pytest.mark.timeout(180)
+@use_cpu_devices(1)
+def test_served_snowball_rollout_updates_and_publishes_in_learner_worker(tmp_path):
+    initializer = tmp_path / "initializer"
+    initializer.mkdir()
+    model = _hf_initializer(initializer)
+    config = _worker_config(tmp_path, initializer, process_count=1)
+    batch_size = config["mini_batch_size"]
+    prompt = np.array([2, 5, 7], dtype=np.int32)
+    options = InferenceServerConfig(
+        service=InferenceEngineConfig(
+            max_seq_len=8,
+            max_pages=32,
+            window_cache_max_pages=24,
+            max_seqs=2,
+            max_rounds=2,
+            page_size=2,
+            max_seqs_in_prefill=2,
+            max_prefill_size=8,
+            max_queued_tokens=4,
+            logprob_mode=LogprobMode.POLICY,
+            compute_dtype=jnp.float32,
+        ),
+        initial_policy_id="initializer",
+        host="127.0.0.1",
+        grpc_port=0,
+    )
+    mesh = compact_grug_mesh(expert_axis_size=1)
+    with jax.set_mesh(mesh):
+        server = InferenceServer.create(
+            options, model.with_packed_experts().with_split_decode_cache(), load_tokenizer(str(initializer)), mesh=mesh
+        )
+        try:
+            with (
+                TestClient(server.app),
+                grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel,
+            ):
+                stub = inference_pb2_grpc.InferenceStub(channel)
+
+                def generate(policy_id):
+                    request = inference_pb2.GenerateRequest(
+                        prompt_token_ids=prompt.tolist(),
+                        max_new_tokens=2,
+                        temperature=0,
+                        capture_router_replay=True,
+                        expected_policy_id=policy_id,
+                        expected_logprob_mode=inference_pb2.LOGPROB_MODE_POLICY,
+                    )
+                    return stub.Generate(request, timeout=30)
+
+                before = generate("initializer")
+                original_scores = np.asarray(before.choices[0].policy_logprobs, dtype=np.float32)
+                tokens = np.tile(np.r_[prompt, before.choices[0].token_ids].astype(np.int32), (batch_size, 1))
+                response_length = len(original_scores)
+                assert response_length == 2
+                payload = {
+                    "arrays": {
+                        "tokens": tokens,
+                        "attention_mask": np.ones_like(tokens, dtype=bool),
+                        "position_ids": np.tile(np.arange(tokens.shape[1], dtype=np.int32), (batch_size, 1)),
+                        "response_mask": np.ones((batch_size, response_length), dtype=bool),
+                        "advantages": np.ones((batch_size, response_length), dtype=np.float32),
+                        "policy_weights": np.full(
+                            (batch_size, response_length), 1 / (batch_size * response_length), dtype=np.float32
+                        ),
+                        "kl_weights": np.zeros((batch_size, response_length), dtype=np.float32),
+                    },
+                    "response_length": response_length,
+                    "global_step": 1,
+                    "policy_id": "initializer",
+                    "grpc_rollouts": [(before.SerializeToString(), 0)] * batch_size,
+                }
+                checkpoint = {"ckpt_dir": str(tmp_path / "updated")}
+                with _learner_processes(config, 1) as (children, _):
+                    assert _same_request(children, "train", payload)[0]["optimizer_step"] == 1
+                    receipt = _same_request(children, "save_checkpoint", checkpoint)[0]
+                    _same_request(children, "shutdown", {})
+                assert (
+                    publish_snowball_checkpoint(
+                        server, checkpoint["ckpt_dir"], policy_version=receipt["version"], expected_serving_version=0
+                    )
+                    == 1
+                )
+                with pytest.raises(grpc.RpcError) as stale:
+                    generate("initializer")
+                assert stale.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+                choice = generate(receipt["policy_id"]).choices[0]
+                assert choice.policy_id == receipt["policy_id"]
+                assert not np.array_equal(choice.policy_logprobs, original_scores)
+        finally:
+            server.shutdown()
