@@ -65,12 +65,13 @@ def test_every_panel_view_returns_declared_fields_for_selected_execution(rl_exec
                     ], (run, panel["id"], actual)
             assert len(queries) - initial_queries == len(dataset().sources), run
 
+
+def test_token_rates_respect_requested_bucket_and_floor(rl_execution_store):
+    app, _ = _bridge(rl_execution_store)
+    with TestClient(app) as client:
         panel = next(panel for panel in PANELS.values() if panel["id"] == 3)
         target = panel["targets"][0]
-        response = client.get(
-            f"/finelog/marin{target['url']}",
-            params={**_target_params(target), "bucket_ms": 60000},
-        )
+        response = client.get(f"/finelog/marin{target['url']}", params={**_target_params(target), "bucket_ms": 60000})
         assert response.status_code == 200, response.text
         assert sorted(response.json(), key=lambda row: row["series"]) == [
             {"section": "token_rates", "t": BASE_EPOCH_MS, "series": "consumed_loss_token · driver", "value": 1.5},
@@ -82,10 +83,7 @@ def test_every_panel_view_returns_declared_fields_for_selected_execution(rl_exec
             },
             {"section": "token_rates", "t": BASE_EPOCH_MS, "series": "generated_token · driver", "value": 2.5},
         ]
-        floored = client.get(
-            f"/finelog/marin{target['url']}",
-            params={**_target_params(target), "bucket_ms": 1000},
-        )
+        floored = client.get(f"/finelog/marin{target['url']}", params={**_target_params(target), "bucket_ms": 1000})
         assert floored.status_code == 200, floored.text
         assert sorted(floored.json(), key=lambda row: row["series"]) == [
             {"section": "token_rates", "t": BASE_EPOCH_MS, "series": "consumed_loss_token · driver", "value": 3},
@@ -98,6 +96,8 @@ def test_every_panel_view_returns_declared_fields_for_selected_execution(rl_exec
             {"section": "token_rates", "t": BASE_EPOCH_MS, "series": "generated_token · driver", "value": 5},
         ]
 
+
+def test_status_uses_latest_step_per_execution(rl_execution_store):
     seed(
         rl_execution_store,
         [
@@ -139,6 +139,8 @@ def test_every_panel_view_returns_declared_fields_for_selected_execution(rl_exec
             }
         ]
 
+
+def test_sync_status_does_not_require_staleness_rows(rl_execution_store):
     rl_execution_store.execute(f"DELETE FROM {TABLE} WHERE run_id = 'sync-run' AND name = 'rollout_staleness_steps'")
     app, _ = _bridge(rl_execution_store)
     with TestClient(app) as client:

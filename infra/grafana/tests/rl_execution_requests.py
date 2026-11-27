@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace as Record
 
 from config import ClusterTarget
-from conftest import bridge_config, finelog_sql_for_duckdb
+from conftest import bridge_config, finelog_sql_for_duckdb, resolved_query_params
 from rl_execution_fixtures import (
     BASE_EPOCH_MS,
     CLUSTER,
@@ -40,13 +40,8 @@ def _target_params(target, *, run=RUN_ID):
         "${__to}": str(WINDOW_START_MS + WINDOW_MS),
         "${__interval_ms}": str(RL_EXECUTION_MIN_BUCKET_MS),
     }
-    params = {}
-    for param in target["url_options"]["params"]:
-        value = param["value"]
-        for macro, replacement in variables.items():
-            value = value.replace(macro, replacement)
-        assert "${" not in value, value
-        params[param["key"]] = value
+    params = resolved_query_params(target, tuple(variables.items()))
+    assert all("${" not in value for value in params.values()), params
     return params
 
 

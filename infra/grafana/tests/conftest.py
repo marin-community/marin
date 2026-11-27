@@ -230,3 +230,13 @@ def absent_namespace_error(sql: str) -> StatsError:
 def queried_namespace(sql: str) -> str:
     (namespace,) = re.findall(r'FROM "([^"]+)"', sql)
     return namespace
+
+
+def resolved_query_params(query: dict, replacements: tuple[tuple[str, str], ...]) -> dict[str, str]:
+    params = {}
+    for param in query["url_options"]["params"]:
+        value = param["value"]
+        for pattern, replacement in replacements:
+            value = value.replace(pattern, replacement)
+        params[param["key"]] = value
+    return params

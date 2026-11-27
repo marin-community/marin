@@ -17,8 +17,9 @@ Dashboard links use ``{"linkRef": "<fragment-name>"}`` markers resolved from
 ``SHARED_LINKS`` for the same reason.
 
 A ``panelGroupRef`` expands an ordered array from a fragment's ``panels`` field,
-including groups inside collapsed rows. Templating SQL expands the canonical RL
-producer eligibility list at build time, leaving Grafana macros intact.
+including groups inside collapsed rows. Templating SQL expands fragments declared by
+``sqlFragmentRefs`` at build time, leaving Grafana macros intact. Fragment paths
+are relative to the bridge source directory.
 
 Targets with ``targetRef`` share endpoint parameters. Time-series targets default to
 time/series/value columns; each target specifies its view, format and other columns.
@@ -28,13 +29,11 @@ import argparse
 import json
 from pathlib import Path
 
-from rl_producer_policy import RL_PRODUCER_ROW_NAMES_SQL
-
 PANEL_REF_KEY = "panelRef"
 LINK_REF_KEY = "linkRef"
 TARGET_REF_KEY = "targetRef"
 PANEL_GROUP_REF_KEY = "panelGroupRef"
-RL_PRODUCER_ROWS_TOKEN = "{{rl_producer_row_names}}"
+SQL_FRAGMENT_REFS_KEY = "sqlFragmentRefs"
 
 _TIMESERIES_COLUMNS = [
     {"selector": "t", "text": "time", "type": "timestamp_epoch"},
@@ -168,13 +167,15 @@ def _stitch_links(links: list[dict]) -> list[dict]:
     return resolved
 
 
-def _stitch_sql_fragments(value):
+def _stitch_sql_fragments(value, fragments: dict[str, str]):
     if isinstance(value, str):
-        return value.replace(RL_PRODUCER_ROWS_TOKEN, RL_PRODUCER_ROW_NAMES_SQL)
+        for token, replacement in fragments.items():
+            value = value.replace(token, replacement)
+        return value
     if isinstance(value, list):
-        return [_stitch_sql_fragments(item) for item in value]
+        return [_stitch_sql_fragments(item, fragments) for item in value]
     if isinstance(value, dict):
-        return {key: _stitch_sql_fragments(item) for key, item in value.items()}
+        return {key: _stitch_sql_fragments(item, fragments) for key, item in value.items()}
     return value
 
 
@@ -184,9 +185,14 @@ def stitch_dashboard(source: dict, fragments: dict[str, dict]) -> dict:
     Raises:
         KeyError: A panel, link or target references an unknown fragment.
     """
-    dashboard = {**source, "panels": _stitch_panels(source["panels"], fragments)}
+    dashboard = {key: value for key, value in source.items() if key != SQL_FRAGMENT_REFS_KEY}
+    dashboard["panels"] = _stitch_panels(source["panels"], fragments)
     if "templating" in source:
-        dashboard["templating"] = _stitch_sql_fragments(source["templating"])
+        sql_fragments = {
+            "{{" + name + "}}": (Path(__file__).parent / filename).read_text().strip()
+            for name, filename in source.get(SQL_FRAGMENT_REFS_KEY, {}).items()
+        }
+        dashboard["templating"] = _stitch_sql_fragments(source["templating"], sql_fragments)
     if "links" in source:
         dashboard["links"] = _stitch_links(source["links"])
     return dashboard

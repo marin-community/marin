@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from conftest import (
     dashboard_panels,
+    resolved_query_params,
 )
 from dashboard_stitch import stitch_all
 from rl_run_fixtures import (
@@ -26,7 +27,6 @@ from rl_run_fixtures import (
     WINDOW_START,
     _dashboard,
     _panel_sql,
-    _picker_params,
     _recent_runs_panel,
     _request_rows,
     _row,
@@ -175,7 +175,7 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(rl_run_store, h
             "to": [str(row["window_to_ms"])],
         }
         linked = parse_qs(url.query)
-        params = _picker_params(
+        params = resolved_query_params(
             query,
             (
                 ("${cluster:sqlstring}", f"'{linked['var-cluster'][0]}'"),
@@ -208,7 +208,7 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(rl_run_store, h
         ("sync", [RUN_ID, UNSTAMPED_RUN_ID, "end-boundary-run"]),
         ("async", [ASYNC_RUN_ID, "early-stamp-run", "mixed-run"]),
     ):
-        params = _picker_params(
+        params = resolved_query_params(
             query,
             (
                 ("${cluster:sqlstring}", f"'{CLUSTER}'"),
@@ -252,7 +252,7 @@ def test_the_job_and_execution_pickers_offer_what_the_producers_report(rl_run_st
 
     def picker_rows(name: str) -> list[dict]:
         query = variables[name]["query"]["infinityQuery"]
-        return _request_rows(rl_run_store, query["url"], _picker_params(query, substitutions))
+        return _request_rows(rl_run_store, query["url"], resolved_query_params(query, substitutions))
 
     assert picker_rows("job") == [{"value": JOB_ID}]
     assert picker_rows("execution") == [{"value": DEFAULT_EXECUTION_UID}]

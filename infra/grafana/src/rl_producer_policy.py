@@ -1,7 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Trainer rows that establish eligibility for RL run, job and execution pickers."""
+"""Producer-row SQL shared by RL picker and recent-run queries."""
 
-RL_PRODUCER_ROW_NAMES = ("lifecycle", "policy_step", "rollout_call")
-RL_PRODUCER_ROW_NAMES_SQL = ", ".join(f"'{name}'" for name in RL_PRODUCER_ROW_NAMES)
+from pathlib import Path
+
+RL_PRODUCER_ROW_NAMES_SQL = Path(__file__).with_suffix(".sql").read_text().strip()

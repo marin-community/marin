@@ -5,6 +5,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import NamedTuple
 
 import duckdb
 import pytest
@@ -48,21 +49,24 @@ NODES = ("gb200-node-0", "gb200-node-1")
 
 DEFAULT_EXECUTION_UID = "iris:/atqamar/snowball-e6-muonh-0-attempt-0/0:attempt:0"
 
-_COLUMNS = (
-    "cluster",
-    "service",
-    "run_id",
-    "job_id",
-    "execution_uid",
-    "node_name",
-    "process_index",
-    "name",
-    "value",
-    "timestamp_ms",
-    "seq",
-    "resource_attributes_json",
-    "attributes_json",
-)
+
+class RunTelemetryRow(NamedTuple):
+    cluster: str
+    service: str
+    run_id: str | None
+    job_id: str | None
+    execution_uid: str
+    node_name: str | None
+    process_index: str | None
+    name: str
+    value: float
+    timestamp_ms: int
+    seq: int
+    resource_attributes_json: str
+    attributes_json: str
+
+
+_COLUMNS = RunTelemetryRow._fields
 
 
 def _millis(moment: datetime) -> int:
@@ -83,11 +87,11 @@ def _row(
     role: str = "",
     training_type: str | None = "sync",
     attributes: dict[str, str] | None = None,
-) -> tuple:
+) -> RunTelemetryRow:
     resource = {"role": role} if role else {}
     if training_type is not None:
         resource["training_type"] = training_type
-    return (
+    return RunTelemetryRow(
         CLUSTER,
         service,
         run_id,
@@ -106,212 +110,228 @@ def _row(
     )
 
 
-def _run_rows() -> list[tuple]:
-    """One RL run as the three producers actually record it."""
+def _trainer_rows(bucket: int, moment: datetime) -> list[RunTelemetryRow]:
     rows = []
-    for bucket in range(6):
-        moment = WINDOW_START + timedelta(minutes=5 * bucket)
-        # The trainer: run_id, job_id and the node it occupies.
-        for node in NODES:
-            rows.append(
-                _row(
-                    service="marinskyrl",
-                    name="policy_step",
-                    value=float(bucket),
-                    moment=moment,
-                    seq=bucket,
-                    run_id=RUN_ID,
-                    job_id=JOB_ID,
-                    node_name=node,
-                    role="trainer",
-                )
-            )
-        for phase, seconds, outcome in (
-            ("rollout_or_inference_wait", 44.0, "success"),
-            ("train_step", 6.0, "success"),
-            # A step that raised partway through. Its duration is a different quantity.
-            ("train_step", 0.5, "failure"),
-        ):
-            rows.append(
-                _row(
-                    service="marinskyrl",
-                    name="phase_duration_seconds",
-                    value=seconds,
-                    moment=moment,
-                    seq=bucket,
-                    run_id=RUN_ID,
-                    job_id=JOB_ID,
-                    node_name=NODES[0],
-                    role="trainer",
-                    attributes={"phase": phase, "clock_domain": "critical_path", "outcome": outcome},
-                )
-            )
-        for work_kind, count in (("rollout", 64.0), ("sample", 512.0), ("generated_token", 131072.0)):
-            rows.append(
-                _row(
-                    service="marinskyrl",
-                    name="work_completed",
-                    value=count,
-                    moment=moment,
-                    seq=bucket,
-                    run_id=RUN_ID,
-                    job_id=JOB_ID,
-                    node_name=NODES[0],
-                    role="trainer",
-                    attributes={"work_kind": work_kind},
-                )
-            )
-        # The Ray controller, forwarded under a different role. Forwarded snapshots always arrive
-        # with kind "gauge"; source_temporality carries the real semantics.
-        for node in NODES:
-            for name, value in (
-                ("ray_object_store_used_memory", 3.0e9),
-                ("ray_object_store_available_memory", 1.0e9),
-            ):
-                rows.append(
-                    _row(
-                        service="marinskyrl",
-                        name=name,
-                        value=value,
-                        moment=moment,
-                        seq=bucket,
-                        run_id=RUN_ID,
-                        job_id=JOB_ID,
-                        node_name=node,
-                        role="controller",
-                        attributes={"metric_source": "ray", "source_temporality": "current_snapshot"},
-                    )
-                )
-            for state, value in (("Spilled", 2.0e9), ("Restored", 5.0e8)):
-                rows.append(
-                    _row(
-                        service="marinskyrl",
-                        name="ray_spill_manager_objects_bytes",
-                        value=value,
-                        moment=moment,
-                        seq=bucket,
-                        run_id=RUN_ID,
-                        job_id=JOB_ID,
-                        node_name=node,
-                        role="controller",
-                        attributes={
-                            "metric_source": "ray",
-                            "source_temporality": "current_snapshot",
-                            "state": state,
-                        },
-                    )
-                )
-        # A cumulative counter from the same allowlist, which must never be averaged in.
+    for node in NODES:
         rows.append(
             _row(
                 service="marinskyrl",
-                name="ray_spill_manager_objects_bytes",
-                value=9.9e12,
+                name="policy_step",
+                value=float(bucket),
+                moment=moment,
+                seq=bucket,
+                run_id=RUN_ID,
+                job_id=JOB_ID,
+                node_name=node,
+                role="trainer",
+            )
+        )
+    for phase, seconds, outcome in (
+        ("rollout_or_inference_wait", 44.0, "success"),
+        ("train_step", 6.0, "success"),
+        # A step that raised partway through. Its duration is a different quantity.
+        ("train_step", 0.5, "failure"),
+    ):
+        rows.append(
+            _row(
+                service="marinskyrl",
+                name="phase_duration_seconds",
+                value=seconds,
                 moment=moment,
                 seq=bucket,
                 run_id=RUN_ID,
                 job_id=JOB_ID,
                 node_name=NODES[0],
-                role="controller",
-                attributes={
-                    "metric_source": "ray",
-                    "source_temporality": "cumulative_snapshot",
-                    "state": "Spilled",
-                },
+                role="trainer",
+                attributes={"phase": phase, "clock_domain": "critical_path", "outcome": outcome},
             )
         )
-        for node in NODES:
-            for gpu in range(2):
-                gauges = {
-                    "gpu_utilization_percent": 71.0 + bucket,
-                    "gpu_sm_active_ratio": 0.5 + gpu * 0.2,
-                    "gpu_tensor_active_ratio": 0.2 + gpu * 0.2,
-                    "gpu_memory_used_bytes": 40e9 + gpu * 20e9,
-                    "gpu_nvlink_receive_bytes_per_second": 100,
-                    "gpu_pcie_receive_bytes_per_second": 10,
-                    "gpu_power_watts": 620 + gpu * 10,
-                    "gpu_pcie_replay_errors": (10, 13, 1, 1, 2, 2)[bucket] if (node, gpu) == (NODES[0], 0) else 4,
-                }
-                for name, value in gauges.items():
-                    rows.append(
-                        _row(
-                            service="iris-node-agent",
-                            name=name,
-                            value=value,
-                            moment=moment,
-                            seq=bucket,
-                            node_name=node,
-                            attributes={"gpu_uuid": f"GPU-{node}-{gpu}"},
-                        )
-                    )
-        # Each engine actor publishes its own vLLM registry under `service='vllm'`, carrying the
-        # run id it inherited from the task environment. The forwarder strips the `vllm:` prefix
-        # and prometheus counters keep `_total`, so these are the names that land. The counters are
-        # cumulative and the panels difference consecutive samples.
-        for engine in ("0", "1"):
-            for name, value in (
-                ("generation_tokens_total", 1024.0 * (bucket + 1)),
-                ("prompt_tokens_total", 256.0 * (bucket + 1)),
-                ("num_requests_running", 48.0),
-                ("num_requests_waiting", 12.0),
-                ("kv_cache_usage_perc", 0.71),
-                ("prefix_cache_hits_total", 42.0 * (bucket + 1)),
-                ("prefix_cache_queries_total", 100.0 * (bucket + 1)),
-                ("num_preemptions_total", 2.0 * (bucket + 1)),
-            ):
+    for work_kind, count in (("rollout", 64.0), ("sample", 512.0), ("generated_token", 131072.0)):
+        rows.append(
+            _row(
+                service="marinskyrl",
+                name="work_completed",
+                value=count,
+                moment=moment,
+                seq=bucket,
+                run_id=RUN_ID,
+                job_id=JOB_ID,
+                node_name=NODES[0],
+                role="trainer",
+                attributes={"work_kind": work_kind},
+            )
+        )
+    return rows
+
+
+def _ray_rows(bucket: int, moment: datetime) -> list[RunTelemetryRow]:
+    rows = []
+    for node in NODES:
+        for name, value in (
+            ("ray_object_store_used_memory", 3.0e9),
+            ("ray_object_store_available_memory", 1.0e9),
+        ):
+            rows.append(
+                _row(
+                    service="marinskyrl",
+                    name=name,
+                    value=value,
+                    moment=moment,
+                    seq=bucket,
+                    run_id=RUN_ID,
+                    job_id=JOB_ID,
+                    node_name=node,
+                    role="controller",
+                    attributes={"metric_source": "ray", "source_temporality": "current_snapshot"},
+                )
+            )
+        for state, value in (("Spilled", 2.0e9), ("Restored", 5.0e8)):
+            rows.append(
+                _row(
+                    service="marinskyrl",
+                    name="ray_spill_manager_objects_bytes",
+                    value=value,
+                    moment=moment,
+                    seq=bucket,
+                    run_id=RUN_ID,
+                    job_id=JOB_ID,
+                    node_name=node,
+                    role="controller",
+                    attributes={
+                        "metric_source": "ray",
+                        "source_temporality": "current_snapshot",
+                        "state": state,
+                    },
+                )
+            )
+    # A cumulative counter from the same allowlist, which must never be averaged in.
+    rows.append(
+        _row(
+            service="marinskyrl",
+            name="ray_spill_manager_objects_bytes",
+            value=9.9e12,
+            moment=moment,
+            seq=bucket,
+            run_id=RUN_ID,
+            job_id=JOB_ID,
+            node_name=NODES[0],
+            role="controller",
+            attributes={
+                "metric_source": "ray",
+                "source_temporality": "cumulative_snapshot",
+                "state": "Spilled",
+            },
+        )
+    )
+    return rows
+
+
+def _node_rows(bucket: int, moment: datetime) -> list[RunTelemetryRow]:
+    rows = []
+    for node in NODES:
+        for gpu in range(2):
+            gauges = {
+                "gpu_utilization_percent": 71.0 + bucket,
+                "gpu_sm_active_ratio": 0.5 + gpu * 0.2,
+                "gpu_tensor_active_ratio": 0.2 + gpu * 0.2,
+                "gpu_memory_used_bytes": 40e9 + gpu * 20e9,
+                "gpu_nvlink_receive_bytes_per_second": 100,
+                "gpu_pcie_receive_bytes_per_second": 10,
+                "gpu_power_watts": 620 + gpu * 10,
+                "gpu_pcie_replay_errors": (10, 13, 1, 1, 2, 2)[bucket] if (node, gpu) == (NODES[0], 0) else 4,
+            }
+            for name, value in gauges.items():
                 rows.append(
                     _row(
-                        service="vllm",
+                        service="iris-node-agent",
                         name=name,
                         value=value,
                         moment=moment,
                         seq=bucket,
-                        run_id=RUN_ID,
-                        job_id=JOB_ID,
-                        node_name=NODES[1],
-                        role="inference",
-                        attributes={"metric_source": "vllm", "engine": engine},
+                        node_name=node,
+                        attributes={"gpu_uuid": f"GPU-{node}-{gpu}"},
                     )
                 )
-            for stage in (
-                "request_queue_time_seconds_sum",
-                "request_queue_time_seconds_count",
-                "request_decode_time_seconds_sum",
-                "request_decode_time_seconds_count",
-            ):
-                rows.append(
-                    _row(
-                        service="vllm",
-                        name=stage,
-                        value=(3.5 if stage.endswith("_sum") else 1.0) * (bucket + 1),
-                        moment=moment,
-                        seq=bucket,
-                        run_id=RUN_ID,
-                        job_id=JOB_ID,
-                        node_name=NODES[1],
-                        role="inference",
-                        attributes={"metric_source": "vllm", "engine": engine},
-                    )
+    return rows
+
+
+def _engine_rows(bucket: int, moment: datetime) -> list[RunTelemetryRow]:
+    rows = []
+    for engine in ("0", "1"):
+        for name, value in (
+            ("generation_tokens_total", 1024.0 * (bucket + 1)),
+            ("prompt_tokens_total", 256.0 * (bucket + 1)),
+            ("num_requests_running", 48.0),
+            ("num_requests_waiting", 12.0),
+            ("kv_cache_usage_perc", 0.71),
+            ("prefix_cache_hits_total", 42.0 * (bucket + 1)),
+            ("prefix_cache_queries_total", 100.0 * (bucket + 1)),
+            ("num_preemptions_total", 2.0 * (bucket + 1)),
+        ):
+            rows.append(
+                _row(
+                    service="vllm",
+                    name=name,
+                    value=value,
+                    moment=moment,
+                    seq=bucket,
+                    run_id=RUN_ID,
+                    job_id=JOB_ID,
+                    node_name=NODES[1],
+                    role="inference",
+                    attributes={"metric_source": "vllm", "engine": engine},
                 )
-            for reason, value in (
-                ("length", 8.0 * (bucket + 1)),
-                ("stop", 40.0 * (bucket + 1)),
-                ("abort", 1.0 * (bucket + 1)),
-            ):
-                rows.append(
-                    _row(
-                        service="vllm",
-                        name="request_success_total",
-                        value=value,
-                        moment=moment,
-                        seq=bucket,
-                        run_id=RUN_ID,
-                        job_id=JOB_ID,
-                        node_name=NODES[1],
-                        role="inference",
-                        attributes={"metric_source": "vllm", "engine": engine, "finished_reason": reason},
-                    )
+            )
+        for stage in (
+            "request_queue_time_seconds_sum",
+            "request_queue_time_seconds_count",
+            "request_decode_time_seconds_sum",
+            "request_decode_time_seconds_count",
+        ):
+            rows.append(
+                _row(
+                    service="vllm",
+                    name=stage,
+                    value=(3.5 if stage.endswith("_sum") else 1.0) * (bucket + 1),
+                    moment=moment,
+                    seq=bucket,
+                    run_id=RUN_ID,
+                    job_id=JOB_ID,
+                    node_name=NODES[1],
+                    role="inference",
+                    attributes={"metric_source": "vllm", "engine": engine},
                 )
+            )
+        for reason, value in (
+            ("length", 8.0 * (bucket + 1)),
+            ("stop", 40.0 * (bucket + 1)),
+            ("abort", 1.0 * (bucket + 1)),
+        ):
+            rows.append(
+                _row(
+                    service="vllm",
+                    name="request_success_total",
+                    value=value,
+                    moment=moment,
+                    seq=bucket,
+                    run_id=RUN_ID,
+                    job_id=JOB_ID,
+                    node_name=NODES[1],
+                    role="inference",
+                    attributes={"metric_source": "vllm", "engine": engine, "finished_reason": reason},
+                )
+            )
+    return rows
+
+
+def _run_rows() -> list[RunTelemetryRow]:
+    rows = []
+    for bucket in range(6):
+        moment = WINDOW_START + timedelta(minutes=5 * bucket)
+        rows.extend(_trainer_rows(bucket, moment))
+        rows.extend(_ray_rows(bucket, moment))
+        rows.extend(_node_rows(bucket, moment))
+        rows.extend(_engine_rows(bucket, moment))
     return rows
 
 
@@ -406,7 +426,7 @@ def _overview_rows(rl_run_store, view, endpoint="/v1/rl/overview"):
 
 
 def _census(database, present: frozenset[str]) -> list[dict[str, object]]:
-    """Run the census the way the route does: one query per namespace the deployment holds."""
+    """Return producer census rows from the deployment's available namespaces."""
 
     def query(sql: str) -> list[dict[str, object]]:
         assert queried_namespace(sql) in present, f"queried {queried_namespace(sql)}, which is absent"
@@ -424,13 +444,3 @@ def _recent_runs_panel() -> dict:
     home = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["home.json"]
     (panel,) = [p for p in home["panels"] if p.get("title") == "Recent RL runs"]
     return panel
-
-
-def _picker_params(query: dict, replacements: tuple[tuple[str, str], ...]) -> dict[str, str]:
-    params = {}
-    for param in query["url_options"]["params"]:
-        value = param["value"]
-        for pattern, replacement in replacements:
-            value = value.replace(pattern, replacement)
-        params[param["key"]] = value
-    return params

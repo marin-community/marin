@@ -58,7 +58,7 @@ Execution panels require an Iris `job_id`. Runs without one show missing-job err
 execution panels; the run-wide panels still render.
 
 The Run, Job and Execution pickers scan the producer rows defined in
-`src/rl_producer_policy.py`. Dashboard stitching expands that same policy into
+`src/rl_producer_policy.sql`. Dashboard stitching expands that same policy into
 all three picker queries. Engine counters sum clamped growth between ordered
 samples, preserving origin cluster and full series identity before aggregation.
 The scan projects narrow keys and hashes resource/attribute labels to limit the
@@ -346,5 +346,5 @@ at build time rather than being editable through the Grafana UI.
 
 The stitcher also expands `panelGroupRef` into an ordered list of panels, so a
 large dashboard can keep its section layouts in bounded fragments. Picker SQL
-uses `{{rl_producer_row_names}}`, expanded from the canonical producer policy at
-build time. Grafana receives only resolved JSON.
+declares `sqlFragmentRefs` and uses `{{rl_producer_row_names}}`, expanded from
+the canonical SQL fragment at build time. Grafana receives only resolved JSON.

@@ -170,9 +170,7 @@ def telemetry_table():
         yield database
 
 
-@pytest.fixture
-def rl_execution_store(telemetry_table):
-    database = telemetry_table
+def _baseline_execution_rows():
     rows = []
 
     def add(name, value=0, *, attributes=None, body=None, process="trainer", execution=DRIVER, timestamp=None):
@@ -389,12 +387,13 @@ def rl_execution_store(telemetry_table):
     add("telemetry_rejected_records", 0)
     for n, value in ((1, 0.75), (16, 0.25)):
         add("training_metric_value", value, attributes={"metric": f"reward/avg_pass_at_{n}", "payload_kind": "train"})
-    # One copy of every row per predicate the panels filter on, each copy falsifying one
-    # predicate and carrying a value no assertion below expects. The other run is a sync
-    # run, which the run picker has to leave out of its dropdown as well.
-    sync_resource = json.dumps({"role": "trainer", "host": "trainer", "training_type": "sync"})
     add("work_completed", 64, attributes={"work_kind": "rollout"})
     add("work_completed", 512, attributes={"work_kind": "sample"})
+    return rows
+
+
+def _execution_distractors(rows):
+    sync_resource = json.dumps({"role": "trainer", "host": "trainer", "training_type": "sync"})
     distractors = []
     for row in rows:
         for column, replacement in (
@@ -410,6 +409,10 @@ def rl_execution_store(telemetry_table):
             if column == "run_id":
                 other = other._replace(resource_attributes_json=sync_resource)
             distractors.append(other)
+    return distractors
+
+
+def _synchronous_execution_rows(rows):
     sync_rows = []
     for row in rows:
         metric = json.loads(row.attributes_json).get("metric", "")
@@ -427,5 +430,11 @@ def rl_execution_store(telemetry_table):
                 value=0 if row.name == "rollout_staleness_steps" else row.value,
             )
         )
-    seed(database, rows + distractors + sync_rows)
-    return database
+    return sync_rows
+
+
+@pytest.fixture
+def rl_execution_store(telemetry_table):
+    rows = _baseline_execution_rows()
+    seed(telemetry_table, rows + _execution_distractors(rows) + _synchronous_execution_rows(rows))
+    return telemetry_table

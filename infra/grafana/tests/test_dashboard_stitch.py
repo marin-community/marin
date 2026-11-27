@@ -46,13 +46,11 @@ def test_stitch_dashboard_expands_target_refs_in_fragments_and_collapsed_rows(pa
         ]
     }
 
-    first, row = stitch_dashboard(
-        source,
-        {
-            "shared": fragment,
-            "nested": {"panels": [{"id": 3, "targets": [{**short, "format": "table", "columns": columns[:1]}]}]},
-        },
-    )["panels"]
+    fragments = {
+        "shared": fragment,
+        "nested": {"panels": [{"id": 3, "targets": [{**short, "format": "table", "columns": columns[:1]}]}]},
+    }
+    first, row = stitch_dashboard(source, fragments)["panels"]
 
     params = [
         {"key": "clusters", "value": "${cluster:csv}"},
@@ -77,7 +75,7 @@ def test_stitch_dashboard_expands_target_refs_in_fragments_and_collapsed_rows(pa
     assert first["targets"] == [expanded]
     assert row["panels"] == [{"id": 3, "targets": [{**expanded, "format": "table", "columns": columns[:1]}]}]
     first["targets"][0]["columns"][0]["selector"] = "changed"
-    assert stitch_dashboard(source, {"shared": fragment})["panels"][0]["targets"] == [expanded]
+    assert stitch_dashboard(source, fragments)["panels"][0]["targets"] == [expanded]
 
 
 def test_stitch_dashboard_leaves_non_ref_panels_untouched():
