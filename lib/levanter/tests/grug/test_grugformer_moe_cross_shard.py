@@ -16,7 +16,14 @@ from levanter.testing.devices import use_test_devices
 
 @pytest.mark.parametrize(
     "implementation",
-    ["ring", "ring_gather_combine", "ring_filtered", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"],
+    [
+        "ring",
+        "ring_gather_combine",
+        "ring_ordered_combine",
+        "ring_filtered",
+        "fixed_all_to_all",
+        "fixed_pooled_wave_all_to_all",
+    ],
 )
 @pytest.mark.parametrize(
     "token_valid",
