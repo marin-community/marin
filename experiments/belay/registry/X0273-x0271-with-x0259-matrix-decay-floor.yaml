@@ -1,0 +1,12 @@
+id: X0273
+slug: x0271-with-x0259-matrix-decay-floor
+name: X0271 with X0259 matrix decay floor
+category: Optimizers
+summary: 🤖 Posted on behalf of @armorfaye.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-7229403397
+  author: armorfaye
+  approved_by: armorfaye (trusted)
