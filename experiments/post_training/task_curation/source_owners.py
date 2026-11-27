@@ -247,7 +247,8 @@ SOURCE_OWNERS: dict[str, SourceOwner] = {
     ),
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
-        note="intake; wave 1 — license gate then conversion chain",
+        note="admitted R41 intake — release-pin SAMPLE GOOD, evidence sealed, overlap"
+        " acknowledged; surfaces at the load",
     ),
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_tir": SourceOwner(
         owner="R41 self-executing · ses_deccb722",
@@ -255,7 +256,8 @@ SOURCE_OWNERS: dict[str, SourceOwner] = {
     ),
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
-        note="intake; wave 1 — license gate then conversion chain",
+        note="admitted R41 intake — release-pin SAMPLE GOOD, evidence sealed, overlap"
+        " acknowledged; surfaces at the load",
     ),
     "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
@@ -294,6 +296,10 @@ SOURCE_OWNERS: dict[str, SourceOwner] = {
         note="admitted R41 intake; surfaces at the load",
     ),
     "Yatin:Edge-Agent-Reasoning-WebSearch-260K": SourceOwner(
+        owner="ingest B · OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+        note="admitted R41 intake; surfaces at the load",
+    ),
+    "ScienceOne:S1-DeepResearch-15k": SourceOwner(
         owner="ingest B · OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
         note="admitted R41 intake; surfaces at the load",
     ),

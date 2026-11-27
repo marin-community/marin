@@ -24,8 +24,10 @@ from experiments.post_training.task_curation.datasets import (
     native_releases,
     nemo_mcqa,
     nemo_structured,
+    nemotron_ultra_renames_admitted,
     qa_abstention_admitted,
     repair_releases,
+    s1_deepresearch_admitted,
     structure_closure,
     tasktrove_structured_native,
     terminus_pivot,
@@ -221,6 +223,7 @@ R41_PENDING_SOURCE_IDS = (
         "Nvidia:Nemotron-RL-Instruction-Following-Citation-Formatting-v1",
         "Nvidia:Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1",
         "Nvidia:Nemotron-RL-QA-Abstention-v1",
+        "ScienceOne:S1-DeepResearch-15k",
         "Yatin:Edge-Agent-Reasoning-WebSearch-260K",
         "Nemotron:Nemotron-RL-knowledge-mcqa",
         # The native TaskTrove structured-output cohort qualified after the R40 freeze.
@@ -248,6 +251,7 @@ PENDING_MEASUREMENT_SOURCES = (
     *inverse_ifeval_admitted.sources(),
     *qa_abstention_admitted.sources(),
     *edge_websearch_admitted.sources(),
+    *s1_deepresearch_admitted.sources(),
     *freeform_formatting_admitted.sources(),
     *citation_formatting_admitted.sources(),
     *(
@@ -274,13 +278,14 @@ PENDING_MEASUREMENT_SOURCES = (
         for source in nemotron_ultra.sources()
         if source.info.id
         in {
-            "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
-            "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
             "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
             "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
             "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
         }
     ),
+    # The two admitted wave-1 renames bind their qualification records; their retained
+    # releases surface at the R41 load.
+    *nemotron_ultra_renames_admitted.sources(),
     # The main-sync staged sources (2026-11-25): declared on origin/main, absent
     # from the Atlas r39 cut, staged for R41 intake at their main pins. The
     # license-banned KTO components never enter this listing.
@@ -336,10 +341,10 @@ def configured_sources() -> list[RlDataSource]:
         *inverse_ifeval_admitted.sources(),
         *qa_abstention_admitted.sources(),
         *edge_websearch_admitted.sources(),
+        *s1_deepresearch_admitted.sources(),
         *freeform_formatting_admitted.sources(),
         *citation_formatting_admitted.sources(),
-        *freeform_formatting_admitted.sources(),
-        *citation_formatting_admitted.sources(),
+        *nemotron_ultra_renames_admitted.sources(),
         *workplace.sources(),
         *nemo_mcqa.sources(),
         *(source for source in cascade.sources() if source.info.subset in CASCADE_RETAINED_SUBSETS),

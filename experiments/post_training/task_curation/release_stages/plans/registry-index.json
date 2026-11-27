@@ -1,5 +1,5 @@
 {
-  "revision": "d0b972fc8d6c24f5e2fff82d48ebec3390ed3526",
+  "revision": "9f50d23faaad5121d557d0d0bcbaac4066af16c9",
   "sources": {
     "AI-MO:numina_math": {
       "input_sha256": "56b745a538dad1c11afd3f5f954f73c43605435b08d296a75836ae5b8a0b1849",
@@ -1141,6 +1141,11 @@
       "sha256": "9e9d7c9d56dc7be78d542a27dd16fa7d0e4df0be341ea67e984533bc16645d3b",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/swe-repair/2026.11.20.1/measurements/source-identity/swe-repair-survey/source-identities-content-nn-v4.json"
     },
+    "ScienceOne:S1-DeepResearch-15k": {
+      "input_sha256": "33f2a0d5c894e167f67bba0d1f454335fcc46929d64b1da09b33599fe6f087d0",
+      "sha256": "6c8b1abde6fd59de3e184f5291e60b3b67e70d34a448687c8ef4e3d40f68fcb3",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/s1-deepresearch/2026.11.26.1/admission-evidence-v1/source-identities.json"
+    },
     "TRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized": {
       "input_sha256": "1f31f4a251af446d7403e3ff44cb0f4f1fc583402e0fc6d317f236ede9bbffa8",
       "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
@@ -1282,9 +1287,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/empty-fingerprints/2026.11.14.1/fingerprints.json"
     },
     "TaskTrove:SWE-Gym__SWE-Gym": {
-      "input_sha256": "17a472315c49536ff10f4945e787e81fb3465840c302b2880201c241b6e3f619",
-      "sha256": "c57017ca626a8895ee1ffa77740e239734f4696a14560cb4543bca0fdddbdb6e",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/empty-fingerprints/2026.11.14.1/fingerprints.json"
+      "input_sha256": "c741a5a5f832ac798a0bf02227cc01f4480f4030a8559e90a876c08c6cc93e8e",
+      "sha256": "2ec722df51769df864f819c74dccf01d58dd3ddb82375cb9f81b5fe0f9d7fd80",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/native-taskspec-repin-20261126/source-identities-content-nn-v4.json"
     },
     "TaskTrove:SankalpKJ__nemotron-code-oracle-filtered": {
       "input_sha256": "65f2a48e8ff68804ef8de9fad891df761e98d7c448e79ae54804ff1b6213f5f5",
@@ -1617,9 +1622,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/empty-fingerprints/2026.11.14.1/fingerprints.json"
     },
     "TaskTrove:laion__r2egym-patched-full-oracle-v3": {
-      "input_sha256": "ec16aef2e4c6c2e9da2a139bf08de353cada0936639b189788ad264ee6f253c3",
-      "sha256": "c57017ca626a8895ee1ffa77740e239734f4696a14560cb4543bca0fdddbdb6e",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/empty-fingerprints/2026.11.14.1/fingerprints.json"
+      "input_sha256": "f57a65a3215e216959ec5218da6d2aa2598e7e3e9f5a8021a3bb8e7ab1499132",
+      "sha256": "2ec722df51769df864f819c74dccf01d58dd3ddb82375cb9f81b5fe0f9d7fd80",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/native-taskspec-repin-20261126/source-identities-content-nn-v4.json"
     },
     "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2": {
       "input_sha256": "afb3577c75c8a2f4429ee735d38a176886fe306b8e8dad71b2faa77aa41cb518",
@@ -1642,9 +1647,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/census-repair/2026.11.17.1/source-identities.json"
     },
     "TaskTrove:laion__swegym-tasks-patched-validated-v5": {
-      "input_sha256": "a55d222af225a2ff3f90a1b8b9e376d0e463ec4165d0fbdd212ccd4418619ac8",
-      "sha256": "c57017ca626a8895ee1ffa77740e239734f4696a14560cb4543bca0fdddbdb6e",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/empty-fingerprints/2026.11.14.1/fingerprints.json"
+      "input_sha256": "23abd3eb61c2ec6223d40ab8fe9e8e7ff39853c3262bb707f897f13be0a749ad",
+      "sha256": "2ec722df51769df864f819c74dccf01d58dd3ddb82375cb9f81b5fe0f9d7fd80",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/native-taskspec-repin-20261126/source-identities-content-nn-v4.json"
     },
     "TaskTrove:laion__swesmith-oracle-filtered-v2": {
       "input_sha256": "d78281f1edc3bdf1eda7e70dfb9e22724d40814fe7513986ae916b62fed8b444",

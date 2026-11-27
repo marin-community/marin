@@ -188,6 +188,7 @@ class SourceOrigin(StrEnum):
     REASONING_GYM = "Reasoning Gym"
     RST = "RST"
     SCIENCE_ONE = "ScienceOne"
+    SYNTHLABS = "SynthLabs"
     TRL = "TRL"
     TASKTROVE = "TaskTrove"
     TEVATRON = "Tevatron"

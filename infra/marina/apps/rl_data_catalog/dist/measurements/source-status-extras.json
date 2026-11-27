@@ -21,6 +21,7 @@
     "Nvidia:Nemotron-RL-InverseIFEval-v1": "ingest B \u00b7 Codex 01a1e039",
     "Nvidia:Nemotron-RL-QA-Abstention-v1": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
     "Yatin:Edge-Agent-Reasoning-WebSearch-260K": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+    "ScienceOne:S1-DeepResearch-15k": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
     "Nvidia:Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
     "Nvidia:Nemotron-RL-Instruction-Following-Citation-Formatting-v1": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
     "TaskTrove:tasktrove-competitive-coding-rebuilt-v1": "ingest B \u00b7 Codex 01a1e039",
@@ -31,11 +32,11 @@
     "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1": "ingest A \u00b7 ses_de826fccdffe",
     "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1": "ingest A \u00b7 ses_de826fccdffe",
     "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1": "ingest A \u00b7 ses_de826fccdffe",
-    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
-    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
     "Anthropic:hh_rlhf/harmless-base": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
     "Anthropic:hh_rlhf/helpful-base": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
     "Anthropic:hh_rlhf/helpful-online": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
@@ -92,7 +93,6 @@
     "TaskTrove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
     "TaskTrove:GAIR__OpenSWE__openswe_oss": "SWE zero-task \u00b7 ses_de7ba44ecffe",
     "TaskTrove:GAIR__OpenSWE__openswe_other": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
-    "TaskTrove:laion__codeelo-v2": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
     "TaskTrove:laion__exp_rpt_bugsinpy-v4": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
     "TaskTrove:laion__exp_rpt_codenet-python-v4": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
     "TaskTrove:laion__exp_rpt_crosscodeeval-csharp-v4": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
@@ -121,7 +121,6 @@
     "TaskTrove:laion__tulu3-sft-personas-math-sandboxes-verified-v3": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
     "TaskTrove:R2E-Gym__R2E-Gym-V1": "SWE zero-task \u00b7 ses_de7ba44ecffe",
     "TaskTrove:SankalpKJ__nemotron-code-oracle-filtered": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
-    "TaskTrove:SWE-Gym__SWE-Gym": "SWE zero-task \u00b7 ses_de7ba44ecffe",
     "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__general": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
     "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__music": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
     "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@backfilled-20261122": "requirement-backfill \u00b7 awaits the next preview publication",
@@ -1637,6 +1636,24 @@
       "reasons": []
     },
     {
+      "id": "ScienceOne:S1-DeepResearch-15k",
+      "display_name": "ScienceOne \u00b7 S1-DeepResearch-15k",
+      "status": "Pending",
+      "origin": "ScienceOne",
+      "upstream_dataset": "S1-DeepResearch-15k",
+      "upstream_url": null,
+      "notes": "TRAIN deep-research tasks under two declared judge families: closed-ended multi-hop rows are graded by a MEDIUM reference judge against the dataset-authored meta.answer (the card calls it a reference answer required for verifiable tasks; the sealed provenance receipt records the answer string only in the final assistant turn for 14/1,192 answered sample rows, nowhere in the trajectory for 586, and a different final-turn stated answer for 234), and every open-ended exploration row by the same MEDIUM prompt-only research-quality checklist. The task context carries the source's own system instruction and first user message verbatim; generated assistant and tool trajectory turns stay private provenance and never serve as judge gold. Bilingual en/zh kept as shipped. Standard lexical retention removed zero of the 15,000 converted input rows (one typed fail-closed contract rejection, incomplete_s1_native_contract); no within-source duplicates; 14,999 retained. Canonical static retention covers all 14,999 current-pin tasks under the no-oracle policy, executability unmeasured. Fresh seed-zero V4 SAMPLE reviewed 99/100, found 7 issues and one unavailable; Result some_issues per the recorded receipt; findings remain verbatim. The content survey measured ten neighbors, all DISTINCT. Quality never vetoes admission. The canonical consumer-runtime check at b9373278 is advisory: bespoke failures 0/14999; global schema rejections advisory per the standing policy. This records loader and launch binding, not live judge responses or executable-grader qualification. Evidence: s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/s1-deepresearch/2026.11.26.1/final-pin-sample-v1/result.json, s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/s1-deepresearch/2026.11.26.1/admission-evidence-v1/result.json and s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/s1-deepresearch/2026.11.26.1/consumer-binding-v1/result.json.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "owner": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
       "id": "Nvidia:Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1",
       "display_name": "Nvidia \u00b7 Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1",
       "status": "Pending",
@@ -1839,42 +1856,6 @@
       "reasons": []
     },
     {
-      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
-      "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/ultra_sft_step3200_lean",
-      "status": "Pending",
-      "origin": "Nemotron",
-      "upstream_dataset": "nemotron_ultra_mopd",
-      "upstream_url": null,
-      "notes": "",
-      "stage": "Measurements pending",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
-      "use": "train",
-      "method_tags": [
-        "RL"
-      ],
-      "reasons": []
-    },
-    {
-      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
-      "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
-      "status": "Pending",
-      "origin": "Nemotron",
-      "upstream_dataset": "nemotron_ultra_mopd",
-      "upstream_url": null,
-      "notes": "",
-      "stage": "Measurements pending",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
-      "use": "train",
-      "method_tags": [
-        "RL"
-      ],
-      "reasons": []
-    },
-    {
       "id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
       "display_name": "Nemotron \u00b7 nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
       "status": "Pending",
@@ -1916,6 +1897,42 @@
       "status": "Pending",
       "origin": "Nemotron",
       "upstream_dataset": "nemotron_ultra_rlvr2",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
+      "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/ultra_sft_step3200_lean",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+      "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
       "upstream_url": null,
       "notes": "",
       "stage": "Measurements pending",
@@ -2047,12 +2064,12 @@
     {
       "id": "Nemotron:nemotron_ultra_mopd/hs3_en",
       "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/hs3_en",
-      "status": "Pending",
+      "status": "Excluded",
       "origin": "Nemotron",
       "upstream_dataset": "nemotron_ultra_mopd",
       "upstream_url": null,
       "notes": "",
-      "stage": "Measurements pending",
+      "stage": null,
       "dataset_id": null,
       "dataset_revision": null,
       "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
@@ -2060,17 +2077,28 @@
       "method_tags": [
         "RL"
       ],
-      "reasons": []
+      "reasons": [
+        {
+          "reason": "grader-missing",
+          "evidence": {
+            "kind": "note",
+            "message": "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): no executable grader is declared on any task \u2014 the blend converter emits NoGrader text tasks, and the sibling hs3 grading censuses at this pin report 100% 'No executable grader is declared' (hs3_multi 962, hs3_multiturn 1,243). cc-by-4.0 license gate PASSES (registry ingest_c_intake_20261126_a_v1) \u2014 re-admissible with an executable or reward-model grader plus a zero-missing grading census; not banned.",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
     },
     {
       "id": "Nemotron:nemotron_ultra_mopd/hs3_multi",
       "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/hs3_multi",
-      "status": "Pending",
+      "status": "Excluded",
       "origin": "Nemotron",
       "upstream_dataset": "nemotron_ultra_mopd",
       "upstream_url": null,
       "notes": "",
-      "stage": "Measurements pending",
+      "stage": null,
       "dataset_id": null,
       "dataset_revision": null,
       "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
@@ -2078,17 +2106,28 @@
       "method_tags": [
         "RL"
       ],
-      "reasons": []
+      "reasons": [
+        {
+          "reason": "grader-missing",
+          "evidence": {
+            "kind": "note",
+            "message": "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading census at this pin reports 962/962 tasks 'No executable grader is declared' (converter 1509fc8638f6, s3://marin-us-east-02a/marin/rl-data/atlas/grading-census/2026.11.13.1/). cc-by-4.0 license gate PASSES \u2014 re-admissible with an executable or reward-model grader plus a zero-missing grading census; not banned.",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
     },
     {
       "id": "Nemotron:nemotron_ultra_mopd/hs3_multiturn",
       "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/hs3_multiturn",
-      "status": "Pending",
+      "status": "Excluded",
       "origin": "Nemotron",
       "upstream_dataset": "nemotron_ultra_mopd",
       "upstream_url": null,
       "notes": "",
-      "stage": "Measurements pending",
+      "stage": null,
       "dataset_id": null,
       "dataset_revision": null,
       "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
@@ -2096,17 +2135,28 @@
       "method_tags": [
         "RL"
       ],
-      "reasons": []
+      "reasons": [
+        {
+          "reason": "grader-missing",
+          "evidence": {
+            "kind": "note",
+            "message": "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading census at this pin reports 1,243/1,243 tasks 'No executable grader is declared' (converter 1509fc8638f6). cc-by-4.0 license gate PASSES \u2014 re-admissible with an executable or reward-model grader plus a zero-missing grading census; not banned.",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
     },
     {
       "id": "Nemotron:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train",
       "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train",
-      "status": "Pending",
+      "status": "Excluded",
       "origin": "Nemotron",
       "upstream_dataset": "nemotron_ultra_mopd",
       "upstream_url": null,
       "notes": "",
-      "stage": "Measurements pending",
+      "stage": null,
       "dataset_id": null,
       "dataset_revision": null,
       "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
@@ -2114,17 +2164,28 @@
       "method_tags": [
         "RL"
       ],
-      "reasons": []
+      "reasons": [
+        {
+          "reason": "grader-missing",
+          "evidence": {
+            "kind": "note",
+            "message": "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading census at this pin reports 2,000/2,000 tasks 'No executable grader is declared', and the actor census reports every task blocked on 'agent: no declared environment' (execution requirement). cc-by-4.0 license gate PASSES \u2014 re-admissible with an executable or reward-model grader plus a zero-missing grading census; not banned.",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
     },
     {
       "id": "Nemotron:nemotron_ultra_mopd/safety_en",
       "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/safety_en",
-      "status": "Pending",
+      "status": "Excluded",
       "origin": "Nemotron",
       "upstream_dataset": "nemotron_ultra_mopd",
       "upstream_url": null,
       "notes": "",
-      "stage": "Measurements pending",
+      "stage": null,
       "dataset_id": null,
       "dataset_revision": null,
       "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
@@ -2132,17 +2193,28 @@
       "method_tags": [
         "RL"
       ],
-      "reasons": []
+      "reasons": [
+        {
+          "reason": "grader-missing",
+          "evidence": {
+            "kind": "note",
+            "message": "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading census at this pin reports 629/629 tasks 'No executable grader is declared' (converter 1509fc8638f6). cc-by-4.0 license gate PASSES \u2014 re-admissible with an executable or reward-model grader plus a zero-missing grading census; not banned.",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
     },
     {
       "id": "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
       "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
-      "status": "Pending",
+      "status": "Excluded",
       "origin": "Nemotron",
       "upstream_dataset": "nemotron_ultra_mopd",
       "upstream_url": null,
       "notes": "",
-      "stage": "Measurements pending",
+      "stage": null,
       "dataset_id": null,
       "dataset_revision": null,
       "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
@@ -2150,17 +2222,28 @@
       "method_tags": [
         "RL"
       ],
-      "reasons": []
+      "reasons": [
+        {
+          "reason": "grader-missing",
+          "evidence": {
+            "kind": "note",
+            "message": "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading census at this pin reports 860/860 tasks 'No executable grader is declared' (converter 1509fc8638f6, s3://marin-us-east-02a/marin/rl-data/atlas/grading-census/2026.11.13.1/results/449f65753d610f85f4c8/receipt.json). cc-by-4.0 license gate PASSES \u2014 re-admissible with an executable or reward-model grader plus a zero-missing grading census; not banned.",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
     },
     {
       "id": "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
       "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
-      "status": "Pending",
+      "status": "Excluded",
       "origin": "Nemotron",
       "upstream_dataset": "nemotron_ultra_mopd",
       "upstream_url": null,
       "notes": "",
-      "stage": "Measurements pending",
+      "stage": null,
       "dataset_id": null,
       "dataset_revision": null,
       "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
@@ -2168,17 +2251,28 @@
       "method_tags": [
         "RL"
       ],
-      "reasons": []
+      "reasons": [
+        {
+          "reason": "grader-missing",
+          "evidence": {
+            "kind": "note",
+            "message": "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading census at this pin reports 3,903/3,903 tasks 'No executable grader is declared' (converter 1509fc8638f6). cc-by-4.0 license gate PASSES \u2014 re-admissible with an executable or reward-model grader plus a zero-missing grading census; not banned.",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
     },
     {
       "id": "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
       "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
-      "status": "Pending",
+      "status": "Excluded",
       "origin": "Nemotron",
       "upstream_dataset": "nemotron_ultra_mopd",
       "upstream_url": null,
       "notes": "",
-      "stage": "Measurements pending",
+      "stage": null,
       "dataset_id": null,
       "dataset_revision": null,
       "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
@@ -2186,17 +2280,28 @@
       "method_tags": [
         "RL"
       ],
-      "reasons": []
+      "reasons": [
+        {
+          "reason": "grader-missing",
+          "evidence": {
+            "kind": "note",
+            "message": "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading census at this pin reports 246/246 tasks 'No executable grader is declared' (converter 1509fc8638f6). cc-by-4.0 license gate PASSES \u2014 re-admissible with an executable or reward-model grader plus a zero-missing grading census; not banned.",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
     },
     {
       "id": "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
       "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
-      "status": "Pending",
+      "status": "Excluded",
       "origin": "Nemotron",
       "upstream_dataset": "nemotron_ultra_mopd",
       "upstream_url": null,
       "notes": "",
-      "stage": "Measurements pending",
+      "stage": null,
       "dataset_id": null,
       "dataset_revision": null,
       "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
@@ -2204,7 +2309,18 @@
       "method_tags": [
         "RL"
       ],
-      "reasons": []
+      "reasons": [
+        {
+          "reason": "grader-missing",
+          "evidence": {
+            "kind": "note",
+            "message": "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading census at this pin reports 932/932 tasks 'No executable grader is declared' (converter 1509fc8638f6). cc-by-4.0 license gate PASSES \u2014 re-admissible with an executable or reward-model grader plus a zero-missing grading census; not banned.",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
     },
     {
       "id": "TaskTrove:laion__nemotron-gym-structured-outputs-v4",

@@ -1,0 +1,7 @@
+{
+  "problem": "Compute the smallest positive integer $n$ such that $2^n \\equiv 1 \\pmod{7}$.",
+  "answer": "3",
+  "source": "number_theory",
+  "domain": ["Mathematics", "Number Theory"],
+  "llama8b_solve_rate": 0.37
+}
