@@ -1,0 +1,18 @@
+experiment: X0268d1280
+track: competitive-d1280
+runs:
+  seed0:
+    seed: 0
+    variant: softcap 2 + sqrt8 start + AIR angle + head law + embed LR x4
+    flags:
+    - --opt-set
+    - muonh_radial_softcap=2
+    - --opt-set
+    - muonh_air=true
+    - --opt-set
+    - embed_lr_mult=4
+  control:
+    seed: 0
+    variant: competitive-d1280 control
+    control: true
+    shared: s7n-d1280L16
