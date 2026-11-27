@@ -588,15 +588,18 @@ def test_script_judge_substitutes_only_the_declared_unservable_model(
     """A declared judge model the endpoint cannot serve is substituted and recorded end to end.
 
     The sandbox's judge.toml and VERIFYIT_JUDGE_MODEL both carry the served model, so the grader's
-    own model pin stays consistent while the wire request names the served model; the grading
-    evidence records the declared-to-served difference only when a substitution applied.
+    own model pin stays consistent while the wire request names the served model; the substituted
+    contract carries the substituted model's own template policy in place of the declared one, and
+    the grading evidence records the declared-to-served difference only when a substitution applied.
     """
+    expected_kwargs = {"reasoning_effort": "low"} if expected_served == "served-judge" else {"thinking_mode": "adaptive"}
     script = (
         b"import json, os, sys, tomllib\nfrom dataclasses import asdict\nfrom pathlib import Path\n"
         b"from verifyit.spec import parse_spec\n"
         b"from verifyit.modes.grade_judge import grade_judge_candidate\n"
         b"raw = tomllib.loads((Path(__file__).parent / 'judge.toml').read_text())\n"
         b"assert os.environ['VERIFYIT_JUDGE_MODEL'] == raw['model']\n"
+        b"assert raw['chat_template_kwargs'] == " + json.dumps(expected_kwargs).encode() + b"\n"
         b"spec = parse_spec((Path(__file__).parent / 'judge.toml').read_text())\n"
         b"result = grade_judge_candidate(spec, Path(sys.argv[1]).read_text())\n"
         b"Path(sys.argv[2]).write_text(json.dumps(asdict(result)))\n"
@@ -619,6 +622,7 @@ def test_script_judge_substitutes_only_the_declared_unservable_model(
                     exact_gate=False,
                     prompt_template="Reference: {reference}\nCandidate: {candidate}",
                     label_scores={"PASS": 1.0, "FAIL": 0.0},
+                    chat_template_kwargs={"thinking_mode": "adaptive"},
                 ),
             ),
         }
@@ -629,6 +633,7 @@ def test_script_judge_substitutes_only_the_declared_unservable_model(
         "runtime-private-key",
         default_model="pinned-judge",
         substitute_models=substitutions,
+        substitution_template_kwargs={"reasoning_effort": "low"},
     )
     result = grade_task(
         task,
@@ -646,6 +651,8 @@ def test_script_judge_substitutes_only_the_declared_unservable_model(
         assert result.diagnostics["judge_protocol"] == {
             "declared_model": "declared-judge",
             "served_model": "served-judge",
+            "declared_chat_template_kwargs": {"thinking_mode": "adaptive"},
+            "applied_chat_template_kwargs": {"reasoning_effort": "low"},
         }
     else:
         assert "judge_protocol" not in result.diagnostics

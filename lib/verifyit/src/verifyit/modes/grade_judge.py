@@ -28,6 +28,7 @@ import time
 import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
+from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -135,6 +136,7 @@ class JudgeConnection:
     api_key: str = field(repr=False)
     default_model: str | None = field(default=None, kw_only=True)
     substitute_models: Mapping[str, str] = field(default_factory=dict, kw_only=True)
+    substitution_template_kwargs: Mapping[str, str] = field(default_factory=dict, kw_only=True)
 
 
 def judge_substitution(spec: JudgeSpec, connection: JudgeConnection | None) -> dict[str, Any] | None:
@@ -142,8 +144,9 @@ def judge_substitution(spec: JudgeSpec, connection: JudgeConnection | None) -> d
 
     A substitution requires an explicit connection whose ``substitute_models`` names the task's
     declared judge model; the record travels into grading evidence. The declared judge's
-    model-specific ``chat_template_kwargs`` are forwarded unchanged but are not interpreted by
-    the substituted model, so the record names them as unhonored.
+    model-specific ``chat_template_kwargs`` cannot be honored by the substituted model, so the
+    substitution applies the connection's ``substitution_template_kwargs`` - the substituted
+    model's own reasoning policy - in their place, and the record states both.
     """
     declared = spec.model.strip()
     if connection is None or not declared:
@@ -153,8 +156,28 @@ def judge_substitution(spec: JudgeSpec, connection: JudgeConnection | None) -> d
         return None
     record: dict[str, Any] = {"declared_model": declared, "served_model": served}
     if spec.chat_template_kwargs:
-        record["unhonored_chat_template_kwargs"] = dict(spec.chat_template_kwargs)
+        record["declared_chat_template_kwargs"] = dict(spec.chat_template_kwargs)
+    if connection.substitution_template_kwargs:
+        record["applied_chat_template_kwargs"] = dict(connection.substitution_template_kwargs)
     return record
+
+
+def substituted_judge_spec(
+    spec: JudgeSpec, connection: JudgeConnection | None
+) -> tuple[JudgeSpec, dict[str, Any] | None]:
+    """The judge contract the endpoint actually serves, with its protocol-difference record.
+
+    The declared model is replaced by the substituted one and the declared model-specific
+    ``chat_template_kwargs`` are replaced by the substituted model's own policy; prompt, rubric,
+    rewards and token budgets stay exactly as declared.
+    """
+    record = judge_substitution(spec, connection)
+    if record is None or connection is None:
+        return spec, record
+    served = dataclasses_replace(
+        spec, model=record["served_model"], chat_template_kwargs=dict(connection.substitution_template_kwargs)
+    )
+    return served, record
 
 
 @dataclass(frozen=True)

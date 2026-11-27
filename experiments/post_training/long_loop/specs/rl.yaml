@@ -22,6 +22,8 @@ config:
         substitute_models:
           MiniMaxAI/MiniMax-M3-MXFP8: zai-org/GLM-5.3-Flash
           glm-5.3: zai-org/GLM-5.3-Flash
+        substitution_template_kwargs:
+          reasoning_effort: low
       task_spec:
         session:
           max_turns: 128

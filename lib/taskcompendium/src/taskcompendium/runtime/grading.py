@@ -24,7 +24,7 @@ from typing import Any
 from uuid import uuid4
 
 from shellbox.machine import Backend, Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
-from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection, judge_substitution
+from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection, substituted_judge_spec
 from verifyit.spec import JudgeSpec, Spec, render_spec
 
 from taskcompendium.grading import answer_submission, gradeable_empty_text, parse_grade_result, terminal_grade
@@ -435,19 +435,18 @@ def _sandbox_grading(task: TaskSpec, task_machine: Machine | None, timeout: floa
 
 
 def _sandbox_judge_contract(grading: _SandboxGrading, connection: JudgeConnection | None) -> JudgeSpec | None:
-    """The judge contract the sandbox sees: a declared model the endpoint cannot serve is substituted.
+    """The judge contract the sandbox sees: an unservable declared model is substituted.
 
     The substituted contract is what ``judge.toml`` renders and what ``VERIFYIT_JUDGE_MODEL`` pins,
     so the grader's own consistency check stays intact while the wire request carries the served
-    model. The declared-to-served difference is recorded in the grading diagnostics.
+    model and the substituted model's own template policy. The declared-to-served difference is
+    recorded in the grading diagnostics.
     """
     if not isinstance(grading.grader, ScriptGrader) or grading.grader.judge is None:
         return None
     declared = grading.grader.judge
-    substitution = judge_substitution(declared, connection)
-    if substitution is None:
-        return declared
-    return replace(declared, model=substitution["served_model"])
+    substituted, _ = substituted_judge_spec(declared, connection)
+    return substituted
 
 
 def _with_judge_protocol(
@@ -456,10 +455,10 @@ def _with_judge_protocol(
     """Record a declared-to-served judge substitution in the grading diagnostics."""
     if not isinstance(grading.grader, ScriptGrader) or grading.grader.judge is None:
         return result
-    substitution = judge_substitution(grading.grader.judge, connection)
-    if substitution is None:
+    _, protocol = substituted_judge_spec(grading.grader.judge, connection)
+    if protocol is None:
         return result
-    return replace(result, diagnostics={**result.diagnostics, "judge_protocol": substitution})
+    return replace(result, diagnostics={**result.diagnostics, "judge_protocol": protocol})
 
 
 def _grading_files(

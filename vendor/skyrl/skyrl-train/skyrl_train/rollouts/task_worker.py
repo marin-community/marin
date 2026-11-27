@@ -369,6 +369,7 @@ class RemoteJudgeSettings:
     api_key_env: str
     model: str | None = None
     substitute_models: Mapping[str, str] = field(default_factory=dict)
+    substitution_template_kwargs: Mapping[str, str] = field(default_factory=dict)
 
     def connection(self) -> JudgeConnection:
         """Resolve the judge credential on the rollout worker, outside task data."""
@@ -377,6 +378,7 @@ class RemoteJudgeSettings:
             require_secret(self.api_key_env),
             default_model=self.model,
             substitute_models=MappingProxyType(self.substitute_models),
+            substitution_template_kwargs=MappingProxyType(self.substitution_template_kwargs),
         )
 
 

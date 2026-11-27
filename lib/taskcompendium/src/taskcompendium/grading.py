@@ -15,7 +15,7 @@ from dataclasses import replace
 from openai import APIError
 from verifyit.candidate import Candidate, grade_candidate, grade_ejection_candidate
 from verifyit.grade import GradingInfraError, InvalidTask, Reward, Status, empty_output_policy
-from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate, judge_substitution
+from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate, substituted_judge_spec
 from verifyit.reasoning_markup import COMPLETED_STOP_REASON, ReasoningReply
 from verifyit.spec import (
     EmptyOutputPolicy,
@@ -221,6 +221,7 @@ def grade_remote_judge_answer(
     if judge.context and judge.context not in resources:
         return GradeResult(Outcome.INVALID_TASK, None, f"judge context {judge.context!r} is not in task resources")
     context = resources.get(judge.context, b"").decode(errors="replace")
+    verifier, protocol = substituted_judge_spec(verifier, connection)
     try:
         verdict = grade_judge_candidate(verifier, candidate, connection=connection, runtime=None, context=context)
     except InvalidTask as error:
@@ -232,11 +233,10 @@ def grade_remote_judge_answer(
     except (RuntimeError, OSError) as error:
         return GradeResult(Outcome.INFRA_ERROR, None, str(error))
     result = grade_result(verifier, verdict)
-    substitution = judge_substitution(verifier, connection)
-    if substitution is None:
+    if protocol is None:
         return result
     return replace(
         result,
-        detail={**(result.detail or {}), "judge_protocol": substitution},
-        diagnostics={**result.diagnostics, "judge_protocol": substitution},
+        detail={**(result.detail or {}), "judge_protocol": protocol},
+        diagnostics={**result.diagnostics, "judge_protocol": protocol},
     )

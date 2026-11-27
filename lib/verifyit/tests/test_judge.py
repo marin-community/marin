@@ -248,7 +248,18 @@ def test_substitute_models_replaces_only_the_declared_unservable_model(fake_judg
     assert grade_judge.judge_substitution(mini_max, connection) == {
         "declared_model": "MiniMaxAI/MiniMax-M3-MXFP8",
         "served_model": "zai-org/GLM-5.3-Flash",
-        "unhonored_chat_template_kwargs": {"thinking_mode": "adaptive"},
+        "declared_chat_template_kwargs": {"thinking_mode": "adaptive"},
+    }
+    policy = replace(connection, substitution_template_kwargs={"reasoning_effort": "low"})
+    served_spec, record = grade_judge.substituted_judge_spec(mini_max, policy)
+    assert served_spec.model == "zai-org/GLM-5.3-Flash"
+    assert served_spec.chat_template_kwargs == {"reasoning_effort": "low"}
+    assert served_spec.references == mini_max.references and served_spec.temperature == mini_max.temperature
+    assert record == {
+        "declared_model": "MiniMaxAI/MiniMax-M3-MXFP8",
+        "served_model": "zai-org/GLM-5.3-Flash",
+        "declared_chat_template_kwargs": {"thinking_mode": "adaptive"},
+        "applied_chat_template_kwargs": {"reasoning_effort": "low"},
     }
     assert grade_judge.judge_substitution(spec, connection) == {
         "declared_model": "MiniMaxAI/MiniMax-M3-MXFP8",
