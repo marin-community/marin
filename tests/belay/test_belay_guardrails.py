@@ -34,6 +34,7 @@ from experiments.belay.__main__ import (
     reproduce,
     score_value,
     submit_job,
+    unrecorded_specs,
     write_spec,
 )
 from experiments.belay.analysis import Header, series_from_rows, write_report
@@ -336,6 +337,20 @@ def test_a_carried_commit_brings_the_left_behind_code_it_calls(repo: Path) -> No
     assert commits == [helper, user]  # the helper first, in commit order
     assert owners == {user: "X0242", helper: "X0238"}
     assert needed_by == {"X0238": "X0242"}
+
+
+def test_a_cut_carries_the_specs_of_runs_still_awaiting_results(repo: Path) -> None:
+    last_week = CONFIG.week_branch(MONDAY - datetime.timedelta(days=7))
+    (repo / "experiments/belay/runs").mkdir(parents=True)
+    commit_file(repo, "experiments/belay/runs/X0001.yaml", SPEC)
+    commit_file(repo, "experiments/belay/runs/X0002d1024.yaml", SPEC.replace("X0001", "X0002d1024"))
+    git(repo, "push", "--quiet", "origin", last_week)
+    entries = {
+        "X0001": {"trials": [{"id": "t001", "delta": [-0.01]}]},
+        "X0002": {"trials": [{"id": "t001", "delta": [-0.01]}, {"id": "t002", "rung": "competitive-d1024"}]},
+    }
+
+    assert unrecorded_specs(repo, last_week, entries) == ["experiments/belay/runs/X0002d1024.yaml"]
 
 
 def test_a_name_the_recipe_already_defines_brings_nothing(repo: Path) -> None:
