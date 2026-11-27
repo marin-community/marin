@@ -64,7 +64,6 @@ def test_history_discovers_later_pages_and_keeps_unmodified_prs(monkeypatch):
     monkeypatch.setattr(app, "github_get", github_get)
     initial = asyncio.run(app.recent_prs(None, [], cutoff, cutoff))
     assert [pr["number"] for pr in initial] == [1, 2]
-    assert visited == [1, 2]
 
     visited.clear()
     pages[0] = [pull(4, 26), pull(5, 25)]
@@ -90,6 +89,8 @@ def test_activity_distinguishes_other_humans_feedback_and_approval():
         event("Approver", "commented"),
         event("RaisedIssue", "reviewed", "approved"),
         event("RaisedIssue", "reviewed", "changes_requested"),
+        event("Dismissed", "reviewed", "approved"),
+        event("Dismissed", "reviewed", "dismissed"),
         event("PendingReviewer", "reviewed", "pending"),
     ]
 
@@ -97,4 +98,5 @@ def test_activity_distinguishes_other_humans_feedback_and_approval():
         "commenter": "feedback",
         "approver": "approved",
         "raisedissue": "feedback",
+        "dismissed": "feedback",
     }

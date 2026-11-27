@@ -8,6 +8,7 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from itertools import zip_longest
 from typing import Annotated, Literal, NotRequired, TypedDict
 
@@ -28,7 +29,7 @@ DISCOVERY_INTERVAL = timedelta(minutes=15)
 HISTORY_WINDOW = timedelta(days=7)
 DISCOVERY_OVERLAP = timedelta(minutes=1)
 RETRY_SECONDS = 60
-REVIEW_STATES = frozenset({"approved", "changes_requested", "commented", "dismissed"})
+REVIEW_SUBMISSION = "reviewed"
 READ_SNAPSHOT = text("SELECT * FROM queue_snapshot")
 READ_METADATA = text("SELECT number, updated_at, lines, reviews, activity FROM review_metadata")
 logger = logging.getLogger(__name__)
@@ -36,6 +37,20 @@ logger = logging.getLogger(__name__)
 
 class ReviewerRef(TypedDict):
     login: str
+
+
+class GitHubUser(ReviewerRef):
+    type: str
+
+
+class ReviewState(StrEnum):
+    APPROVED = "approved"
+    CHANGES_REQUESTED = "changes_requested"
+    COMMENTED = "commented"
+    DISMISSED = "dismissed"
+
+
+REVIEW_STATES = frozenset(ReviewState)
 
 
 class TeamRef(TypedDict):
@@ -176,7 +191,8 @@ def pr_summary(pr: dict) -> PullSummary:
     }
 
 
-def external_login(user: dict | None, author: str | None) -> str | None:
+def external_login(user: GitHubUser | None, author: str | None) -> str | None:
+    """Return a human participant's login, excluding the PR author."""
     if user is None or user["type"] != "User":
         return None
     login = user["login"].lower()
@@ -194,7 +210,7 @@ def review_facts(timeline: list[dict], author: str | None) -> list[ReviewFact]:
             requests[reviewer["login"].lower()] = datetime.fromisoformat(event["created_at"])
         elif kind == "review_request_removed" and reviewer:
             requests.pop(reviewer["login"].lower(), None)
-        elif kind == "reviewed" and event.get("state") in REVIEW_STATES and event.get("submitted_at"):
+        elif kind == REVIEW_SUBMISSION and event.get("state") in REVIEW_STATES and event.get("submitted_at"):
             login = external_login(event.get("user"), author)
             if login is None:
                 continue
@@ -220,7 +236,7 @@ def review_activity(timeline: list[dict], author: str | None) -> ReviewActivity:
     activity: ReviewActivity = {}
     for event in timeline:
         kind = event["event"]
-        if kind not in {"reviewed", "commented"}:
+        if kind not in {REVIEW_SUBMISSION, "commented"}:
             continue
         login = external_login(event.get("user"), author)
         if login is None:
@@ -229,11 +245,11 @@ def review_activity(timeline: list[dict], author: str | None) -> ReviewActivity:
             activity.setdefault(login, "feedback")
         elif event.get("submitted_at"):
             state = event.get("state")
-            if state == "approved":
+            if state == ReviewState.APPROVED:
                 activity[login] = "approved"
-            elif state == "changes_requested":
+            elif state in {ReviewState.CHANGES_REQUESTED, ReviewState.DISMISSED}:
                 activity[login] = "feedback"
-            elif state in {"commented", "dismissed"}:
+            elif state == ReviewState.COMMENTED:
                 activity.setdefault(login, "feedback")
     return activity
 
@@ -277,7 +293,7 @@ async def recent_prs(
 
 
 async def pr_metadata(client: httpx.AsyncClient, number: int) -> PullMetadata:
-    detail = (await github_get(client, f"pulls/{number}")).json()
+    detail = (await github_get(client, f"{PULLS_PATH}/{number}")).json()
     timeline = []
     async for page in github_pages(client, f"issues/{number}/timeline"):
         timeline.extend(page)
@@ -291,7 +307,7 @@ async def pr_metadata(client: httpx.AsyncClient, number: int) -> PullMetadata:
     }
 
 
-def prs_missing_metadata(snapshot: Row, metadata: dict[int, Row]) -> list[int]:
+def prs_needing_metadata(snapshot: Row, metadata: dict[int, Row]) -> list[int]:
     """Return PR numbers with missing or stale metadata in sync order."""
     opened = [pr for pr in snapshot.open_prs if not pr["draft"]]
     individual = {
@@ -348,11 +364,12 @@ async def refresh_snapshot(connection: Connection, client: httpx.AsyncClient, sn
 
 
 async def sync_prs(connection: Connection, client: httpx.AsyncClient, snapshot: Row) -> int:
+    """Fetch the next batch and return the retry delay in seconds."""
     cutoff = datetime.now(UTC) - HISTORY_WINDOW
     if snapshot.history_since is None or not cutoff - DISCOVERY_INTERVAL < snapshot.history_since <= cutoff:
         snapshot = await refresh_snapshot(connection, client, snapshot)
     metadata = {row.number: row for row in connection.execute(READ_METADATA)}
-    missing = prs_missing_metadata(snapshot, metadata)
+    missing = prs_needing_metadata(snapshot, metadata)
     for number in missing[:BATCH_SIZE]:
         save_metadata(connection, await pr_metadata(client, number))
     if len(missing) > BATCH_SIZE:
@@ -466,13 +483,13 @@ def queue_payload(connection: Connection) -> QueuePayload:
     records = list(connection.execute(READ_METADATA).all())
     metadata = {row.number: row for row in records}
     pulls = {pr["number"]: pr for pr in snapshot.history_prs + snapshot.open_prs}
-    total = len(prs_missing_metadata(snapshot, {}))
+    total = len(prs_needing_metadata(snapshot, {}))
     return {
         "refreshed_at": snapshot.refreshed_at,
         "prs": enriched_open_prs(snapshot.open_prs, metadata),
         "stats": reviewer_history(records, pulls),
         "sync": {
-            "completed": total - len(prs_missing_metadata(snapshot, metadata)),
+            "completed": total - len(prs_needing_metadata(snapshot, metadata)),
             "total": total,
             "history_discovered": snapshot.history_since is not None,
         },

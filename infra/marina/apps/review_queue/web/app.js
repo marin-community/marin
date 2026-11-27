@@ -1,6 +1,7 @@
 const FAVORITES_KEY = "marin.review-queue.favorites.v1";
 const PR_URL = "https://github.com/marin-community/marin/pull/";
 const PENDING = "pending";
+const FIRST_REVIEW = "first-review";
 const GITHUB_HANDLE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,38})$/;
 const $ = (id) => document.getElementById(id);
 const numberFormat = new Intl.NumberFormat();
@@ -31,7 +32,7 @@ function queueActivity(pr, reviewer) {
   const others = Object.entries(pr.activity).filter(([login]) => login !== reviewer);
   if (others.some(([, kind]) => kind === "approved")) return ["other-approval", "Approved by someone else"];
   if (others.length) return ["other-feedback", "Feedback from someone else"];
-  if (!Object.keys(pr.activity).length && pr.reviewStatus === PENDING) return ["first-review", "Needs first review"];
+  if (!Object.keys(pr.activity).length && pr.reviewStatus === PENDING) return [FIRST_REVIEW, "Needs first review"];
   return null;
 }
 
@@ -50,7 +51,7 @@ function prRow(pr, reviewer) {
   subject.append(link(pr.html_url, `#${pr.number} ${pr.title}`, "pr-title"));
   if (reviewer) {
     const activity = queueActivity(pr, reviewer);
-    if (activity?.[0] === "first-review") {
+    if (activity?.[0] === FIRST_REVIEW) {
       subject.append(statusPill(...activity));
     } else {
       subject.append(statusPill(pr.reviewStatus, pr.reviewStatus === PENDING ? "Pending" : "Reviewed"));
@@ -79,7 +80,7 @@ function reviewedRow(pr) {
   return row;
 }
 
-function requestedTeams(prs) {
+function prsByRequestedTeam(prs) {
   const groups = new Map();
   for (const pr of prs) {
     for (const { slug } of pr.requested_teams) {
@@ -282,7 +283,7 @@ function renderFavoriteSuggestion(query, groups, toggleFavorite) {
 }
 
 function renderOtherQueues(prs) {
-  const teams = requestedTeams(prs);
+  const teams = prsByRequestedTeam(prs);
   $("team-section").hidden = teams.length === 0;
   $("team-count").textContent = String(teams.length);
   const teamList = $("teams");
