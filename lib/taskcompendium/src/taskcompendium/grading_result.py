@@ -51,7 +51,6 @@ class GradeResult:
     score_min: float = 0.0
     score_max: float = 1.0
     verifier_setup_seconds: float = 0.0
-    error_identity: ErrorIdentity | None = None
 
 
 _GRADING_ERROR_TYPES = MappingProxyType(
@@ -66,9 +65,7 @@ _GRADING_ERROR_TYPES = MappingProxyType(
 
 
 def grading_failure_identity(grade: GradeResult) -> ErrorIdentity | None:
-    """Return a recorded identity, or synthesize one for an INFRA_ERROR grade."""
-    if grade.error_identity is not None:
-        return grade.error_identity
+    """Synthesize an identity for an INFRA_ERROR grade."""
     if grade.status is not Outcome.INFRA_ERROR:
         return None
     exception_type = VERIFIER_RUNTIME_ERROR if grade.failure is None else _GRADING_ERROR_TYPES[grade.failure]

@@ -39,7 +39,7 @@ from finestore.reader import ReadView
 from finestore.schema import arrow_schema
 from finestore.store import DataStore, Transaction
 from openai import APIError, APIStatusError
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field
 from rigging.task_errors import ErrorIdentity
 from rolloutengine.agents.mini_swe.agent import MiniSweModelFormat
 from rolloutengine.agents.pi.agent import AgentKilledBySignalError, ModelAuthenticationError, PiThinkingFormat
@@ -110,8 +110,7 @@ REUSED_FROM_RUN = "reused_response_from_run"
 # Run descriptor key listing, for each run whose responses this root reused, its root, run identity and driver revision.
 RESPONSE_SOURCES = "response_sources"
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
-EVALUATION_EXECUTION_REVISION = "2026.11.25.1"
-GRADE_RECORD = TypeAdapter(GradeResult)
+EVALUATION_EXECUTION_REVISION = "2026.11.27.1"
 
 
 # Time for a judge-graded attempt's grading beyond the judge's own transport budget.
@@ -313,7 +312,7 @@ def _sample(
             metric=protocol.primary_metric,
             score=grade.reward,
             passed=grade.passed,
-            detail=json.dumps(GRADE_RECORD.dump_python(grade, mode="json"), allow_nan=False),
+            detail=json.dumps(dataclasses.asdict(grade), allow_nan=False),
         ),
         metrics=metrics,
         correct=(
@@ -387,6 +386,11 @@ class _StoredResponses:
         run = json.loads(saved)
         if run["config"]["model"] != model.model_dump(mode="json"):
             raise ValueError(f"Reused model responses require the same model identity as {root}")
+        if run["driver_revision"] != EVALUATION_EXECUTION_REVISION:
+            raise ValueError(
+                f"Reused model responses require execution revision {EVALUATION_EXECUTION_REVISION}; "
+                f"{root} stored {run['driver_revision']}"
+            )
         self.source = ResponseSource(root, run_identity(run), run["driver_revision"])
         datasets: dict[str, str] = {}
         for entry in run["datasets"]:
@@ -846,7 +850,7 @@ async def _score_rollout(
     raw = {
         **saved_task_fields(task, config.task_evidence),
         "item": case.item.model_dump(mode="json"),
-        "grade": GRADE_RECORD.dump_python(grade, mode="json"),
+        "grade": dataclasses.asdict(grade),
         "conversations": [dataclasses.asdict(conversation) for conversation in rollout.conversations],
         "rollout_metrics": rollout.metrics,
         "stop_reason": rollout.stop_reason,

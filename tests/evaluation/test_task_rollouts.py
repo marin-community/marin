@@ -1795,16 +1795,12 @@ async def test_reuse_asks_the_model_when_a_sampling_option_changed(tmp_path, run
 
 
 @pytest.mark.asyncio
-async def test_reuse_records_the_source_run_and_its_driver_revision_outside_the_run_identity(
-    tmp_path, run_config, monkeypatch
-):
+async def test_reuse_records_the_source_run_and_its_driver_revision_outside_the_run_identity(tmp_path, run_config):
     strict = publish_colors_corpus(tmp_path, "strict")
     lenient = publish_colors_corpus(tmp_path, "lenient", converter=convert_ignoring_case)
     source, output, fresh = (str(tmp_path / name) for name in ("stored", "regraded", "fresh"))
     red = dict.fromkeys(COLORS, "red")
-    with monkeypatch.context() as older:
-        older.setattr(evaluation, "EVALUATION_EXECUTION_REVISION", "older-driver")
-        await run_evaluation((strict,), source, run_config, ScriptedModel(red), machine_factories={})
+    await run_evaluation((strict,), source, run_config, ScriptedModel(red), machine_factories={})
     await run_evaluation((lenient,), fresh, run_config, ScriptedModel(red), machine_factories={})
 
     await run_evaluation((lenient,), output, run_config, no_model, machine_factories={}, reuse_from=source)
@@ -1813,11 +1809,31 @@ async def test_reuse_records_the_source_run_and_its_driver_revision_outside_the_
 
     regraded = json.loads(ReadView(output).read_blob(RUN_OBJECT))
     assert regraded[RESPONSE_SOURCES] == [
-        {"root": source, "run": stored_run_identity(source), "driver_revision": "older-driver"}
+        {
+            "root": source,
+            "run": stored_run_identity(source),
+            "driver_revision": evaluation.EVALUATION_EXECUTION_REVISION,
+        }
     ]
     assert regraded["driver_revision"] == evaluation.EVALUATION_EXECUTION_REVISION
     assert RESPONSE_SOURCES not in json.loads(ReadView(fresh).read_blob(RUN_OBJECT))
     assert run_identity(regraded) == stored_run_identity(fresh)
+
+
+@pytest.mark.asyncio
+async def test_reuse_rejects_a_source_stored_by_another_execution_revision(tmp_path, run_config, monkeypatch):
+    strict = publish_colors_corpus(tmp_path, "strict")
+    source, output = str(tmp_path / "stored"), str(tmp_path / "regraded")
+    with monkeypatch.context() as older:
+        older.setattr(evaluation, "EVALUATION_EXECUTION_REVISION", "older-driver")
+        await run_evaluation(
+            (strict,), source, run_config, ScriptedModel(dict.fromkeys(COLORS, "red")), machine_factories={}
+        )
+
+    with pytest.raises(ValueError, match="execution revision"):
+        await run_evaluation((strict,), output, run_config, no_model, machine_factories={}, reuse_from=source)
+
+    assert ReadView(output).read_blob(RUN_OBJECT) is None
 
 
 @pytest.mark.asyncio
