@@ -96,29 +96,20 @@ def materialize_contiguous_kv(
     finite = jnp.all(jnp.isfinite(keys)) & jnp.all(jnp.isfinite(values))
     safe_keys = jnp.where(jnp.isfinite(keys), keys, 0).astype(jnp.bfloat16)
     safe_values = jnp.where(jnp.isfinite(values), values, 0).astype(jnp.bfloat16)
-    logical = jnp.stack((safe_keys, safe_values), axis=3).reshape(
-        spec.max_num_seqs,
-        spec.pages_per_seq,
-        spec.page_size,
-        2 * spec.num_kv_heads,
-        spec.head_dim,
-    )
+    logical = jnp.stack((safe_keys, safe_values), axis=3)
+    # Gather complete logical rows before combining page positions and K/V heads.
+    # In an Explicit expert mesh, the reshape cannot infer this transfer.
+    mesh = _get_mesh()
+    if mesh is not None and not mesh.empty:
+        logical = reshard(logical, NamedSharding(mesh, P()))
+    logical = logical.reshape(-1, spec.page_size, 2 * spec.num_kv_heads, spec.head_dim)
     pages = jnp.zeros(
         (spec.num_physical_pages, spec.page_size, 2 * spec.num_kv_heads, spec.head_dim),
         dtype=jnp.bfloat16,
     )
-
-    # Indexed placement must see whole logical updates and a replicated page
-    # accumulator. Otherwise each data shard attempts to update a replicated
-    # result with a shard-local slice, which is rejected by Explicit sharding.
-    mesh = _get_mesh()
     if mesh is not None and not mesh.empty:
-        replicated = NamedSharding(mesh, P())
-        logical = reshard(logical, replicated)
-        pages = reshard(pages, replicated)
-    pages = pages.at[safe_pages.reshape(-1)].set(
-        logical.reshape(-1, spec.page_size, 2 * spec.num_kv_heads, spec.head_dim)
-    )
+        pages = reshard(pages, NamedSharding(mesh, P()))
+    pages = pages.at[safe_pages.reshape(-1)].set(logical)
     return jnp.where(map_valid & finite, pages, jnp.full_like(pages, jnp.nan))
 
 
@@ -166,38 +157,48 @@ def _local_fixed_attention(
     )
     safe_q = jnp.where(jnp.isfinite(q), q, 0).astype(jnp.float32)
 
-    # Packed BF16 K/V requires 1, 2, 4, 8 or a multiple of eight KV heads.
-    # Add complete GQA groups so the real heads keep the same pairing.
+    # Size each call for four KV heads at most. This keeps the FP32 Q
+    # and output tiles within v4 VMEM for production GQA.
     kv_heads = spec.num_kv_heads
-    padded_heads = 1 << (kv_heads - 1).bit_length() if kv_heads < 8 else ((kv_heads + 7) // 8) * 8
-    head_padding = padded_heads - kv_heads
+    kv_heads_per_call = min(4, 1 << (kv_heads - 1).bit_length())
+    groups = (kv_heads + kv_heads_per_call - 1) // kv_heads_per_call
+    q_per_kv = spec.num_q_heads // kv_heads
+    head_padding = groups * kv_heads_per_call - kv_heads
     if head_padding:
         safe_kv_pages = jnp.pad(safe_kv_pages, ((0, 0), (0, 0), (0, 2 * head_padding), (0, 0)))
-        safe_q = jnp.pad(safe_q, ((0, 0), (0, head_padding * (spec.num_q_heads // kv_heads)), (0, 0)))
+        safe_q = jnp.pad(safe_q, ((0, 0), (0, head_padding * q_per_kv), (0, 0)))
 
-    # The installed kernel applies sm_scale after QK, consumes BF16 page
-    # operands, uses DEFAULT dot precision, and requests FP32 preferred output
-    # types for QK and AV. This context freezes the deliberate DEFAULT choice
-    # instead of inheriting ambient caller state; it does not promise FP32
-    # operand multiplies.
-    with jax.default_matmul_precision("default"):
-        output = ragged_paged_attention(
-            safe_q,
-            safe_kv_pages,
-            safe_kv_lens,
-            safe_pages,
-            cu_q_lens,
-            jnp.asarray([1], dtype=jnp.int32),
-            sm_scale=spec.sm_scale,
-            sliding_window=spec.sliding_window,
-            soft_cap=None,
-            mask_value=DEFAULT_MASK_VALUE,
-            k_scale=None,
-            v_scale=None,
-            num_kv_pages_per_block=spec.num_kv_pages_per_block,
-            num_queries_per_block=spec.num_queries_per_block,
-            vmem_limit_bytes=None,
+    def attend(query_and_pages):
+        query, pages = query_and_pages
+        # Keep DEFAULT dot precision independent of the caller's context.
+        with jax.default_matmul_precision("default"):
+            return ragged_paged_attention(
+                query,
+                pages,
+                safe_kv_lens,
+                safe_pages,
+                cu_q_lens,
+                jnp.asarray([1], dtype=jnp.int32),
+                sm_scale=spec.sm_scale,
+                sliding_window=spec.sliding_window,
+                soft_cap=None,
+                mask_value=DEFAULT_MASK_VALUE,
+                k_scale=None,
+                v_scale=None,
+                num_kv_pages_per_block=spec.num_kv_pages_per_block,
+                num_queries_per_block=spec.num_queries_per_block,
+                vmem_limit_bytes=None,
+            )
+
+    if groups == 1:
+        output = attend((safe_q, safe_kv_pages))
+    else:
+        q_groups = safe_q.reshape(spec.max_kv_len, groups, kv_heads_per_call * q_per_kv, spec.head_dim)
+        page_groups = safe_kv_pages.reshape(
+            spec.num_physical_pages, spec.page_size, groups, 2 * kv_heads_per_call, spec.head_dim
         )
+        output = jax.lax.map(attend, (q_groups.swapaxes(0, 1), jnp.moveaxis(page_groups, 2, 0)))
+        output = output.swapaxes(0, 1).reshape(spec.max_kv_len, -1, spec.head_dim)
     output = jnp.where(query_valid[:, None, None], output[:, : spec.num_q_heads], 0.0)
     output = jnp.where(valid_metadata, output, jnp.nan)
     return output[None, ...]

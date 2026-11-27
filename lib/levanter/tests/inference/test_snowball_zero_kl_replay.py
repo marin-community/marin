@@ -226,15 +226,20 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path, laye
                 block_size=1024,
             )
 
+        parity = {}
         for name, learner_batch in (("unpacked", batch), ("packed", packed)):
             mask = np.asarray(learner_batch.response_mask.array)
             actual = np.asarray(score(model, learner_batch).array)[mask]
             expected = np.asarray(learner_batch.old_logprobs.array)[mask]
             assert actual.size == _SLOTS * _NEW_TOKENS
-            np.testing.assert_array_equal(actual.view(np.uint32), expected.view(np.uint32), err_msg=name)
             _, metrics = objective(model, learner_batch)
-            assert metrics["policy_kl"].value() == 0.0
-            assert metrics["log_ratio_abs_max"].value() == 0.0
+            parity[name] = {
+                **_score_error(actual, expected),
+                "kl": float(metrics["policy_kl"].value()),
+                "max_abs_log_ratio": float(metrics["log_ratio_abs_max"].value()),
+            }
+            if production_width:
+                print("SNOWBALL_STRICT_PARITY " + json.dumps({name: parity[name]}), flush=True)
 
         if production_width:
             template = jax.eval_shape(lambda: SnowballLMHeadModel.init(vocab, base, key=key))
@@ -269,3 +274,6 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path, laye
                     sort_keys=True,
                 )
             )
+
+        for name, evidence in parity.items():
+            assert evidence["mismatches"] == evidence["kl"] == evidence["max_abs_log_ratio"] == 0, (name, evidence)
