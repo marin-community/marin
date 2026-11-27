@@ -89,6 +89,13 @@ there. A per-job `MARIN_TEMP_PREFIX` overrides the shared scratch default.
 Passing `temp_prefix` to `marin_temp_bucket` selects an explicit destination even
 when `MARIN_TEMP_PREFIX` is set.
 
+On preemption, the hero EP trainer can save a recovery checkpoint to its
+configured rolling TTL root if retries search that root. It requires a prior
+completed save in the current attempt and enough shutdown time for twice the
+longest observed save. When the budget is smaller or unknown, the next attempt
+loads the latest committed checkpoint. Normal completion saves the final step
+to the permanent root.
+
 Do not read or copy data from GCS while running on CoreWeave without explicit
 user approval. The transfer can incur egress charges.
 

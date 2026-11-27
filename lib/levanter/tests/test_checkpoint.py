@@ -10,6 +10,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import time
 from contextlib import contextmanager
 from datetime import timedelta
 
@@ -923,6 +924,35 @@ def test_checkpointer_commits_application_metadata_with_every_save(tmp_path):
     assert (permanent["placement"], permanent["step"]) == ({"fingerprint": "abc"}, 2)
 
 
+def test_preemption_recovery_rolls_then_final_save_is_durable(tmp_path):
+    permanent = tmp_path / "checkpoints"
+    rolling = tmp_path / "temporary"
+    checkpointer = Checkpointer(permanent, None, [], temporary_base_path=rolling)
+    checkpointer.save_final_checkpoint(tree={"model": jnp.asarray(1)}, step=1)
+
+    checkpointer.save_preemption_checkpoint(tree={"model": jnp.asarray(2)}, step=2, deadline=time.monotonic())
+    assert latest_checkpoint_path(permanent, rolling) == str(permanent / "step-1")
+
+    deadline = time.monotonic() + 60
+    state = {"model": jnp.asarray(3)}
+    checkpointer.save_preemption_checkpoint(tree=state, step=3, deadline=deadline)
+    recovered = latest_checkpoint_path(permanent, rolling)
+    assert recovered == str(rolling / "step-3")
+    assert load_checkpoint_metadata(recovered)["is_temporary"]
+    assert not (permanent / "step-3").exists()
+
+    # A second shutdown at the same step preserves the already committed data.
+    checkpointer.save_preemption_checkpoint(tree={"model": jnp.asarray(4)}, step=3, deadline=deadline)
+    assert_trees_all_equal(load_checkpoint({"model": jnp.asarray(0)}, recovered), state)
+
+    checkpointer.save_final_checkpoint(tree=state, step=3)
+    checkpointer.wait_until_finished()
+    final_path = latest_checkpoint_path(permanent, rolling)
+    assert final_path == str(permanent / "step-3")
+    assert not load_checkpoint_metadata(final_path)["is_temporary"]
+    assert_trees_all_equal(load_checkpoint({"model": jnp.asarray(0)}, final_path), state)
+
+
 def test_final_checkpoint_waits_for_pending_temporary_save_and_restores_completed_state(tmp_path):
     permanent_path = tmp_path / "checkpoints"
     temporary_path = tmp_path / "temporary"
@@ -1372,7 +1402,7 @@ def _run_temp_prune_with_fs_wrapper(tmp_path, monkeypatch, wrapper_factory):
     return step1_dir, temporary_path, before_files
 
 
-def test_prune_removes_metadata_before_payload_so_interrupted_delete_is_skipped(tmp_path, monkeypatch):
+def test_prune_removes_metadata_before_payload_and_restarts_interrupted_delete(tmp_path, monkeypatch):
     observed_candidates_at_payload_rm: list[list[int]] = []
 
     class InterruptedPayloadRmFs:
@@ -1390,15 +1420,23 @@ def test_prune_removes_metadata_before_payload_so_interrupted_delete_is_skipped(
                 observed_candidates_at_payload_rm.append(
                     [c.step for c in discover_checkpoint_candidates(self._temporary_path)]
                 )
+                payload = next(p for p in self._step1_dir.rglob("*") if p.is_file())
+                payload.unlink()
                 raise OSError("simulated mid-delete failure")
             return self._inner.rm(path, recursive=False)
 
-    step1_dir, temporary_path, _ = _run_temp_prune_with_fs_wrapper(tmp_path, monkeypatch, InterruptedPayloadRmFs)
+    with monkeypatch.context() as interruption:
+        step1_dir, temporary_path, _ = _run_temp_prune_with_fs_wrapper(tmp_path, interruption, InterruptedPayloadRmFs)
 
     assert observed_candidates_at_payload_rm == [[2]]
     assert step1_dir.exists()
     assert not (step1_dir / "metadata.json").exists()
     assert [c.step for c in discover_checkpoint_candidates(temporary_path)] == [2]
+
+    restarted = Checkpointer(tmp_path / "checkpoints", None, [], temporary_base_path=temporary_path)
+    restarted.wait_until_finished()
+    assert not step1_dir.exists()
+    assert {p.name for p in temporary_path.iterdir()} == {"step-2"}
 
 
 @pytest.mark.parametrize("failure_mode", ["raise", "silent_noop"])
@@ -1428,7 +1466,8 @@ def test_prune_aborts_payload_removal_when_metadata_delete_fails(tmp_path, monke
     assert not recursive_rm_called
     after_files = sorted(str(p.relative_to(step1_dir)) for p in step1_dir.rglob("*") if p.is_file())
     assert after_files == before_files
-    assert _get_checkpoint_steps(temporary_path) == [1, 2]
+    # Discovery excludes a checkpoint with a durable delete intent, even if removing metadata failed.
+    assert [c.step for c in discover_checkpoint_candidates(temporary_path)] == [2]
 
 
 @pytest.mark.parametrize(

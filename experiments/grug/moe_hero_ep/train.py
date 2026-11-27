@@ -63,6 +63,8 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 from levanter.utils.mesh import MeshConfig
+from rigging.filesystem.cluster_config import data_buckets, data_config
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.checkpointing import (
     checkpoint_stores_master,
@@ -1503,6 +1505,21 @@ def _count_expert_leaves(tree, num_experts: int) -> int:
     )
 
 
+def _has_recoverable_temporary_root(trainer: TrainerConfig, run_id: str) -> bool:
+    root = trainer.checkpointer.expanded_temporary_path(run_id)
+    if trainer.load_checkpoint is False or root is None:
+        return False
+    path = StoragePath(root)
+    config = data_config()
+    return (
+        path.bucket in data_buckets()
+        and len(path.segments) >= 3
+        and path.segments[0] == config.temp_path
+        and path.segments[1] in {f"ttl={days}d" for days in config.ttl_days}
+        and path in {StoragePath(search_path) for search_path in trainer.checkpoint_search_paths(run_id)}
+    )
+
+
 def _final_checkpoint_committed(checkpointer: Checkpointer, step: int) -> bool:
     """Whether a complete permanent checkpoint of ``step`` exists under the checkpointer's permanent root."""
     # Every process must take the same branch around the collective save, so process 0 decides for all.
@@ -1580,6 +1597,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if config.trainer.save_checkpoints
         else None
     )
+    recovery_enabled = checkpointer is not None and _has_recoverable_temporary_root(trainer, run_id)
     dashboard = (
         TrainingDashboard(config, checkpointer.request_checkpoint, run_id) if checkpointer is not None else nullcontext()
     )
@@ -1836,8 +1854,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
 
+                preempted = preemption.should_stop(current_step)
                 checkpoint_start = time.perf_counter()
-                if checkpointer is not None:
+                if checkpointer is not None and not preempted:
                     with callbacks.progress_event_scope(
                         state_callbacks.emit_event,
                         callbacks.ProgressEvent.CHECKPOINT_STARTED,
@@ -1854,7 +1873,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     step=step,
                 )
 
-                preempted = preemption.should_stop(int(state.step))
                 if preempted:
                     break
         except BaseException:
@@ -1863,7 +1881,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             )
             raise
         else:
-            # The final checkpoint comes before the forced hooks, whose evals can fail, so a failure there cannot
+            # On normal completion, save before the forced hooks so a failing eval cannot
             # lose it. A retry that restores that checkpoint has nothing left to protect, and it must not repeat a
             # failing eval on every rack or write a second copy of every array into the checkpoint's OCDBT store.
             # It succeeds with no final eval, which can run offline.
@@ -1884,7 +1902,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         callbacks.ProgressEvent.CHECKPOINT_STARTED,
                         callbacks.ProgressEvent.CHECKPOINT_FINISHED,
                     ):
-                        checkpointer.save_final_checkpoint(tree=state, step=int(state.step))
+                        if preempted:
+                            if recovery_enabled:
+                                checkpointer.save_preemption_checkpoint(
+                                    tree=state, step=current_step, deadline=preemption.checkpoint_deadline()
+                                )
+                        else:
+                            checkpointer.save_final_checkpoint(tree=state, step=current_step)
                 if not preempted:
                     state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
         finally:
