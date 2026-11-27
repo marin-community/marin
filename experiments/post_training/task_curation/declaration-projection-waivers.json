@@ -73,6 +73,7 @@
     "TerminalWorld:TerminalWorld",
     "Yatin:Edge-Agent-Reasoning-WebSearch-260K",
     "di-zhang-fdu:aime_1983_2024",
-    "marin-community:mcp-atlas-easy"
+    "marin-community:mcp-atlas-easy",
+    "SynthLabs:Big-Math-RL-Verified"
   ]
 }

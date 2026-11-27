@@ -16,6 +16,7 @@ from experiments.post_training.task_curation.conversion_admission import (
 )
 from experiments.post_training.task_curation.datasets import (
     backfill_releases,
+    big_math_admitted,
     campaign_releases,
     citation_formatting_admitted,
     crosscode_python_repair,
@@ -256,6 +257,7 @@ PENDING_MEASUREMENT_SOURCES = (
     *s1_deepresearch_admitted.sources(),
     *freeform_formatting_admitted.sources(),
     *citation_formatting_admitted.sources(),
+    *big_math_admitted.sources(),
     *(
         source
         for source in campaign_releases.sources()
@@ -346,6 +348,7 @@ def configured_sources() -> list[RlDataSource]:
         *s1_deepresearch_admitted.sources(),
         *freeform_formatting_admitted.sources(),
         *citation_formatting_admitted.sources(),
+        *big_math_admitted.sources(),
         *nemotron_ultra_renames_admitted.sources(),
         *workplace.sources(),
         *nemo_mcqa.sources(),

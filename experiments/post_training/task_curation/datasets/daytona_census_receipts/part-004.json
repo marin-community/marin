@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-rl-data-atlas-registry",
-  "revision": "c2ec9c01f7332dbffdaefdbd1291764156deebef",
-  "path": "experiments/post_training/task_curation/datasets/daytona_census_receipts/part-004.json",
-  "sha256": "d8370ac795d62961ce46a995dd8bb351de3be35a0da8c3a26785af3bb4189661"
+  "revision": "9096a5da4fbeaac10a8476465e287acc51e2443f",
+  "path": "experiments/post_training/task_curation/datasets/daytona_census_receipts_big_math_20261127_b_v1/part-004.json",
+  "sha256": "beb0df0010f285c08b4c3bea1bba29f48a1675f87e182a16aee7654a090d6136"
 }

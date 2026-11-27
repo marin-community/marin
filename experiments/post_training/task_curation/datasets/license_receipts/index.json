@@ -1,42 +1,48 @@
 {
   "repo": "open-athena/marin-license-receipts",
-  "revision": "6a34e4f84ee66e0406c027a397e6830a057a21d6",
+  "revision": "db31863115fc480cf63722758375acedd5f84cc4",
   "references": [
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "6a34e4f84ee66e0406c027a397e6830a057a21d6",
-      "path": "Nemotron:nemotron_ultra_rlvr2_reasoning_gym_reseal_20261126_a_v1/part-000.json",
+      "revision": "db31863115fc480cf63722758375acedd5f84cc4",
+      "path": "big_math_20261127_b_v1/part-000.json",
       "sha256": "0e1116b6d033cf6950d51e514e979134313abcf2db5902b7223e73e95ad2838a"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "6a34e4f84ee66e0406c027a397e6830a057a21d6",
-      "path": "Nemotron:nemotron_ultra_rlvr2_reasoning_gym_reseal_20261126_a_v1/part-001.json",
+      "revision": "db31863115fc480cf63722758375acedd5f84cc4",
+      "path": "big_math_20261127_b_v1/part-001.json",
       "sha256": "2861ec879032f59f42db81ca9e28ea11edcc47280e0785b68e22c4ad715afb82"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "6a34e4f84ee66e0406c027a397e6830a057a21d6",
-      "path": "Nemotron:nemotron_ultra_rlvr2_reasoning_gym_reseal_20261126_a_v1/part-002.json",
+      "revision": "db31863115fc480cf63722758375acedd5f84cc4",
+      "path": "big_math_20261127_b_v1/part-002.json",
       "sha256": "c57e053fb8a57fff560567b96b19ecb6aad7f64ab4a5c7eda5c52c217c9c91ce"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "6a34e4f84ee66e0406c027a397e6830a057a21d6",
-      "path": "Nemotron:nemotron_ultra_rlvr2_reasoning_gym_reseal_20261126_a_v1/part-003.json",
-      "sha256": "db28ab39fd33c3c95733f90c457e41f775a4e329c60539194ca202509bb5ddf0"
+      "revision": "db31863115fc480cf63722758375acedd5f84cc4",
+      "path": "big_math_20261127_b_v1/part-003.json",
+      "sha256": "cc96efee539165c822987aeee24a06bae4689d816ce6b2c44a28421fe3aaeb14"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "6a34e4f84ee66e0406c027a397e6830a057a21d6",
-      "path": "Nemotron:nemotron_ultra_rlvr2_reasoning_gym_reseal_20261126_a_v1/part-004.json",
-      "sha256": "963697b62da854e2106c10ca6ec011201b4757e6845ed97d97e9f760af21e1bf"
+      "revision": "db31863115fc480cf63722758375acedd5f84cc4",
+      "path": "big_math_20261127_b_v1/part-004.json",
+      "sha256": "a10418b8130554e8d85a697d15b882b449595aa06cc3472f72990abdee8f44e1"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "6a34e4f84ee66e0406c027a397e6830a057a21d6",
-      "path": "Nemotron:nemotron_ultra_rlvr2_reasoning_gym_reseal_20261126_a_v1/part-005.json",
-      "sha256": "5d444904fad8bacb9cb30e52c7b20c25c2ff3bf9ae4f4b4fdc822c10e327f11d"
+      "revision": "db31863115fc480cf63722758375acedd5f84cc4",
+      "path": "big_math_20261127_b_v1/part-005.json",
+      "sha256": "12bc71f93b94e42367d1277236caec7359afc1c81fc0367c6acff56b3adb73b3"
+    },
+    {
+      "repo": "open-athena/marin-license-receipts",
+      "revision": "db31863115fc480cf63722758375acedd5f84cc4",
+      "path": "big_math_20261127_b_v1/part-006.json",
+      "sha256": "8f1d18485718300ee07fcb3654c78c715ab048a2a647bac72dbeaff17399a06d"
     }
   ]
 }
