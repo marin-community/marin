@@ -12,7 +12,7 @@ Injected rows match what each deployed harness would send:
 
 - Terminus-2 keeps a failed reply in its history and answers with its parser's feedback. A failed attempt is the
   original JSON turn re-rendered in a seeded variant of a measured error style. The reply is the prompt Terminus-2
-  builds from the parser's error, using the parser vendored at ``vendor/harbor``.
+  builds from the error returned by RolloutEngine's Terminus-2 parser.
 - mini-swe-agent drops a reply it cannot parse before it enters history and sends only its format error. A failed
   attempt is therefore that error message alone, with no assistant turn.
 
@@ -21,15 +21,14 @@ errors on TBLite-100 (653 rejected turns), and points per row and attempts per p
 ``marianna13/grug-sft-mix-v4-40M-think``.
 """
 
-import importlib.util
 import json
 import random
 import re
-import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from pathlib import Path
+
+from rolloutengine.agents.terminus.terminus_json_plain_parser import ParseResult, TerminusJSONPlainParser
 
 INJECTED_KEY = "injected"
 
@@ -68,9 +67,6 @@ MINI_SWE_NO_TOOL_CALL = (
 )
 MINI_SWE_STYLE = "no_tool_call"
 ELIDED = "@@elided@@"
-HARBOR_PARSER_PATH = (
-    Path(__file__).resolve().parents[3] / "vendor/harbor/src/harbor/agents/terminus_2/terminus_json_plain_parser.py"
-)
 
 
 class Harness(StrEnum):
@@ -98,25 +94,12 @@ class InjectedFailure:
     error: str
 
 
-def _load_terminus_parser():
-    # Harbor is not installed in the Marin workspace, and importing its package pulls in the whole Terminus-2 agent.
-    # The parser file has no dependencies outside the standard library, so load it straight from the vendored tree.
-    spec = importlib.util.spec_from_file_location("harbor_terminus_json_plain_parser", HARBOR_PARSER_PATH)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module.TerminusJSONPlainParser()
-
-
-PARSER = _load_terminus_parser()
-
-
 def weighted(rng: random.Random, weights: dict):
     keys = sorted(weights)
     return rng.choices(keys, weights=[weights[key] for key in keys])[0]
 
 
-def terminus_feedback(result) -> str:
+def terminus_feedback(result: ParseResult) -> str:
     """Terminus-2's reply to a response whose parse `result` has an error."""
     feedback = f"ERROR: {result.error}"
     if result.warning:
@@ -127,9 +110,13 @@ def terminus_feedback(result) -> str:
     )
 
 
+def _parse_terminus_response(content: str) -> ParseResult:
+    return TerminusJSONPlainParser().parse_response(content)
+
+
 def terminus_fields(content: str) -> dict | None:
     """The turn's JSON object when it is a clean Terminus-2 response with at least one command."""
-    result = PARSER.parse_response(content)
+    result = _parse_terminus_response(content)
     if result.error or result.warning:
         return None
     data = json.loads(content)
@@ -240,15 +227,15 @@ def render_terminus_failure(data: dict, style: str, rng: random.Random, previous
             text = terminus_variant(data, style, variant, rng)
             if text is None:
                 break
-            if PARSER.parse_response(text).error.startswith(TERMINUS_ERRORS[style]) and text != previous:
+            if _parse_terminus_response(text).error.startswith(TERMINUS_ERRORS[style]) and text != previous:
                 return text, variant
     text = terminus_base_failure(data, style)
-    if PARSER.parse_response(text).error and text != previous:
+    if _parse_terminus_response(text).error and text != previous:
         return text, "base"
     # No prose here: the parser takes the first balanced object, so an analysis that quotes a valid response makes
     # every rendering with prose parse clean.
     text = terminus_unquoted_plan(data)
-    assert PARSER.parse_response(text).error, text
+    assert _parse_terminus_response(text).error, text
     return text, "fallback_invalid_json"
 
 
@@ -327,7 +314,7 @@ def inject(
                     terminus_fields(message["content"]), failure.style, random.Random(failure.seed), previous
                 )
                 previous = failed
-                result = PARSER.parse_response(failed)
+                result = _parse_terminus_response(failed)
                 out.append({"role": "assistant", "content": failed, INJECTED_KEY: True})
                 out.append({"role": "user", "content": terminus_feedback(result), INJECTED_KEY: True})
                 error = result.error.split(":", 1)[0]
