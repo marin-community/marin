@@ -50,6 +50,12 @@ from levanter.grug.attention import (
     attention,
     ragged_paged_attention,
 )
+from levanter.grug.attention._paged import (
+    FUSED_KV_APPEND_MAX_TOKENS,
+    RPA_V3_ALIGNMENT,
+    PagedAttentionImplementation,
+    ragged_paged_attention_append,
+)
 from levanter.grug.grug_moe import MoEExpertMlpPspecs, MoeImplementation, MoEExpertMlp
 from levanter.grug.sharding import (
     Pembed_vocab,
@@ -549,6 +555,7 @@ class SnowballAttention(eqx.Module):
         pos_ids: jax.Array,
         *,
         mode: Literal["short", "long"],
+        implementation: PagedAttentionImplementation | None = None,
     ) -> tuple[jax.Array, KvPageCache]:
         """Write the new keys and values, then attend over each request's cached prefix."""
         cfg = self.cfg
@@ -558,19 +565,43 @@ class SnowballAttention(eqx.Module):
         kv_axes = (token_axis, Axis("kv_head", cfg.num_kv_heads), Axis("head_size", head_dim))
         cache_k = reshard(k[:, 0], P(None, "model", None))
         cache_v = reshard(v[:, 0], P(None, "model", None))
-        cache = cache.update(batch_info, hax.named(cache_k, kv_axes), hax.named(cache_v, kv_axes))
         q = q.reshape(x.shape[0], cfg.num_kv_heads, cfg.num_heads // cfg.num_kv_heads, head_dim)
         q = reshard(q, P(None, "model", None, None))
-        out = ragged_paged_attention(
-            q,
-            cache.kv_pages.array,
+        metadata = (
             batch_info.seq_lens.array,
             batch_info.page_indices.array,
             batch_info.cu_q_lens.array,
             batch_info.num_seqs,
-            sm_scale=head_dim**-0.5,
-            sliding_window=cfg.sliding_window if mode == "short" else None,
-        ).reshape(x.shape[0], 1, cfg.num_heads, head_dim)
+        )
+        sliding_window = cfg.sliding_window if mode == "short" else None
+        scale = head_dim**-0.5
+        if (
+            implementation == "tpu_v3"
+            and q.shape[0] <= FUSED_KV_APPEND_MAX_TOKENS
+            and q.dtype == cache.kv_pages.dtype == jnp.bfloat16
+            and head_dim == batch_info.page_size == RPA_V3_ALIGNMENT
+        ):
+            out, pages = ragged_paged_attention_append(
+                q,
+                cache_k.astype(q.dtype),
+                cache_v.astype(q.dtype),
+                cache.kv_pages.array,
+                *metadata,
+                sm_scale=scale,
+                sliding_window=sliding_window,
+            )
+            cache = KvPageCache(hax.named(pages, cache.kv_pages.axes))
+        else:
+            cache = cache.update(batch_info, hax.named(cache_k, kv_axes), hax.named(cache_v, kv_axes))
+            out = ragged_paged_attention(
+                q,
+                cache.kv_pages.array,
+                *metadata,
+                sm_scale=scale,
+                sliding_window=sliding_window,
+                implementation=implementation,
+            )
+        out = out.reshape(x.shape[0], 1, cfg.num_heads, head_dim)
         return self._project_output(x, out, v), cache
 
 
@@ -850,12 +881,18 @@ class SnowballBlock(eqx.Module):
         pos_ids: Array,
         use_long: Bool[Array, ""],
         token_valid: Array,
+        *,
+        implementation: PagedAttentionImplementation | None = None,
     ) -> tuple[Array, KvPageCache]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         attn_out, cache = jax.lax.cond(
             use_long,
-            lambda _: self.attn.decode(attn_in, cache, batch_info, pos_ids, mode="long"),
-            lambda _: self.attn.decode(attn_in, cache, batch_info, pos_ids, mode="short"),
+            lambda _: self.attn.decode(
+                attn_in, cache, batch_info, pos_ids, mode="long", implementation=implementation
+            ),
+            lambda _: self.attn.decode(
+                attn_in, cache, batch_info, pos_ids, mode="short", implementation=implementation
+            ),
             operand=None,
         )
         return self._after_attention(x, attn_out, return_routes=False, token_valid=token_valid).output, cache
@@ -979,6 +1016,11 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
 
     transformer: SnowballTransformer
     _config: SnowballConfig = eqx.field(static=True)
+    _paged_attention: PagedAttentionImplementation | None = eqx.field(static=True, default=None)
+
+    def with_paged_attention(self, implementation: PagedAttentionImplementation) -> "SnowballLMHeadModel":
+        """Select the attention backend for cache-based generation."""
+        return dataclasses.replace(self, _paged_attention=implementation)
 
     @property
     def config(self) -> SnowballConfig:
@@ -1110,7 +1152,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         op = _resize_axis(self.transformer.output_proj, 1, new_size, self._config.initializer_std, key)
         new_cfg = dataclasses.replace(self._config, vocab_size=new_size)
         new_tf = eqx.tree_at(lambda t: (t.token_embed, t.output_proj, t.config), self.transformer, (te, op, new_cfg))
-        return SnowballLMHeadModel(new_tf, new_cfg)
+        return dataclasses.replace(self, transformer=new_tf, _config=new_cfg)
 
     def initial_cache(self, spec: PageTableSpec, *, dtype: jnp.dtype) -> ListCache[KvPageCache]:
         """Allocate paged KV state on a serving mesh with context parallelism disabled."""
@@ -1155,7 +1197,9 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         def layer_step(x, layer_data):
             block, pages, use_long = layer_data
             cache = KvPageCache(hax.named(pages, cache_axes))
-            x, cache = block.decode(x, cache, batch_info, pos_ids.array, use_long, token_valid)
+            x, cache = block.decode(
+                x, cache, batch_info, pos_ids.array, use_long, token_valid, implementation=self._paged_attention
+            )
             return x, cache.kv_pages.array
 
         hidden, cache_pages = jax.lax.scan(layer_step, hidden, (stacked, cache_pages, long_schedule))
@@ -1184,7 +1228,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
 
     def from_state_dict(self, state_dict: StateDict, prefix: Optional[str] = None) -> "SnowballLMHeadModel":
         new_tf = snowball_from_state_dict(self.transformer, state_dict, prefix=prefix)
-        return SnowballLMHeadModel(new_tf, self._config)
+        return dataclasses.replace(self, transformer=new_tf)
 
 
 def _resize_axis(arr: jax.Array, axis: int, new_size: int, std: float, key) -> jax.Array:
