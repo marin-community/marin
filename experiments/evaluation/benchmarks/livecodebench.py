@@ -8,6 +8,9 @@ Prompts are LiveCodeBench's OpenAI-chat template from ``lcb_runner/prompts/code_
 ``CodeGenerationProblem.get_evaluation_sample`` does. The source stores private tests as base64
 zlib-compressed pickles of JSON text; conversion decodes them once with an unpickler that refuses
 every global, and ships the canonical cases zlib-compressed so the grader never unpickles.
+
+``livecodebench-hero-clean`` is the same benchmark on the problems that Marin's hero training data does not
+contain; see :data:`HERO_CLEAN_IDS`.
 """
 
 import base64
@@ -15,6 +18,7 @@ import io
 import json
 import pickle
 import zlib
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -45,7 +49,7 @@ from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmar
 from experiments.evaluation.benchmarks.environments import LIVECODEBENCH_GRADER
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.datasets.skyrl.code import SCORERS, lcb_test_cases
-from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, RowSelector
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 HARNESS_REVISION = "998c52d394b836f15fff3b9a29866191108ff81b"
@@ -54,6 +58,7 @@ DATASET_REVISION = "0fe84c3912ea0c4d4a78037083943e8f0c4dd505"
 RELEASE_V6_FILES = ("test.jsonl", "test2.jsonl", "test3.jsonl", "test4.jsonl", "test5.jsonl", "test6.jsonl")
 """The files ``code_generation_lite.py`` loads for ``version_tag="release_v6"``."""
 RELEASE_V6_POPULATION = 1055
+HERO_CLEAN_POPULATION = 379
 
 SYSTEM_MESSAGE = (
     "You are an expert Python programmer. You will be given a question (problem specification) and will "
@@ -80,6 +85,13 @@ GRADER_STARTUP_ALLOWANCE = 60
 """Seconds beyond the scorer deadline for interpreter startup, imports and decompression."""
 
 HERE = Path(__file__).parent
+HERO_CLEAN_IDS = tuple(json.loads((HERE / "livecodebench_hero_clean.json").read_text()))
+"""``release_v6`` problems with no copy in the hero pretraining sources or Mochi's SFT and RL data.
+
+A problem has a copy when one document holds at least 30% of the case-folded word 13-grams of its statement,
+after dropping 13-grams shared by three or more problems or found in pre-May 2023 contest problems. The scan
+ran over all 292 normalized hero sources before deduplication and sampling, so the list errs toward exclusion.
+"""
 GRADE = grade_script(HERE / "livecodebench_grade.py", *shipped_files(SCORERS, "livecodebench.py"))
 CONVERSION_REVISION = "1-" + canonical_sha256({resource.path: resource.source.content_base64 for resource in GRADE})[:16]
 """Names the prepared corpus. The hash follows the grade scripts; bump the leading counter whenever this
@@ -169,24 +181,53 @@ def livecodebench_item(task: TaskSpec) -> EvaluationItem:
     return item.model_copy(update={"groups": {"difficulty": evidence["difficulty"], "platform": evidence["platform"]}})
 
 
+def listed(data: dict, context: ConversionContext, *, question_ids: tuple[str, ...]) -> bool:
+    return data["question_id"] in question_ids
+
+
 def source() -> RlDataSource[EvaluationCorpusRecipe]:
+    return _source(
+        "LiveCodeBench", "livecodebench-release-v6", "2026.11.13", RELEASE_V6_POPULATION, variant=None, select=None
+    )
+
+
+def hero_clean_source() -> RlDataSource[EvaluationCorpusRecipe]:
+    return _source(
+        "LiveCodeBench-Hero-Clean",
+        "livecodebench-release-v6-hero-clean",
+        "2026.11.27",
+        HERO_CLEAN_POPULATION,
+        variant="hero-clean",
+        # Bound by keyword so the corpus identity records the list itself.
+        select=partial(listed, question_ids=HERO_CLEAN_IDS),
+    )
+
+
+def _source(
+    benchmark: str, name: str, version: str, population: int, variant: str | None, select: RowSelector | None
+) -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
             upstream_dataset="release_v6",
             upstream_name="LiveCodeBench",
             subset=None,
-            build_path="LiveCodeBench",
+            variant=variant,
+            build_path=benchmark,
             origin=SourceOrigin.LIVECODEBENCH,
             family="competitive-programming",
             tags=("eval", "source:livecodebench", "benchmark", "code", "single-turn"),
-            count=RELEASE_V6_POPULATION,
+            count=population,
         ),
         config=EvaluationCorpusRecipe(
             recipe=CurationRecipe(
-                name="livecodebench-release-v6",
+                name=name,
                 source=HfSource(
-                    "livecodebench/code_generation_lite", DATASET_REVISION, RELEASE_V6_FILES, SourceFormat.JSONL
+                    "livecodebench/code_generation_lite",
+                    DATASET_REVISION,
+                    RELEASE_V6_FILES,
+                    SourceFormat.JSONL,
+                    select=select,
                 ),
                 convert=convert_livecodebench,
                 version=CONVERSION_REVISION,
@@ -194,8 +235,8 @@ def source() -> RlDataSource[EvaluationCorpusRecipe]:
                 grader=LIVECODEBENCH_GRADER,
             ),
             protocol=EvaluationProtocol(
-                benchmark="LiveCodeBench",
-                version="2026.11.13",
+                benchmark=benchmark,
+                version=version,
                 operation=OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
                     temperature=None,
@@ -209,7 +250,7 @@ def source() -> RlDataSource[EvaluationCorpusRecipe]:
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
-                expected_population=RELEASE_V6_POPULATION,
+                expected_population=population,
             ),
             item_builder=livecodebench_item,
             protocol_name="official",
@@ -221,4 +262,4 @@ def source() -> RlDataSource[EvaluationCorpusRecipe]:
 
 
 def benchmarks() -> list[EvaluationBenchmark]:
-    return fixed_benchmarks([source()])
+    return fixed_benchmarks([source(), hero_clean_source()])
