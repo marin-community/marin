@@ -4,7 +4,7 @@ name: ID Balancing router bias
 category: MoE and routing
 summary: 🤖 Posted on behalf of @WhenWen (drafted by a Claude Code session).
 source: intake
-status: done
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7209715736
@@ -59,3 +59,15 @@ trials:
   steps: 3030
   baseline: belay-X0265v1-control 3.0457 (same commit, seed 0)
   step_time_change: -2%
+- id: t004
+  variant: ID Balancing bias in place of QB, id_balance_gain=0.096
+  rung: speedrun
+  protocol: fixed_time
+  batch: X0265
+  date: '2026-11-27'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0265
+  wandb: []
+  settings:
+    id_balance_gain: '0.096'
+  commit: f779655e2f
+  priority: interactive
