@@ -271,6 +271,20 @@ evaluations:
       limit: 2
       task_machine:
         image_build: declarative
+  swebench-multilingual-pi:
+    benchmark: swebench-multilingual-100
+    protocol: pi
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
+  swebench-multilingual-pi-lite:
+    benchmark: swebench-multilingual-100
+    protocol: pi
+    run:
+      limit: 2
+      task_machine:
+        image_build: declarative
   swebench-science:
     benchmark: swebench-science
     protocol: pi-xhigh

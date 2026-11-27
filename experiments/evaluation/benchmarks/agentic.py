@@ -511,6 +511,12 @@ BIXBENCH_PI = PiAgent(version="0.87.1", setup_timeout=360, compaction_reserve_to
 BIXBENCH_32K_PROTOCOL = "pi-32k"
 BIXBENCH_PI_32K = PiAgent(version="0.87.1", setup_timeout=360, compaction_reserve_tokens=LONG_MAX_OUTPUT_TOKENS)
 """The same profile for models with a 32,768-token window, whose reserve the campaign halved."""
+PYTHON3_INSTALL = (
+    "RUN if ! command -v python3 >/dev/null; then apt-get update"
+    " && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3"
+    " && rm -rf /var/lib/apt/lists/*; fi\n"
+)
+"""Dockerfile instructions that install Python 3, which the machine-local model relay of a Pi episode runs on."""
 TERMINUS_DATASETS = (
     TERMINAL_BENCH_2,
     SWEBENCH_VERIFIED,
@@ -610,7 +616,50 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             )
             for dataset in SWEBENCH_PRO_DATASETS
         ),
+        # Pi beside mini-swe-agent at SWE-bench Pro's context, with BixBench's profile, Python 3 and Pi installed over
+        # each task's image, under the packages' own timeouts.
+        *(
+            harbor_source(
+                dataset,
+                BIXBENCH_PI,
+                max_input_tokens=SWEBENCH_PRO_MAX_INPUT_TOKENS,
+                max_output_tokens=SWEBENCH_PRO_MAX_OUTPUT_TOKENS,
+                job=replace(SWEBENCH_PRO_JOB, agent_install=PYTHON3_INSTALL + pi_install(BIXBENCH_PI)),
+            )
+            for dataset in SWEBENCH_PRO_DATASETS
+        ),
+        # Pi with BixBench's profile, installed with Python 3 over each task's image, under the packages' own timeouts.
+        *(
+            harbor_source(
+                dataset,
+                BIXBENCH_PI,
+                max_output_tokens=LONG_MAX_OUTPUT_TOKENS,
+                job=JobSettings(agent_install=PYTHON3_INSTALL + pi_install(BIXBENCH_PI)),
+            )
+            for dataset in (SWEBENCH_MULTILINGUAL, SWEBENCH_MULTILINGUAL_100)
+        ),
         harbor_source(DS_1000_MINI_200, terminus, max_input_tokens=CAMPAIGN_MAX_INPUT_TOKENS, job=CAMPAIGN_JOB),
+        # Pi beside Terminus 2 at the context Terminus 2 gets, with BixBench's profile for that context, under the
+        # packages' own timeouts.
+        harbor_source(
+            TERMINAL_BENCH_2_1_3TRIAL,
+            BIXBENCH_PI,
+            max_input_tokens=LONG_MAX_INPUT_TOKENS,
+            max_output_tokens=LONG_MAX_OUTPUT_TOKENS,
+            trials=CAMPAIGN_TRIALS,
+            job=JobSettings(agent_install=PYTHON3_INSTALL + pi_install(BIXBENCH_PI)),
+        ),
+        *(
+            harbor_source(
+                dataset,
+                BIXBENCH_PI_32K,
+                max_input_tokens=CAMPAIGN_MAX_INPUT_TOKENS,
+                max_output_tokens=LONG_MAX_OUTPUT_TOKENS,
+                trials=trials,
+                job=JobSettings(agent_install=PYTHON3_INSTALL + pi_install(BIXBENCH_PI_32K)),
+            )
+            for dataset, trials in ((OT_TBLITE_3TRIAL, CAMPAIGN_TRIALS), (DS_1000_MINI_200, 1))
+        ),
         harbor_source(
             BFCL_PARITY_PI,
             CAMPAIGN_PI,
