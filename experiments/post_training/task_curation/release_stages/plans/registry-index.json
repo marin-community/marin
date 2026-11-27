@@ -1,5 +1,5 @@
 {
-  "revision": "9f50d23faaad5121d557d0d0bcbaac4066af16c9",
+  "revision": "3a4c892d824512f1863b0d2caf0dfe7b2185e423",
   "sources": {
     "AI-MO:numina_math": {
       "input_sha256": "56b745a538dad1c11afd3f5f954f73c43605435b08d296a75836ae5b8a0b1849",
@@ -1132,9 +1132,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.17.1/rst-final-admission-preseal-v1/1e0af0ebe59e0eb380bf/fingerprints.json"
     },
     "Reasoning Gym:reasoning_gym": {
-      "input_sha256": "8a95b73de42b057b2d63c36cde46bbecc6f4a496783545ddcc5b44c8118c9c07",
-      "sha256": "57f808b53b05dd6a7aa38213c291ded8277be567a02ee3aaca60ef649341903c",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-57f808b53b05dd6a.json"
+      "input_sha256": "60089135ed6904697a8ad3bd1c678c20454f5948240aa4cd68b1fbe8073ecda5",
+      "sha256": "dea0b8098eb49c8df5707cced4fee21f3af6e9acb10d9a0cfa0a822ecd50b96a",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/grader-reseal-2-20261126/reasoning-gym/source-identities.json"
     },
     "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@repaired-20261119": {
       "input_sha256": "3fbdb53666b7ba87d727e4e48820fcd615f9ab138eae7fc961f3aa82f1e6af51",
