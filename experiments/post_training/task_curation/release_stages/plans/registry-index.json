@@ -1,5 +1,5 @@
 {
-  "revision": "a2447b12e4fc8c1ccb38acbbca8322b529ae8c25",
+  "revision": "3f1b06defcceaeb6e0ce7980554db8b3153c7f0b",
   "sources": {
     "AI-MO:numina_math": {
       "input_sha256": "56b745a538dad1c11afd3f5f954f73c43605435b08d296a75836ae5b8a0b1849",
@@ -1150,6 +1150,11 @@
       "input_sha256": "33f2a0d5c894e167f67bba0d1f454335fcc46929d64b1da09b33599fe6f087d0",
       "sha256": "6c8b1abde6fd59de3e184f5291e60b3b67e70d34a448687c8ef4e3d40f68fcb3",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/s1-deepresearch/2026.11.26.1/admission-evidence-v1/source-identities.json"
+    },
+    "SynthLabs:Big-Math-RL-Verified": {
+      "input_sha256": "3311c4453660375787b8e87172fc1659585e315396adef6689cd9ed95931ba42",
+      "sha256": "eb7015d990e9a968a3f620732d53d1e14cf799fda215c51f6b8d10f950a58804",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/big-math/2026.11.27.2/overlap-disposition-v1/source-identities.json"
     },
     "TRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized": {
       "input_sha256": "1f31f4a251af446d7403e3ff44cb0f4f1fc583402e0fc6d317f236ede9bbffa8",

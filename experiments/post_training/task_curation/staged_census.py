@@ -313,12 +313,18 @@ def main() -> None:
     )
     record, census = staged.record, staged.census
     args.output.mkdir(parents=True, exist_ok=True)
-    census["path"] = str(args.published_artifact)
+    # Validate against the pod-local copy: the published location does not hold the
+    # artifact until the script copies it (the step right after this check).
+    census["path"] = str(args.output)
     (args.output / ".artifact.json").write_text(
-        json.dumps({"result": {**record, "path": str(args.published_artifact)}}, indent=2, sort_keys=True) + "\n"
+        json.dumps({"result": {**record, "path": str(args.output)}}, indent=2, sort_keys=True) + "\n"
     )
     receipt = receipt_from_census(census, None)
     check_receipt_evidence(receipt)
+    # Ship the receipt bound to the published location: the script's copy lands the
+    # validated bytes there immediately after this step.
+    census["path"] = str(args.published_artifact)
+    receipt = receipt_from_census(census, None)
     args.receipts_output.mkdir(parents=True, exist_ok=True)
     write_receipt_shards(args.receipts_output, {receipt.source_id: receipt.model_dump(mode="json")})
     result_payload = (
