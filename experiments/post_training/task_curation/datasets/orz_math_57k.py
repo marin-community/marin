@@ -37,7 +37,7 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 
 HERE = Path(__file__).parent
 REPO = "Open-Reasoner-Zero/orz_math_57k_collection"
-REVISION = "09e8ddf7ff58fe0f2ea5e8e74ed7d20d0f8ea24e"
+REVISION = "09e8ddf7ff585350b62f26f34c3e02c6365b69f0"
 SOURCE_ID = "Open-Reasoner-Zero:orz_math_57k_collection"
 VERSION = "orz-boxed-verify-v1"
 COUNT = 56878
@@ -48,7 +48,8 @@ def read_rows(path: StoragePath, _context: ConversionContext) -> Iterator[dict[s
     """One dict per transcript: the verbatim problem and the exact reference answer."""
     with path.open("rb") as stream:
         array = json.load(stream)
-    for transcript in array:
+    for item in array:
+        transcript = item if isinstance(item, list) else item.get("messages", [])
         human = [m for m in transcript if m.get("from") == "human"]
         assistant = [m for m in transcript if m.get("from") == "assistant"]
         problem = human[-1]["value"] if human else None

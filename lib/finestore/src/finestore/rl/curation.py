@@ -196,6 +196,7 @@ class SourceOrigin(StrEnum):
     TEVATRON = "Tevatron"
     TERMINALWORLD = "TerminalWorld"
     OPEN_REASONER_ZERO = "Open-Reasoner-Zero"
+    QASPER = "QASPER"
     AGENTICA_ORG = "agentica-org"
     CYBENCH = "CyBench"
     DI_ZHANG_FDU = "di-zhang-fdu"
