@@ -514,14 +514,17 @@ def episode_machine(runtime: MachineRuntimeSpec, inputs: EpisodeInputs) -> Machi
 
 
 def grader_machine(
-    runtime: MachineRuntimeSpec | None, environment: EnvironmentRequirements, inputs: EpisodeInputs | None
+    runtime: MachineRuntimeSpec | None, environment: EnvironmentRequirements, task_machine: MachineRuntimeSpec | None
 ) -> MachineRuntimeSpec | None:
-    """The run's verifier machine with the network ``environment`` requires and the resources the task sets."""
+    """The run's verifier machine with the network ``environment`` requires and the task machine's resources.
+
+    A grader in its own machine runs the work it would otherwise run in the task machine, so it gets that size.
+    """
     if runtime is None:
         return None
     update: dict[str, object] = {"network": NetworkPolicy.ALLOW} if "network" in environment.capabilities else {}
-    if inputs is not None and inputs.verifier_resources is not None:
-        update |= inputs.verifier_resources.model_dump(exclude_none=True)
+    if task_machine is not None:
+        update |= task_machine.model_dump(include={"cpus", "memory_mb", "storage_mb"}, exclude_none=True)
     return runtime.model_copy(update=update)
 
 
@@ -801,7 +804,7 @@ async def _score_rollout(
         if isinstance(task.grader, VerifyitGrader) and grades_with_judge(task.grader)
         else grader_environment(task.grader)
     )
-    verifier = None if grader_build is None else grader_machine(config.verifier_machine, grader_build, case.item.episode)
+    verifier = None if grader_build is None else grader_machine(config.verifier_machine, grader_build, task_machine)
     spec = TaskRolloutSpec(
         task=task,
         harness=harness,

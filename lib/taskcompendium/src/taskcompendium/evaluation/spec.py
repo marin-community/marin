@@ -109,14 +109,6 @@ class EpisodeLimits(EvaluationModel):
         return self
 
 
-class MachineResources(EvaluationModel):
-    """A machine's CPU, memory and disk; unset values take the run's."""
-
-    cpus: int | None = Field(default=None, gt=0)
-    memory_mb: int | None = Field(default=None, gt=0)
-    storage_mb: int | None = Field(default=None, gt=0)
-
-
 class EpisodeInputs(EvaluationModel):
     """One task's episode settings. Set values replace the protocol's limits and the run's machine resources."""
 
@@ -127,8 +119,6 @@ class EpisodeInputs(EvaluationModel):
     storage_mb: int | None = Field(default=None, gt=0)
     gpus: int = Field(default=0, ge=0)
     network: NetworkPolicy
-    verifier_resources: MachineResources | None = Field(default=None, exclude_if=lambda value: value is None)
-    """The grader machine's resources, for a grader that runs in its own machine."""
 
 
 class ShellAgent(EvaluationModel):
