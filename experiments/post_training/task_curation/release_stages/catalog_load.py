@@ -660,7 +660,7 @@ def _replay_qc_panels_parallel(
         if panel is None:
             raise RuntimeError(f"panel {panels[panel_index]['source_id']} never prepared")
         try:
-            finish_content_review(client(), panel, counts[panel_index], progress)
+            finish_content_review(client(), panel, progress)
         except BaseException:
             control.stop.set()
             raise

@@ -492,7 +492,6 @@ def insert_review_segment(
 def finish_content_review(
     query: AppletQuery,
     prepared: PreparedReviewPanel,
-    counts: dict[str, int],
     progress: Callable[[str, int], None] | None = None,
 ) -> None:
     """Materialize the panel's cohort summaries and publish its presentation pointer last."""
@@ -533,7 +532,7 @@ def load_content_reviews(
     counts: dict[str, int] = {}
     for table, rows, columns in prepared.groups:
         counts[table] = insert_review_segment(query, load_id, prepared.key, table, columns, rows, progress)
-    finish_content_review(query, prepared, counts, progress)
+    finish_content_review(query, prepared, progress)
     return counts
 
 
