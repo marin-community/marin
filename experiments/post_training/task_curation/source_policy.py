@@ -23,6 +23,7 @@ CROSSCODE_EVAL_REASON = (
 # with a typed link to its replacement, never Excluded. The replacements are
 # declared sources in the Atlas; the audit refuses a link that does not resolve.
 SUPERSEDED_REPLACEMENTS: dict[str, str] = {
+    "TaskTrove:DCAgent__swe_rebench_v2_patched_oracle-v2": "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@sealed-20261124",
     "TaskTrove:laion__swesmith-oracle-filtered-v2": "TaskTrove:swesmith-verifier-repaired-v5",
     "TaskTrove:smartie-swesmith-admitted": "TaskTrove:swesmith-verifier-repaired-v5",
     # Ruling 2026-11-24: the shared-v2 Harbor cohort's data is already served as

@@ -523,9 +523,9 @@ RECIPE_VERSIONS = {
     "ultra_sft_step3200_calendar_v2": REASONING_MARKUP_RECIPE_VERSION,
     "ultra_sft_step3200_comp_coding": REASONING_MARKUP_RECIPE_VERSION,
     "ultra_sft_step3200_lean": EXECUTABLE_GRADER_RECIPE_VERSION,
-    # Held at the sealed version: this component's receipts are re-cut by its own
-    # re-seal, whose admission landing binds version 9 with them.
-    "ultra_sft_step3200_reasoning_gym": EXECUTABLE_GRADER_RECIPE_VERSION,
+    # The admission landing (L2) ships this bump together with the refreshed
+    # receipt families bound at this version.
+    "ultra_sft_step3200_reasoning_gym": REASONING_GYM_RECIPE_VERSION,
 }
 """Calibrated or deterministic grader revisions; new judge families stay on version 3 until calibrated."""
 

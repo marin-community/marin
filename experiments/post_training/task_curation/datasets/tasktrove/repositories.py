@@ -133,6 +133,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:DCAgent__swe_rebench_v2_patched_oracle-v2",
+                replacement_source_id=SUPERSEDED_REPLACEMENTS["TaskTrove:DCAgent__swe_rebench_v2_patched_oracle-v2"],
                 upstream_dataset="DCAgent__swe_rebench_v2_patched_oracle-v2",
                 upstream_name="DCAgent__swe_rebench_v2_patched_oracle-v2",
                 subset=None,

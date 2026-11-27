@@ -1,5 +1,5 @@
 {
-  "revision": "3a4c892d824512f1863b0d2caf0dfe7b2185e423",
+  "revision": "d5657a6d9ed75e9b18f7c161c0de70b3bd99ae4d",
   "sources": {
     "AI-MO:numina_math": {
       "input_sha256": "56b745a538dad1c11afd3f5f954f73c43605435b08d296a75836ae5b8a0b1849",
@@ -762,9 +762,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/pending-burndown/20261123-lexical-v1/fingerprints/retained-20261123-v1-b/survey.json"
     },
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_reasoning_gym": {
-      "input_sha256": "262a6a26bb68f2b73468a1755a109277515aecdac61e85c88484dca4f40c7355",
-      "sha256": "ff9526c6f784d044f4a1bd33cee63ef086e9571149b6501d3cd6fd419ea99ba2",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-ff9526c6f784d044.json"
+      "input_sha256": "0b62a6360c0e282167bf4447268c9f3ead77cc0bc0f8f19a7dc23c93eba07600",
+      "sha256": "85190c3c5fff8e1c8a25a5543441b65366aeca01912683bf5706418c75d13254",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/grader-reseal-2-20261126/ultra-reasoning-gym/source-identities.json"
     },
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa": {
       "input_sha256": "96514b73d13079196ad39c6449b88f32b9ca2bcf31a639a276d3f38227b4e8ba",
@@ -872,9 +872,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-57f808b53b05dd6a.json"
     },
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym": {
-      "input_sha256": "201358bac6ccdfef95fdd4501a160f215bd8ca24acb3e684c0963834016e1828",
-      "sha256": "2bc6c1596c7edf9c893f53ae8fca7727f3cae4c37a694bc3fd9fba514b04d62a",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2bc6c1596c7edf9c.json"
+      "input_sha256": "6fcf01800b3e9e5eabf42ec7c7946bd48bfcf259fe5ca8d8ef6b4daa4471453b",
+      "sha256": "85190c3c5fff8e1c8a25a5543441b65366aeca01912683bf5706418c75d13254",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/grader-reseal-2-20261126/ultra-reasoning-gym/source-identities.json"
     },
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa": {
       "input_sha256": "279d25a3f12e091c019b08f765989d1f182661c412c109be855322c9c1d8ab01",
@@ -987,9 +987,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/pending-burndown/20261123-lexical-v1/fingerprints/retained-20261123-v1-b/survey.json"
     },
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_reasoning_gym": {
-      "input_sha256": "c122335bd8cbdc0b6d488c205568e85715d5d44cc13025f754122c35544600af",
-      "sha256": "ff9526c6f784d044f4a1bd33cee63ef086e9571149b6501d3cd6fd419ea99ba2",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-ff9526c6f784d044.json"
+      "input_sha256": "76e5fcea36f8c9f08564d81a07f561b036c75a7d6ef1b71d218856183004ea06",
+      "sha256": "85190c3c5fff8e1c8a25a5543441b65366aeca01912683bf5706418c75d13254",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/grader-reseal-2-20261126/ultra-reasoning-gym/source-identities.json"
     },
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa": {
       "input_sha256": "cc954951cb9c93a34572d4f6b7fc9145c59596d38d7f190fbfcedbbe1fff661c",
@@ -1140,6 +1140,11 @@
       "input_sha256": "3fbdb53666b7ba87d727e4e48820fcd615f9ab138eae7fc961f3aa82f1e6af51",
       "sha256": "9e9d7c9d56dc7be78d542a27dd16fa7d0e4df0be341ea67e984533bc16645d3b",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/swe-repair/2026.11.20.1/measurements/source-identity/swe-repair-survey/source-identities-content-nn-v4.json"
+    },
+    "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@sealed-20261124": {
+      "input_sha256": "c871d638ea7364ff955618917dc8e0fb7fa36490816159acb5a6510ef8b90036",
+      "sha256": "2dd3a26ccb24242710f3636d4285fc8185c7c2d9273ae6889b34928737f20255",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/swe-repair-sealed-20261127/source-identities-content-nn-v4.json"
     },
     "ScienceOne:S1-DeepResearch-15k": {
       "input_sha256": "33f2a0d5c894e167f67bba0d1f454335fcc46929d64b1da09b33599fe6f087d0",

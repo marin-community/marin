@@ -354,6 +354,14 @@ SOURCE_OWNERS: dict[str, SourceOwner] = {
         owner="swe-repair · ses_e15d1c017ffe",
         note="excluded",
     ),
+    "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@sealed-20261124": SourceOwner(
+        owner="swe-repair · opencode ses_de7955b8",
+        note=(
+            "the oracle-admitted release chain in flight: the v3 cut (7,207/7,484) published, "
+            "the census/lexical/sample complete, the receipt+binding pending"
+        ),
+        active=True,
+    ),
     "TRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized": SourceOwner(
         owner="by design — ban registry / rulings; nothing to burn down",
         note="metadata exclusion",
