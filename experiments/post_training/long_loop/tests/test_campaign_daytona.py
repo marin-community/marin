@@ -132,20 +132,57 @@ def test_unverified_registry_stops_campaign_before_any_snapshot_deletion(tmp_pat
     )
 
 
-def test_purge_records_deletions_before_quota_failure_and_refuses_blind_retry(tmp_path, account_clients, monkeypatch):
-    async def quota_unavailable(_client):
+def test_usage_failure_falls_back_to_inventory_and_the_purge_still_completes(tmp_path, account_clients, monkeypatch):
+    """A provider usage failure (e.g. a 403 on /usage) must not discard a purge that succeeded."""
+    calls = {"count": 0}
+
+    async def usage_unavailable(_client):
+        calls["count"] += 1
         raise RuntimeError("Provider quota API unavailable")
 
-    monkeypatch.setattr(daytona_usage, "account_usage_from_client", quota_unavailable)
+    monkeypatch.setattr(daytona_usage, "account_usage_from_client", usage_unavailable)
+    invoke_prelaunch(tmp_path, protection_registry())
 
-    with pytest.raises(RuntimeError, match="Provider quota API unavailable"):
+    receipt = json.loads((tmp_path / "purge.json").read_text())
+    assert receipt["state"] == "complete"
+    for account in ("rl", "eval"):
+        result = receipt["accounts"][account]
+        assert result["state"] == "complete"
+        assert result["purge"]["deleted"] == ["unused"]
+        assert result["deleted_count"] == 1
+        # The used count comes from a fresh inventory taken after this account's own deletion.
+        assert result["snapshot_used_from_inventory"] == 2
+        assert result["snapshot_quota"] is None and result["snapshot_free"] is None
+        assert "RuntimeError" in result["usage_error"]
+    assert calls["count"] == 2
+
+
+def test_failed_purge_still_refuses_blind_retry(tmp_path, account_clients, monkeypatch):
+    """A purge that cannot complete keeps its started receipt and blocks the retry."""
+    from shellbox.backends.daytona import snapshot as snapshot_module
+
+    real_purge = snapshot_module.purge_stale_snapshots
+
+    calls = {"count": 0}
+
+    async def eval_purge_fails(client, *, protected_snapshots=()):
+        # The rl account purges first; fail the second (eval) account's purge.
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise RuntimeError("Provider purge unavailable")
+        return await real_purge(client, protected_snapshots=protected_snapshots)
+
+    monkeypatch.setattr(snapshot_module, "purge_stale_snapshots", eval_purge_fails)
+
+    with pytest.raises(RuntimeError, match="Provider purge unavailable"):
         invoke_prelaunch(tmp_path, protection_registry())
 
     receipt = json.loads((tmp_path / "purge.json").read_text())
     assert receipt["state"] == "started"
-    assert receipt["accounts"]["rl"]["state"] == "purged"
-    assert receipt["accounts"]["rl"]["purge"]["deleted"] == ["unused"]
-    assert "eval" not in receipt["accounts"]
+    assert receipt["accounts"]["rl"]["state"] == "complete"
+    # The eval account's entry exists with its protection evidence, but its purge never completed.
+    assert receipt["accounts"]["eval"]["state"] == "started"
+    assert "purge" not in receipt["accounts"]["eval"]
 
     with pytest.raises(RuntimeError, match="Prior snapshot purge is incomplete"):
         invoke_prelaunch(tmp_path, protection_registry())

@@ -75,7 +75,7 @@ def current_snapshot_protections(
 async def purge_campaign_snapshots(config: CampaignSnapshotPurge) -> dict:
     """Use Shellbox's one-hour purge for both campaign accounts and retain quota receipts."""
     # CPU pool workers compile this graph without the optional provider SDK.
-    from shellbox.backends.daytona.snapshot import purge_stale_snapshots  # noqa: PLC0415
+    from shellbox.backends.daytona.snapshot import list_snapshots, purge_stale_snapshots  # noqa: PLC0415
     from shellbox.backends.daytona.usage import account_usage_from_client  # noqa: PLC0415
 
     if not config.target:
@@ -101,14 +101,29 @@ async def purge_campaign_snapshots(config: CampaignSnapshotPurge) -> dict:
             report = await purge_stale_snapshots(client, protected_snapshots=protected[account])
             result.update(state="purged", purge=dataclasses.asdict(report), deleted_count=len(report.deleted))
             path.write_text(json.dumps(receipt, indent=2))
-            usage = await account_usage_from_client(client)
-        result.update(
-            state="complete",
-            organization_id=usage.organization_id,
-            snapshot_quota=usage.snapshots.quota,
-            snapshot_used=usage.snapshots.used,
-            snapshot_free=usage.snapshots.remaining,
-        )
+            try:
+                usage = await account_usage_from_client(client)
+            except Exception as error:
+                # A provider-side usage failure (e.g. a 403 on /usage) must not discard a purge that
+                # succeeded: report the used count from a fresh inventory instead. Free headroom is
+                # the known quota minus this count; the quota itself is not re-derivable here.
+                inventory = await list_snapshots(client)
+                used = len([snapshot for snapshot in inventory if not snapshot.general])
+                result.update(
+                    state="complete",
+                    usage_error=f"{type(error).__name__}: {str(error)[:160]}",
+                    snapshot_used_from_inventory=used,
+                    snapshot_quota=None,
+                    snapshot_free=None,
+                )
+            else:
+                result.update(
+                    state="complete",
+                    organization_id=usage.organization_id,
+                    snapshot_quota=usage.snapshots.quota,
+                    snapshot_used=usage.snapshots.used,
+                    snapshot_free=usage.snapshots.remaining,
+                )
         path.write_text(json.dumps(receipt, indent=2))
         if report.remaining:
             raise RuntimeError(f"{account} snapshot deletions remain pending; campaign submission stopped")
@@ -141,7 +156,12 @@ def purge_before_campaign_submission(handles: list[ArtifactStep]) -> None:
         return
     receipt = asyncio.run(purge_campaign_snapshots(config))
     counts = "; ".join(
-        f"{account}: deleted={result['deleted_count']}, free={result['snapshot_free']}"
+        (
+            f"{account}: deleted={result['deleted_count']}, free={result['snapshot_free']}"
+            if result.get("snapshot_free") is not None
+            else f"{account}: deleted={result['deleted_count']}, free=unknown"
+            f"(used={result['snapshot_used_from_inventory']} by inventory; usage endpoint failed)"
+        )
         for account, result in receipt["accounts"].items()
     )
     print(f"Campaign snapshot purge complete: {counts}; receipt={config.receipt_path}")
