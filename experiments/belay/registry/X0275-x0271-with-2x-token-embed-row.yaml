@@ -4,9 +4,26 @@ name: X0271 with 2x token_embed row-AdamH LR
 category: Embeddings and inputs
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7229588356
   author: armorfaye
   approved_by: armorfaye (trusted)
+trials:
+- id: t001
+  variant: X0271 + token_embed row-AdamH LR 2x adam_lr (lr_div=0.5)
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0275
+  date: '2026-11-27'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0275
+  wandb: []
+  settings:
+    muonc_anneal_decay: '0.2'
+    muonc_anneal_adamc: '12.5'
+    adamc_adam_decay: '0.3'
+    muonc_anneal_embed_row_adamh: 'True'
+    muonc_anneal_embed_row_adamh_lr_div: '0.5'
+  commit: e3799865ff
+  priority: interactive
