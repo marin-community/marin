@@ -71,7 +71,6 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_MODEL_NAME = "levanter"
-_MAX_REQUEST_BYTES = 4 * 1024 * 1024
 _EVENT_STREAM = "text/event-stream"
 _CHAT_CHUNK = "chat.completion.chunk"
 MAX_POLICY_ID_LENGTH = 256
@@ -1070,9 +1069,7 @@ async def _stream_chat_completion(
 
 def _encode_chat_generation(prompt: list[int], results: list[InferenceResponse], score_mode: LogprobMode) -> str:
     mode = (
-        inference_pb2.LOGPROB_MODE_POLICY
-        if score_mode == LogprobMode.POLICY
-        else inference_pb2.LOGPROB_MODE_BEHAVIOR
+        inference_pb2.LOGPROB_MODE_POLICY if score_mode == LogprobMode.POLICY else inference_pb2.LOGPROB_MODE_BEHAVIOR
     )
     response = _grpc_generate_response(prompt, results, mode)
     return base64.b64encode(response.SerializeToString()).decode("ascii")
