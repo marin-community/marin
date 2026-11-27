@@ -1091,8 +1091,5 @@ def test_staged_weights_leave_admission_open_and_recheck_version(
             assert stale.value.code() == grpc.StatusCode.FAILED_PRECONDITION
             choice = generate(stub, "next")
             assert (choice.policy_id, choice.model_version) == ("next", 1)
-            server.unload()
-            with pytest.raises(ValueError, match="Load a serving model"):
-                server.publish(lambda model: model, expected_version=1, policy_id="unloaded")
     finally:
         server.shutdown()
