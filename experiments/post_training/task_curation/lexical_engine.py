@@ -156,24 +156,23 @@ class DatakitDecontamination:
         rows = 0
         for path in marks:
             target = str(StoragePath(prefix_join(flags_dir, StoragePath(path).name)))
-            sink = None
-            writer = None
-            try:
-                with StoragePath(path).open("rb") as stream:
-                    for batch in pq.ParquetFile(stream).iter_batches():
-                        mark_columns = (
-                            "id",
-                            "max_overlap",
-                            "contaminated",
-                            "matched_hashes",
-                        )
-                        columns = {name: batch.column(name).to_pylist() for name in mark_columns}
-                        eval_ids = [
-                            sorted(set().union(*{hash_groups[h] for h in hashes if h in hash_groups}))
-                            for hashes in columns["matched_hashes"]
-                        ]
-                        families = [sorted({_eval_family(eval_id) for eval_id in ids}) for ids in eval_ids]
-                        table = pa.Table.from_pylist(
+            tables = []
+            with StoragePath(path).open("rb") as stream:
+                for batch in pq.ParquetFile(stream).iter_batches():
+                    mark_columns = (
+                        "id",
+                        "max_overlap",
+                        "contaminated",
+                        "matched_hashes",
+                    )
+                    columns = {name: batch.column(name).to_pylist() for name in mark_columns}
+                    eval_ids = [
+                        sorted(set().union(*{hash_groups[h] for h in hashes if h in hash_groups}))
+                        for hashes in columns["matched_hashes"]
+                    ]
+                    families = [sorted({_eval_family(eval_id) for eval_id in ids}) for ids in eval_ids]
+                    tables.append(
+                        pa.Table.from_pylist(
                             [
                                 {
                                     "id": task_id,
@@ -195,16 +194,12 @@ class DatakitDecontamination:
                             ],
                             schema=TASK_FLAGS_SCHEMA,
                         )
-                        if writer is None:
-                            # Open the sink through the configured storage filesystem so
-                            # remote targets see the caller's credentials.
-                            sink = StoragePath(target).open("wb", auto_mkdir=True)
-                            writer = pq.ParquetWriter(sink, TASK_FLAGS_SCHEMA, compression="zstd")
-                        writer.write_table(table)
-                        rows += batch.num_rows
-            finally:
-                if writer is not None:
-                    writer.close()
-                if sink is not None:
-                    sink.close()
+                    )
+            # Open the sink through the configured storage filesystem so remote
+            # targets see the caller's credentials; StoragePath.open returns a
+            # lazy fsspec handle, so it must be entered before writing.
+            combined = pa.concat_tables(tables)
+            with StoragePath(target).open("wb", auto_mkdir=True) as sink:
+                pq.write_table(combined, sink, compression="zstd")
+            rows += combined.num_rows
         return rows
