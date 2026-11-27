@@ -5,6 +5,8 @@ import numpy as np
 
 from levanter.inference import inference_pb2
 
+_UINT16_LE = np.dtype("<u2")
+
 
 def write_router_replay(replay: inference_pb2.RouterReplay, experts: np.ndarray, valid: np.ndarray) -> None:
     """Store captured expert IDs in row-major order with their wire dtype."""
@@ -15,7 +17,7 @@ def write_router_replay(replay: inference_pb2.RouterReplay, experts: np.ndarray,
         if experts.min(initial=0) < 0 or experts.max(initial=0) > np.iinfo(np.uint16).max:
             raise ValueError("Expert IDs must fit in uint16")
         replay.expert_id_dtype = inference_pb2.EXPERT_ID_DTYPE_UINT16_LE
-        experts = experts.astype("<u2", copy=False)
+        experts = experts.astype(_UINT16_LE, copy=False)
     replay.expert_ids = experts.tobytes()
     replay.valid.extend(valid.tolist())
 
@@ -37,7 +39,7 @@ def read_router_replay(
     if replay.expert_id_dtype == inference_pb2.EXPERT_ID_DTYPE_UINT8:
         dtype = np.dtype("u1")
     elif replay.expert_id_dtype == inference_pb2.EXPERT_ID_DTYPE_UINT16_LE:
-        dtype = np.dtype("<u2")
+        dtype = _UINT16_LE
     else:
         raise ValueError("Unknown expert ID dtype in generation response")
     expert_bytes = replay.expert_ids
