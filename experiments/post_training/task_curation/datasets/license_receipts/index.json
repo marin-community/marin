@@ -1,48 +1,42 @@
 {
   "repo": "open-athena/marin-license-receipts",
-  "revision": "ff323922141f976d6516c3f820362d331e8ca5d6",
+  "revision": "6a34e4f84ee66e0406c027a397e6830a057a21d6",
   "references": [
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "ff323922141f976d6516c3f820362d331e8ca5d6",
-      "path": "native_taskspec_binds_20261126_a_v1/part-000.json",
-      "sha256": "75356ced1db999ac7a001911539b551e777aaeb2c194feba39e374df4bda10b2"
+      "revision": "6a34e4f84ee66e0406c027a397e6830a057a21d6",
+      "path": "Nemotron:nemotron_ultra_rlvr2_reasoning_gym_reseal_20261126_a_v1/part-000.json",
+      "sha256": "0e1116b6d033cf6950d51e514e979134313abcf2db5902b7223e73e95ad2838a"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "ff323922141f976d6516c3f820362d331e8ca5d6",
-      "path": "native_taskspec_binds_20261126_a_v1/part-001.json",
-      "sha256": "855b30e06b438e75251993f8c4d8284079b2284061175c906352ca67f74fe100"
+      "revision": "6a34e4f84ee66e0406c027a397e6830a057a21d6",
+      "path": "Nemotron:nemotron_ultra_rlvr2_reasoning_gym_reseal_20261126_a_v1/part-001.json",
+      "sha256": "2861ec879032f59f42db81ca9e28ea11edcc47280e0785b68e22c4ad715afb82"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "ff323922141f976d6516c3f820362d331e8ca5d6",
-      "path": "native_taskspec_binds_20261126_a_v1/part-002.json",
-      "sha256": "fd09d3323559548fdc41ae9c68bb2abf8f4173f6544179b9dbaee11ff0d8c654"
+      "revision": "6a34e4f84ee66e0406c027a397e6830a057a21d6",
+      "path": "Nemotron:nemotron_ultra_rlvr2_reasoning_gym_reseal_20261126_a_v1/part-002.json",
+      "sha256": "c57e053fb8a57fff560567b96b19ecb6aad7f64ab4a5c7eda5c52c217c9c91ce"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "ff323922141f976d6516c3f820362d331e8ca5d6",
-      "path": "native_taskspec_binds_20261126_a_v1/part-003.json",
-      "sha256": "703cbc1ddfd187f8004daf3b4c2e4e44f2da1c1ee9534d9c759b8263790bc14d"
+      "revision": "6a34e4f84ee66e0406c027a397e6830a057a21d6",
+      "path": "Nemotron:nemotron_ultra_rlvr2_reasoning_gym_reseal_20261126_a_v1/part-003.json",
+      "sha256": "db28ab39fd33c3c95733f90c457e41f775a4e329c60539194ca202509bb5ddf0"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "ff323922141f976d6516c3f820362d331e8ca5d6",
-      "path": "native_taskspec_binds_20261126_a_v1/part-004.json",
-      "sha256": "15192c202d2f04ed72695fe18463ce78208f6a5972aa10db884729e1ec49583c"
+      "revision": "6a34e4f84ee66e0406c027a397e6830a057a21d6",
+      "path": "Nemotron:nemotron_ultra_rlvr2_reasoning_gym_reseal_20261126_a_v1/part-004.json",
+      "sha256": "963697b62da854e2106c10ca6ec011201b4757e6845ed97d97e9f760af21e1bf"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "ff323922141f976d6516c3f820362d331e8ca5d6",
-      "path": "native_taskspec_binds_20261126_a_v1/part-005.json",
-      "sha256": "39bfd73d6eae3f7305eabd63357ad7f90eed9ce11fc051384ee0242250aa0f8a"
-    },
-    {
-      "repo": "open-athena/marin-license-receipts",
-      "revision": "ff323922141f976d6516c3f820362d331e8ca5d6",
-      "path": "native_taskspec_binds_20261126_a_v1/part-006.json",
-      "sha256": "4197ccf8f53a13200491a48b526af036064b30709b6c5654c976b64fbe80532a"
+      "revision": "6a34e4f84ee66e0406c027a397e6830a057a21d6",
+      "path": "Nemotron:nemotron_ultra_rlvr2_reasoning_gym_reseal_20261126_a_v1/part-005.json",
+      "sha256": "5d444904fad8bacb9cb30e52c7b20c25c2ff3bf9ae4f4b4fdc822c10e327f11d"
     }
   ]
 }
