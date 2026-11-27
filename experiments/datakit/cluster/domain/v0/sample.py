@@ -31,7 +31,6 @@ survive a restart).
 import logging
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
 
 import numpy as np
 import pyarrow as pa
@@ -39,7 +38,7 @@ from fray.types import ResourceConfig
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.input_file import InputFileSpec
-from zephyr.readers import load_file
+from zephyr.readers import load_parquet_batch
 from zephyr.runners import InlineRunner
 
 from experiments.datakit.embeddings.luxical.pipeline import LUXICAL_DIM, EmbeddingAttrData
@@ -56,28 +55,25 @@ _SAMPLE_SCHEMA = pa.schema(
 
 
 def _sample_shard(
-    batches: Iterator[list[dict[str, Any]]],
+    batches: Iterator[pa.RecordBatch],
     shard: ShardInfo,
     *,
     source_name: str,
     per_shard: int,
     seed: int,
-) -> Iterator[dict[str, Any]]:
-    """Per-shard map: collect rows, uniform-sample ``per_shard`` of them, emit with source label.
-
-    Reads the whole shard into memory because parquet row groups can't be
-    sampled randomly without first knowing row counts. Shards are MB-sized
-    (~22K rows x 192-byte int8 embedding) so this is cheap.
-    """
+) -> Iterator[pa.RecordBatch]:
+    """Per-shard map: uniform-sample ``per_shard`` embeddings and label them with the source."""
     rng = np.random.default_rng(seed + shard.shard_idx)
-    rows: list[dict[str, Any]] = []
-    for batch in batches:
-        rows.extend(batch)
-    if per_shard < len(rows):
-        idx = rng.choice(len(rows), size=per_shard, replace=False)
-        rows = [rows[i] for i in idx]
-    for r in rows:
-        yield {"source": source_name, "embedding": r["embedding"]}
+    # Hold the shard's embedding column in Arrow, not as per-row Python lists: short-document
+    # sources reach millions of rows per shard, and a Python row costs kilobytes, not 192 bytes.
+    embeddings = pa.chunked_array(
+        [batch.column("embedding") for batch in batches], type=_SAMPLE_SCHEMA.field("embedding").type
+    )
+    if per_shard < len(embeddings):
+        idx = rng.choice(len(embeddings), size=per_shard, replace=False)
+        embeddings = embeddings.take(idx)
+    for chunk in embeddings.chunks:
+        yield pa.RecordBatch.from_arrays([pa.repeat(source_name, len(chunk)), chunk], schema=_SAMPLE_SCHEMA)
 
 
 def _sample_one_source(
@@ -106,8 +102,7 @@ def _sample_one_source(
 
     ds = (
         Dataset.from_list(source_specs)
-        .flat_map(load_file)
-        .window(4096)
+        .flat_map(load_parquet_batch)
         .map_shard(
             lambda batches, shard, sn=source_name, ps=per_shard, sd=seed: _sample_shard(
                 batches, shard, source_name=sn, per_shard=ps, seed=sd
