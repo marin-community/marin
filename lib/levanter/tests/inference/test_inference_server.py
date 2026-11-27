@@ -5,6 +5,7 @@ import base64
 import dataclasses
 import json
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import equinox as eqx
@@ -979,6 +980,13 @@ def test_publish_snowball_checkpoint_drives_the_live_grpc_snapshot(tmp_path, loc
         learned = SnowballLMHeadModel.init(vocab, cfg, key=jax.random.key(21))
         path = str(tmp_path / "native-policy")
         save_checkpoint({"model": learned}, 3, path, metadata={"policy_version": 2, "policy_id": "learned:2"})
+        incomplete = str(tmp_path / "incomplete-policy")
+        save_checkpoint(
+            {"model": {"other": jnp.array(0)}},
+            3,
+            incomplete,
+            metadata={"policy_version": 2, "policy_id": "incomplete:2"},
+        )
         server = InferenceServer.create(options, initial, local_gpt2_tokenizer, mesh=mesh)
         try:
             with (
@@ -1003,6 +1011,12 @@ def test_publish_snowball_checkpoint_drives_the_live_grpc_snapshot(tmp_path, loc
                 before = generate("starting").choices[0]
                 with pytest.raises(ValueError):
                     publish_snowball_checkpoint(server, path, policy_version=1, expected_serving_version=0)
+                with pytest.raises(FileNotFoundError):
+                    publish_snowball_checkpoint(server, incomplete, policy_version=2, expected_serving_version=0)
+                with pytest.raises(grpc.RpcError) as unstaged:
+                    generate("incomplete:2")
+                assert unstaged.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+                assert generate("starting").choices[0] == before
                 assert publish_snowball_checkpoint(server, path, policy_version=2, expected_serving_version=0) == 1
                 with pytest.raises(grpc.RpcError) as stale:
                     generate("starting")
@@ -1025,3 +1039,57 @@ def test_publish_snowball_checkpoint_drives_the_live_grpc_snapshot(tmp_path, loc
                 )
         finally:
             server.shutdown()
+
+
+def test_staged_weights_leave_admission_open_and_recheck_version(
+    inference_server_config, llama_model_config, local_gpt2_tokenizer
+):
+    tokenizer = local_gpt2_tokenizer
+    config = dataclasses.replace(inference_server_config, initial_policy_id="initial")
+    mesh = config.trainer.device_mesh
+    with hax.partitioning.set_mesh(mesh), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        model = LlamaLMHeadModel.init(hax.Axis("vocab", len(tokenizer)), llama_model_config, key=jax.random.key(0))
+        server = InferenceServer.create(config, model, tokenizer, mesh=mesh)
+    entered, release = threading.Event(), threading.Event()
+    prompt = np.array([18, 7, 3, 18], dtype=np.int32)
+
+    def restore(model):
+        entered.set()
+        if not release.wait(30):
+            raise TimeoutError("Test did not release checkpoint staging")
+        return jax.tree.map(jnp.zeros_like, model)
+
+    def generate(stub, policy_id):
+        return stub.Generate(
+            inference_pb2.GenerateRequest(
+                prompt_token_ids=prompt.tolist(), max_new_tokens=2, temperature=0, expected_policy_id=policy_id
+            ),
+            timeout=30,
+        ).choices[0]
+
+    try:
+        with (
+            TestClient(server.app),
+            grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel,
+            ThreadPoolExecutor(max_workers=2) as pool,
+        ):
+            stub = inference_pb2_grpc.InferenceStub(channel)
+            try:
+                staging = pool.submit(server.publish, restore, expected_version=0, policy_id="staged")
+                assert entered.wait(5)
+                during_stage = pool.submit(generate, stub, "initial").result(timeout=30)
+                assert during_stage.model_version == 0
+                assert server.reload(lambda model: model, expected_version=0, policy_id="next") == 1
+            finally:
+                release.set()
+            with pytest.raises(ValueError, match="Expected model version"):
+                staging.result(timeout=30)
+            with pytest.raises(ValueError, match="new, nonempty policy ID"):
+                server.publish(lambda model: model, expected_version=1, policy_id="next")
+            with pytest.raises(grpc.RpcError) as stale:
+                generate(stub, "staged")
+            assert stale.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+            choice = generate(stub, "next")
+            assert (choice.policy_id, choice.model_version) == ("next", 1)
+    finally:
+        server.shutdown()

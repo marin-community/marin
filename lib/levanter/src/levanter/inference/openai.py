@@ -19,12 +19,13 @@ import queue
 import threading
 import time
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from typing import List, Optional, Union
 
 import grpc
 import haliax as hax
+import jax
 import jax.numpy as jnp
 from jax.sharding import Mesh
 import jax.random as jrandom
@@ -224,51 +225,89 @@ class InferenceContext:
     def unload(self):
         """Unload the inference model to free up resources."""
         logger.info("Unloading inference model...")
-        with self.model_lock:
+        with self._publication_lock, self.model_lock:
             # pyrefly: ignore[bad-assignment]  # unload() deliberately clears the model; reload() restores it
             self.model = None
             self.engine = None  # type: ignore[assignment]
         logger.info("Inference model unloaded.")
 
+    def _check_policy_update(self, expected_version: int | None, policy_id: str | None) -> None:
+        if expected_version is not None and expected_version != self._model_version:
+            raise ValueError(f"Expected model version {expected_version}, serving {self._model_version}")
+        if policy_id is not None and (
+            not 0 < len(policy_id) <= MAX_POLICY_ID_LENGTH or policy_id in self._published_policy_ids
+        ):
+            raise ValueError("A weight update requires a new, nonempty policy ID")
+
+    @contextmanager
+    def _publication_barrier(self) -> collections.abc.Iterator[None]:
+        with self._publication_lock:
+            self._publication_pending.set()
+            try:
+                with (
+                    self.model_lock,
+                    hax.partitioning.set_mesh(self.mesh),
+                    hax.axis_mapping(self.config.trainer.compute_axis_mapping),
+                ):
+                    yield
+            finally:
+                self._publication_pending.clear()
+
+    def publish(self, restore: WeightSource, *, expected_version: int, policy_id: str) -> int:
+        """Stage compatible weights while serving, then install at the expected version."""
+        with self._publication_lock:
+            self._check_policy_update(expected_version, policy_id)
+            active, engine = self.model, self.engine
+            if active is None or engine is None:
+                raise ValueError("Load a serving model before publishing staged weights")
+        with (
+            hax.partitioning.set_mesh(self.mesh),
+            hax.axis_mapping(self.config.trainer.compute_axis_mapping),
+        ):
+            candidate = restore(active)
+            if not engine.can_reuse_cache(candidate):
+                raise ValueError("Staged weights must preserve the model structure and array layouts")
+            jax.block_until_ready(candidate)
+
+        with self._publication_barrier():
+            self._check_policy_update(expected_version, policy_id)
+            if engine is not self.engine:
+                raise ValueError("Serving engine changed while staging weights")
+            self._reset_engine_for_model(engine, candidate)
+            return self._commit_policy(candidate, engine, policy_id)
+
     def reload(
         self, weight_callback: WeightSource, *, expected_version: int | None = None, policy_id: str | None = None
     ) -> int:
         """Install new weights with empty KV state and return the new serving version."""
-        with self._publication_lock:
-            self._publication_pending.set()
-            try:
-                with self.model_lock:
-                    if expected_version is not None and expected_version != self._model_version:
-                        raise ValueError(f"Expected model version {expected_version}, serving {self._model_version}")
-                    if policy_id is not None and (
-                        not 0 < len(policy_id) <= MAX_POLICY_ID_LENGTH or policy_id in self._published_policy_ids
-                    ):
-                        raise ValueError("A weight update requires a new, nonempty policy ID")
+        with self._publication_barrier():
+            self._check_policy_update(expected_version, policy_id)
+            model = weight_callback(self.model)
+            engine = self.engine
+            if engine.can_reuse_cache(model):
+                self._reset_engine_for_model(engine, model)
+            else:
+                engine = InferenceEngine.from_model_with_config(
+                    model=model,
+                    tokenizer=self.tokenizer,
+                    config=self.config.service,
+                    axis_resources=self.config.trainer.compute_axis_mapping,
+                )
+            return self._commit_policy(model, engine, policy_id)
 
-                    with (
-                        hax.partitioning.set_mesh(self.mesh),
-                        hax.axis_mapping(self.config.trainer.compute_axis_mapping),
-                    ):
-                        model = weight_callback(self.model)
-                        engine = self.engine
-                        if engine.can_reuse_cache(model):
-                            engine.reset()
-                            engine.model = model
-                        else:
-                            engine = InferenceEngine.from_model_with_config(
-                                model=model,
-                                tokenizer=self.tokenizer,
-                                config=self.config.service,
-                                axis_resources=self.config.trainer.compute_axis_mapping,
-                            )
-                    self.model, self.engine = model, engine
-                    self._model_version += 1
-                    self._policy_id = policy_id
-                    if policy_id is not None:
-                        self._published_policy_ids.add(policy_id)
-                    return self._model_version
-            finally:
-                self._publication_pending.clear()
+    @staticmethod
+    def _reset_engine_for_model(engine: InferenceEngine, model: LmHeadModel) -> None:
+        engine.reset()
+        jax.block_until_ready(engine.gen_state)
+        engine.model = model
+
+    def _commit_policy(self, model: LmHeadModel, engine: InferenceEngine, policy_id: str | None) -> int:
+        self.model, self.engine = model, engine
+        self._model_version += 1
+        self._policy_id = policy_id
+        if policy_id is not None:
+            self._published_policy_ids.add(policy_id)
+        return self._model_version
 
     def submit_request(
         self,
@@ -1295,6 +1334,10 @@ class InferenceServer:
     def unload(self):
         """Unload the inference model to free up resources."""
         self.inference_context.unload()
+
+    def publish(self, restore: WeightSource, *, expected_version: int, policy_id: str) -> int:
+        """Prepare and install a complete policy snapshot."""
+        return self.inference_context.publish(restore, expected_version=expected_version, policy_id=policy_id)
 
     def reload(
         self, weight_callback: WeightSource, *, expected_version: int | None = None, policy_id: str | None = None

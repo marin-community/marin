@@ -98,6 +98,14 @@ For long contexts or multiple choices, size the client's
 `grpc.max_receive_message_length` for the expected route payload. Packed expert
 IDs and the validity mask can exceed gRPC's default 4 MiB receive limit.
 
+### Frozen checkpoint publication
+
+Native Snowball checkpoint publication restores and validates an immutable
+candidate while the current policy serves. Installation rechecks the base
+serving version and policy ID, then drains generation and resets the KV state
+before making the candidate visible. New gRPC requests can supply
+`expected_policy_id` to reject a stale policy with `FAILED_PRECONDITION`.
+
 ### Performance Considerations
 - **JIT Compilation**: Warmup generation on startup to trigger JIT compilation
 - **Memory Management**: Efficient KV cache page allocation and deallocation
