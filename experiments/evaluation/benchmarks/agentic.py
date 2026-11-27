@@ -213,6 +213,8 @@ CAMPAIGN_TRIALS = 3
 """The trials of the campaign's Terminal-Bench policies."""
 CAMPAIGN_PROTOCOL = "campaign-2026-09-25"
 """The protocol of a campaign policy whose agent is also the benchmark's default protocol."""
+PACKAGE_TIMEOUTS_PROTOCOL = "package-timeouts"
+"""A campaign policy's agent, limits and trials, with each package's own agent and verifier time limits."""
 CAMPAIGN_MAX_INPUT_TOKENS = 32768
 CAMPAIGN_PI = PiAgent(version="0.87.0", setup_timeout=360)
 TERMINAL_BENCH_2_1_3TRIAL = replace(
@@ -506,6 +508,21 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             job=CAMPAIGN_JOB,
             protocol=CAMPAIGN_PROTOCOL,
         ),
+        harbor_source(
+            TERMINAL_BENCH_2_1_3TRIAL,
+            terminus,
+            max_input_tokens=LONG_MAX_INPUT_TOKENS,
+            max_output_tokens=LONG_MAX_OUTPUT_TOKENS,
+            trials=CAMPAIGN_TRIALS,
+            protocol=PACKAGE_TIMEOUTS_PROTOCOL,
+        ),
+        harbor_source(
+            OT_TBLITE_3TRIAL,
+            terminus,
+            max_input_tokens=CAMPAIGN_MAX_INPUT_TOKENS,
+            trials=CAMPAIGN_TRIALS,
+            protocol=PACKAGE_TIMEOUTS_PROTOCOL,
+        ),
         # Terminus 2 as Harbor ran it, with the 16,384-token replies of the Harbor runs this port reproduces.
         *(
             harbor_source(dataset, terminus, max_output_tokens=LONG_MAX_OUTPUT_TOKENS)
@@ -525,6 +542,14 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             max_input_tokens=LONG_MAX_INPUT_TOKENS,
             max_output_tokens=LONG_MAX_OUTPUT_TOKENS,
             job=replace(CAMPAIGN_JOB, storage_mb=10240, agent_install=pi_install(BIXBENCH_PI)),
+        ),
+        harbor_source(
+            BIXBENCH,
+            BIXBENCH_PI,
+            max_input_tokens=LONG_MAX_INPUT_TOKENS,
+            max_output_tokens=LONG_MAX_OUTPUT_TOKENS,
+            job=JobSettings(storage_mb=10240, agent_install=pi_install(BIXBENCH_PI)),
+            protocol=PACKAGE_TIMEOUTS_PROTOCOL,
         ),
         harbor_source(
             BIXBENCH,
