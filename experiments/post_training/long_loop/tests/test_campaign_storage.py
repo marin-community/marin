@@ -13,12 +13,12 @@ from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from marin.execution.artifact import write_artifact
 from marin.rl.skyrl import SkyRLRun, skyrl_temporary_run_path
 from rigging.filesystem.storage_path import StoragePath, prefix_join
-from vendor.skyrl.marinskyrl.model_manifest import ModelManifestFile, build_model_manifest
 
 from experiments.post_training.long_loop import campaign_storage
 from experiments.post_training.long_loop.campaign_storage import retain_campaign_checkpoints
 from vendor.skyrl.marinskyrl.checkpoint_paths import LATEST_CHECKPOINT_FILE
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
+from vendor.skyrl.marinskyrl.model_manifest import ModelManifestFile, build_model_manifest
 
 FINAL_STEP = 50
 WEIGHTS = b"policy-weights"
