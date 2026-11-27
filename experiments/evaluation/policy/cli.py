@@ -9,6 +9,14 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import click
+from evalrecords.policy_release import (
+    ReleasedRun,
+    RunCompliance,
+    Verdict,
+    compliance_path,
+    record_sha256,
+    release_tag,
+)
 from evalrecords.records import EvalRunRecord, EvaluationSelection, RunStatus
 from iris.cli.connect import open_iris_client
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
@@ -17,6 +25,7 @@ from marin.evaluation.runner import EvaluationBatch
 from marin.execution.step_runner import check_cache
 from marin.rollouts.evaluation import CHAT_OPERATIONS, served_chat_template_kwargs
 from rigging.config_discovery import find_project_root
+from rigging.filesystem.factory import open_url
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 from rigging.provenance import git_output
@@ -32,11 +41,18 @@ from experiments.evaluation.policy.launch import (
     policy_model,
     source_checkout,
 )
+from experiments.evaluation.policy.release import (
+    carried_runs,
+    is_ancestor,
+    publish,
+    release_candidate,
+    tagged_commit,
+    without,
+)
 from experiments.evaluation.policy.runs import (
     ExpectedRun,
     FoundRun,
     RunCheck,
-    RunState,
     check_found,
     check_run,
     compliant_run,
@@ -203,6 +219,8 @@ class _ModelPlan:
     model: PolicyModel
     batches: tuple[EvaluationBatch, ...]
     excluded: Mapping[str, str]
+    carried: Mapping[str, ReleasedRun]
+    """Evaluations whose base release run a patch keeps."""
     done: Mapping[str, FoundRun]
     """Evaluations with a compliant run of the same inputs, at any commit."""
     invalid: Mapping[str, FoundRun]
@@ -237,7 +255,7 @@ def _decide(runs: tuple[FoundRun, ...], expected: ExpectedRun, checkout: str, re
         check = check_found(target, expected)
         if check is None:
             raise ValueError(f"{target.run_id} has not finished")
-        if check.state is RunState.VALID and not check.warnings:
+        if check.state is Verdict.VALID and not check.warnings:
             raise ValueError(f"{target.run_id} is valid; only an invalid or flagged run is run again")
         return _Decision(attempt=here[-1].attempt + 1 if here else 1, replaces=target.run_id)
     if (hit := compliant_run(runs, expected)) is not None:
@@ -258,12 +276,15 @@ def _launch_plan(
     *,
     limit: int | None,
     checkout: str,
+    root: Path,
     **placement,
 ) -> _ModelPlan:
     """Resolve one model's launch: its evaluations, which of them already have a compliant run, and the attempt
     each of the rest runs as. ``placement`` is the priority band and cluster ``expected_runs`` takes."""
     try:
         plan = model_evaluations(policy, model, evaluations)
+        carried = carried_runs(policy, model, plan, root)
+        plan = without(plan, carried)
         first = {evaluation.name: run_suffix(checkout, 1) for evaluation in plan.evaluations}
         initial = expected_runs(policy, plan, limit=limit, run_suffixes=first, **placement)
         decisions = {expected.name: _decide(found_runs(expected), expected, checkout, rerun) for expected in initial}
@@ -287,6 +308,7 @@ def _launch_plan(
         model=model,
         batches=tuple({id(run.batch): run.batch for run in runs}.values()),
         excluded=plan.excluded,
+        carried=carried,
         done={name: decision.run for name, decision in decisions.items() if decision.run and decision.compliant},
         invalid={name: decision.run for name, decision in decisions.items() if decision.run and not decision.compliant},
         reruns=frozenset(decision.replaces for decision in decisions.values() if decision.replaces is not None),
@@ -299,6 +321,8 @@ def _print_launch(policy: Policy, plan: _ModelPlan, checkout: str) -> None:
     click.echo(f"  {model.location}@{model.revision}  served at {plan.model.window}")
     for name, reason in sorted(plan.excluded.items()):
         click.echo(f"  excluded {name}: {reason}")
+    for name, run in sorted(plan.carried.items()):
+        click.echo(f"  carried {name}: {run.run_id} from {run.carried_from}")
     for name, run in sorted(plan.done.items()):
         click.echo(f"  skip {name}: compliant run {run.run_id}")
     for name, run in sorted(plan.invalid.items()):
@@ -412,7 +436,12 @@ def launch(
     targets = _targets(policy, model_names, all_baselines, model_config)
     if targets is None:
         raise click.UsageError("name --model, --baselines or --model-config")
-    checkout = source_checkout(find_project_root())
+    root = find_project_root()
+    checkout = source_checkout(root)
+    if (released := tagged_commit(policy.version, root)) is not None and not checkout.startswith(released[:12]):
+        raise click.ClickException(
+            f"{version} is released at {released}; launch it from there: git checkout {release_tag(version)}"
+        )
     plans = [
         _launch_plan(
             policy,
@@ -421,6 +450,7 @@ def launch(
             frozenset(rerun),
             limit=limit,
             checkout=checkout,
+            root=root,
             priority_band=priority_band_value(priority),
             federated_cluster=federated_cluster,
         )
@@ -473,10 +503,12 @@ def status(
     configure_coreweave_s3()
     targets = _targets(policy, model_names, all_baselines, model_config) or _targets(policy, (), True, None)
     assert targets is not None
-    checkout = source_checkout(find_project_root())
+    root = find_project_root()
+    checkout = source_checkout(root)
     for model in targets:
         try:
             plan = model_evaluations(policy, model)
+            carried = carried_runs(policy, model, plan, root)
             suffixes = {evaluation.name: run_suffix(checkout, 1) for evaluation in plan.evaluations}
             full = expected_runs(policy, plan, limit=None, run_suffixes=suffixes)
             smoke = {run.name: run for run in expected_runs(policy, plan, limit=limit, run_suffixes=suffixes)}
@@ -485,7 +517,11 @@ def status(
         rows = tuple(
             (
                 run.name,
-                _status(found_runs(run), run, checkout),
+                (
+                    f"carried {carried[run.name].run_id} from {carried[run.name].carried_from}"
+                    if run.name in carried
+                    else _status(found_runs(run), run, checkout)
+                ),
                 _status(found_runs(smoke[run.name]), smoke[run.name], checkout),
             )
             for run in full
@@ -516,12 +552,31 @@ def _verified(policy: Policy, record: EvalRunRecord, records_prefix: str) -> Run
     return check_run(record, expected, step_succeeded=check_cache(prefix_join(records_prefix, record.run_id)))
 
 
+def _write_compliance(policy: Policy, check: RunCheck, records_prefix: str) -> None:
+    """Write the verdict beside the run's record, where EvalDash admits a checked run from."""
+    record = check.record
+    assert record.evaluation.curated is not None
+    compliance = RunCompliance(
+        version=policy.version,
+        run_id=record.run_id,
+        commit=record.provenance.git_sha,
+        full=record.evaluation.curated.settings.source_limit is None,
+        record_sha256=record_sha256(records_prefix, record.run_id),
+        verdict=check.state,
+        problems=check.problems,
+        warnings=check.warnings,
+    )
+    with open_url(compliance_path(records_prefix, record.run_id), "w") as handle:
+        handle.write(compliance.model_dump_json(indent=2))
+
+
 @cli.command()
 @click.option("--policy", "version", required=True, type=click.Choice(sorted(POLICIES)), help="Policy version.")
 @click.argument("run_ids", nargs=-1, required=True)
 def verify(version: str, run_ids: tuple[str, ...]) -> None:
-    """Check runs against the policy from a clean checkout of their commit, and exit non-zero unless every one
-    complies. Warnings flag results far outside expectations without making a run invalid."""
+    """Check runs against the policy from a clean checkout of their commit, write each verdict beside its record,
+    and exit non-zero unless every run complies. Warnings flag results far outside expectations without making a
+    run invalid."""
     policy = POLICIES[version]
     configure_coreweave_s3()
     invalid = False
@@ -533,14 +588,73 @@ def verify(version: str, run_ids: tuple[str, ...]) -> None:
             check = _verified(policy, record, records_prefix)
         except ValueError as error:
             raise click.ClickException(f"{run_id}: {error}") from error
+        _write_compliance(policy, check, records_prefix)
         click.echo(f"{run_id}  {_run_summary(check)}")
         for problem in check.problems:
             click.echo(f"  {problem}")
         for warning in check.warnings:
             click.echo(f"  warning: {warning}")
-        invalid |= check.state is not RunState.VALID
+        invalid |= check.state is not Verdict.VALID
     if invalid:
         raise SystemExit(1)
+
+
+@cli.command()
+@click.option("--policy", "version", required=True, type=click.Choice(sorted(POLICIES)), help="Policy version.")
+@click.option("--dry-run", is_flag=True, help="Print what the release would pin without writing or tagging it.")
+@click.option(
+    "--runs-from",
+    "outside_history",
+    multiple=True,
+    help="A commit on origin outside origin/main's history, such as an integration branch's, whose runs may be pinned.",
+)
+def release(version: str, dry_run: bool, outside_history: tuple[str, ...]) -> None:
+    """Pin each baseline's compliant full run of each evaluation in a manifest, and tag HEAD as the release.
+
+    Runs from a clean checkout of a commit on origin/main. It pins runs from that commit's history and from the
+    ``--runs-from`` commits. For each pinned run from another commit it prints the evaluation code changed since,
+    or, for a ``--runs-from`` commit, how its evaluation code differs; the release's reviewer reads these for side
+    effects. A patch (a policy with a ``base``) keeps each base release run whose inputs are unchanged apart from
+    the version.
+    """
+    policy = POLICIES[version]
+    configure_coreweave_s3()
+    root = find_project_root()
+    if changes := git_output(["status", "--porcelain"], root):
+        raise click.ClickException(f"release from a clean checkout; uncommitted changes:\n{changes}")
+    git_output(["fetch", "-q", "origin", "main"], root)
+    if not is_ancestor("HEAD", "origin/main", root):
+        raise click.ClickException("release from a commit on origin/main")
+    commits = tuple(git_output(["rev-parse", "--verify", f"{commit}^{{commit}}"], root) for commit in outside_history)
+    for commit in commits:
+        if not git_output(["branch", "-r", "--contains", commit], root):
+            raise click.ClickException(f"--runs-from {commit[:12]} is on no branch of origin; push it first")
+    try:
+        candidate = release_candidate(policy, root, outside_history=commits)
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
+    head = candidate.release.commit
+    _print_table(
+        ("baseline", "evaluation", "run", "commit", "carried from"),
+        tuple(
+            (run.model, run.evaluation, run.run_id, run.commit[:12], run.carried_from or "-")
+            for run in candidate.release.runs
+        ),
+    )
+    for commit, log in candidate.changes.items():
+        click.echo(f"\nevaluation code changed between {commit[:12]} and {head[:12]}:\n{log or '  none'}")
+    for warning in candidate.warnings:
+        click.echo(f"warning: {warning}")
+    if candidate.missing:
+        raise click.ClickException("no release; missing runs:\n" + "\n".join(candidate.missing))
+    if dry_run:
+        return
+    click.confirm(f"Write the manifest and push tag {release_tag(version)} at {head[:12]}?", abort=True)
+    try:
+        digest = publish(candidate.release, root)
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(f"released {version} at {head}: manifest sha256 {digest}")
 
 
 if __name__ == "__main__":

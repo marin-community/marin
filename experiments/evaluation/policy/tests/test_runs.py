@@ -8,6 +8,7 @@ import subprocess
 from dataclasses import replace
 
 import pytest
+from evalrecords.policy_release import Verdict
 from evalrecords.records import PromptFormat, RunStatus, TaskCoverage, read_record
 from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, AttemptPhase
 from finestore.schema import arrow_schema
@@ -27,7 +28,6 @@ from experiments.evaluation.policy.runs import (
     RunCheck,
     RunEvidence,
     RunName,
-    RunState,
     expected_runs,
     found_runs,
     record_model,
@@ -66,6 +66,7 @@ def _evidence(
     window: int | None = None,
     capped: int = 0,
     undecided: int = 0,
+    unfinished: int = 0,
 ) -> RunEvidence:
     return RunEvidence(
         coverage={
@@ -77,6 +78,7 @@ def _evidence(
         replies=attempted,
         capped=capped,
         undecided={"d": undecided} if undecided else {},
+        unfinished={"d": unfinished} if unfinished else {},
     )
 
 
@@ -109,6 +111,7 @@ def test_a_compliant_run_has_no_problems(qwen, records):
         pytest.param(RunStatus.INFRA_FAILED, None, True, "infra_failed", id="failed"),
         pytest.param(RunStatus.SUCCEEDED, {"window": 32768}, True, "server window", id="another-server-window"),
         pytest.param(RunStatus.SUCCEEDED, {"undecided": 1}, True, "undecided", id="full-run-left-items-undecided"),
+        pytest.param(RunStatus.SUCCEEDED, {"unfinished": 2}, True, "never finished", id="trials-never-finished"),
         pytest.param(RunStatus.SUCCEEDED, None, True, RUN_OBJECT, id="no-archive"),
         pytest.param(RunStatus.SUCCEEDED, {}, False, "step did not finish", id="step-failed-after-its-record"),
     ],
@@ -205,7 +208,7 @@ class _FakeRecord:
 @pytest.fixture
 def verdicts(monkeypatch):
     """Stand in for archive checks: each found run's verdict by run ID."""
-    table: dict[str, tuple[RunState, tuple[str, ...]]] = {}
+    table: dict[str, tuple[Verdict, tuple[str, ...]]] = {}
 
     def check(run, _expected):
         if run.record is None:
@@ -214,7 +217,7 @@ def verdicts(monkeypatch):
         return RunCheck(record=run.record, state=state, problems=(), warnings=warnings)
 
     def compliant(runs, expected):
-        valid = [run for run in runs if run.record is not None and table[run.run_id][0] is RunState.VALID]
+        valid = [run for run in runs if run.record is not None and table[run.run_id][0] is Verdict.VALID]
         return (valid[-1], check(valid[-1], expected)) if valid else None
 
     monkeypatch.setattr(cli, "check_found", check)
@@ -224,30 +227,30 @@ def verdicts(monkeypatch):
 
 def test_a_compliant_run_at_an_older_commit_leaves_the_evaluation_out(verdicts):
     old = _found(OLD, 1, RunStatus.SUCCEEDED)
-    verdicts[old.run_id] = (RunState.VALID, ())
+    verdicts[old.run_id] = (Verdict.VALID, ())
     assert cli._decide((old,), None, HEAD, ()) == cli._Decision(attempt=None, run=old, compliant=True)
 
 
 def test_a_finished_run_here_that_doesnt_comply_waits_for_rerun_and_a_failed_one_resumes(verdicts):
     invalid, failed = _found(HEAD, 1, RunStatus.SUCCEEDED), _found(HEAD, 1, RunStatus.INFRA_FAILED)
-    verdicts[invalid.run_id] = (RunState.INVALID, ())
+    verdicts[invalid.run_id] = (Verdict.INVALID, ())
     assert cli._decide((invalid,), None, HEAD, ()) == cli._Decision(attempt=None, run=invalid)
-    verdicts[failed.run_id] = (RunState.INVALID, ())
+    verdicts[failed.run_id] = (Verdict.INVALID, ())
     assert cli._decide((failed,), None, HEAD, ()) == cli._Decision(attempt=1)
     assert cli._decide((), None, HEAD, ()) == cli._Decision(attempt=1)
 
 
 def test_rerun_writes_the_next_attempt_for_an_invalid_or_flagged_run_only(verdicts):
     invalid = _found(HEAD, 1, RunStatus.SUCCEEDED)
-    verdicts[invalid.run_id] = (RunState.INVALID, ())
+    verdicts[invalid.run_id] = (Verdict.INVALID, ())
     assert cli._decide((invalid,), None, HEAD, {invalid.run_id}) == cli._Decision(attempt=2, replaces=invalid.run_id)
 
     flagged = _found(OLD, 1, RunStatus.SUCCEEDED)
-    verdicts[flagged.run_id] = (RunState.VALID, ("4/30 replies hit their output cap",))
+    verdicts[flagged.run_id] = (Verdict.VALID, ("4/30 replies hit their output cap",))
     assert cli._decide((flagged,), None, HEAD, {flagged.run_id}).attempt == 1
 
     valid = _found(OLD, 1, RunStatus.SUCCEEDED)
-    verdicts[valid.run_id] = (RunState.VALID, ())
+    verdicts[valid.run_id] = (Verdict.VALID, ())
     with pytest.raises(ValueError, match="valid"):
         cli._decide((valid,), None, HEAD, {valid.run_id})
     running = _found(HEAD, 1, None)
@@ -270,10 +273,18 @@ def _selection(index: int, status: SelectionStatus, reason: str | None, max_toke
     ).model_dump(mode="json")
 
 
-def _archive(path, caps_and_tokens: list[tuple[int, int]], *, excluded: int = 0, rows: int | None = None) -> None:
+def _archive(
+    path,
+    caps_and_tokens: list[tuple[int, int]],
+    *,
+    excluded: int = 0,
+    rows: int | None = None,
+    trials: int | None = None,
+) -> None:
     """Write a single-turn run archive whose items have the given output caps and reply lengths.
 
-    ``excluded`` more items are excluded by the protocol, and the dataset has ``rows`` items in all.
+    ``excluded`` more items are excluded by the protocol, the dataset has ``rows`` items in all, and each selected
+    item finishes ``trials`` of its protocol's trials, by default all of them.
     """
     aime24 = next(evaluation for evaluation in POLICY.evaluations if evaluation.name == "aime24")
     protocol = selection_dataset(aime24, PromptFormat.CHAT).protocol
@@ -291,22 +302,23 @@ def _archive(path, caps_and_tokens: list[tuple[int, int]], *, excluded: int = 0,
             for index, (cap, tokens) in enumerate(caps_and_tokens):
                 row = f"row:{index}"
                 transaction.table(SELECTIONS_TABLE).add(_selection(index, SelectionStatus.SELECTED, None, cap))
-                transaction.table(ATTEMPTS_TABLE).add(
-                    Attempt(
-                        dataset="d",
-                        task_id=f"t{index}",
-                        source_row=row,
-                        trial=0,
-                        retry=0,
-                        phase=AttemptPhase.FINISHED,
-                        seed=None,
-                        outcome="graded",
-                        error=None,
-                        result_blob=None,
-                        prompt_tokens=10,
-                        completion_tokens=tokens,
-                    ).model_dump(mode="json")
-                )
+                for trial in range(protocol.trials.count if trials is None else trials):
+                    transaction.table(ATTEMPTS_TABLE).add(
+                        Attempt(
+                            dataset="d",
+                            task_id=f"t{index}",
+                            source_row=row,
+                            trial=trial,
+                            retry=0,
+                            phase=AttemptPhase.FINISHED,
+                            seed=None,
+                            outcome="graded",
+                            error=None,
+                            result_blob=None,
+                            prompt_tokens=10,
+                            completion_tokens=tokens,
+                        ).model_dump(mode="json")
+                    )
             for index in range(len(caps_and_tokens), len(caps_and_tokens) + excluded):
                 transaction.table(SELECTIONS_TABLE).add(
                     _selection(index, SelectionStatus.EXCLUDED, "context_window", None)
@@ -323,7 +335,7 @@ def _archive(path, caps_and_tokens: list[tuple[int, int]], *, excluded: int = 0,
 
 def test_a_reply_counts_as_capped_against_its_own_items_cap(qwen, records, tmp_path):
     # The evaluator shrinks a long prompt's cap, so 300 tokens fills the second item's cap but not the first's.
-    _archive(tmp_path / "results", [(1000, 300), (300, 300), (1000, 999)])
+    _archive(tmp_path / "results", [(1000, 300), (300, 300), (1000, 999)], trials=1)
     record = _write(_runs(qwen, {"aime24"})["aime24"])
     evidence = run_evidence(record.model_copy(update={"results_path": str(tmp_path / "results")}), {})
     assert (evidence.replies, evidence.capped) == (3, 1)
@@ -338,6 +350,19 @@ def test_items_the_protocol_excludes_are_decided_and_missing_ones_are_not(qwen, 
         for name in ("excluded", "missing")
     }
     assert (evidence["excluded"].undecided, evidence["missing"].undecided) == ({}, {"d": 2})
+
+
+def test_selected_trials_that_never_finished_are_counted(qwen, records, tmp_path):
+    record = _write(_runs(qwen, {"aime24"})["aime24"])
+    aime24 = next(evaluation for evaluation in POLICY.evaluations if evaluation.name == "aime24")
+    trials = selection_dataset(aime24, PromptFormat.CHAT).protocol.trials.count
+    _archive(tmp_path / "all", [(1000, 10), (1000, 10)])
+    _archive(tmp_path / "short", [(1000, 10), (1000, 10)], trials=trials - 1)
+    evidence = {
+        name: run_evidence(record.model_copy(update={"results_path": str(tmp_path / name)}), {})
+        for name in ("all", "short")
+    }
+    assert (evidence["all"].unfinished, evidence["short"].unfinished) == ({}, {"d": 2})
 
 
 def test_an_archive_without_its_run_object_gives_no_evidence(qwen, records, tmp_path):

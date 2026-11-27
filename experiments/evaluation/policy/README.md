@@ -9,6 +9,7 @@ is tracked in [#10197](https://github.com/marin-community/marin/issues/10197).
 | [`schema.py`](schema.py) | `Policy` and the checks it makes when built |
 | [`launch.py`](launch.py) | the models and evaluations a launch runs, and their servers |
 | [`runs.py`](runs.py) | finding a policy's runs and checking them |
+| [`release.py`](release.py) | releases: pinning runs in a manifest and tagging the commit |
 | [`cli.py`](cli.py) | the `policy` command |
 
 ## Declaring a policy
@@ -78,6 +79,7 @@ uv run python -m experiments.evaluation.policy.cli launch --policy marin-2026-11
   --baselines --priority batch [--evaluations a,b] [--limit 20] [--dry-run]
 uv run python -m experiments.evaluation.policy.cli status --policy marin-2026-11-20-trial
 uv run python -m experiments.evaluation.policy.cli verify --policy marin-2026-11-20-trial RUN_ID...
+uv run python -m experiments.evaluation.policy.cli release --policy marin-2026-11-20-trial [--dry-run]
 ```
 
 `launch` and `status` take the models to run in one of three ways:
@@ -115,8 +117,9 @@ A run complies if:
 - it was launched from a clean checkout;
 - its record succeeded and its step finished successfully;
 - its model, evaluation and runtime match the policy's;
-- its archive shows the window it was served at, and, for a full run, every item decided. A full run may leave
-  out items its protocol excludes, such as ones too long for its window, but not items it never inspected.
+- its archive, in the run's own directory, shows the window it was served at, every selected trial finished,
+  and, for a full run, every item decided. A full run may leave out items its protocol excludes, such as ones
+  too long for its window, but not items it never inspected.
 
 A ⚠ marks a compliant run whose replies often hit their output cap or whose attempts often went unscored.
 
@@ -127,5 +130,32 @@ which changes its inputs. A run at the launch's commit that finished but doesn't
 or flagged, so a valid run can't be redrawn.
 
 `status` shows each evaluation's compliant run and the commit it ran at, or else its newest run and why it
-doesn't comply. `verify` checks runs from a clean checkout of their own commit, names each problem, and exits
-non-zero unless every run complies.
+doesn't comply. `verify` checks runs from a clean checkout of their own commit, names each problem, writes its
+verdict beside the run's record as `policy-compliance.json`, and exits non-zero unless every run complies.
+
+## Releasing
+
+A release pins, for each baseline and evaluation, the run that represents it:
+
+1. Declare the version in a PR, smoke it with `--limit 20` until `status` is clean, then launch full runs.
+   Fix what breaks; a fixed evaluation bumps its benchmark's `VERSION` and reruns, and nothing else does.
+2. From a clean checkout of the newest commit on `origin/main`, run `release --dry-run`. It picks each pair's
+   compliant full run, at that commit or an earlier one in its history, and lists any pair without one. Runs
+   launched from a branch whose PRs reached `main` squashed, such as an integration branch, are outside that
+   history: name each such commit with `--runs-from`, after pushing it, and read how its evaluation code differs
+   from `main`'s before releasing.
+3. For each run from an earlier commit, it prints the commits since that changed evaluation code. Shared code,
+   such as a grader several benchmarks use, can change an evaluation without changing its inputs, so read these
+   for side effects, and rerun an evaluation they affect by bumping its `VERSION`.
+4. `release` writes the manifest, `policy-releases/<version>.json` beside the eval records, and pushes the
+   annotated tag `eval-policy-<version>` at the commit. The manifest pins each run's ID, commit, record digest,
+   archive version and scores. It is written once: a retry finishes an interrupted release, and a different
+   manifest for the same version is refused.
+
+A released version launches only from its tag, so a model evaluated later, such as a training checkpoint, runs
+the released code; `verify` then records whether it complies.
+
+**Patches.** To fix a released version, declare a new version with `base="<released version>"` and bump the
+`VERSION` of each benchmark it fixes. `launch` and `release` keep each base release run whose inputs are
+unchanged apart from the version, and run only the rest. The same review of code changes applies: a carried
+run is only as good as the review of what changed since its commit.

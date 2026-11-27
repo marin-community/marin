@@ -12,7 +12,6 @@ from experiments.evaluation.curated import load_evaluations
 from experiments.evaluation.policy.versions import POLICIES
 
 POLICY = POLICIES["marin-2026-11-20-trial"]
-QWEN_NAME = "qwen3.6-35b-a3b"
 
 EVALUATIONS = {evaluation.name: evaluation for evaluation in POLICY.evaluations}
 

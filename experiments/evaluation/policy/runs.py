@@ -12,9 +12,9 @@ import re
 from collections import Counter
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
-from enum import StrEnum
 
 import draccus
+from evalrecords.policy_release import Verdict
 from evalrecords.records import EvalRunRecord, RunStatus, TaskCoverage, read_record, record_path
 from evalrecords.rollout_attempts import RUN_OBJECT
 from evalrecords.rollout_results import score_curated_record, terminal_attempts
@@ -23,8 +23,7 @@ from iris.rpc import job_pb2
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.runner import Evaluation, EvaluationBatch
 from marin.execution.step_runner import check_cache
-from rigging.filesystem.factory import url_to_fs
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE, SelectionStatus
 from taskcompendium.evaluation.spec import EvaluationProtocol, OperationKind
 
@@ -51,11 +50,6 @@ SCORED_WARNING = 0.95
 def run_suffix(checkout: str, attempt: int) -> str:
     """The run-ID part naming the checkout a run was launched from and its attempt there."""
     return f"{checkout}-a{attempt}"
-
-
-class RunState(StrEnum):
-    VALID = "valid"
-    INVALID = "invalid"
 
 
 @dataclass(frozen=True)
@@ -112,7 +106,7 @@ class RunCheck:
     """A record, scored from its archive, and how it compares with the policy."""
 
     record: EvalRunRecord
-    state: RunState
+    state: Verdict
     problems: tuple[str, ...]
     warnings: tuple[str, ...]
 
@@ -151,10 +145,9 @@ def expected_runs(
 
 def found_runs(expected: ExpectedRun) -> tuple[FoundRun, ...]:
     """Every run of the expected run's inputs, at every commit and attempt, oldest attempt first."""
-    fs, root = url_to_fs(expected.batch.records_prefix)
     runs = []
-    for path in fs.glob(f"{root}/{expected.base}-*"):
-        run_id = path.rsplit("/", 1)[-1]
+    for path in StoragePath(prefix_join(expected.batch.records_prefix, f"{expected.base}-*")).glob():
+        run_id = str(path).rsplit("/", 1)[-1]
         if (match := _SUFFIX.fullmatch(run_id.removeprefix(f"{expected.base}-"))) is None:
             continue
         try:
@@ -195,13 +188,14 @@ def _short(value: object) -> str:
 class RunEvidence:
     """What a succeeded run's archive shows: scored coverage, the window it read from the server, how many
     of its single-turn replies stopped at their output cap, and, by dataset, how many items its selection
-    left undecided."""
+    left undecided and how many selected trials never finished."""
 
     coverage: Mapping[str, TaskCoverage]
     window: int | None
     replies: int
     capped: int
     undecided: Mapping[str, int]
+    unfinished: Mapping[str, int]
 
 
 def run_evidence(record: EvalRunRecord, coverage: Mapping[str, TaskCoverage]) -> RunEvidence | None:
@@ -228,9 +222,12 @@ def run_evidence(record: EvalRunRecord, coverage: Mapping[str, TaskCoverage]) ->
         if row["status"] == SelectionStatus.SELECTED and row["dataset"] in single_turn and row["max_tokens"] is not None
     }
     decided = Counter(row["dataset"] for row in selections if row["status"] != SelectionStatus.UNINSPECTED)
+    selected = Counter(row["dataset"] for row in selections if row["status"] == SelectionStatus.SELECTED)
+    finished = terminal_attempts(reader)
+    finished_trials = Counter(dataset for dataset, _, _ in finished)
     tokens = [
         (row["completion_tokens"], caps[key])
-        for row in terminal_attempts(reader).values()
+        for row in finished.values()
         if (key := (row["dataset"], row["source_row"])) in caps and row["completion_tokens"] is not None
     ]
     return RunEvidence(
@@ -242,6 +239,15 @@ def run_evidence(record: EvalRunRecord, coverage: Mapping[str, TaskCoverage]) ->
             entry["dataset"]: missing
             for entry in run["datasets"]
             if (missing := entry["manifest"]["rows"] - decided[entry["dataset"]]) > 0
+        },
+        unfinished={
+            entry["dataset"]: missing
+            for entry in run["datasets"]
+            if (
+                missing := selected[entry["dataset"]] * entry["protocol"]["trials"]["count"]
+                - finished_trials[entry["dataset"]]
+            )
+            > 0
         },
     )
 
@@ -265,9 +271,9 @@ def run_problems(
     """Every way a record and its archive's evidence fall short of the run the policy expects.
 
     The record must be of the same inputs (its run ID extends the expected base, and its model, evaluation and
-    runtime match), from a clean checkout, finished with its step's success marker, and its archive must show
-    the served window and full coverage. Items the protocol excludes, such as ones too long for its window,
-    are not missing from a full run.
+    runtime match), from a clean checkout, finished with its step's success marker, and its archive, in the
+    run's own directory, must show the served window, every selected trial finished and, for a full run, every
+    item decided. Items the protocol excludes, such as ones too long for its window, are not missing.
     """
     batch, evaluation = expected.batch, expected.evaluation
     problems = [
@@ -280,6 +286,8 @@ def run_problems(
         problems.append(f"run_id: ran {record.run_id}, not a run of {expected.base}")
     elif "-dirty" in match["checkout"]:
         problems.append("launched from a checkout with uncommitted changes")
+    if record.results_path != (own := prefix_join(batch.records_prefix, f"{record.run_id}/results")):
+        problems.append(f"its archive is at {record.results_path}, not its own {own}")
     if record.version != batch.version:
         problems.append(f"version {record.version!r}, not {batch.version!r}")
     if record.status is not RunStatus.SUCCEEDED:
@@ -293,6 +301,10 @@ def run_problems(
             problems.append(f"server window {evidence.window}, policy gives {batch.model.serve.max_model_len}")
         if not evidence.coverage:
             problems.append("no coverage in the run's archive")
+        problems.extend(
+            f"{dataset}: {missing} selected trials never finished"
+            for dataset, missing in sorted(evidence.unfinished.items())
+        )
         curated = evaluation.identity.eval_ref.curated
         assert curated is not None, "policy evaluations are curated selections"
         if curated.settings.source_limit is None:
@@ -307,12 +319,12 @@ def check_run(record: EvalRunRecord, expected: ExpectedRun, *, step_succeeded: b
     """Score a record from its archive and compare it with the run the policy expects."""
     if record.status is not RunStatus.SUCCEEDED:
         problems = run_problems(record, None, expected, step_succeeded=step_succeeded)
-        return RunCheck(record=record, state=RunState.INVALID, problems=problems, warnings=())
+        return RunCheck(record=record, state=Verdict.INVALID, problems=problems, warnings=())
     scored = score_curated_record(record)
     evidence = run_evidence(record, scored.coverage)
     problems = run_problems(record, evidence, expected, step_succeeded=step_succeeded)
     warnings = () if evidence is None else run_warnings(evidence)
-    state = RunState.INVALID if problems else RunState.VALID
+    state = Verdict.INVALID if problems else Verdict.VALID
     return RunCheck(record=scored, state=state, problems=problems, warnings=warnings)
 
 
@@ -331,7 +343,7 @@ def compliant_run(runs: Collection[FoundRun], expected: ExpectedRun) -> tuple[Fo
             newest[run.checkout] = run
     for run in sorted(newest.values(), key=lambda run: run.record.created_at, reverse=True):
         check = check_found(run, expected)
-        if check is not None and check.state is RunState.VALID:
+        if check is not None and check.state is Verdict.VALID:
             return run, check
     return None
 
