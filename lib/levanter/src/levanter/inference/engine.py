@@ -1148,7 +1148,7 @@ class InferenceEngine:
             requests: Sequence of generation requests
             step_callback: Optional callback function called at each decode iteration with iteration number.
             capture_routes: Retain the expert IDs used to score each Snowball choice. Routes align with
-                the prompt followed by its generated tokens, excluding the unscheduled terminal row.
+                the prompt followed by its generated tokens. The unscheduled terminal row is invalid.
         """
         if capture_routes and not isinstance(self.model, SnowballLMHeadModel):
             raise ValueError("Expert route capture requires a Snowball model")
@@ -1401,10 +1401,10 @@ class InferenceEngine:
             count = int(routes.count)
             slots = routes.slots.array[:count]
             for slot in np.unique(slots):
-                request = self.local_map[int(slot)]
+                request_choice = self.local_map[int(slot)]
                 take = slots == slot
                 chunk = (routes.positions.array[:count][take], routes.experts.array[:count][take])
-                route_chunks.setdefault(request, []).append(chunk)
+                route_chunks.setdefault(request_choice, []).append(chunk)
         n = int(pending_outputs.num_tokens)
         fins = pending_outputs.finished.array
         toks_arr = pending_outputs.tokens.array
