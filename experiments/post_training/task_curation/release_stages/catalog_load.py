@@ -340,7 +340,6 @@ def _run_write(
     fresh_qc = read_ref(inputs.staging["fresh_qc_index"])
     if fresh_qc["load_id"] != inputs.target_load_id or fresh_qc["snapshot_id"] != inputs.snapshot_id:
         raise ValueError("fresh QC index names different loads than this release")
-    reviews_loader = reviews_loader if reviews_loader is not None else load_content_reviews
     qc_results: list[dict] = []
     if reviews_loader is not None:
         # An injected loader keeps the serial per-panel contract exactly (tests).
