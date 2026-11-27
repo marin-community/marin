@@ -9,6 +9,7 @@ import pytest
 from marinskyrl.agent_harnesses import PI_HARNESS
 from omegaconf import OmegaConf
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS
+from rolloutengine.models import JudgeConnection
 from rolloutengine.validation import validate_spec
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
 from shellbox.backends.local.machine import check_local_environment
@@ -35,6 +36,7 @@ from taskcompendium.runtime.resources import inline_resource
 from tests.cpu.task_specs import NATIVE_ENVIRONMENT, SHELL_ENVIRONMENT, machine_runtime, text_task
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
+from verifyit.spec import JudgeSpec
 
 
 class LocalAdmissionFactory:
@@ -149,15 +151,35 @@ def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_pa
             ),
         }
     )
-    inputs = _load(tmp_path, (image, prefix))
+    judged = image.model_copy(
+        update={
+            "id": "judged-script",
+            "grader": image.grader.model_copy(
+                update={
+                    "judge": JudgeSpec(
+                        references=("12",),
+                        rubric="labels",
+                        prompt_template="Reference: {reference}\nCandidate: {candidate}",
+                        label_scores={"PASS": 1.0, "FAIL": 0.0},
+                        model="fixture-judge",
+                    )
+                }
+            ),
+        }
+    )
+    inputs = _load(tmp_path, (image, prefix, judged))
     assert [(item.metadata.task_id, item.metadata.subset_id) for item in inputs] == [
         ("image-task", "competitive-coding"),
         ("prefix-task", "structure-closure"),
+        ("judged-script", "competitive-coding"),
     ]
-    loaded = [item.spec for item in inputs]
-    assert is_shell_harness(loaded[0].harness)
-    assert loaded[1].harness == ASSISTANT_PREFIX_HARNESS
-    for spec in loaded:
+    image_spec, prefix_spec, judged_spec = [item.spec for item in inputs]
+    assert is_shell_harness(image_spec.harness)
+    assert prefix_spec.harness == ASSISTANT_PREFIX_HARNESS
+    connected = judged_spec.model_copy(
+        update={"judge_connection": JudgeConnection("http://judge.invalid/v1", "fixture-key")}
+    )
+    for spec in (image_spec, prefix_spec, connected):
         validate_spec(spec, FACTORIES)
 
 

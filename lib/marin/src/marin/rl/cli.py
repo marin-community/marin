@@ -24,6 +24,7 @@ from iris.rpc import job_pb2
 from iris.rpc.proto_display import priority_band_value
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from rigging.config_discovery import find_project_root
+from rigging.secrets import get_secret
 from rigging.timing import Duration
 
 from marin.execution.lazy import ArtifactStep, run
@@ -151,11 +152,21 @@ def _coordinator_request(
     env_vars: Mapping[str, str],
 ) -> tuple[str, JobRequest]:
     executions = _skyrl_executions(handles)
-    selected_env = {name: env_vars[name] for name in _COORDINATOR_ENV_VARS if name in env_vars}
-    for execution in executions:
-        for name in execution.required_env_vars:
-            selected_env[name] = env_vars[name]
-    selected_env[_COORDINATOR_GRAPH_ENV] = _COORDINATOR_GRAPH.dump_json(_coordinator_graph(handles)).decode()
+    graph = _coordinator_graph(handles)
+    required = {name for execution in executions for name in execution.required_env_vars}
+    forwarded = {name for run in graph for name in run.forward_env}
+    # Iris inherits the W&B key as a secret unless a step requests plain environment forwarding.
+    inherited = {"WANDB_API_KEY"} - forwarded
+    unavailable = sorted(
+        name for name in required if not (get_secret(name) if name in inherited else env_vars.get(name, "").strip())
+    )
+    if unavailable:
+        raise ValueError("Missing or empty RL coordinator variables: " + ", ".join(unavailable))
+
+    selected_env = {
+        name: env_vars[name] for name in sorted(required.union(_COORDINATOR_ENV_VARS) - inherited) if name in env_vars
+    }
+    selected_env[_COORDINATOR_GRAPH_ENV] = _COORDINATOR_GRAPH.dump_json(graph).decode()
     route = _submission_route(executions)
     terminal = graph_handles(handles)[-1]
     job_name = sanitize_job_name(f"{terminal.name}-{terminal.version}-coordinator-{uuid.uuid4().hex[:8]}")

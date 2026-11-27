@@ -21,9 +21,9 @@ from iris.cli.job import validate_system_reason
 from iris.client.client import IrisClient, Job, JobAlreadyExists
 from iris.cluster.config import load_config
 from iris.cluster.constraints import preemptible_constraint
-from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.types import Entrypoint, JobName, ResourceSpec
 from iris.rpc import job_pb2
+from rigging.redaction import redact_env_argv
 from rigging.timing import Duration
 
 from scripts.iris.coreweave_dev_pod import (
@@ -77,7 +77,7 @@ class HolderJob:
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
             # A retry would land on an empty pod and restart the lifetime clock.
             max_retries_preemption=0,
-            submit_argv=redact_submit_argv(list(sys.argv)),
+            submit_argv=redact_env_argv(sys.argv),
         )
 
 

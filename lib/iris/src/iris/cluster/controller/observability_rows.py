@@ -38,6 +38,7 @@ from typing import NamedTuple, Protocol
 
 from finelog.client.log_client import Table as FinelogTable
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance
+from rigging.redaction import redact_string
 from rigging.timing import RateLimiter, Timestamp
 from sqlalchemy import select, tuple_
 from sqlalchemy.engine.cursor import CursorResult
@@ -46,7 +47,6 @@ from iris.cluster.constraints import get_device_variant
 from iris.cluster.controller.codec import proto_from_json
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.write_lock_cost import CostWindow, RowTransactionCost
-from iris.cluster.redaction import redact_string
 from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisTask, IrisTaskAttempt, stats_timestamp
 from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2

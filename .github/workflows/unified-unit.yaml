@@ -456,7 +456,8 @@ jobs:
         run: >-
           uv run --package marin-rolloutengine --frozen --group test pytest
           -c lib/rolloutengine/pyproject.toml lib/rolloutengine/tests
-          lib/shellbox/tests/test_docker_machine.py lib/shellbox/tests/test_daytona_machine.py -q
+          lib/shellbox/tests/test_docker_machine.py lib/shellbox/tests/test_daytona_machine.py
+          lib/shellbox/tests/test_daytona_process.py -q
 
       - name: Test Docker and Daytona guest execution
         # Pull through Google's Docker Hub mirror: unauthenticated Docker Hub pulls from
@@ -573,9 +574,11 @@ jobs:
             skyrl-train/tests/cpu/test_remote_safetensors.py \
             skyrl-train/tests/cpu/test_dataset.py \
             skyrl-train/tests/cpu/test_megatron_router_replay_plumbing.py \
+            skyrl-train/tests/cpu/test_chunked_output_cp.py \
             skyrl-train/tests/cpu/test_compact_distillation.py \
             skyrl-train/tests/cpu/test_evaluation_score_order.py \
             skyrl-train/tests/cpu/test_best_checkpoint_selection.py \
+            skyrl-train/tests/cpu/test_evaluation_dispatch.py \
             skyrl-train/tests/cpu/test_checkpoint_exporter.py \
             skyrl-train/tests/cpu/test_cat_count_gpu_opd.py \
             skyrl-train/tests/cpu/test_grug_log_scaling.py \

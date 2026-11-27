@@ -27,7 +27,7 @@ from rigging.filesystem.storage_path import prefix_join
 from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
 from skyrl_train.io import io
 from skyrl_train.telemetry import record_event
-from skyrl_train.trainer_memory_profile import preserve_training_state, warm_state_profile
+from skyrl_train.trainer_memory_profile import preserve_training_state, sizing_replay_routes, warm_state_profile
 from skyrl_train.distributed.dispatch import MeshRank
 from skyrl_train.distributed.megatron.megatron_strategy import MegatronStrategy
 from skyrl_train.distributed.megatron.megatron_utils import (
@@ -654,6 +654,15 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             old = torch.full(action_shape, -math.log(self.strategy.hf_config.vocab_size), device=device)
             advantages = torch.ones(action_shape, device=device)
             advantages[:, 1::2] = -1
+            replay = self.model.router_replay
+            routes = None
+            if replay is not None:
+                if replay.num_moe_layers_total is None or replay.topk is None:
+                    raise ValueError("Synthetic sizing requires configured router replay geometry")
+                experts = get_model_config(self.actor_module[0]).num_moe_experts
+                routes = sizing_replay_routes(batch_size, tokens - 1, replay.num_moe_layers_total, experts, replay.topk).to(
+                    device
+                )
             micro = MegatronPolicyMicroBatch(
                 sequences=sequences,
                 attention_mask=attention,
@@ -665,6 +674,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                 loss_mask=torch.ones(action_shape, device=device),
                 rollout_action_logprobs=old.clone(),
                 response_span_tags=torch.zeros(action_shape, dtype=torch.int8, device=device),
+                rollout_routed_experts=routes,
             )
             self.model.train()
             self.optimizer.zero_grad()

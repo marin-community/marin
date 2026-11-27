@@ -289,9 +289,13 @@ class TrainingContext:
                 {"training": summary["subsets"], "training_tasks": summary["tasks"]},
             )
 
+    def pause(self) -> None:
+        """Stop each producer from submitting new rollout work."""
+        self._submission_allowed.clear()
+
     async def pause_and_drain(self) -> None:
         """Stop dispatching new generation and finish already submitted groups."""
-        self._submission_allowed.clear()
+        self.pause()
         if self._running:
             await self.wait(asyncio.gather(*self._running))
 

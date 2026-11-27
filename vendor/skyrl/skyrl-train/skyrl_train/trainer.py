@@ -774,9 +774,20 @@ class RayPPOTrainer:
         )
         return True
 
+    def _step_evaluation_due(self) -> bool:
+        return self._control.should_evaluate and self.eval_dataset is not None
+
+    async def _run_step_begin_callbacks(self, epoch: int) -> None:
+        self._control.reset()
+        self._control = await self.callback_handler.call_event_async(
+            "on_step_begin", self._create_trainer_state(epoch), self._control, trainer=self
+        )
+        if self._step_evaluation_due():
+            self.context.pause()
+
     async def _run_step_end_callbacks(self, state: TrainerState, *, step_wall: StepWallTime | None = None) -> None:
         """Run callback-requested work that belongs to the current training step."""
-        self._control.reset()
+        dispatch_paused_for_eval = self._step_evaluation_due()
         self._control = await self.callback_handler.call_event_async("on_step_end", state, self._control, trainer=self)
 
         if self._control.should_save:
@@ -785,11 +796,13 @@ class RayPPOTrainer:
             await self._save_intermediate_checkpoint(state)
             self._control.should_save = False
 
-        if self._control.should_evaluate and self.eval_dataset is not None:
+        if self._step_evaluation_due():
             if step_wall is not None:
                 step_wall.start("evaluation")
             await self._evaluate_and_log(state, Timer(EVALUATION_TIMER_KEY, self.all_timings), commit=False)
             self._control.should_evaluate = False
+        elif dispatch_paused_for_eval:
+            self.context.resume()
 
         if self._control.should_save_hf_model:
             if step_wall is not None:
@@ -1467,6 +1480,7 @@ class RayPPOTrainer:
                 on_admitted=self._submit_admitted_groups_for_teacher_scoring,
             )
             self.all_metrics.update(metadata.metrics)
+        await self._run_step_begin_callbacks(epoch)
         if self.colocate_all:
             # Colocation runs at staleness 0, where no rollout is in flight once the batch is complete.
             if self._expert_block_sync is not None:
@@ -1510,6 +1524,7 @@ class RayPPOTrainer:
             metadata = await context.next_batch_metadata(stall_timeout=stall_timeout)
             reader = context.reader(metadata, stall_timeout=stall_timeout)
             self.all_metrics.update(metadata.metrics)
+        await self._run_step_begin_callbacks(epoch)
         step_wall.start("batch_assembly")
         plan, metrics = plan_worker_batch(
             self.cfg,

@@ -442,7 +442,7 @@ class EvaluationCallback(TrainerCallback):
             control.should_evaluate = True
         return control
 
-    def on_step_end(
+    def on_step_begin(
         self,
         state: TrainerState,
         control: TrainerControl,
