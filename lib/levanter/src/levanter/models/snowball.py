@@ -1165,7 +1165,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         caches = ListCache(tuple(KvPageCache(hax.named(cache_pages[i], cache_axes)) for i in range(len(kv_cache))))
         if logit_positions is not None:
             rows = hidden[:, 0].at[logit_positions.array].get(out_sharding=P())
-            logits = jnp.einsum("pd,dv->pv", rows, self.transformer.output_proj, out_sharding=P())
+            logits = jnp.einsum("...d,dv->...v", rows, self.transformer.output_proj, out_sharding=P())
             return hax.named(logits, (*logit_positions.axes, self.Vocab)), caches
 
         logits = jnp.einsum(
