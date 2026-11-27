@@ -60,6 +60,7 @@ from experiments.post_training.task_curation.pipeline import (
     HarborHubSource,
     HfSource,
     UrlSource,
+    download_hosts,
     download_source,
     download_step,
     environment_requirements,
@@ -232,6 +233,13 @@ def test_declarations_with_the_same_pinned_files_share_one_download():
     pipeline = math500()
     selected = replace(pipeline.source, select=lambda row, context: True)
     assert download_step(selected, CampaignRuntime()).name == download_step(pipeline.source, CampaignRuntime()).name
+
+
+def test_download_hosts_grant_web_sources_only():
+    pipeline = math500()
+    web = UrlSource("https://example.org/data/rows.jsonl", "0" * 64, "rows.jsonl", SourceFormat.JSONL)
+    mirrored = UrlSource("mirror://evaluation/datasets/rows.jsonl", "0" * 64, "rows.jsonl", SourceFormat.JSONL)
+    assert download_hosts(replace(pipeline, source=mirrored, inputs={"web": web})) == ("example.org",)
 
 
 def convert_fixture(row, _context):
