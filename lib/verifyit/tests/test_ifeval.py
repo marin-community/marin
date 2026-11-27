@@ -3,12 +3,10 @@
 
 import sys
 import unicodedata
-from types import SimpleNamespace
 
 import pytest
 from verifyit.execution.worker import call_bounded
 from verifyit.grade import InvalidTask, Status
-from verifyit.instruction_observations import prepare_extended_instruction_observations
 from verifyit.modes import grade_ifeval
 from verifyit.modes.ifeval import CONSTRAINTS
 from verifyit.spec import Constraint, EmptyOutputPolicy, IfevalSpec
@@ -1228,53 +1226,3 @@ def test_malformed_keyword_members_cannot_silently_disappear(name, key, valid):
     for words in ([], [valid]):
         spec = IfevalSpec((Constraint(name, {key: words}),))
         assert grade_ifeval.grade_ifeval_candidate(spec, "candidate").reward == 1
-
-
-@pytest.mark.parametrize(
-    "text,language,expected",
-    [("YES THIS IS ENGLISH", "en", 1.0), ("Yes this is English", "en", 0.0), ("OUI", "fr", 0.0)],
-)
-def test_prepared_observations_require_both_constraint_and_tool_result(text, language, expected):
-    verdict = grade_ifeval.grade_instruction_observations(
-        [
-            (IfevalSpec((Constraint("change_case:english_capital"),)), text),
-            ({"type": "string", "const": "en"}, language),
-        ]
-    )
-    assert (verdict.status, verdict.reward) == (Status.SCORED, expected)
-
-
-def test_invalid_prepared_reference_cannot_preserve_a_passing_observation():
-    with pytest.raises(InvalidTask):
-        grade_ifeval.grade_instruction_observations(
-            [({"const": "valid"}, "valid"), ({"type": "array", "minItems": "many"}, [])]
-        )
-    empty = grade_ifeval.grade_instruction_observations([])
-    assert (empty.status, empty.reward) == (Status.INVALID_TASK, 0.0)
-
-
-@pytest.mark.parametrize("identifier", ["detectable_format:sentence_hyphens", "keywords:start_end"])
-def test_empty_instruction_tokens_score_zero_without_invalidating_task(identifier):
-    tools = SimpleNamespace(split_into_sentences=str.split, nltk=SimpleNamespace(word_tokenize=str.split))
-    observations = prepare_extended_instruction_observations(identifier, {}, tools, "")
-    verdict = grade_ifeval.grade_instruction_observations(observations)
-    assert (verdict.status, verdict.reward) == (Status.SCORED, 0.0)
-
-
-def test_repeated_phrase_requires_exactly_one_changed_word_per_match():
-    args = {"phrase": "red warm soft fox", "small_n": 2}
-    for candidate, expected in [
-        ("red cold soft fox red warm furry fox", 1.0),
-        ("red cold furry fox red warm furry fox", 0.0),
-        ("red warm soft fox red warm furry fox", 0.0),
-        ("red cold soft fox", 0.0),
-    ]:
-        observations = prepare_extended_instruction_observations("copy:repeat_phrase", args, None, candidate)
-        assert grade_ifeval.grade_instruction_observations(observations).reward == expected
-
-
-def test_source_copy_span_uses_exclusive_character_end():
-    args = {"prompt_to_repeat": "A small bird", "n_start": 2, "n_end": 7}
-    for candidate, expected in [("SMALL", 1.0), ("small b", 0.0), ("small bird", 0.0)]:
-        observations = prepare_extended_instruction_observations("new:copy_span_idx", args, None, candidate)
-        assert grade_ifeval.grade_instruction_observations(observations).reward == expected

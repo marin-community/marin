@@ -36,6 +36,7 @@ from finestore.rl.curation import (
     register_catalog,
     validate_items,
 )
+from finestore.rl.source_identity import canonical_source_id
 from finestore.store import DataStore
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.filesystem.storage_path import StoragePath
@@ -191,17 +192,34 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
             attempts = list(catalog.attempts(run_id))
             if len(attempts) != run["source_count"]:
                 raise ValueError("Assessment attempts do not cover the terminal campaign")
-            selected = {row.source_id: row for row in attempts}
+            selected = {canonical_source_id(row.source_id): row for row in attempts}
             if len(selected) != len(attempts) or None in selected or not set(selected).issubset(by_id):
                 raise ValueError("Campaign sources must be unique members of the catalog inventory")
             pointer = catalog.view.point(CURRENT, name="latest")
-            previous = {row.id: row for row in catalog.sources(pointer["snapshot_id"])} if pointer else {}
+            # Persisted rows may carry historical IDs; the generated identity reconciles them,
+            # and a row already stored under its generated identity wins over its alias row.
+            previous: dict[str, SnapshotSource] = {}
+            for row in catalog.sources(pointer["snapshot_id"]) if pointer else []:
+                key = canonical_source_id(row.id)
+                if key not in previous or row.id == key:
+                    if row.id != key:
+                        # A row matched through its alias publishes under its generated identity,
+                        # so a renamed source keeps one row and its carried assessment joins by key.
+                        row = row.model_copy(
+                            update={"id": key, "declaration": row.declaration.model_copy(update={"id": key})}
+                        )
+                    previous[key] = row
             if run["started_at"] is None:
                 raise ValueError(f"Campaign {run_id} has no start time")
             started = datetime.fromisoformat(run["started_at"])
+            starts: dict[str, datetime] = {}
+            for source_id, prior_start in published_source_starts(catalog).items():
+                key = canonical_source_id(source_id)
+                if key not in starts or prior_start > starts[key]:
+                    starts[key] = prior_start
             superseded = {
                 source_id
-                for source_id, prior_start in published_source_starts(catalog).items()
+                for source_id, prior_start in starts.items()
                 if source_id in selected and source_id in previous and started < prior_start
             }
             declarations.extend(row.declaration for source_id, row in previous.items() if source_id not in by_id)

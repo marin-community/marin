@@ -63,13 +63,19 @@ class ChatAssistantMessage(BaseModel):
     tool_calls: list[ChatToolCall] | None = None
 
 
+def _normalize_text_blocks(message: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(message.get("content"), list):
+        return {**message, "content": message_text(message["content"])}
+    return message
+
+
 def assistant_message(message: dict[str, Any]) -> TextMessage | AssistantToolCalls:
     """Validate chat wire data and return protocol-independent submission evidence.
 
     Invalid JSON raises at this ingestion boundary. JSON arguments of the wrong
     shape remain evidence; execution and submission validation reject them.
     """
-    validated = ChatAssistantMessage.model_validate(message)
+    validated = ChatAssistantMessage.model_validate(_normalize_text_blocks(message))
     if validated.tool_calls:
         return AssistantToolCalls(
             calls=tuple(
@@ -83,19 +89,19 @@ def assistant_message(message: dict[str, Any]) -> TextMessage | AssistantToolCal
     return TextMessage(role="assistant", content=validated.content or "")
 
 
+def conversation_event(message: dict[str, Any]) -> ConversationEvent:
+    """Convert one chat message to typed conversation evidence."""
+    role = message.get("role")
+    if role == "assistant":
+        return assistant_message(message)
+    message = _normalize_text_blocks(message)
+    if role == "tool":
+        return ToolResult(call_id=message["tool_call_id"], content=message["content"])
+    return TextMessage.model_validate(message)
+
+
 def _conversation_events(messages: list[dict[str, Any]]) -> tuple[ConversationEvent, ...]:
-    events: list[ConversationEvent] = []
-    for message in messages:
-        if isinstance(message.get("content"), list):
-            message = {**message, "content": message_text(message["content"])}
-        role = message.get("role")
-        if role == "assistant":
-            events.append(assistant_message(message))
-        elif role == "tool":
-            events.append(ToolResult(call_id=message["tool_call_id"], content=message["content"]))
-        else:
-            events.append(TextMessage.model_validate(message))
-    return tuple(events)
+    return tuple(conversation_event(message) for message in messages)
 
 
 def chat_input(messages: list[dict[str, Any]]) -> ConversationInput:

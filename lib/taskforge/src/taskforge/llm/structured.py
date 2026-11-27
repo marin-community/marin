@@ -46,7 +46,7 @@ class SchemaCompletions(Protocol):
 class StructuredOutputError(ValueError):
     """The output limit cut a reply off, or the first reply and every repair failed validation."""
 
-    def __init__(self, error: ValueError, completions: Sequence[Completion]):
+    def __init__(self, error: ValueError, completions: Sequence[Completion]) -> None:
         super().__init__(f"structured output invalid after {len(completions) - 1} repairs: {error}")
         self.completions = tuple(completions)
 

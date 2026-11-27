@@ -6,7 +6,8 @@ import logging
 import tempfile
 from pathlib import Path
 
-from harbor_config.errors import ErrorCategory, error_category
+from rigging.task_errors import ErrorCategory, error_category
+from harbor_config.errors import ERROR_CATEGORIES
 
 import harbor.environments.factory as environment_factory
 import pytest
@@ -383,7 +384,7 @@ class TestStopBoundedByWallClock:
             assert result.exception_info is not None
             assert result.verifier_result is None
             assert (
-                error_category(result.exception_info.exception_type)
+                error_category(result.exception_info.exception_type, categories=ERROR_CATEGORIES)
                 is ErrorCategory.INFRASTRUCTURE
             )
             assert Job._is_resume_retryable_result(result)

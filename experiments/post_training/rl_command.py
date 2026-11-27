@@ -11,6 +11,7 @@ from finestore.rl.run_records import AttemptRecord
 from marin.rl.skyrl import SkyRLReceiptLookupError
 from marin.rl.skyrl_records import RecordedLaunch
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
 
 from experiments.post_training.rl_compose import utc_millis
 from experiments.post_training.rl_measurements import InvalidComparison
@@ -20,8 +21,27 @@ REFUSAL_EXIT_CODE = 4
 GRAFANA_URL = "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training"
 
 
+def visible_setting(text: str) -> str:
+    """Render an authored setting for publication without credential values."""
+    key, _, value = text.partition("=")
+    if is_sensitive_key_name(key):
+        return f"{key}={REDACTED_VALUE}"
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return f"{key}={redact_string(value)}"
+    redacted = redact_value(parsed)
+    return f"{key}={json.dumps(redacted)}" if redacted != parsed else text
+
+
 def grafana_url(
-    run_id: str, cluster: str, training_type: str | None, started_at: str, finished_at: str | None = None
+    run_id: str,
+    cluster: str,
+    training_type: str | None,
+    started_at: str,
+    finished_at: str | None = None,
+    *,
+    job_id: str | None = None,
 ) -> str:
     """Link a native run to its UTC submission or execution window."""
     query = urlencode(
@@ -33,7 +53,7 @@ def grafana_url(
             "var-training_type": training_type or "sync",
             "var-cluster": cluster,
             "var-run": run_id,
-            "var-job": "$__all",
+            "var-job": job_id or "$__all",
             "var-execution": "$__all",
         },
         safe="$",
@@ -44,7 +64,14 @@ def grafana_url(
 def attempt_grafana_url(receipt: AttemptRecord, launch: RecordedLaunch) -> str | None:
     result = receipt.native.result
     if result.started_at:
-        return grafana_url(receipt.run_id, launch.cluster, launch.training_type, result.started_at, result.finished_at)
+        return grafana_url(
+            receipt.index_run_id,
+            launch.cluster,
+            launch.training_type,
+            result.started_at,
+            result.finished_at,
+            job_id=result.iris_job_id,
+        )
     return None
 
 

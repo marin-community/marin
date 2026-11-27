@@ -617,8 +617,9 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(
     assert captured["overlay"].archive_dataset == executor.config.record_dataset
     assert captured["overlay"].dataset_path is None
     assert captured["env"]["DAYTONA_API_KEY"] == "daytona-key"
-    assert captured["env"]["DAYTONA_TARGET"] == "test-target"
-    assert captured["env"]["DAYTONA_API_URL"] == "https://daytona.example/api"
+    # The API URL and target are constants; supplied values for them must not reach the driver.
+    assert "DAYTONA_TARGET" not in captured["env"]
+    assert "DAYTONA_API_URL" not in captured["env"]
     if dataset_kind == HarborDatasetKind.HUGGING_FACE:
         assert captured["env"]["HF_TOKEN"] == "hf-key"
     assert captured["env"]["OPENAI_API_KEY"] == "policy-judge-private"
@@ -976,6 +977,9 @@ def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, mo
 @pytest.mark.parametrize("changed_input", ["checkpoint", "judge", "policy", "evaluator"])
 def test_harbor_resume_rejects_changed_scoring_inputs_before_reusing_trials(tmp_path, monkeypatch, changed_input):
     executor = _harbor_executor("aime")
+    candidate = executor.model_config.model_copy(update={"evaluation_request_timeout": None})
+    judge = candidate.model_copy(update={"name": "judge", "location": "org/judge"})
+    executor = replace(executor, model_config=candidate, judge_config=judge)
     stored_results = []
 
     def driver(config, overlay, _env, _state):
@@ -991,16 +995,27 @@ def test_harbor_resume_rejects_changed_scoring_inputs_before_reusing_trials(tmp_
 
     monkeypatch.setattr(runner, "run_harbor_driver", driver)
     session = _inference_session()
-    original = executor(session, str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
-    resumed = executor(session, str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
+    judge_session = _inference_session("https://iris.example/judge/v1", "judge")
+    original = executor(
+        session, str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY, judge=judge_session
+    )
+    executor = replace(
+        executor,
+        model_config=candidate.model_copy(update={"evaluation_request_timeout": 21600}),
+        judge_config=judge.model_copy(update={"evaluation_request_timeout": 21600}),
+    )
+    resumed = executor(
+        session, str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY, judge=judge_session
+    )
     assert original.canonical_metrics["aime"]["reward"] == 1
     assert resumed.canonical_metrics["aime"]["reward"] == 1
+    assert len(stored_results) == 1
     if changed_input == "checkpoint":
         changed = replace(
             executor, model_config=executor.model_config.model_copy(update={"location": "org/new-checkpoint"})
         )
     elif changed_input == "judge":
-        changed = replace(executor, judge_config=executor.model_config)
+        changed = replace(executor, judge_config=judge.model_copy(update={"location": "org/new-judge"}))
     elif changed_input == "policy":
         changed = replace(executor, config=replace(executor.config, digest=f"sha256:{'2' * 64}"))
     else:
@@ -1012,7 +1027,7 @@ def test_harbor_resume_rejects_changed_scoring_inputs_before_reusing_trials(tmp_
         changed = executor
     before = {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
     with pytest.raises(EvaluationError, match="different dataset, model, policy"):
-        changed(session, str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
+        changed(session, str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY, judge=judge_session)
     assert {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()} == before
 
 

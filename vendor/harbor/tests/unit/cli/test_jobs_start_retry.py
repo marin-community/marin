@@ -8,6 +8,7 @@ from harbor.models.job.config import JobConfig
 from harbor.models.task.config import EnvironmentConfig as TaskEnvironmentConfig
 from harbor.models.trial.config import AgentConfig
 from harbor.models.trial.paths import TrialPaths
+from shellbox.backends.daytona.connection import DAYTONA_API_URL, DAYTONA_TARGET
 from typer.testing import CliRunner
 
 runner = CliRunner()
@@ -250,8 +251,9 @@ def test_cli_snapshots_private_backend_connection_after_dotenv_and_isolates_gues
     assert result.exit_code == (1 if fail else 0), result.output
     assert len(connections) == 1
     assert connections[0].api_key == "private-backend-canary"
-    assert connections[0].api_url == "https://daytona.invalid/api"
-    assert connections[0].target == "test-target"
+    # The API URL and target are constants; the ambient and dotenv values are ignored.
+    assert connections[0].api_url == DAYTONA_API_URL == "https://app.daytona.io/api"
+    assert connections[0].target == DAYTONA_TARGET == "us"
     assert "private-backend-canary" not in configurations[0].model_dump_json()
     assert configurations[0].environment.kwargs == {}
     monkeypatch.delenv("DAYTONA_API_KEY")

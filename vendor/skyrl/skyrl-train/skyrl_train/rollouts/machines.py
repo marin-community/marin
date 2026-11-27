@@ -6,7 +6,17 @@ from enum import StrEnum
 from pathlib import Path
 
 from loguru import logger
-from shellbox.machine import Backend, Command, ExecutionRequirements, Machine, MachineFactory, MachineSpec, Result
+from shellbox.machine import (
+    Backend,
+    Command,
+    ExecutionRequirements,
+    Machine,
+    MachineFactory,
+    MachineSpec,
+    ProcessMachine,
+    ProcessSession,
+    Result,
+)
 
 _PASSTHROUGH_ERRORS = (TypeError, ValueError, AttributeError, LookupError, AssertionError)
 
@@ -14,6 +24,7 @@ _PASSTHROUGH_ERRORS = (TypeError, ValueError, AttributeError, LookupError, Asser
 class MachineOperation(StrEnum):
     CREATE = "create"
     RUN = "run"
+    OPEN_PROCESS = "open_process"
     UPLOAD = "upload"
     DOWNLOAD = "download"
     CLOSE = "close"
@@ -82,6 +93,19 @@ class _OwnedMachine:
         await asyncio.shield(self.begin_close())
 
 
+@dataclass(eq=False)
+class _OwnedProcessMachine(_OwnedMachine):
+    machine: ProcessMachine
+
+    async def open_process(self, command: Command) -> ProcessSession:
+        try:
+            return await self.machine.open_process(command)
+        except _PASSTHROUGH_ERRORS:
+            raise
+        except Exception as error:
+            raise TaskMachineError("Task-machine process startup failed", MachineOperation.OPEN_PROCESS) from error
+
+
 @dataclass
 class OwnedMachineFactory:
     """Track provider creations and machines across rollout cancellation."""
@@ -115,7 +139,7 @@ class OwnedMachineFactory:
                 raise
             except Exception as error:
                 raise TaskMachineError("Task-machine creation failed", MachineOperation.CREATE) from error
-            owned = _OwnedMachine(machine, self)
+            owned = _OwnedProcessMachine(machine, self) if isinstance(machine, ProcessMachine) else _OwnedMachine(machine, self)
             self.machines.add(owned)
             if self.closing:
                 await owned.close()

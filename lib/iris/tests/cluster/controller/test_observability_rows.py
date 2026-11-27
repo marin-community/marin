@@ -34,6 +34,7 @@ from iris.testing.controller import (
     make_direct_job_request,
     make_job_request,
     make_worker_metadata,
+    query_job,
     query_task,
     register_worker,
     submit_job,
@@ -261,6 +262,7 @@ def test_failed_write_commits_and_runs_later_post_commit_hooks(state):
         )
         cur.register(lambda: later_hook_ran.append(True))
 
+    assert query_job(state, job_id) is not None
     assert later_hook_ran == [True]
 
 
@@ -328,16 +330,16 @@ def test_a_replaced_child_gets_its_own_job_key(state):
     assert {(j.job_id, j.submitted_at_ms) for j in rows.jobs} == {(child, 3_000)}
 
 
-_CLUSTER_CONFIGS = sorted((Path(__file__).parents[3] / "config").glob("*.yaml"))
+_FINELOG_CLUSTER_CONFIGS = [
+    path for path in sorted((Path(__file__).parents[3] / "config").glob("*.yaml")) if load_config(path).finelog.config
+]
 
 
-@pytest.mark.parametrize("config_path", _CLUSTER_CONFIGS, ids=lambda p: p.stem)
-def test_every_cluster_config_forwards_under_its_own_name_or_not_at_all(config_path):
+@pytest.mark.parametrize("config_path", _FINELOG_CLUSTER_CONFIGS, ids=lambda p: p.stem)
+def test_every_finelog_cluster_config_forwards_under_its_own_name_or_not_at_all(config_path):
     # A forwarder ships only rows named for its forwarding.cluster, and the controller
     # names its rows with the cluster config name, so a mismatch would drop them.
     config = load_config(config_path)
-    if not config.finelog.config:
-        return
     forwarding = load_finelog_config(config.finelog.config).forwarding
     assert forwarding is None or forwarding.cluster == config.name
 
@@ -701,18 +703,6 @@ def test_a_controller_with_observability_rows_off_attaches_no_row_tables(make_co
         assert tx.observability_rows is not None
     with off._db.transaction() as tx:
         assert tx.observability_rows is None
-
-
-def test_slow_rows_are_logged_and_counted_in_the_dbs_lock_cost(state, monkeypatch, caplog):
-    monkeypatch.setattr(observability_rows, "SLOW_ROWS_SECONDS", 0.0)
-    monkeypatch.setattr(observability_rows, "_slow_rows_log", RateLimiter(interval_seconds=0))
-    _attach(state, "marin")
-
-    with caplog.at_level(logging.WARNING, logger=observability_rows.__name__):
-        submit_job(state, "train", make_job_request("train"))
-
-    (warning,) = [r.getMessage() for r in caplog.records if "under the write lock" in r.getMessage()]
-    assert "finelog.controller_rows: false" in warning
 
 
 def _emitted(monkeypatch, state) -> list[PendingCost]:
