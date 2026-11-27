@@ -2801,21 +2801,21 @@
       "status": "Available",
       "intended_use": "train",
       "pipeline": {
-        "name": "polaris-53k-retained",
+        "name": "polaris-53k-grader-v4",
         "files": [
           "tasks.parquet"
         ],
-        "source": "open-athena/polaris-project-polaris-dataset-53k-b25e0cb8-retained-20261116-b-v1",
-        "version": "2026.11.13.1",
-        "revision": "9079512fe3d2d332b446b1b37deb9d2898f5461e"
+        "source": "open-athena/polaris-project-polaris-dataset-53k-grader-v4-20261127-v1",
+        "version": "2026.11.27.2",
+        "revision": "8f1ecf9a2711b366253a6c76ffbad45a302d5013"
       },
       "current_release": {
-        "url": "https://huggingface.co/datasets/open-athena/polaris-project-polaris-dataset-53k-b25e0cb8-retained-20261116-b-v1/tree/9079512fe3d2d332b446b1b37deb9d2898f5461e",
-        "repo": "open-athena/polaris-project-polaris-dataset-53k-b25e0cb8-retained-20261116-b-v1",
-        "revision": "9079512fe3d2d332b446b1b37deb9d2898f5461e"
+        "url": "https://huggingface.co/datasets/open-athena/polaris-project-polaris-dataset-53k-grader-v4-20261127-v1/tree/8f1ecf9a2711b366253a6c76ffbad45a302d5013",
+        "repo": "open-athena/polaris-project-polaris-dataset-53k-grader-v4-20261127-v1",
+        "revision": "8f1ecf9a2711b366253a6c76ffbad45a302d5013"
       },
-      "dataset_id": "open-athena/polaris-project-polaris-dataset-53k-b25e0cb8-retained-20261116-b-v1",
-      "dataset_revision": "9079512fe3d2d332b446b1b37deb9d2898f5461e",
+      "dataset_id": "open-athena/polaris-project-polaris-dataset-53k-grader-v4-20261127-v1",
+      "dataset_revision": "8f1ecf9a2711b366253a6c76ffbad45a302d5013",
       "actor_census_input": {
         "dataset_id": "open-athena/polaris-project-polaris-dataset-53k-b25e0cb8-retained-20261116-b-v1",
         "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/polaris/2026.11.16.1/retained-census/2026.11.16.1/b25e0cb84e99b1f26085/actor/.artifact.json",
@@ -2832,6 +2832,15 @@
         "counts": {
           "role_absent": 53167
         }
+      },
+      "repin": {
+        "issue": "marin #12386",
+        "parent": {
+          "repo": "open-athena/polaris-project-polaris-dataset-53k-b25e0cb8-retained-20261116-b-v1",
+          "revision": "9079512fe3d2d332b446b1b37deb9d2898f5461e"
+        },
+        "change": "grader-only replacement (polaris-final-text-v4); identities, questions, references and runtime unchanged; identity-inventory.jsonl in the release maps parent to new task hashes",
+        "qualification": "qualification.json in the release: 47/47 LOCAL-guest development controls, 99-case fresh replay, 51-case independent blinded review with 0 false rewards"
       }
     },
     "PRIME-RL:eurus2_code": {

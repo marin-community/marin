@@ -1783,11 +1783,19 @@ Hugging Face release, alter the catalog, regrade a live run or launch training.
 Failed artifacts require investigation before a fresh attempt; the command
 does not automatically retry them.
 
-The candidate remains unqualified until its Linux grading guest, regression
-controls and a fresh independent review pass. A development replay is not that
-review. Existing ambiguous reference defects remain recorded without edits or
-filters. Only a separately qualified immutable source pin may release campaign
+A candidate needs three checks before release: its Linux grading guest,
+regression controls and a fresh independent review. A development replay is not
+that review. Existing ambiguous reference defects remain recorded without edits
+or filters. Only a separately qualified immutable source pin may release campaign
 holds; existing pools retain their original grader.
+
+Candidate `2026.11.27.2` (policy v4) passed all three checks and is released as
+`open-athena/polaris-project-polaris-dataset-53k-grader-v4-20261127-v1@8f1ecf9a2711b366253a6c76ffbad45a302d5013`.
+Its `qualification.json` records the results: 47/47 guest controls, a 99-case
+fresh replay, and a 51-case blinded review with no false rewards. The review found
+four false zeros, all fail-closed. The campaign `source_pins.json` binds this
+release. The two multi-target, partial-reference questions fail closed and stay
+recorded as reference defects.
 
 The v3 candidate recognizes explicitly delimited explanations, final proof displays,
 signed changes, and assignments to the variable requested by the question. It
