@@ -564,13 +564,12 @@ class LocalMachine:
                 disk=self._disk,
             )
         else:
+            # As root, a user namespace adds no isolation (uid 0 maps to uid 0 and capabilities are
+            # dropped), and it forbids mounting a fresh /proc where the runtime overmounts /proc paths
+            # (GPU pods bind /proc/driver/nvidia). The non-root rule below still adds one when needed.
             arguments = [
                 str(self._bwrap),
-                "--unshare-user",
-                "--uid",
-                "0",
-                "--gid",
-                "0",
+                *(() if os.geteuid() == 0 else ("--uid", "0", "--gid", "0")),
                 "--unshare-ipc",
                 "--unshare-pid",
                 "--unshare-uts",
