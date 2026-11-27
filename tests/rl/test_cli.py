@@ -56,6 +56,7 @@ def _execution() -> IrisSkyRLExecution:
 
 
 def test_coordinator_request_replays_the_experiment_main(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DAYTONA_API_KEY", "secret")
     cluster_config, request = _coordinator_request(
         [_step(_execution())],
         "experiments.test_rl",
@@ -69,7 +70,8 @@ def test_coordinator_request_replays_the_experiment_main(tmp_path, monkeypatch) 
     assert request.resources.cpu == 4
     assert request.resources.ram == "16GB"
     assert request.environment is not None
-    assert request.environment.env_vars["DAYTONA_API_KEY"] == "secret"
+    assert request.environment.secrets["DAYTONA_API_KEY"] == "secret"
+    assert "DAYTONA_API_KEY" not in request.environment.env_vars
     assert request.timeout == Duration.from_hours(18)
     assert request.entrypoint.binary_entrypoint is not None
     assert request.entrypoint.binary_entrypoint.command == "python"
@@ -305,8 +307,44 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(
 
     assert result.exit_code == 0, result.output
     environment = client.submit.call_args.kwargs["environment"]
-    assert expected_env.items() <= environment.env_vars.items()
+    for name, value in expected_env.items():
+        if name.endswith("API_KEY"):
+            assert environment.secrets[name] == value
+            assert name not in environment.env_vars
+        else:
+            assert environment.env_vars[name] == value
     assert {"HF_TOKEN", "WANDB_API_KEY", "UNRELATED_SECRET"}.isdisjoint(environment.env_vars)
+
+
+def test_rl_coordinator_accepts_required_file_only_credentials(tmp_path, monkeypatch):
+    expected = {"DAYTONA_RL_API_KEY": "mounted-rl", "JUDGE_KEY": "mounted-judge"}
+    for name, value in expected.items():
+        (tmp_path / name).write_text(value)
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
+    monkeypatch.setenv("DAYTONA_TARGET", "us")
+    client = MagicMock(spec=IrisClient)
+    client.submit.return_value.job_id = "/tests/file-only-coordinator"
+    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **_kwargs: nullcontext(client))
+    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+
+    @click.command()
+    @rl_build_options
+    def main():
+        return _step(
+            dataclasses.replace(
+                _execution(),
+                required_env_vars=(*expected, "DAYTONA_TARGET"),
+            )
+        )
+
+    result = CliRunner().invoke(main, ["--version", "2026.11.27", "--run"])
+    assert result.exit_code == 0, (result.output, result.exception)
+    environment = client.submit.call_args.kwargs["environment"]
+    assert expected.items() <= environment.secrets.items()
+    assert expected.keys().isdisjoint(environment.env_vars)
+    assert environment.env_vars["DAYTONA_TARGET"] == "us"
+    assert all(value not in result.output for value in expected.values())
 
 
 def test_execution_requires_a_complete_federated_route() -> None:

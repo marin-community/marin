@@ -6,7 +6,6 @@
 import argparse
 import asyncio
 import json
-import os
 import time
 from functools import partial
 from pathlib import Path
@@ -14,6 +13,7 @@ from pathlib import Path
 import ray
 from daytona import AsyncDaytona, DaytonaConfig
 from harbor.models.task.config import EnvironmentConfig
+from rigging.secrets import require_secret
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, MachineSpec, NetworkPolicy
@@ -36,7 +36,7 @@ async def probe(inputs: Path, output: Path) -> None:
                 startup_timeout=900,
             )
         )
-    key = os.environ["DAYTONA_RL_API_KEY"]
+    key = require_secret("DAYTONA_RL_API_KEY")
     url = "https://app.daytona.io/api"
     leaser = shared_snapshot_leaser(capacity=2, api_key=key, api_url=url, target="us")
     factory = DaytonaMachineFactory(

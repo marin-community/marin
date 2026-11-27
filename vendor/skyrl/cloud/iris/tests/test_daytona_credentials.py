@@ -1,11 +1,65 @@
 """Credential selection for task backends and remote graders."""
 
+import json
+import os
+import subprocess
+import sys
+import textwrap
+
 import pytest
 from omegaconf import OmegaConf
 from rigging.secrets import SecretResolutionError
 from marinskyrl.task_machine_factories import task_machine_factories
 
 import cloud.iris.iris_backend as launcher
+
+
+def test_nested_launcher_resolves_file_only_credentials_without_an_environment_bridge(tmp_path):
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    expected = {
+        "DAYTONA_RL_API_KEY": "mounted-rl",
+        "DAYTONA_EVAL_API_KEY": "mounted-eval",
+        "TOGETHER_API_KEY": "mounted-judge",
+    }
+    for name, value in expected.items():
+        (secrets / name).write_text(value)
+    config = {
+        "runtime": {"entrypoint": "train", "task_env": {}},
+        "skyrl": {
+            "environment": {"task_sessions": {
+                "daytona": {"api_key_env": "DAYTONA_RL_API_KEY", "eval_api_key_env": "DAYTONA_EVAL_API_KEY"},
+                "remote_judge": {"api_key_env": "TOGETHER_API_KEY"},
+            }},
+            "trainer": {"callbacks": [{"type": "harbor_evaluation", "daytona_api_key_env": "DAYTONA_EVAL_API_KEY"}]},
+        },
+    }
+    config_path = tmp_path / "launch.yaml"
+    OmegaConf.save(OmegaConf.create(config), config_path)
+    program = textwrap.dedent("""
+        import json
+        import os
+        import sys
+        from omegaconf import OmegaConf
+        from cloud.iris.iris_backend import IrisBackend, config_task_environment
+
+        names = tuple(sys.argv[2:])
+        assert not any(name in os.environ for name in names)
+        # Construction rejects missing explicit forwarding inputs before submission.
+        IrisBackend(forward_env=names)
+        environment = config_task_environment(OmegaConf.load(sys.argv[1]))
+        assert not any(name in os.environ for name in names)
+        print(json.dumps(environment))
+    """)
+    environment = {name: value for name, value in os.environ.items() if name not in expected}
+    environment["RIGGING_SECRETS_DIR"] = str(secrets)
+    result = subprocess.run(
+        [sys.executable, "-c", program, str(config_path), *expected],
+        env=environment, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == expected
+    assert OmegaConf.to_container(OmegaConf.load(config_path)) == config
 
 
 @pytest.mark.parametrize("export", [False, True])

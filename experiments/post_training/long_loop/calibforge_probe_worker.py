@@ -6,13 +6,13 @@
 import argparse
 import asyncio
 import json
-import os
 import time
 from pathlib import Path
 
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.trial.config import TrialConfig
 from harbor.trial.trial import Trial
+from rigging.secrets import require_secret
 from shellbox.backends.daytona.connection import DaytonaConnection
 from skyrl_train.dataset.harbor_import import restore_harbor_trial_task
 from taskcompendium.models import TaskSpec
@@ -21,7 +21,7 @@ from taskcompendium.models import TaskSpec
 async def probe(inputs: Path, output: Path) -> None:
     rows = json.loads(inputs.read_text())
     report = {"passed": False, "results": []}
-    connection = DaytonaConnection(os.environ["DAYTONA_RL_API_KEY"], "https://app.daytona.io/api", "us")
+    connection = DaytonaConnection(require_secret("DAYTONA_RL_API_KEY"), "https://app.daytona.io/api", "us")
     try:
         for i, row in enumerate(rows):
             task = TaskSpec.model_validate(row)

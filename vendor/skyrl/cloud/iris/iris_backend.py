@@ -35,7 +35,7 @@ from iris.resources.state import JobState
 from iris.rpc import job_pb2
 from omegaconf import DictConfig, OmegaConf
 from rigging.config_discovery import find_project_root
-from rigging.secrets import get_secret, require_secret
+from rigging.secrets import get_secret, list_secret_names, looks_like_credential, require_secret
 
 from cloud.iris.launch_config import SubmissionMode, derive_launch_topology, load_launch_config
 from cloud.iris.launch import LaunchOutcome
@@ -328,10 +328,15 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
 
 
 def _forwarded_environment(names: tuple[str, ...]) -> dict[str, str]:
-    missing = [name for name in names if name not in os.environ]
+    mounted = set(list_secret_names())
+    values = {
+        name: require_secret(name) if name in mounted or looks_like_credential(name) else os.environ.get(name)
+        for name in names
+    }
+    missing = [name for name, value in values.items() if value is None]
     if missing:
         raise ValueError(f"Missing forwarded environment variables: {', '.join(missing)}")
-    return {name: os.environ[name] for name in names}
+    return {name: value for name, value in values.items() if value is not None}
 
 
 class IrisBackend:
@@ -975,10 +980,7 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
         for field in ("daytona_api_key_env", "eval_daytona_api_key_env"):
             name = OmegaConf.select(args.config, f"skyrl.terminal_bench_config.harbor.{field}")
             if name is not None:
-                value = get_secret(name)
-                if not value:
-                    raise ValueError(f"Missing Daytona credential environment variable: {name}")
-                env_vars[name] = value
+                env_vars[name] = require_secret(name)
 
     with submission_client(
         args.cluster_config, args.target_cluster, args.parent_cluster_config, workspace

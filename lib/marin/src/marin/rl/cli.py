@@ -24,7 +24,7 @@ from iris.rpc import job_pb2
 from iris.rpc.proto_display import priority_band_value
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from rigging.config_discovery import find_project_root
-from rigging.secrets import resolve_secret_spec
+from rigging.secrets import get_secret, list_secret_names, looks_like_credential, require_secret, resolve_secret_spec
 from rigging.timing import Duration
 
 from marin.execution.lazy import ArtifactStep, run
@@ -157,11 +157,6 @@ def _coordinator_request(
 ) -> tuple[str, JobRequest]:
     executions = _skyrl_executions(handles)
     required_names = {name for execution in executions for name in execution.required_env_vars}
-    missing_names = sorted(name for name in required_names if not env_vars.get(name))
-    if missing_names:
-        raise ValueError("Missing required environment variables for RL coordinator: " + ", ".join(missing_names))
-    selected_env = {name: env_vars[name] for name in _COORDINATOR_ENV_VARS if name in env_vars}
-    selected_env.update({name: env_vars[name] for name in sorted(required_names)})
     secret_sources = {}
     for execution in executions:
         for name, source in execution.coordinator_secret_sources:
@@ -172,8 +167,24 @@ def _coordinator_request(
     empty_secrets = sorted(name for name, value in secrets.items() if not value.strip())
     if empty_secrets:
         raise ValueError("Missing or empty required coordinator secrets: " + ", ".join(empty_secrets))
-    for name in secrets:
-        selected_env.pop(name, None)
+    forwarded_names = required_names | set(_COORDINATOR_ENV_VARS)
+    secret_names = set(list_secret_names()) | set(secret_sources)
+    secret_names.update(name for name in forwarded_names if looks_like_credential(name))
+    missing_names = sorted(
+        name
+        for name in required_names
+        if not (secrets.get(name) or (get_secret(name) if name in secret_names else env_vars.get(name)))
+    )
+    if missing_names:
+        raise ValueError("Missing required environment variables for RL coordinator: " + ", ".join(missing_names))
+    secrets.update(
+        {
+            name: require_secret(name)
+            for name in forwarded_names & secret_names
+            if name not in secret_sources and get_secret(name) is not None
+        }
+    )
+    selected_env = {name: env_vars[name] for name in forwarded_names - secret_names if name in env_vars}
     selected_env[_COORDINATOR_GRAPH_ENV] = _COORDINATOR_GRAPH.dump_json(_coordinator_graph(handles)).decode()
     route = _submission_route(executions)
     terminal = graph_handles(handles)[-1]
