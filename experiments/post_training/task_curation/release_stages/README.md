@@ -364,6 +364,14 @@ computed against the frozen declaration. Reviews drawn from another pin remain s
 copies are valid when all prior panels were omitted. Explicit policy exclusions
 stay excluded. No new reviews are requested.
 
+Catalog loading reuses panels whose receipt identities and row counts match the
+sealed browse-copy completion and current QC index. It checks their selected
+evidence and recorded current-pin flag against the current declarations: that
+flag must agree with whether the reviewed population matches the declared
+population. It then checks the target SQL presentation pointers in bounded
+batches. A changed pointer or failed binding check stops catalog loading. Only new or replaced panels download and replay staged review payloads;
+copied task, reviewer and QA identities remain unchanged.
+
 To refresh an already staged index after a declaration changes, supply its
 digest-bound `prior_index` reference to `fresh_qc_index` and put replacement
 review references in `fresh_panels`. Use a new output root and current frozen

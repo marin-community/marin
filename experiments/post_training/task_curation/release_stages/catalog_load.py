@@ -28,6 +28,7 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from itertools import batched
 from pathlib import Path
 from typing import Any, cast
 
@@ -57,6 +58,7 @@ from experiments.post_training.task_curation.release_stages.history_staging impo
 )
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref, sealed_contract_rows
 from experiments.post_training.task_curation.release_stages.paced_query import RetryControl, open_paced_query
+from experiments.post_training.task_curation.release_stages.qc_browse import pin_currency, selected_uri
 from experiments.post_training.task_curation.release_stages.sizing import catalog_replay_sizing
 from experiments.post_training.task_curation.source_status import served_snapshot_sources
 from infra.marina.apps.rl_data_catalog.load import CatalogDisplayPolicy
@@ -73,6 +75,7 @@ from infra.marina.apps.rl_data_catalog.load_reviews import (
 )
 from infra.marina.apps.rl_data_catalog.load_reviews import ensure_tables as load_review_ensure_tables
 from infra.marina.apps.rl_data_catalog.parallel_history import retain_prior_assessments_parallel
+from infra.marina.apps.rl_data_catalog.server.content_access import content_is_withheld
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 
 CATALOG_DISPLAY_POLICY = CatalogDisplayPolicy.PREVIEW
@@ -344,28 +347,16 @@ def _run_write(
     if reviews_loader is not None:
         # An injected loader keeps the serial per-panel contract exactly (tests).
         qc_results = [_stage_qc_panel(inputs, panel, reviews_loader, query) for panel in fresh_qc["receipts"]]
-    elif fresh_qc["receipts"]:
-        staged_panels = [_validate_staged_panel(inputs, panel) for panel in fresh_qc["receipts"]]
-        total = _replay_record_total(staged_panels)
-        progress = _ReplayProgress(total)
-        if catalog_replay_sizing(total).workers == 1:
-            # One paced client: replay panel by panel, in the declared receipt order.
-            for panel, staged in zip(fresh_qc["receipts"], staged_panels, strict=True):
-                loaded = load_content_reviews(staged, inputs.target_load_id, panel["source_id"], query, progress)
-                qc_results.append(
-                    {
-                        "source_id": panel["source_id"],
-                        "reference": panel["reference"],
-                        "counts": loaded,
-                        "review": staged["receipt"],
-                        "current_pin": bool(staged["receipt"]["current_pin"]),
-                    }
-                )
-        else:
-            qc_results = _replay_qc_panels_parallel(
-                inputs, fresh_qc["receipts"], staged_panels, total, progress, query, query_factory, control
-            )
-        progress.finish()
+    else:
+        qc_results = replay_catalog_reviews(
+            inputs,
+            fresh_qc["receipts"],
+            browse,
+            {row.id: row.declaration.model_dump(mode="json") for row in sources},
+            query,
+            query_factory,
+            control,
+        )
     orphaned_panels = _drop_orphaned_review_panels(query, inputs.target_load_id)
     selected = {
         row["source_id"]
@@ -445,6 +436,99 @@ def _default_retain(query_factory: Callable[[], Query], control: RetryControl, s
         )
 
     return retain
+
+
+def replay_catalog_reviews(
+    inputs: CatalogLoadInputs,
+    panels: list[dict],
+    browse: dict,
+    declarations: dict[str, dict],
+    query: Query,
+    query_factory: Callable[[], Query],
+    control: RetryControl,
+) -> list[dict]:
+    """Reuse verified SQL copies of unchanged panels and replay the remaining reviews.
+
+    The sealed QC index already verified staged payloads. A matching copy receipt
+    proves exact SQL row equality; check its live selection before reusing those
+    rows without downloading or inserting their payloads again.
+    """
+    copied = {row["source_id"]: row for row in browse["results"]}
+    reused = {}
+    for panel in panels:
+        source_id = panel["source_id"]
+        copy = copied.get(source_id)
+        if copy is None:
+            continue
+        receipt = copy["original_receipt"]
+        identity = hashlib.sha256(json.dumps(receipt, sort_keys=True).encode()).hexdigest()
+        if panel["identity"] != identity:
+            continue  # A newly selected panel replaces the prior SQL copy.
+        declaration = declarations[source_id]
+        if (
+            copy["catalog_load_id"] != inputs.target_load_id
+            or copy["selected_receipt"] != receipt
+            or copy["qa_bindings_changed"] is not False
+            or copy["task_or_reviewer_identities_changed"] is not False
+            or copy["presentation_pin_currency_preserved"] is not True
+            or any(table["mismatches"] != 0 for table in copy["tables"].values())
+            or panel["records"] != copy["tables"]["atlas_raw_reviews"]["rows"]
+            or panel["status"] != "complete"
+            or copy["pipeline_key"] != f"qc:{receipt['artifact']['sha256']}"
+            or content_is_withheld(declaration)
+            or selected_uri(declaration) != receipt["artifact"]["uri"]
+            or pin_currency(declaration, receipt) != receipt["current_pin"]
+        ):
+            raise ValueError(f"copied QC panel differs from its index or declaration: {source_id}")
+        reused[source_id] = {
+            "source_id": source_id,
+            "reference": panel["reference"],
+            "counts": {name: table["rows"] for name, table in copy["tables"].items()},
+            "review": receipt,
+            "current_pin": bool(receipt["current_pin"]),
+            "retained_sql_copy": True,
+        }
+    for group in batched(reused, 32):
+        stored = query(
+            "SELECT source_id,pipeline_key,receipt FROM atlas_review_current WHERE load_id=:load"
+            " AND source_id IN (SELECT jsonb_array_elements_text(CAST(:sources AS JSONB)))",
+            {"load": inputs.target_load_id, "sources": json.dumps(group)},
+        )["rows"]
+        expected = [
+            {
+                "source_id": source_id,
+                "pipeline_key": copied[source_id]["pipeline_key"],
+                "receipt": copied[source_id]["selected_receipt"],
+            }
+            for source_id in group
+        ]
+        if sorted(stored, key=lambda row: row["source_id"]) != sorted(expected, key=lambda row: row["source_id"]):
+            raise ValueError("copied QC panel selection changed after SQL copy")
+    pending = [panel for panel in panels if panel["source_id"] not in reused]
+    results = list(reused.values())
+    if not pending:
+        return results
+    staged_panels = [_validate_staged_panel(inputs, panel) for panel in pending]
+    total = _replay_record_total(staged_panels)
+    progress = _ReplayProgress(total)
+    if catalog_replay_sizing(total).workers == 1:
+        for panel, staged in zip(pending, staged_panels, strict=True):
+            loaded = load_content_reviews(staged, inputs.target_load_id, panel["source_id"], query, progress)
+            results.append(
+                {
+                    "source_id": panel["source_id"],
+                    "reference": panel["reference"],
+                    "counts": loaded,
+                    "review": staged["receipt"],
+                    "current_pin": bool(staged["receipt"]["current_pin"]),
+                }
+            )
+    else:
+        results.extend(
+            _replay_qc_panels_parallel(inputs, pending, staged_panels, total, progress, query, query_factory, control)
+        )
+    progress.finish()
+    return results
 
 
 def _drop_orphaned_review_panels(query: Query, load_id: str) -> list[str]:

@@ -391,7 +391,7 @@ class _ReplayQuery:
         upper = text.upper()
         self.statements.append((text, dict(parameters)))
         if "FROM ATLAS_SOURCES" in upper:
-            return {"rows": [{"declaration": self.declarations}]}
+            return {"rows": [{"declaration": self.declarations[parameters["source"]]}]}
         if upper.startswith(("CREATE TABLE", "ALTER TABLE", "UPDATE")):
             return {"rows": [], "row_count": 0}
         if "AS MATCHED" in upper:
@@ -425,6 +425,15 @@ class _ReplayQuery:
                 if row["load_id"] == parameters["load"] and row["source_id"] == parameters["source"]
             ]
             return {"rows": rows}
+        if "SELECT SOURCE_ID,PIPELINE_KEY,RECEIPT FROM ATLAS_REVIEW_CURRENT" in upper:
+            source_ids = json.loads(parameters["sources"])
+            return {
+                "rows": [
+                    {name: row[name] for name in ("source_id", "pipeline_key", "receipt")}
+                    for row in self.tables["atlas_review_current"]
+                    if row["load_id"] == parameters["load"] and row["source_id"] in source_ids
+                ]
+            }
         if upper.startswith("INSERT INTO ATLAS_") and "JSONB_TO_RECORDSET" in upper:
             table = text.split("INTO ")[1].split(" (")[0].strip()
             columns = [column.strip().split()[0] for column in text.split(" AS r(")[1].split(")")[0].split(",")]
@@ -511,7 +520,7 @@ def _replay_fixture(records: int, batches: int = 1, chunk: bool = False):
 def test_load_content_reviews_preserves_its_statement_sequence(monkeypatch):
     """The refactor keeps the loader's exact SQL order: checks, DDL, insert+verify pairs, pointer last."""
     document, declaration = _replay_fixture(records=3, batches=1, chunk=True)
-    fake = _ReplayQuery(declaration)
+    fake = _ReplayQuery({"Replay:fixture": declaration})
     seen_summaries: list[str] = []
     monkeypatch.setattr(
         load_reviews_module,
@@ -583,7 +592,7 @@ def test_parallel_replay_matches_serial_byte_identical(tmp_path, monkeypatch):
     )
 
     def run(parallel: bool):
-        fake = _ReplayQuery(declaration)
+        fake = _ReplayQuery({"Replay:fixture": declaration})
         total = cl._replay_record_total([document])
         progress = cl._ReplayProgress(total, interval_s=10**9, log=lambda line: None)
         if parallel:
@@ -611,6 +620,71 @@ def test_parallel_replay_matches_serial_byte_identical(tmp_path, monkeypatch):
             json.dumps(row, sort_keys=True) for row in parallel_fake.tables.get(table, [])
         ), table
     assert set(parallel_fake.tables) == set(serial_fake.tables)
+
+
+@pytest.mark.parametrize("changed_pointer", [False, True])
+def test_catalog_reviews_reuse_copied_payload_and_replay_new_panel(tmp_path, monkeypatch, changed_pointer):
+    copied = _staged_panel_document("retained", records=2)
+    fresh = _staged_panel_document("Replay:fixture", records=3)
+    declaration = _declaration_for("retained", copied["receipt"]["artifact"]["sha256"])
+    fresh_declaration = _declaration_for("Replay:fixture", fresh["receipt"]["artifact"]["sha256"])
+    copied["receipt"]["current_pin"] = False
+    fresh["receipt"]["current_pin"] = False
+    copy_key = copied["assessment"]["pipeline_key"]
+    fake = _ReplayQuery({"retained": declaration, "Replay:fixture": fresh_declaration})
+    monkeypatch.setattr(load_reviews_module, "materialize_cohort_summaries", lambda *args, **kwargs: 0)
+    load_reviews_module.load_content_reviews(copied, TARGET, "retained", fake)
+    prior_rows = {table: list(rows) for table, rows in fake.tables.items()}
+    if changed_pointer:
+        fake.tables["atlas_review_current"][0]["receipt"] = {"changed": True}
+    copy_receipt = {
+        "source_id": "retained",
+        "catalog_load_id": TARGET,
+        "pipeline_key": copy_key,
+        "original_receipt": copied["receipt"],
+        "selected_receipt": copied["receipt"],
+        "presentation_pin_currency_preserved": True,
+        "qa_bindings_changed": False,
+        "task_or_reviewer_identities_changed": False,
+        "tables": {"atlas_raw_reviews": {"rows": 2, "mismatches": 0}},
+    }
+    raw = gzip.compress(json.dumps(fresh).encode())
+    fresh_path = tmp_path / "fresh.json.gz"
+    fresh_path.write_bytes(raw)
+    retained_panel = {
+        "source_id": "retained",
+        "status": "complete",
+        "records": 2,
+        "identity": hashlib.sha256(json.dumps(copied["receipt"], sort_keys=True).encode()).hexdigest(),
+        "reference": {"uri": str(tmp_path / "unavailable-copied-payload.json.gz"), "sha256": "a" * 64},
+    }
+    fresh_panel = {
+        "source_id": "Replay:fixture",
+        "status": "complete",
+        "records": 3,
+        "reference": {"uri": str(fresh_path), "sha256": hashlib.sha256(raw).hexdigest()},
+    }
+    args = (
+        _inputs(tmp_path),
+        [retained_panel, fresh_panel],
+        {"results": [copy_receipt]},
+        {"retained": declaration},
+        fake,
+        lambda: fake,
+        cl.RetryControl(),
+    )
+    if changed_pointer:
+        with pytest.raises(ValueError, match="selection changed"):
+            cl.replay_catalog_reviews(*args)
+        assert fake.tables["atlas_raw_reviews"] == prior_rows["atlas_raw_reviews"]
+        return
+    results = cl.replay_catalog_reviews(*args)
+    assert [row["source_id"] for row in results] == ["retained", "Replay:fixture"]
+    assert results[0]["retained_sql_copy"] is True
+    assert results[0]["review"] == copied["receipt"]
+    assert fake.tables["atlas_raw_reviews"][:2] == prior_rows["atlas_raw_reviews"]
+    assert len(fake.tables["atlas_raw_reviews"]) == 5
+    assert {row["source_id"] for row in fake.tables["atlas_review_current"]} == {"retained", "Replay:fixture"}
 
 
 def test_replay_sizing_scales_with_records():
