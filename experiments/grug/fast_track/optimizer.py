@@ -313,6 +313,65 @@ def _front_heavy_matrix_lr(
     return schedule, q
 
 
+def _muonc_front_heavy_matrix_lr(
+    matrix_lr_schedule,
+    learning_rate_schedule,
+    num_train_steps: int,
+    warmup_steps: int,
+    late_anneal_start: int,
+    peak: float,
+    floor: float,
+):
+    """``muonc_anneal_front_heavy``'s matrix LR: ``muonc_anneal_decay``'s late-annealed matrix LR with its base shape
+    made front-heavy, the late anneal taken on the new shape.
+
+    ``learning_rate_schedule`` keeps the warmup. After it, with ``u`` the post-warmup progress, the base is
+    ``b(u) = 1`` until ``u = WN_STAR_HOLD_FRAC``, then ``floor + (1 - floor) (1 - x^q)`` with
+    ``x = (u - WN_STAR_HOLD_FRAC) / (1 - WN_STAR_HOLD_FRAC)``; the LR is ``peak b(t)`` before
+    ``t0 = late_anneal_start`` and ``peak b(t)^2 / b(t0)`` from it. ``q`` is solved so that the post-warmup mean of
+    this LR equals that of ``matrix_lr_schedule`` (``muonc_anneal_decay``'s). Returns the schedule and ``q``.
+    """
+    steps = np.arange(num_train_steps, dtype=np.float64)
+    reference = np.asarray(jax.vmap(matrix_lr_schedule)(jnp.arange(num_train_steps)), np.float64)
+    post_warmup = steps >= warmup_steps
+    target = float(np.mean(reference[post_warmup]))
+    late = steps >= late_anneal_start
+    progress = np.clip((steps - warmup_steps) / max(num_train_steps - warmup_steps, 1), 0.0, 1.0)
+    held = progress < WN_STAR_HOLD_FRAC
+    decay_progress = np.clip((progress - WN_STAR_HOLD_FRAC) / (1.0 - WN_STAR_HOLD_FRAC), 0.0, 1.0)
+
+    def shape_at(q: float) -> np.ndarray:
+        return np.where(held, 1.0, floor + (1.0 - floor) * (1.0 - decay_progress**q))
+
+    def mean_at(q: float) -> float:
+        shape = shape_at(q)
+        annealed = np.where(late, shape * shape / shape[late_anneal_start], shape)
+        return float(np.mean((peak * annealed)[post_warmup]))
+
+    # The mean rises with q (q -> 0: the floor right after the hold; q -> inf: the peak throughout).
+    low, high = WN_STAR_Q_BRACKET
+    if not mean_at(low) <= target <= mean_at(high):
+        raise ValueError(
+            f"muonc_anneal_front_heavy: no q in {WN_STAR_Q_BRACKET} matches the mean matrix LR {target:.4g}"
+        )
+    for _ in range(100):
+        mid = 0.5 * (low + high)
+        low, high = (mid, high) if mean_at(mid) < target else (low, mid)
+    q = 0.5 * (low + high)
+    shape_at_late_anneal_start = float(shape_at(q)[late_anneal_start])
+
+    def schedule(step):
+        lr = learning_rate_schedule(step)
+        step = jnp.asarray(step, jnp.float32)
+        u = jnp.clip((step - warmup_steps) / max(num_train_steps - warmup_steps, 1), 0.0, 1.0)
+        x = jnp.clip((u - WN_STAR_HOLD_FRAC) / (1.0 - WN_STAR_HOLD_FRAC), 0.0, 1.0)
+        shape = jnp.where(u < WN_STAR_HOLD_FRAC, 1.0, floor + (1.0 - floor) * (1.0 - x**q))
+        annealed = jnp.where(step >= late_anneal_start, shape * shape / shape_at_late_anneal_start, shape)
+        return jnp.where(step < warmup_steps, lr, peak * annealed)
+
+    return schedule, q
+
+
 def _air_matrix_lr(learning_rate_schedule, num_train_steps: int, warmup_steps: int, floor: float):
     """``muonh_air``'s matrix LR: ``learning_rate_schedule``'s warmup, then the AIR path over the ``K`` post-warmup
     steps, ``eta(k) = floor + (peak - floor) f(k)`` with ``f(k) = (q(k) - q(K)) / (1 - q(K))``, ``q(k) = (1 + k /
@@ -899,6 +958,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     muonc_anneal_embed_row_adamh_lr_div: float = 0.0
     """With ``muonc_anneal_embed_row_adamh``: the row-wise AdamH step on ``token_embed`` takes ``adam_lr_t /
     muonc_anneal_embed_row_adamh_lr_div``, every row still held at its norm. 0: off."""
+    muonc_anneal_front_heavy: bool = False
+    """With ``muonc_anneal_decay``: the ``muonh`` and ``kda_beta`` matrix LR takes ``_muonc_front_heavy_matrix_lr``:
+    after the warmup it holds at ``lr_max`` until ``WN_STAR_HOLD_FRAC`` of the post-warmup run, then decays as
+    ``1 - x^q`` to the ``min_lr_ratio`` floor, and from ``t0`` it is ``lr_max b(t)^2 / b(t0)`` on that shape. ``q`` is
+    solved per run so the post-warmup mean matrix LR equals ``muonc_anneal_decay``'s. The matrix decay ``lambda_t``
+    follows the new ``lr_m``; the head and Adam LRs are unchanged."""
     muonh_law_cap_ball: bool = False
     """Law-cap ball (``scale_with_grug_muon_law_cap``) in place of the MuonH sphere for the ``muonh`` and ``kda_beta``
     groups, ``s(t) = lr_t / lr_max`` of the MuonH schedule: a plain Muon step at the matrix LR ``lr_m = lr_t`` until
@@ -960,6 +1025,16 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return jnp.where(step >= late_anneal_start, annealed, lr)
 
             hyperparams["matrix_lr"] = matrix_lr_schedule
+            if self.muonc_anneal_front_heavy:
+                hyperparams["matrix_lr"], _ = _muonc_front_heavy_matrix_lr(
+                    matrix_lr_schedule,
+                    learning_rate_schedule,
+                    num_train_steps,
+                    _convert_frac_or_steps(self.warmup, num_train_steps),
+                    late_anneal_start,
+                    self.learning_rate,
+                    self.min_lr_ratio,
+                )
             if self.muonh_wn_star:
                 hyperparams["matrix_lr"], _ = _front_heavy_matrix_lr(
                     learning_rate_schedule,
@@ -1292,6 +1367,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             raise ValueError("muonc_anneal_decay_floor_frac must be in [0, 1] and needs muonc_anneal_decay")
         if self.muonc_anneal_lr_floor and not self.muonc_anneal_decay:
             raise ValueError("muonc_anneal_lr_floor needs muonc_anneal_decay")
+        if self.muonc_anneal_front_heavy and (not self.muonc_anneal_decay or self.muonc_anneal_lr_floor):
+            raise ValueError("muonc_anneal_front_heavy needs muonc_anneal_decay and excludes muonc_anneal_lr_floor")
         if self.muonc_anneal_head_token_norm and not self.muonc_anneal_adamc:
             raise ValueError("muonc_anneal_head_token_norm needs muonc_anneal_adamc")
         if self.muonc_anneal_head_adamw and (not self.muonc_anneal_adamc or self.muonc_anneal_head_token_norm):
