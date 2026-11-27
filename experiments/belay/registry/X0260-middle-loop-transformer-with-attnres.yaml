@@ -59,7 +59,8 @@ trials:
   batch: X0260
   date: '2026-11-27'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0260
-  wandb: []
+  wandb:
+  - belay-X0260v4-seed0
   settings:
     middle_loop: window_x3
   commit: f7ebaa9736
