@@ -29,7 +29,8 @@ from jax.sharding import NamedSharding, PartitionSpec
 from levanter.checkpoint import load_checkpoint, load_checkpoint_metadata, save_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef
 from levanter.distributed import DistributedConfig
-from levanter.inference.policy_replay import BinaryRolloutChoice, prepare_binary_policy_batch
+from levanter.inference import inference_pb2
+from levanter.inference.policy_replay import RolloutChoice, prepare_rollout_policy_batch
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.policy import ClippedPolicyConfig
 from levanter.policy_learner import SpmdPolicyLearner
@@ -55,10 +56,10 @@ def _payload_fingerprint(payload: dict) -> str:
     digest = hashlib.sha256()
     for name in ("old_logprobs", "advantages", "policy_weights"):
         value = payload["arrays"].get(name)
-        if name == "old_logprobs" and payload.get("binary_rollouts") is not None:
+        if name == "old_logprobs" and payload.get("grpc_rollouts") is not None:
             digest.update(name.encode())
-            for frame, choice in payload["binary_rollouts"]:
-                digest.update(hashlib.sha256(frame).digest())
+            for response, choice in payload["grpc_rollouts"]:
+                digest.update(hashlib.sha256(response).digest())
                 digest.update(str(choice).encode())
             continue
         digest.update(name.encode())
@@ -108,6 +109,7 @@ class NativePolicyRuntime:
         self.learner = None
         self.publisher = None
         self.version = 0
+        self.policy_id: str | None = None
         self.source_identity = None
 
     def initialize(self, config: dict) -> dict:
@@ -272,10 +274,13 @@ class NativePolicyRuntime:
             segment_ids=named("segment_ids", response=False) if "segment_ids" in source else None,
         )
 
-        binary_rollouts = payload.get("binary_rollouts")
-        if binary_rollouts is not None:
-            rollouts = [BinaryRolloutChoice(frame=frame, choice=choice) for frame, choice in binary_rollouts]
-            batch = prepare_binary_policy_batch(self.state.model, batch, rollouts, policy_id=payload["policy_id"])
+        grpc_rollouts = payload.get("grpc_rollouts")
+        if grpc_rollouts is not None:
+            rollouts = [
+                RolloutChoice(inference_pb2.GenerateResponse.FromString(response), choice)
+                for response, choice in grpc_rollouts
+            ]
+            batch = prepare_rollout_policy_batch(self.state.model, batch, rollouts, policy_id=payload["policy_id"])
 
         def place(value: hax.NamedArray) -> hax.NamedArray:
             mesh = self.trainer.device_mesh
@@ -308,6 +313,7 @@ class NativePolicyRuntime:
         if _router_bias_fingerprint(self.state.model) != self.frozen_router_bias:
             raise RuntimeError("Policy update mutated frozen QB router biases")
         self.version = int(payload["global_step"])
+        self.policy_id = f"{self.settings['run_id']}:{self.version}"
         return {
             "policy_loss": float(result.loss),
             "policy_lr": self.settings["optimizer"]["lr"],
@@ -322,7 +328,7 @@ class NativePolicyRuntime:
         path = payload["ckpt_dir"]
         run_id = self.settings["run_id"]
         if method == "save_checkpoint":
-            policy_id = f"{run_id}:{self.version}"
+            policy_id = self.policy_id if self.policy_id is not None else f"{run_id}:{self.version}"
             save_checkpoint(
                 self.state,
                 int(self.state.step),
@@ -333,19 +339,23 @@ class NativePolicyRuntime:
             metadata = load_checkpoint_metadata(path)
             if metadata["source"] != self.source_identity:
                 raise ValueError("Policy checkpoint initializer identity differs from the active recipe")
-            self.state = load_checkpoint(
+            version = metadata["policy_version"]
+            policy_id = metadata.get("policy_id", f"{run_id}:{version}")
+            if not isinstance(policy_id, str) or not policy_id:
+                raise ValueError("Policy checkpoint contains an invalid policy ID")
+            restored = load_checkpoint(
                 self.state,
                 path,
                 axis_mapping=self.trainer.parameter_axis_mapping,
                 mesh=self.trainer.device_mesh,
             )
-            self.version = metadata["policy_version"]
-            if _router_bias_fingerprint(self.state.model) != self.frozen_router_bias:
+            if _router_bias_fingerprint(restored.model) != self.frozen_router_bias:
                 raise ValueError("Policy checkpoint changed the initializer's frozen QB router biases")
+            self.state, self.version, self.policy_id = restored, version, policy_id
         receipt = {
             "step": int(self.state.step),
             "version": self.version,
-            "policy_id": f"{run_id}:{self.version}",
+            "policy_id": policy_id,
             "checkpoint": path,
         }
         if payload.get("include_fingerprints", False):
