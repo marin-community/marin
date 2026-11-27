@@ -25,6 +25,7 @@ from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from rigging.inference_clock import remote_execution_watchdog
 from taskcompendium.models import ProviderRequirement, TaskSpec, TextMessage
 
 from rolloutengine.agents.environment import ExecResult, MachineEnvironment
@@ -467,7 +468,8 @@ async def run_pi(
         mcp_servers(context.task.environment_requirements.tool_providers),
     )
     relay = ModelRelay(complete, tokenize)
-    async with serve_model_relay(context.machine, relay, port=options.relay_port):
+    request_timeout = remote_execution_watchdog(context.limits.total_turn_timeout or context.limits.attempt_timeout)
+    async with serve_model_relay(context.machine, relay, port=options.relay_port, request_timeout=request_timeout):
         try:
             async with asyncio.timeout(options.setup_timeout):
                 await agent.setup()

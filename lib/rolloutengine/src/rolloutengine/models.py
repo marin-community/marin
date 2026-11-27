@@ -10,6 +10,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
+from rigging.inference_clock import INFERENCE_METRIC_KEYS
 from shellbox.machine import NetworkPolicy
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import TaskSpec
@@ -19,12 +20,18 @@ from verifyit.reasoning_markup import ReasoningViolation
 GRADING_SECONDS_METRIC = "timing/grading"
 SETUP_SECONDS_METRIC = "timing/setup"
 SETUP_COMPLETED_METRIC = "setup_completed"
-TASK_TIMING_KEYS = (GRADING_SECONDS_METRIC, SETUP_SECONDS_METRIC)
 TASK_ROLLOUT_COLUMN = "task_rollout_spec"
+TASK_METRIC_KEYS = (
+    GRADING_SECONDS_METRIC,
+    SETUP_SECONDS_METRIC,
+    *INFERENCE_METRIC_KEYS,
+)
 
 LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"
 TOTAL_TURN_TIMEOUT_STOP_REASON = "total_turn_timeout"
+MODEL_TURN_TIMEOUT_STOP_REASON = "model_turn_timeout"
+ATTEMPT_TIMEOUT_STOP_REASON = "attempt_timeout"
 BUDGET_STOP_REASON = "budget_reached"
 
 

@@ -24,6 +24,7 @@ from verifyit.reasoning_markup import (
 from skyrl_train.inference_engines.base import (
     CHOICE_POLICY_STEPS_KEY,
     SESSION_ID_HEADER,
+    REQUEST_ID_HEADER,
     ChatContinuation,
     InferenceEngineInput,
     InferenceEngineOutput,
@@ -438,7 +439,7 @@ class DirectModelClient:
                 body["top_logprobs"] = requested_top_k + 1
                 body["return_tokens_as_token_ids"] = True
             request_id = uuid4().hex if session_id is None else request_id_for_session(session_id)
-            headers = {"x-request-id": request_id}
+            headers = {REQUEST_ID_HEADER: request_id}
             if session_id is not None:
                 headers[SESSION_ID_HEADER] = str(session_id)
             response = await self._client.chat_completion({"json": body, "headers": headers})

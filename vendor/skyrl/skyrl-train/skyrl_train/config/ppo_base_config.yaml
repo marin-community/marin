@@ -529,6 +529,8 @@ trajectory_runner:
   command_timeout: 120
   cleanup_timeout: 30
   shutdown_timeout: 45
+  # Cumulative inference admission wait per trial, separate from active execution.
+  inference_queue_timeout: 2280
   # Trajectories each rollout worker runs at once; an evaluation runs at most this many across all workers.
   max_concurrent_tasks: 1024
   # Training machine trajectories across the rollout worker pool, with at least one slot per worker.

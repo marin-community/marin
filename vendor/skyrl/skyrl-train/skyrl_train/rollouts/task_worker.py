@@ -16,6 +16,7 @@ from daytona import DaytonaError
 from finestore.rl.task_health import AttemptReceipt
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from rigging.inference_clock import InferenceClock, current_inference_clock
 from rigging.redaction import redact_string
 from rigging.task_errors import ErrorCategory, error_category, setup_exit_is_task_failure
 from shellbox.machine import ExitReason, MachineFactory
@@ -423,6 +424,7 @@ class TaskRolloutWorker:
         sessions: Mapping[str, EpisodeFactory] | None = None,
         *,
         shutdown_timeout: float,
+        inference_queue_timeout: float,
         concurrent_training_machine_tasks: int | None = None,
         agents: TaskAgentHarnesses | None = None,
         judge_connection: JudgeConnection | None = None,
@@ -435,6 +437,9 @@ class TaskRolloutWorker:
         self.active_requests: set[asyncio.Task] = set()
         self.closing = False
         self.shutdown_timeout = shutdown_timeout
+        if inference_queue_timeout <= 0:
+            raise ValueError("inference_queue_timeout must be positive")
+        self.inference_queue_timeout = inference_queue_timeout
         self.chat_template_kwargs = dict(trajectory_runner_cfg.get("chat_template_kwargs", {}))
         self.agents = agents
         self.task_health_export = task_health_export
@@ -546,7 +551,9 @@ class TaskRolloutWorker:
             )
             while True:
                 async with machine_slots, self.task_slots:
-                    result = await _run_task_attempt(engine, lowered, model, attempt_id)
+                    clock = InferenceClock(self.inference_queue_timeout)
+                    with clock.scope() if self.trajectory_runner_cfg.backend == "vllm" else nullcontext():
+                        result = await _run_task_attempt(engine, lowered, model, attempt_id)
                 if not external_agent:
                     return result
                 result = _reject_unconfirmed_cleanup(result)
@@ -690,6 +697,7 @@ class TaskRolloutWorkerSpec:
             concurrent_tasks=int(self.config.trajectory_runner.max_concurrent_tasks),
             sessions=self.sessions,
             shutdown_timeout=float(self.config.trajectory_runner.shutdown_timeout),
+            inference_queue_timeout=float(self.config.trajectory_runner.inference_queue_timeout),
             concurrent_training_machine_tasks=None if machine_task_limit is None else max(1, machine_task_limit // shard.count),
             agents=agents,
             judge_connection=judge,

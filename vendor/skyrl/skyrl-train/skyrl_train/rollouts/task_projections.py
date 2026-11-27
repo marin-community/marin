@@ -27,7 +27,7 @@ from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.dataset.tasks import TASKCOMPENDIUM_ENVIRONMENT
 from skyrl_train.distillation import INVALID_TOPK_INDEX
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
-from skyrl_train.metric_names import GENERATE_OUTCOME_METRIC_PREFIX, TASK_ROLLOUT_METRIC_PREFIX, TASK_TIMING_KEYS
+from skyrl_train.metric_names import GENERATE_OUTCOME_METRIC_PREFIX, TASK_ROLLOUT_METRIC_PREFIX, TASK_METRIC_KEYS
 from skyrl_train.trajectory_runners.trajectory_processing import (
     apply_overlong_filtering,
     get_batch_failure_metrics,
@@ -255,7 +255,7 @@ class WholeTaskProjection:
         ]
         classes = [row.metadata.metric_class for row in request.rows]
         metrics = [
-            {key: value for key, value in rollout.metrics.items() if key in TASK_TIMING_KEYS}
+            {key: value for key, value in rollout.metrics.items() if key in TASK_METRIC_KEYS}
             if environment == TASKCOMPENDIUM_ENVIRONMENT
             else dict(rollout.metrics)
             for rollout, environment in zip(rollouts, classes, strict=True)
@@ -314,7 +314,7 @@ class StepTaskProjection:
                 final_steps.append(last)
                 classes.append(row.metadata.metric_class)
         metrics = [
-            {key: value for key, value in sample.metrics.items() if key in TASK_TIMING_KEYS} for sample in samples
+            {key: value for key, value in sample.metrics.items() if key in TASK_METRIC_KEYS} for sample in samples
         ]
         batch = _training_batch(samples, decisions, required, self.runner_config, self.tokenizer, classes, metrics)
         batch["trajectory_ids"] = projected_ids
@@ -581,7 +581,7 @@ def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollo
         if environment != TASKCOMPENDIUM_ENVIRONMENT:
             continue
         for key, value in rollout.metrics.items():
-            if key not in TASK_TIMING_KEYS:
+            if key not in TASK_METRIC_KEYS:
                 metrics[key] = metrics.get(key, 0.0) + value
 
 
@@ -612,7 +612,7 @@ def _step_rollouts(rollout: TrainingRollout) -> list[TrainingRollout]:
             steps=(replace(step, response_end=len(turn.response_token_ids) - 1, transition=transition),),
             metrics={
                 **step.transition.metrics,
-                **({key: value for key, value in rollout.metrics.items() if key in TASK_TIMING_KEYS} if last else {}),
+                **({key: value for key, value in rollout.metrics.items() if key in TASK_METRIC_KEYS} if last else {}),
             },
         )
         outputs.append(output)

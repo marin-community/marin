@@ -10,6 +10,8 @@ MessageType = Dict[str, str]
 ConversationType = List[MessageType]
 OnlineEagleResult = Dict[str, Any] | List[Dict[str, Any]]
 SESSION_ID_HEADER = "x-skyrl-session-id"
+REQUEST_ID_HEADER = "x-request-id"
+ABORT_FINISH_REASON = "abort"
 
 
 _GROUPED_REQUEST_PREFIX = "skyrl-group-"
@@ -63,6 +65,8 @@ class InferenceEngineInput(TypedDict):
     # Per-prompt token scoring overrides. Rollout sampling remains shared.
     sampling_params_per_prompt: NotRequired[List[PromptSamplingOverride]]
     session_ids: Optional[List[Hashable]]
+    # Internal request IDs used by the admission-notification transport.
+    request_ids: NotRequired[List[str]]
     # Per-sample Responses-API options (tools, parallel_tool_calls, etc.) that
     # require the serving backend's resolved chat renderer.
     chat_completion_params: NotRequired[List[Dict[str, Any]]]

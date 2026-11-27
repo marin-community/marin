@@ -90,10 +90,12 @@ class _Frames:
             self.buffer.extend(data)
 
 
-async def _response(handler: Callable[[HttpRequest], Awaitable[HttpResponse]], request: _RequestFrame) -> _ResponseFrame:
+async def _response(
+    handler: Callable[[HttpRequest], Awaitable[HttpResponse]], request: _RequestFrame, request_timeout: float
+) -> _ResponseFrame:
     try:
         response = await asyncio.wait_for(
-            handler(HttpRequest(request.method, request.path, request.body)), timeout=http_service_guest.REQUEST_TIMEOUT
+            handler(HttpRequest(request.method, request.path, request.body)), timeout=request_timeout
         )
         return _ResponseFrame(
             id=request.id, status=response.status, body=response.body, content_type=response.content_type
@@ -129,7 +131,9 @@ def _handler_finished(task: asyncio.Task) -> None:
         task.exception()
 
 
-async def _pump(frames: _Frames, handler: Callable[[HttpRequest], Awaitable[HttpResponse]]) -> None:
+async def _pump(
+    frames: _Frames, handler: Callable[[HttpRequest], Awaitable[HttpResponse]], request_timeout: float
+) -> None:
     pending: dict[str, asyncio.Task[_ResponseFrame]] = {}
     receive = asyncio.create_task(frames.receive())
     try:
@@ -146,7 +150,7 @@ async def _pump(frames: _Frames, handler: Callable[[HttpRequest], Awaitable[Http
                 request = _RequestFrame.model_validate_json(receive.result())
                 if request.id in pending or len(pending) >= MAX_PENDING:
                     raise ValueError("Duplicate sandbox HTTP request or pending request limit exceeded")
-                pending[request.id] = asyncio.create_task(_response(handler, request))
+                pending[request.id] = asyncio.create_task(_response(handler, request, request_timeout))
                 receive = asyncio.create_task(frames.receive())
     finally:
         await finish_owned(own_cleanup(_cancel({receive, *pending.values()})))
@@ -159,6 +163,7 @@ async def serve_http(
     *,
     port: int,
     task_group: asyncio.TaskGroup,
+    request_timeout: float = http_service_guest.REQUEST_TIMEOUT,
 ) -> AsyncIterator[str]:
     """Run a host handler behind one foreground machine-local HTTP listener.
 
@@ -170,10 +175,12 @@ async def serve_http(
     """
     if not 1 <= port <= 65535:
         raise ValueError("HTTP service port is out of range")
+    if request_timeout <= 0:
+        raise ValueError("HTTP service request timeout must be positive")
     if not isinstance(machine, ProcessMachine):
         raise UnsupportedMachineSpec("HTTP services require persistent process sessions")
     source = Path(http_service_guest.__file__).read_text()
-    session = await machine.open_process(Command(("python3", "-u", "-c", source, str(port))))
+    session = await machine.open_process(Command(("python3", "-u", "-c", source, str(port), str(request_timeout))))
     pump: asyncio.Task[None] | None = None
     primary: BaseException | None = None
 
@@ -181,7 +188,7 @@ async def serve_http(
         frames = _Frames(session)
         async with asyncio.timeout(TRANSPORT_TIMEOUT):
             _ReadyFrame.model_validate_json(await frames.receive())
-        pump = task_group.create_task(_pump(frames, handler))
+        pump = task_group.create_task(_pump(frames, handler, request_timeout))
         yield f"http://127.0.0.1:{port}"
     except BaseException as error:
         primary = error

@@ -55,3 +55,34 @@ From the Marin repository root:
 ```bash
 uv run --package marin-rolloutengine --frozen --group test pytest -c lib/rolloutengine/pyproject.toml lib/rolloutengine/tests -q
 ```
+
+## Inference admission and execution clocks
+
+SkyRL task workers bind a scoped `InferenceClock` to each trial. The model transport
+returns a request-correlated engine `SCHEDULED` or first-token notice over the same
+cancellable Ray stream as the result. Submission alone does not start execution.
+The recorder arms total-turn and model-turn budgets at the first request and
+rebases them at that notice; the attempt clock still bounds setup before the first
+request and starts its execution budget afresh at first admission. Later queue
+waits pause remaining execution budgets. Installed-agent callbacks restore the
+trial clock when an HTTP request enters a separate task.
+
+`trajectory_runner.inference_queue_timeout` bounds cumulative admission wait
+separately (2280 seconds by default). A never-scheduled request raises
+`InferenceAdmissionTimeout`. The rollout reports `timing/inference_queue_wait`
+separately from `timing/inference_generation`,
+plus scheduled-request and queue-timeout counts. Engine `request_timing` logs retain
+the engine ID, request ID, and `QUEUED`/`SCHEDULED`/first-token evidence.
+Missing traces are not evidence that no engine work occurred.
+
+The shared task client requests vLLM's native partial abort before the nearest
+remaining trial, turn, or agent deadline, reserving up to 30 seconds for transport.
+It waits for the original response collector, preserving sampled tokens, logprobs,
+routes, and policy-step stamps for the real verifier. A request with no sampled
+tokens remains unavailable. The recorder labels a retained partial by its nearest
+active model-turn, total-turn, or attempt budget. Canonical evaluation uses this
+path without a recipe cutoff; jobs already submitted remain pinned to their
+original code.
+
+Verifier-unavailable rows have zero token-loss masks and are excluded from RLOO-N
+baselines, with zero advantage. Any stored reward zero is an archive placeholder.

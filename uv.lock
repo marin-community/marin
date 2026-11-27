@@ -5978,6 +5978,7 @@ version = "0.1.0"
 source = { editable = "lib/rolloutengine" }
 dependencies = [
     { name = "jinja2" },
+    { name = "marin-rigging" },
     { name = "marin-shellbox" },
     { name = "marin-taskcompendium" },
     { name = "openai" },
@@ -5999,6 +6000,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "jinja2", specifier = ">=3.1" },
+    { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-shellbox", editable = "lib/shellbox" },
     { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
     { name = "openai", specifier = ">=1.59.9" },

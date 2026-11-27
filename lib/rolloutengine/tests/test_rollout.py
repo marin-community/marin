@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 import taskcompendium.runtime.grading as grading_runtime
+from rigging.inference_clock import PARTIAL_DEADLINE_STOP_REASON
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.backends.local.machine import check_local_environment
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -84,6 +85,8 @@ from rolloutengine.harness.step import StepHarness
 from rolloutengine.machines import MachineSetupError, _machine_spec, task_machine
 from rolloutengine.models import (
     LENGTH_STOP_REASON,
+    MODEL_TURN_TIMEOUT_STOP_REASON,
+    TOTAL_TURN_TIMEOUT_STOP_REASON,
     AttemptEnded,
     AttemptStarted,
     ContextRecovery,
@@ -2116,6 +2119,53 @@ async def test_one_task_supports_independent_turn_deadlines():
     finally:
         release.set()
         await asyncio.gather(limited, unlimited, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
+@pytest.mark.parametrize(
+    "model_turn_timeout,total_turn_timeout,reason",
+    [(2, 5, MODEL_TURN_TIMEOUT_STOP_REASON), (5, 2, TOTAL_TURN_TIMEOUT_STOP_REASON)],
+)
+async def test_a_transport_deadline_keeps_partial_tokens_for_grading_and_refuses_another_turn(
+    answer, reward, model_turn_timeout, total_turn_timeout, reason
+):
+    class PartialModel(ReplayModel):
+        async def complete(self, request):
+            turn = await super().complete(request)
+            if len(self.requests) == 1:
+                return replace(turn, stop_reason=PARTIAL_DEADLINE_STOP_REASON, metadata={"routes": [[1, 2]]})
+            return turn
+
+    class AsksAgain:
+        context_recovery = ContextRecovery.NEVER
+
+        def check(self, task, limits):
+            pass
+
+        async def run(self, context, session):
+            await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+            await session.reply(())
+
+    model = PartialModel([{"role": "assistant", "content": answer}, {"role": "assistant", "content": "0"}])
+    record = await engine(model, harnesses={"fixture": AsksAgain()}).run_task(
+        rollout_spec(
+            arithmetic_task(),
+            harness="fixture",
+            model_turn_timeout=model_turn_timeout,
+            total_turn_timeout=total_turn_timeout,
+        )
+    )
+    assert (record.rollout.stop_reason, record.grade.status, record.grade.reward) == (
+        reason,
+        Outcome.GRADED,
+        reward,
+    )
+    [step] = record.rollout.conversations[0].steps
+    assert step.turn.response_token_ids == (20,)
+    assert step.turn.logprobs == (-0.5,)
+    assert step.turn.metadata == {"routes": [[1, 2]]}
+    assert len(model.requests) == 1
 
 
 @pytest.mark.parametrize(

@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import socket
+from contextvars import Context
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from typing import Any
 import httpx
 import openai
 import pytest
+from rigging.inference_clock import InferenceClock, current_inference_clock
 from shellbox.http_service import HttpRequest, HttpResponse
 from shellbox.machine import Command, ExitReason, Result
 from shellbox.process_session import SubprocessSession
@@ -218,6 +220,23 @@ async def test_relay_rejects_unsupported_requests_and_reports_context_rejections
     assert response.status == status
     if isinstance(outcome, ContextWindowExceeded):
         assert json.loads(response.body)["error"]["code"] == "context_length_exceeded"
+
+
+async def test_relay_callback_keeps_trial_clock_across_http_task_context():
+    clock = InferenceClock(2280)
+
+    async def complete(_prompt: Prompt) -> ModelTurn:
+        assert current_inference_clock() is clock
+        return turn({"role": "assistant", "content": "12"})
+
+    with clock.scope():
+        relay = ModelRelay(complete, unavailable_tokenizer)
+        callback = asyncio.create_task(
+            relay.handle(HttpRequest("POST", "/v1/chat/completions", b'{"messages": []}')),
+            context=Context(),
+        )
+        response = await callback
+    assert json.loads(response.body)["choices"][0]["message"]["content"] == "12"
 
 
 async def test_relay_streams_a_turn_with_its_tool_calls_reasoning_and_usage():

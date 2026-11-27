@@ -62,6 +62,8 @@ from skyrl_train.inference_engines.base import (
     NamedWeightsUpdateRequest,
     LORA_DISK_LOAD_NAME,
     LORA_DISK_PATH_KEY,
+    SESSION_ID_HEADER,
+    REQUEST_ID_HEADER,
     request_id_for_session,
 )
 from skyrl_train.inference_engines.response_topk import select_response_topk
@@ -70,6 +72,7 @@ from marinskyrl.inference_placement import InferenceWorkerPlacement
 from skyrl_train.inference_engines.placement import inference_worker_placement
 from skyrl_train.inference_engines.vllm.numa import set_async_worker_numa_affinity
 from skyrl_train.inference_engines.policy_steps import PolicyStepStamps
+from skyrl_train.inference_engines.request_timing import RequestTimings, scheduled_results
 from skyrl_train.weight_sync.expert_block.receiver import ExpertBlockReceiver
 from skyrl_train.weight_sync.weight_loader import WeightLoader
 from skyrl_train.weight_sync.vllm_weight_conversion import load_weights_into_vllm
@@ -113,7 +116,7 @@ def _create_async_engine(engine_args, stat_loggers, data_parallel_master_ports):
         vllm_config,
         stat_loggers=stat_loggers,
         enable_log_requests=False,
-        disable_log_stats=True,
+        disable_log_stats=False,
     )
 
 
@@ -1070,6 +1073,9 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         self.llm = self._create_engine(*args, **kwargs)
         self._weight_loader = VLLMWeightLoader(self.llm)
         self._policy_steps = PolicyStepStamps()
+        self._request_timings = RequestTimings(
+            lambda record: logger.info("request_timing {}", json.dumps({"engine_id": self._stats_engine_id, **record}))
+        )
         self._stamp_engine_steps()
 
     def _stamp_engine_steps(self) -> None:
@@ -1083,6 +1089,13 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                 state = output_processor.request_states.get(output.request_id)
                 if state is not None:
                     self._policy_steps.observe(state.external_req_id, len(output.new_token_ids), engine_core_timestamp)
+                    self._request_timings.observe(
+                        state.external_req_id,
+                        ((event.type.name, event.timestamp) for event in output.events or ()),
+                        len(output.new_token_ids),
+                        engine_core_timestamp,
+                        prompt_tokens=state.prompt_len,
+                    )
             return process_outputs(engine_core_outputs, engine_core_timestamp, iteration_stats)
 
         output_processor.process_outputs = stamped_process_outputs
@@ -1285,10 +1298,9 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
             _engine_arg_fields = {f.name for f in _dataclass_fields(vllm.AsyncEngineArgs)}
         except TypeError:
             _engine_arg_fields = set()
-        # The custom interval logger keeps vLLM stats enabled. This flag only
-        # omits vLLM's duplicate console logger; its Prometheus logger remains.
+        # Keep vLLM's request timing stats enabled alongside the interval logger.
         if "disable_log_stats" in _engine_arg_fields:
-            kwargs["disable_log_stats"] = True
+            kwargs["disable_log_stats"] = False
         if "enable_log_requests" in _engine_arg_fields:
             engine_args = vllm.AsyncEngineArgs(enable_log_requests=False, **kwargs)
         elif "disable_log_requests" in _engine_arg_fields:
@@ -1370,10 +1382,47 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         result = await self.llm.add_lora(lora_request)
         return result
 
+    async def generate_with_scheduling(self, input_batch: InferenceEngineInput):
+        request_id = input_batch["request_ids"][0]
+        async for item in self._scheduled_request(request_id, self.generate(input_batch)):
+            yield item
+
+    async def chat_completion_with_scheduling(self, request_payload: Dict[str, Any]):
+        request_id = request_payload["headers"][REQUEST_ID_HEADER]
+        async for item in self._scheduled_request(request_id, self.chat_completion(request_payload)):
+            yield item
+
+    async def _scheduled_request(self, request_id: str, pending):
+        """Pair one engine result with its scheduler notice on the Ray stream."""
+        scheduled = self._request_timings.scheduled_event(request_id)
+        try:
+            async for item in scheduled_results(pending, scheduled):
+                yield item
+        finally:
+            self._request_timings.forget_schedule(request_id)
+
+    async def abort_active_partial_request(self, request_id: str) -> bool:
+        """Return true only if a live sampled request was aborted; the caller awaits its output."""
+        key = self._request_timings.request_key(request_id)
+        timing = self._request_timings.requests.get(key)
+        if timing is None or timing.generated_tokens == 0:
+            return False
+        external_ids = {
+            state.external_req_id
+            for state in self.llm.output_processor.request_states.values()
+            if self._request_timings.request_key(state.external_req_id) == key
+        }
+        if not external_ids:
+            return False
+        # The pinned vLLM abort path emits accumulated tokens, logprobs and
+        # routes as a final output. Do not cancel its response collector first.
+        await self.llm.abort(external_ids)
+        logger.info("request_deadline request_id={} generated_tokens={}", key, timing.generated_tokens)
+        return True
+
     async def _collect_outputs(self, prompt_token_ids, request_id: str, sampling_params: SamplingParams):
         """Collect a single prompt's final output and the policy steps of its tokens."""
         # Check if LoRA is enabled and create LoRA request
-        final_output = None
         lora_request = None
 
         if self._is_lora:
@@ -1385,15 +1434,24 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                     lora_name=f"{lora_int_id}", lora_int_id=lora_int_id, lora_path="/dummy_lora_path"
                 )
 
-        async for request_output in self.llm.generate(
-            prompt=TokensPrompt(prompt_token_ids=prompt_token_ids),
-            sampling_params=sampling_params,
-            request_id=request_id,
-            lora_request=lora_request,
-        ):
-            final_output = request_output
+        async def collect():
+            final_output = None
+            async for request_output in self.llm.generate(
+                prompt=TokensPrompt(prompt_token_ids=prompt_token_ids),
+                sampling_params=sampling_params,
+                request_id=request_id,
+                lora_request=lora_request,
+            ):
+                final_output = request_output
+            if final_output is None:
+                raise RuntimeError("vLLM ended generation without a request output")
+            return final_output
 
-        return final_output, self._policy_steps.finish(request_id, len(final_output.outputs[0].token_ids))
+        try:
+            final_output = await collect()
+            return final_output, self._policy_steps.finish(request_id, len(final_output.outputs[0].token_ids))
+        finally:
+            self._request_timings.finish(request_id)
 
     async def generate(self, input_batch: InferenceEngineInput) -> InferenceEngineOutput:
         """Generate responses using vLLM's async engine.
@@ -1422,7 +1480,10 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                 request_id = uuid4().hex
             else:
                 request_id = request_id_for_session(session_ids[index])
+            if input_batch.get("request_ids") is not None:
+                request_id = input_batch["request_ids"][index]
             request_ids.append(request_id)
+            self._request_timings.start(request_id, None if session_ids is None else str(session_ids[index]))
             task = asyncio.create_task(self._collect_outputs(prompt, request_id, row_sampling_params))
             tasks.append(task)
         try:
@@ -1585,7 +1646,8 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
 
         body = request_payload.get("json", {})
         headers = request_payload.get("headers", {})
-        request_id = headers.get("x-request-id") or uuid4().hex
+        request_id = headers.get(REQUEST_ID_HEADER) or uuid4().hex
+        self._request_timings.start(request_id, headers.get(SESSION_ID_HEADER))
 
         # Explicit request sampling takes precedence for both training and evaluation.
         # Requests for rollout logprobs must still match the training distribution.
@@ -1600,6 +1662,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                 request = CompletionRequest(**body)
             assert request.stream is False, "Streaming is not supported in SkyRL yet, please set stream to False."
         except Exception as e:
+            self._request_timings.finish(request_id)
             return _build_error_response(str(e), HTTPStatus.BAD_REQUEST.phrase, HTTPStatus.BAD_REQUEST.value)
 
         # 2. Call vllm engine
@@ -1608,11 +1671,12 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
             minimal_request = _MinimalRequest(headers)
             if endpoint == "/chat/completions":
                 if exact_prompt_token_ids is None:
-                    generator = await self.openai_serving_chat.create_chat_completion(request, minimal_request)
+                    pending = self.openai_serving_chat.create_chat_completion(request, minimal_request)
                 else:
-                    generator = await self.openai_serving_chat.create_chat_completion_with_exact_prompt(
+                    pending = self.openai_serving_chat.create_chat_completion_with_exact_prompt(
                         request, minimal_request, exact_prompt_token_ids
                     )
+                generator = await pending
                 assert isinstance(generator, (ChatCompletionResponse, ErrorResponse))
             else:
                 generator = await self.openai_serving_completion.create_completion(request, minimal_request)
@@ -1674,6 +1738,8 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
             response["request_id"] = request_id
             response["error_category"] = category
             return response
+        finally:
+            self._request_timings.finish(request_id)
 
     async def chat_completion(self, request_payload: Dict[str, Any]) -> Dict[str, Any]:
         """OpenAI-compatible HTTP endpoint for handling `/chat/completions` in Python vLLM engine.
