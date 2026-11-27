@@ -195,13 +195,7 @@ class RetainedLineageDrift(ValueError):
 
 
 def _check_pipeline_lineage(source: RlDataSource, pin: RetainedPin) -> None:
-    """Fail the binding unless the declaration projects the sealed conversion pipeline.
-
-    The declaration's pipeline reference carries the dataset pin, the pipeline
-    name, the consumed files and the converter version: main's declaration must
-    project exactly what the receipt sealed, or the retained release would be
-    attributed to a conversion that did not produce it.
-    """
+    """Require the exact conversion pipeline recorded by the sealed receipt."""
     if source.declaration.pipeline != pin.original_pipeline:
         raise RetainedLineageDrift(f"retention lineage belongs to another conversion pipeline: {source.info.id}")
 
@@ -218,7 +212,6 @@ def _bind(source: RlDataSource, pin: RetainedPin) -> RlDataSource:
             f"retention belongs to another conversion input: expected {expected}, sealed {observed}"
         )
     _check_pipeline_lineage(source, pin)
-    require_lexical_qualification(pin.lexical, pin.release_repo, pin.release_revision, SourceUse(pin.intended_use.value))
 
     config = pin.cohort(name=source.name)
     release = pin.release

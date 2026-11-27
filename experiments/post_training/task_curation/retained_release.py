@@ -6,8 +6,8 @@
 The Atlas seals each retained release with its census, lexical, dedup and grading
 receipts in the pinned registry; those admission gates ran upstream. This reader
 fails closed on the bytes (release digest, per-task identity, row count) and on
-the lexical qualification the publication carries, so a run can only consume the
-population the publication read back.
+the lexical qualification for admitted runs. QUICK verifies bytes without
+admitting tasks.
 """
 
 import hashlib
@@ -34,6 +34,7 @@ from experiments.post_training.task_curation.prebuilt import require_runnable_gr
 from experiments.post_training.task_curation.retained_admission import require_lexical_qualification
 from experiments.post_training.task_curation.source import EXCLUDED_TAG, RlDataSource, SourceReference
 
+FINAL_VIEW = "final"
 RETAINED_TASKS_FILE = "tasks.parquet"
 """The published cohort file the reader downloads and every view derives from."""
 RETAINED_PART_FILE = "part-000000.parquet"
@@ -92,14 +93,14 @@ def _write_evidence_views(
     carry no rows, so the assessment contract still holds and its excluded cohort
     samples zero. QUICK writes an empty final view, matching its admitted count.
     """
-    final_view = output / "final"
+    final_view = output / FINAL_VIEW
     final_view.mkdirs(exist_ok=True)
     outputs: dict[str, str] = {}
     admitted = mode is not SourceProcessingMode.QUICK
     if admitted:
         final = final_view / RETAINED_PART_FILE
         final.upload_from(str(normalized))
-        outputs["final"] = str(final.parent)
+        outputs[FINAL_VIEW] = str(final.parent)
     else:
         with (final_view / RETAINED_PART_FILE).open("wb") as stream:
             pq.write_table(RETAINED_SCHEMA.empty_table(), stream)
@@ -110,7 +111,7 @@ def _write_evidence_views(
         with (view_dir / RETAINED_PART_FILE).open("wb") as stream:
             pq.write_table(EMPTY_EVIDENCE_TABLE, stream)
         views[view] = str(view_dir)
-    return outputs, {"normalize": str(normalized.parent), **views, "final": str(final_view)}
+    return outputs, {"normalize": str(normalized.parent), **views, FINAL_VIEW: str(final_view)}
 
 
 def _retained_manifest(invocation: RetainedImport, *, seen: int, views: dict[str, str]) -> dict[str, object]:
@@ -148,26 +149,7 @@ def _retained_manifest(invocation: RetainedImport, *, seen: int, views: dict[str
     }
 
 
-def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
-    """Read exact published bytes, preserving the original qualification provenance."""
-    cohort = invocation.cohort
-    admitted = invocation.mode is not SourceProcessingMode.QUICK
-    if admitted:
-        if cohort.expected_rows <= 0:
-            raise ValueError("An admitted source requires a nonempty retained population")
-        require_lexical_qualification(
-            invocation.lexical_contamination,
-            cohort.release.repo,
-            cohort.release.revision,
-            SourceUse(cohort.intended_use.value),
-        )
-    local = Path(
-        hf_hub_download(cohort.release.repo, cohort.files[0], repo_type="dataset", revision=cohort.release.revision)
-    )
-    if file_sha256(StoragePath(str(local))) != cohort.tasks_parquet_sha256:
-        raise ValueError("Retained release differs from its publication readback receipt")
-    output = StoragePath(invocation.output_path)
-    normalized = output / "normalize" / RETAINED_PART_FILE
+def _normalize_retained_tasks(local: Path, normalized: StoragePath, expected_rows: int, admitted: bool) -> int:
     seen = set()
     with normalized.open("wb", auto_mkdir=True) as stream, pq.ParquetWriter(stream, RETAINED_SCHEMA) as writer:
         for batch in pq.ParquetFile(local).iter_batches(batch_size=16):
@@ -188,13 +170,37 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
                     }
                 )
             writer.write_table(pa.Table.from_pylist(records, schema=RETAINED_SCHEMA))
-    if len(seen) != cohort.expected_rows:
+    if len(seen) != expected_rows:
         raise ValueError("Retained release count differs from its frozen plan")
+    return len(seen)
+
+
+def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
+    """Read exact published bytes, preserving the original qualification provenance."""
+    cohort = invocation.cohort
+    admitted = invocation.mode is not SourceProcessingMode.QUICK
+    if admitted:
+        if cohort.expected_rows <= 0:
+            raise ValueError("An admitted source requires a nonempty retained population")
+        require_lexical_qualification(
+            invocation.lexical_contamination,
+            cohort.release.repo,
+            cohort.release.revision,
+            SourceUse(cohort.intended_use.value),
+        )
+    local = Path(
+        hf_hub_download(cohort.release.repo, cohort.files[0], repo_type="dataset", revision=cohort.release.revision)
+    )
+    if file_sha256(StoragePath(str(local))) != cohort.tasks_parquet_sha256:
+        raise ValueError("Retained release differs from its publication readback receipt")
+    output = StoragePath(invocation.output_path)
+    normalized = output / "normalize" / RETAINED_PART_FILE
+    seen = _normalize_retained_tasks(local, normalized, cohort.expected_rows, admitted)
     (output / RETAINED_TASKS_FILE).upload_from(str(local))
     outputs = {"tasks": str(output / RETAINED_TASKS_FILE), "normalize": str(normalized.parent)}
     view_outputs, views = _write_evidence_views(output, normalized=normalized, mode=invocation.mode)
     outputs.update(view_outputs)
-    manifest = _retained_manifest(invocation, seen=len(seen), views=views)
+    manifest = _retained_manifest(invocation, seen=seen, views=views)
     (output / RETAINED_MANIFEST_FILE).write_text(json.dumps(manifest, indent=2) + "\n")
     return CampaignArtifact(
         status="completed",

@@ -9,7 +9,7 @@ fields record where each value came
 from. The fixture's bytes live in the pinned public Hugging Face dataset
 ``open-athena/atlas-source-pins``; the repository commits only the immutable
 reference (revision, sha256, byte size), and the Atlas release step on
-``atlas-env-audit`` republishes a refreshed cut as a new revision.
+the pinned ``atlas_revision`` republishes a refreshed cut as a new revision.
 
 Three checks, all computed from the catalog:
 
@@ -30,6 +30,7 @@ import json
 from functools import cache
 
 import pytest
+from finestore.rl.curation import PipelineReference
 from finestore.rl.pinned_file import PinnedHfFile, read_pinned_hf_file
 from finestore.rl.source_identity import canonical_source_id
 
@@ -58,16 +59,14 @@ def read_atlas_source_pins() -> dict:
     return json.loads(read_pinned_hf_file(ATLAS_SOURCE_PINS_REFERENCE))
 
 
-def _durable_ref(source) -> dict:
-    dataset = source.dataset
-    pipeline = source.pipeline
-    return {
-        "dataset_repo": dataset.name if dataset else None,
-        "dataset_revision": dataset.revision if dataset else None,
-        "pipeline_files": list(source.files) if pipeline is not None else [],
-        "pipeline_name": source.name if pipeline is not None else None,
-        "pipeline_version": source.version if pipeline is not None else None,
-    }
+def _durable_ref(reference: dict) -> PipelineReference:
+    return PipelineReference(
+        source=reference["dataset_repo"],
+        revision=reference["dataset_revision"],
+        files=reference["pipeline_files"],
+        name=reference["pipeline_name"],
+        version=reference["pipeline_version"],
+    )
 
 
 def test_every_atlas_admitted_source_is_declared_on_main_or_recorded_as_blocked():
@@ -107,11 +106,12 @@ def test_main_pins_match_the_atlas_admitted_pins():
         source = sources.get(key)
         if source is None or key in blockers:
             continue
-        current = _durable_ref(source)
+        current = source.declaration.pipeline
+        expected = _durable_ref(atlas_ref)
         if key in waivers:
-            if current == atlas_ref:
+            if current == expected:
                 stale_waivers.append(source_id)
-        elif current != atlas_ref:
+        elif current != expected:
             unwaived.append(source_id)
 
     assert stale_waivers == [], f"parity landed; drop the waivers: {stale_waivers}"
