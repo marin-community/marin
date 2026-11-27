@@ -17,6 +17,41 @@ See [task selection](../../../docs/references/task-curation.md#final-task-select
 resume commands, and [train on a Snowball selection](../../../docs/references/task-curation.md#train-on-a-snowball-selection)
 for the handoff to [Snowball RL experiments](../../../docs/recipes/rl-experiments.md).
 
+## Task store
+
+Every SAMPLE or FULL campaign takes `--task-store NAME@VERSION`. After the
+campaign succeeds, the driver builds that [`TaskStore`](task_store.py) from the
+run's sources as its last step and prints the store's path and the sources it
+left out: a dataset-owned pipeline that writes no curation manifest admits no
+tasks. A failed campaign builds no store; rerun it once the failure is fixed, or
+rerun with `--source` for the sources that completed. Either rerun reuses the
+completed source artifacts.
+
+A store records each source's curation artifact, the SHA-256 of its canonical
+`manifest.json` and its `intended_use`; it copies no task data and does not hash
+the admitted files. Only SAMPLE and FULL curation admits tasks, so a store
+refuses other artifacts. A FULL campaign also curates evaluation populations
+such as `aime24` and `gpqa`, so a training reader selects its sources by
+`intended_use`:
+
+```python
+store = TaskStore.open("main", "2026.11.27.1")
+training = [source_id for source_id, source in store.sources.items() if source.intended_use == IntendedUse.TRAIN]
+rows = store.select_sources(*training).to_dataset()
+```
+
+`TaskStore.open` reads the record under `rl-data/task-store/<name>/<version>` of
+the configured artifact prefix and raises `FileNotFoundError` when there is none.
+`to_dataset()` returns a Zephyr dataset of `TaskRow(source_id, task_id,
+task_json)` over the admitted files that each manifest records. It fails when a
+manifest changed, or when a manifest counts admitted tasks whose files are gone.
+`select_sources(...)` restricts the store to the named sources.
+
+A store version keeps the sources it was first built with. A rerun with the same
+sources reuses it for one manifest read per source; a rerun with other sources
+raises `FingerprintMismatchError` until it names a new version. Training
+selection reads admitted tasks through the same reader.
+
 ## EvalLite
 
 `--corpus <converted-corpus.json> --eval-lite
@@ -91,7 +126,7 @@ source's panel, while FULL expands sources accepted by its panel review.
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' python \
   -m experiments.post_training.task_curation.driver \
-  --mode sample --cache-dir ~/.cache/marin/rl-curation \
+  --mode sample --task-store local-preview@dev --cache-dir ~/.cache/marin/rl-curation \
   --source aime24 --source svamp --quality-sample-size 5 \
   --assess --assessment-sample-size 3 --excluded-sample-size 2 \
   --max-workers 2 --concurrent-sources 1 --review-concurrency 1 \

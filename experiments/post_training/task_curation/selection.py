@@ -65,12 +65,17 @@ from zephyr.writers import write_parquet_file
 
 from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT
 from experiments.post_training.task_curation.curation_catalog import MANIFEST_FILENAME
+from experiments.post_training.task_curation.task_store import (
+    PARQUET_BATCH_ROWS,
+    TASK_JSON_COLUMN,
+    admitted_task_files,
+    curated_rows,
+)
 
 SELECTION_PREFIX = "rl-data/task-selection"
 SELECTION_INPUT_PREFIX = "rl-data/selection-inputs"
 HELDOUT_BLEND = "rlvr1"
 STRUCTURAL_FAMILY = "structural"
-PARQUET_BATCH_ROWS = 256
 # Answers per task in the initializer run that measures panel pass rates.
 PASS_RATE_ATTEMPTS = 8
 MIN_PROBED_TASKS = 50
@@ -81,7 +86,6 @@ SUMMARY_FILENAME = "summary.json"
 FULL_VALIDATION_FILENAME = "full_validation.parquet"
 TASK_MANIFEST_FILENAME = "task_manifest.parquet"
 TASK_SPEC_COLUMN = "task_spec"
-TASK_JSON_COLUMN = "task_json"
 LOWERED_TASK_SPEC_COLUMN = "lowered_task_spec"
 TASK_SCHEMA = pa.schema([pa.field(TASK_SPEC_COLUMN, pa.string(), nullable=False), *arrow_schema(TaskStrata)])
 HELDOUT_SCHEMA_VERSION = "0.27"
@@ -442,9 +446,8 @@ def _admitted_records(source: SelectionInput) -> Iterator[tuple[TaskSpec, str]]:
         raise ValueError(f"Selection requires SAMPLE/FULL curation: {source.source_id}")
     if manifest["intended_use"] != IntendedUse.TRAIN:
         raise ValueError(f"Selection source is not a training population: {source.source_id}")
-    for path in sorted((root / "final" / "*.parquet").glob(), key=str):
-        for row in _parquet_rows(path, TASK_JSON_COLUMN):
-            task_json = row[TASK_JSON_COLUMN]
+    for path in admitted_task_files(source.root, manifest):
+        for _, task_json in curated_rows(path):
             yield TaskSpec.model_validate_json(task_json), task_json
 
 

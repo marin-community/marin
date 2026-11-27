@@ -24,6 +24,7 @@ from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.runtime.environment import prepare_machine_spec
 from taskcompendium.runtime.local import LocalRuntime, local_runtime
+from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
@@ -32,6 +33,7 @@ from experiments.post_training.task_curation.datasets.skyrl import math as skyrl
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import environment_artifact
+from experiments.post_training.task_curation.local import artifact_prefix
 from experiments.post_training.task_curation.pipeline import (
     CampaignMachines,
     CurationRecipe,
@@ -40,6 +42,7 @@ from experiments.post_training.task_curation.pipeline import (
     process_rows,
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.task_store import TaskStore
 from experiments.post_training.task_curation.tests.image_builds import (
     DATA_PATH,
     REPOSITORY,
@@ -80,9 +83,14 @@ def catalog(monkeypatch, tmp_path):
     return pipelines
 
 
+STORE_NAME, STORE_VERSION, RETRY_VERSION = "fixture", "2026.11.26.1", "2026.11.26.2"
+STORE_OPTION = f"{STORE_NAME}@{STORE_VERSION}"
+
+
 def arguments(tmp_path) -> list[str]:
     options = {
         "--mode": "sample",
+        "--task-store": STORE_OPTION,
         "--review-mode": "chat",
         "--model-revision": "fixture-revision",
         "--review-cache": str(tmp_path / "cache"),
@@ -118,6 +126,8 @@ def test_local_canary_cannot_write_an_explicit_production_catalog(tmp_path, cata
             *arguments(tmp_path),
             "--mode",
             "full",
+            "--task-store",
+            STORE_OPTION,
             "--cache-dir",
             str(tmp_path / "canary"),
             "--publish-catalog",
@@ -262,6 +272,7 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
     else:
         report = tmp_path / "report.json"
         options += ["--coordinator-memory", "1g", "--worker-image", "fixture-image", "--report-path", str(report)]
+        options += ["--task-store", STORE_OPTION]
     runner = CliRunner()
     planned = runner.invoke(main, options)
     assert planned.exit_code == 0, planned.output
@@ -291,6 +302,9 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
             assert repeated.exit_code == 0, repeated.output
             assert json.loads(StoragePath(result["outputs"]["numbers"]).read_text()) == expected
             assert Path(os.environ["MARIN_PREFIX"]) == tmp_path / "artifacts"
+        else:
+            # The generated pipeline writes no curation manifest, so its campaign's store holds no source.
+            assert TaskStore.open(STORE_NAME, STORE_VERSION).sources == {}
     finally:
         client.shutdown()
 
@@ -324,6 +338,8 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
     options = [
         "--mode",
         mode,
+        "--task-store",
+        STORE_OPTION,
         "--skip-assessment",
         "--max-workers",
         "1",
@@ -400,6 +416,8 @@ def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, 
     args = [
         "--mode",
         "sample",
+        "--task-store",
+        STORE_OPTION,
         "--cache-dir",
         str(cache),
         "--source",
@@ -428,7 +446,8 @@ def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, 
     assert manifest["raw_population_count"] == 6 and manifest["raw_sample_count"] == 2
     assert len(review_server.requests) == 2
     assert (cache / "review-cache").exists()
-    repeated = runner.invoke(main, [*args, "--normalized-shards", "2"])
+    # The rebuilt source is another source set, so it needs another store version.
+    repeated = runner.invoke(main, [*args, "--normalized-shards", "2", "--task-store", f"{STORE_NAME}@{RETRY_VERSION}"])
     assert repeated.exit_code == 0, repeated.output
     rebuilt = json.loads((cache / "campaigns/campaign.json").read_text())["sources"][0]
     assert rebuilt["path"] != outcome["path"]
@@ -449,6 +468,8 @@ def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, r
     args = [
         "--mode",
         "sample",
+        "--task-store",
+        STORE_OPTION,
         "--cache-dir",
         str(cache),
         "--source",
@@ -506,6 +527,8 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
     args = [
         "--mode",
         "full",
+        "--task-store",
+        STORE_OPTION,
         "--cache-dir",
         str(cache),
         "--input-root",
@@ -526,6 +549,8 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
     ]
     result = CliRunner().invoke(main, args)
     assert result.exit_code != 0
+    with artifact_prefix(str(cache)), pytest.raises(FileNotFoundError):
+        TaskStore.open(STORE_NAME, STORE_VERSION)
     campaign = json.loads((cache / "campaigns/campaign.json").read_text())
     outcome = campaign["sources"][0]
     assert campaign["status"] == "failed" and outcome["status"] == "incomplete"
@@ -548,3 +573,12 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
     recovered = json.loads((cache / "campaigns/campaign.json").read_text())
     assert recovered["sources"][0]["status"] == "completed"
     assert recovered["sources"][0]["path"] != outcome["path"]
+    with artifact_prefix(str(cache)):
+        store = TaskStore.open(STORE_NAME, STORE_VERSION)
+    entry = store.sources[source.info.id]
+    # The report records the assessment step; the store pins the curation artifact it assessed.
+    assert Path(entry.root).parent.parent == cache / "data/rl"
+    with ZephyrContext(client=LocalClient(), max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+        rows = context.execute(store.to_dataset()).results
+    assert rows and {row.source_id for row in rows} == {source.info.id}
+    assert all(row.task.id == row.task_id for row in rows)

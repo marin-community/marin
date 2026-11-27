@@ -25,7 +25,6 @@ from taskcompendium.runtime.resources import resource_bytes
 from experiments.evaluation.benchmarks.harbor import image_lock
 from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT
 from experiments.post_training.task_curation.selection import (
-    PARQUET_BATCH_ROWS,
     SUMMARY_FILENAME,
     TASK_MANIFEST_FILENAME,
     TASK_MANIFEST_SCHEMA,
@@ -33,6 +32,7 @@ from experiments.post_training.task_curation.selection import (
     TRAIN_FILENAME,
     GraderKind,
 )
+from experiments.post_training.task_curation.task_store import PARQUET_BATCH_ROWS
 
 SWESMITH_DATASET = "long-loop-smartie-swesmith"
 SWESMITH_PI_VERSION = "0.87.0"
