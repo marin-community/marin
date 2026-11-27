@@ -1,48 +1,48 @@
 {
   "repo": "open-athena/marin-license-receipts",
-  "revision": "434ad97c63fed964a5b16d73fdb3b8e6d75d7088",
+  "revision": "29af43ac2d4f3fc853f0038b7a633d23c2150f56",
   "references": [
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "434ad97c63fed964a5b16d73fdb3b8e6d75d7088",
-      "path": "nemotron_if_reseal_20261127_a_v1/part-000.json",
+      "revision": "29af43ac2d4f3fc853f0038b7a633d23c2150f56",
+      "path": "acecode_20261127_b_v1/part-000.json",
       "sha256": "0e1116b6d033cf6950d51e514e979134313abcf2db5902b7223e73e95ad2838a"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "434ad97c63fed964a5b16d73fdb3b8e6d75d7088",
-      "path": "nemotron_if_reseal_20261127_a_v1/part-001.json",
+      "revision": "29af43ac2d4f3fc853f0038b7a633d23c2150f56",
+      "path": "acecode_20261127_b_v1/part-001.json",
       "sha256": "2861ec879032f59f42db81ca9e28ea11edcc47280e0785b68e22c4ad715afb82"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "434ad97c63fed964a5b16d73fdb3b8e6d75d7088",
-      "path": "nemotron_if_reseal_20261127_a_v1/part-002.json",
+      "revision": "29af43ac2d4f3fc853f0038b7a633d23c2150f56",
+      "path": "acecode_20261127_b_v1/part-002.json",
       "sha256": "eb9fec78f11a8d4215c9dfe27ae9b409e3b02d87c3fe1bc593fbc64d15cabd94"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "434ad97c63fed964a5b16d73fdb3b8e6d75d7088",
-      "path": "nemotron_if_reseal_20261127_a_v1/part-003.json",
-      "sha256": "cfe1727904d2f790842cc4cc3fe756c93eba3b741d151ac03407dc1b8493b87a"
+      "revision": "29af43ac2d4f3fc853f0038b7a633d23c2150f56",
+      "path": "acecode_20261127_b_v1/part-003.json",
+      "sha256": "5f72b548dc12d11ab7ea90b2a3dd5412f7ca9bdb392b11336f15cd329f0370e4"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "434ad97c63fed964a5b16d73fdb3b8e6d75d7088",
-      "path": "nemotron_if_reseal_20261127_a_v1/part-004.json",
-      "sha256": "4a132846ef853e7d439a629c3ee56556436f50e02f8bdb4a806f0f703830cef4"
+      "revision": "29af43ac2d4f3fc853f0038b7a633d23c2150f56",
+      "path": "acecode_20261127_b_v1/part-004.json",
+      "sha256": "a68807accaffd7fb723cb3a2ca9d736d4493674cb009e2e783e87d6c34b38cd9"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "434ad97c63fed964a5b16d73fdb3b8e6d75d7088",
-      "path": "nemotron_if_reseal_20261127_a_v1/part-005.json",
-      "sha256": "9f86a10a080f5dff53adaf8852557c43d7c18ca4d79828663939dc1028b20eac"
+      "revision": "29af43ac2d4f3fc853f0038b7a633d23c2150f56",
+      "path": "acecode_20261127_b_v1/part-005.json",
+      "sha256": "893b3d16b01135c933d458e9336cf2e162318245a569a903e55f93f5c32182be"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "434ad97c63fed964a5b16d73fdb3b8e6d75d7088",
-      "path": "nemotron_if_reseal_20261127_a_v1/part-006.json",
-      "sha256": "d27c0d958bba1faf4462518733d65f0c0d9593a98d65dfab071332ada7433591"
+      "revision": "29af43ac2d4f3fc853f0038b7a633d23c2150f56",
+      "path": "acecode_20261127_b_v1/part-006.json",
+      "sha256": "455b8a944b4673cfe8e060bdfd30f37146626d808995be85076d0099830f7f65"
     }
   ]
 }

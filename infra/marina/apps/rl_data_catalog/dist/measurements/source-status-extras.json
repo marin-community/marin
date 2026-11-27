@@ -26,6 +26,7 @@
     "Nvidia:Nemotron-RL-Instruction-Following-Citation-Formatting-v1": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
     "SynthLabs:Big-Math-RL-Verified": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
     "Tiger-lab:AceCode-89K": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+    "Newfacade:LeetCodeDataset": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
     "TaskTrove:tasktrove-competitive-coding-rebuilt-v1": "ingest B \u00b7 Codex 01a1e039",
     "TaskTrove:tasktrove-code-contests-built-image": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
     "TaskTrove:tasktrove-taco-built-image": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
@@ -1732,6 +1733,24 @@
       "upstream_dataset": "AceCode-89K",
       "upstream_url": null,
       "notes": "TRAIN code tasks under one declared judge family: the context is the verbatim native question plus a recorded completion-format normalization, and the grader is the shipped runner that execs the candidate's fenced block then every inferred assert case in one namespace (reward 1 when all pass, 0 on candidate-code failure, harness defects exit nonzero). The source's 64 sampled model inferences stay private provenance, never judge gold. Contract defects fail closed: the conversion turned 87,149 input rows into 86,560 unique tasks with 589 typed non-assert rejections and zero within-source duplicates. Standard lexical retention removed zero of 86,560 rows. Canonical static retention covers all 86,560 current-pin tasks under the no-oracle policy, executability unmeasured. Fresh seed-zero V4 SAMPLE reviewed 100/100, found 16 issues and zero unavailable; Result some_issues; findings remain verbatim and quality never vetoes admission. The content survey measured ten neighbors, all DISTINCT. The canonical consumer-runtime check at b9373278 is advisory: bespoke failures 0/86560; global schema rejections 86560/86560, paths {'integrity_contract': 86560} (the Formatting-precedent advisory class). This records loader and launch binding, not live grader execution. Evidence: s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/acecode-89k/2026.11.26.1/final-pin-sample-v1/result.json, s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/acecode-89k/2026.11.26.1/admission-evidence-v1/result.json and s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/acecode-89k/2026.11.26.1/consumer-binding-v1/result.json.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "owner": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Newfacade:LeetCodeDataset",
+      "display_name": "Newfacade \u00b7 LeetCodeDataset",
+      "status": "Pending",
+      "origin": "Newfacade",
+      "upstream_dataset": "LeetCodeDataset",
+      "upstream_url": null,
+      "notes": "TRAIN code tasks whose grader is the source's own check(candidate) harness, shipped verbatim: the context is the verbatim native query \u2014 the source's own complete framing carrying the problem statement and starter code in every row \u2014 plus a recorded completion-format normalization. The shipped runner execs the source's own runtime preamble (the prompt's imports and helper classes, compiled in every native row), the candidate's block, and the harness verbatim; the truncated starter_code stays provenance and is never executed. Every task passed a conversion-time CPU qualification: the source's own reference solution must pass the shipped harness; 2 of 2,641 train rows failed and are typed per-task source-defect exclusions with sealed evidence (harness_rejects_reference_solution), never grader edits. The grader environment pins sortedcontainers==2.4.0 (the source's own eval environment provides it) compiled to a hash lock. The reference completions stay private provenance, never judge gold; the test split (228 rows) stays held out as shipped. This v2 conversion supersedes the v1 binding of the boilerplate prompt field, which the fresh SAMPLE rejected. The conversion turned 2,641 input rows into 2,639 unique tasks with the 2 typed exclusions and zero within-source duplicates; standard lexical retention removed zero rows. Canonical static retention covers all 2,639 current-pin tasks under the no-oracle policy, executability unmeasured. Fresh seed-zero V4 SAMPLE reviewed 97/100 with 15 issues and 3 unavailable (within the 5% bound); Result some_issues; findings remain verbatim and quality never vetoes admission. The content survey measured ten neighbors, all DISTINCT. The canonical consumer-runtime check at b9373278 is advisory: bespoke failures 0/2639; global schema rejections 2639/2639, paths {'integrity_contract': 2639} (the Formatting-precedent advisory class). This records loader and launch binding, not live grader execution. Evidence: s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/leetcode-dataset/2026.11.27.1/final-pin-sample-v2c/result.json, s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/leetcode-dataset/2026.11.27.1/admission-evidence-v2c/result.json and s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/leetcode-dataset/2026.11.27.1/consumer-binding-v2c/result.json.",
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,

@@ -27,6 +27,7 @@ from experiments.post_training.task_curation.datasets import (
     freeform_formatting_admitted,
     hierarchy_intake,
     inverse_ifeval_admitted,
+    leetcode_dataset_admitted,
     native_releases,
     nemo_mcqa,
     nemo_structured,
@@ -260,6 +261,7 @@ PENDING_MEASUREMENT_SOURCES = (
     *citation_formatting_admitted.sources(),
     *big_math_admitted.sources(),
     *acecode_89k_admitted.sources(),
+    *leetcode_dataset_admitted.sources(),
     *(
         source
         for source in campaign_releases.sources()
@@ -352,6 +354,7 @@ def configured_sources() -> list[RlDataSource]:
         *citation_formatting_admitted.sources(),
         *big_math_admitted.sources(),
         *acecode_89k_admitted.sources(),
+        *leetcode_dataset_admitted.sources(),
         *nemotron_ultra_renames_admitted.sources(),
         *workplace.sources(),
         *nemo_mcqa.sources(),

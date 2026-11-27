@@ -1,6 +1,6 @@
 {
-  "path": "experiments/post_training/task_curation/datasets/within_source_dedup_big_math_20261127_b_v1.json",
   "repo": "open-athena/marin-rl-data-atlas-registry",
-  "revision": "88a3f973405c0c1b253b96f9f854cc66b1804f07",
-  "sha256": "c2e804b401c2c9f2b8be55d68e8dc6345c8b258525a0ac7132614afe239232f4"
+  "revision": "4659988bac0b3aeffb642640164a24758c69c98a",
+  "path": "experiments/post_training/task_curation/datasets/within_source_dedup_leetcode_20261127_b_v2.json",
+  "sha256": "0c18c59543d425104b18e8b673487cc01869d3fd49b934edd4a85184f34c6b0c"
 }
