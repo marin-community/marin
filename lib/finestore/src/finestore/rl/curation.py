@@ -195,6 +195,7 @@ class SourceOrigin(StrEnum):
     TASKTROVE = "TaskTrove"
     TEVATRON = "Tevatron"
     TERMINALWORLD = "TerminalWorld"
+    OPEN_REASONER_ZERO = "Open-Reasoner-Zero"
     AGENTICA_ORG = "agentica-org"
     CYBENCH = "CyBench"
     DI_ZHANG_FDU = "di-zhang-fdu"
