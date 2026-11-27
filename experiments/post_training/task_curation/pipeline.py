@@ -102,6 +102,7 @@ CURATION_VERSION = "2026.10.12.1"
 QUICK_VERSION = "2026.10.14.1"
 URL_CHUNK_BYTES = 1024 * 1024
 URL_TIMEOUT = 60
+WEB_SCHEMES = frozenset({"http", "https"})
 IMAGE_MACHINE_CPUS = 4
 INPUT_OVERRIDES_REVISION = "2"
 
@@ -703,14 +704,15 @@ def download_identity(source: RecipeSource) -> dict[str, Any]:
 
 
 def download_hosts(recipe: CurationRecipe) -> tuple[str, ...]:
-    """Hosts to grant in addition to Iris's default Hugging Face access."""
+    """Web hosts to grant in addition to Iris's default Hugging Face access; object storage needs no egress rule."""
     hosts: set[str] = set()
     for source in (recipe.source, *recipe.inputs.values()):
         if isinstance(source, HarborHubSource):
             hosts.add(REGISTRY_HOST)
         elif isinstance(source, UrlSource | HarborArchiveSource):
-            if host := urlsplit(source.url).hostname:
-                hosts.add(host)
+            url = urlsplit(source.url)
+            if url.scheme in WEB_SCHEMES and url.hostname:
+                hosts.add(url.hostname)
     return tuple(sorted(hosts))
 
 
