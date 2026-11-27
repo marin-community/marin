@@ -13,13 +13,14 @@ import tempfile
 import time
 from pathlib import Path
 
+import grpc
 import haliax as hax
 import httpx
 import jax
 import jax.numpy as jnp
 import jmp
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
-from levanter.inference import inference_pb2
+from levanter.inference import inference_pb2, inference_pb2_grpc
 from levanter.inference.engine import Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
@@ -44,16 +45,17 @@ from experiments.evaluation.knotmeter.workload import check_native_cache, restor
 
 logger = logging.getLogger(__name__)
 
+_PROBE_TIMEOUT = 180.0
+
 
 def _request(tokens: list[int], request_id: int, generated: int) -> Request:
     params = dataclasses.replace(SeqDecodingParams.default(), max_num_tokens=jnp.int32(len(tokens) + generated))
     return Request(tokens, request_id, params, n_generations=1)
 
 
-def _warmup(server: InferenceServer, capture_routes: bool) -> None:
+def _warmup(server: InferenceServer, capture_routes: bool, filler: int) -> None:
     ctx = server.inference_context
     config = ctx.engine.config
-    filler = ctx.tokenizer.encode(" example", add_special_tokens=False)[0]
     with ctx.model_lock, ctx.config.trainer.use_device_mesh(), hax.axis_mapping(ctx.config.trainer.compute_axis_mapping):
         ctx.engine.generate([_request([filler], 0, 2)], capture_routes=capture_routes)
         for index, lower in enumerate(config.prefill_bucket_sizes):
@@ -81,7 +83,7 @@ def _check_chat_stream(server_url: str, model: str, capture_routes: bool) -> Non
     }
     completed = False
     captured_routes = False
-    with httpx.stream("POST", f"{server_url}/v1/chat/completions", json=request, timeout=180.0) as response:
+    with httpx.stream("POST", f"{server_url}/v1/chat/completions", json=request, timeout=_PROBE_TIMEOUT) as response:
         response.raise_for_status()
         for line in response.iter_lines():
             if not line.startswith("data: "):
@@ -97,6 +99,20 @@ def _check_chat_stream(server_url: str, model: str, capture_routes: bool) -> Non
     if not completed or (capture_routes and not captured_routes):
         raise RuntimeError("Native chat preflight did not complete its requested stream")
     logger.info("Native chat stream completed with route capture %s", capture_routes)
+
+
+def _check_grpc_context_limit(server: InferenceServer, token: int, max_context: int) -> None:
+    prompt = [token] * (max_context - 1)
+    request = inference_pb2.GenerateRequest(prompt_token_ids=prompt, max_new_tokens=1, temperature=0)
+    with grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel:
+        response = inference_pb2_grpc.InferenceStub(channel).Generate(request, timeout=_PROBE_TIMEOUT)
+    if (
+        list(response.prompt_token_ids) != prompt
+        or len(response.choices) != 1
+        or len(response.choices[0].token_ids) != 1
+    ):
+        raise RuntimeError("Native gRPC generation did not round-trip the context-boundary request")
+    logger.info("Native gRPC generation completed with %d prompt tokens and one output token", len(prompt))
 
 
 def main() -> None:
@@ -133,6 +149,8 @@ def main() -> None:
         service=config,
         batch_timeout=AGENTX_BATCH_TIMEOUT,
         initial_policy_id=args.weights,
+        host="127.0.0.1",
+        grpc_port=0,
     )
     with tempfile.TemporaryDirectory(prefix="snowball-agentx-") as directory:
         bundle = Path(directory) / "bundle"
@@ -154,7 +172,8 @@ def main() -> None:
         logger.info("Loaded Snowball and KV in %.1f seconds", time.monotonic() - started)
         try:
             warmup_started = time.monotonic()
-            _warmup(server, args.capture_routes)
+            filler = tokenizer.encode(" example", add_special_tokens=False)[0]
+            _warmup(server, args.capture_routes, filler)
             with bind_serving_socket("127.0.0.1", 0) as sock:
                 server_url = f"http://127.0.0.1:{sock.getsockname()[1]}"
                 command = benchmark_command(series, args.concurrency, server_url, output / "aiperf_artifacts")
@@ -185,6 +204,7 @@ def main() -> None:
                         timeout=series["warmup_grace_period"] + series["duration"] + 300,
                         sample=output / "client-load.jsonl",
                     )
+                    _check_grpc_context_limit(server, filler, config.max_seq_len)
                 profile = json.loads((output / PROFILE_EXPORT_RELATIVE_PATH).read_text())
                 if profile.get("was_cancelled") or profile.get("request_count", {}).get("avg", 0) == 0:
                     raise RuntimeError("AgentX reported no completed timed requests")
