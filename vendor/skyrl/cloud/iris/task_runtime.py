@@ -102,7 +102,7 @@ from marinskyrl.process_diagnostics import (
     write_process_outcome,
 )
 from cloud.iris.paths import resolve_repo_path
-from cloud.iris.ray_ports import RayPort, resolve_ray_ports
+from cloud.iris.ray_ports import RAY_WORKER_PORTS, RayPort, resolve_ray_ports
 from cloud.iris.role_topology import RoleTopology, audit_role_nodes, node_physical_labels, probe_fabric_info
 from cloud.iris.ray_storage import (
     RaySpillBackend,
@@ -2351,7 +2351,6 @@ def main() -> None:
             else policy_local_path or policy_chat_template_model(args.prestage_model, args.model_local_path)
         )
         apply_policy_chat_template(model_path, args.policy_chat_template)
-    ports = resolve_ray_ports()
     rank = _rank()
     trainer = launch_config.skyrl.get("trainer", {})
     debug_mode = DebugMode(str(trainer.get("debug_mode", DebugMode.LIGHT.value)))
@@ -2362,9 +2361,11 @@ def main() -> None:
             policy_tokenizer=policy_tokenizer,
             draft_model=draft_model,
         )
-        exit_code = run_head(args, final_config_path, derived_gloo_ifname, ports=ports, debug_mode=debug_mode)
+        exit_code = run_head(
+            args, final_config_path, derived_gloo_ifname, ports=resolve_ray_ports(), debug_mode=debug_mode
+        )
     else:
-        exit_code = run_worker(args, ports=ports, debug_mode=debug_mode)
+        exit_code = run_worker(args, ports=resolve_ray_ports(RAY_WORKER_PORTS), debug_mode=debug_mode)
     if exit_code != 0:
         sys.exit(exit_code)
 

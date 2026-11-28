@@ -41,7 +41,6 @@ from dataclasses import dataclass, field
 import httpx
 import shellsim
 import uvicorn
-from rigging.port_lease import configured_tcp_port
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -273,10 +272,8 @@ def build_dashboard_app(
     return app
 
 
-def bind_serving_socket(host: str, port: int = 0, *, name: str | None = None) -> socket.socket:
-    """Bind a socket before starting the server, honoring a named allocation."""
-    if name is not None:
-        port = configured_tcp_port(name) or port
+def bind_serving_socket(host: str, port: int = 0) -> socket.socket:
+    """Bind a socket before starting the server."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

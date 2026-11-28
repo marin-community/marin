@@ -206,8 +206,7 @@ def _publish_rendezvous(
 ) -> int:
     """Register the rendezvous and return the first port of its leased block."""
     port = leases.enter_context(lease_tcp_port_block(port_count))
-    endpoint_id = registry.register(endpoint_name, f"{host}:{port}", access=access)
-    leases.callback(registry.unregister, endpoint_id)
+    leases.enter_context(registry.registered(endpoint_name, f"{host}:{port}", access=access))
     logger.info("Registered rendezvous %s at %s:%d", endpoint_name, host, port)
     return port
 

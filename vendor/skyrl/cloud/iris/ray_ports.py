@@ -3,6 +3,7 @@
 
 """Ray endpoints allocated by Iris for each task on a shared host."""
 
+from collections.abc import Iterable
 from enum import StrEnum
 
 from rigging.port_lease import allocate_tcp_port, configured_tcp_port
@@ -20,9 +21,12 @@ class RayPort(StrEnum):
     OBJECT_MANAGER = "ray_object_manager"
 
 
-def resolve_ray_ports() -> dict[RayPort, int]:
-    """Return the task's Ray endpoint ports and claim unassigned ports until exit."""
-    ports = {port: configured_tcp_port(port) for port in RayPort}
+RAY_WORKER_PORTS = tuple(port for port in RayPort if port not in (RayPort.HEAD, RayPort.DASHBOARD, RayPort.CLIENT))
+
+
+def resolve_ray_ports(names: Iterable[RayPort] = RayPort) -> dict[RayPort, int]:
+    """Resolve the requested Ray endpoints, claiming unassigned ports until exit."""
+    ports = {port: configured_tcp_port(port) for port in names}
     assigned = {port for port in ports.values() if port}
     for port, value in ports.items():
         if not value:

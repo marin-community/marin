@@ -269,7 +269,7 @@ class DistributedTorchRayActor:
     def get_master_addr_port(self):
         return self._master_addr, self._master_port
 
-    def release_master_port(self):
+    def release_master_port_lease(self):
         self._master_port_lease.close()
 
 
@@ -682,7 +682,7 @@ class PPORayActorGroup:
         # Initialize process group
         logger.info("Initializing process group for RayActorGroup")
         ray.get([actor.init_worker_process_group.remote(master_addr, master_port) for actor in self._actor_handlers])
-        ray.get(master_actor.release_master_port.remote())
+        ray.get(master_actor.release_master_port_lease.remote())
         logger.info("Initialized process group for RayActorGroup")
         self.actor_infos = [ActorInfo(actor, ray.get(actor.get_mesh_rank.remote())) for actor in self._actor_handlers]
         logger.info(f"Mesh Ranks: {[actor_info.rank for actor_info in self.actor_infos]}")

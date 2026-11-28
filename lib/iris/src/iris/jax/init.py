@@ -46,12 +46,13 @@ _JAX_DIST_HEARTBEAT_TIMEOUT = 100
 # Rank 0 can spend up to 60 seconds in tracker teardown before joining peers.
 # Leave the same margin again while bounding a rank stuck below Python.
 _JAX_DIST_SHUTDOWN_TIMEOUT = 120
+_JAX_PORT_NAME = "jax"
 
 
 _JAX_ENV_KEYS = (
     "IRIS_TASK_ID",
     "IRIS_NUM_TASKS",
-    port_env_var("jax"),
+    port_env_var(_JAX_PORT_NAME),
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
     IRIS_MULTIGPU_PROCESS_INDEX_ENV,
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
@@ -197,7 +198,7 @@ def _initialize_supervised_jax(
         raise RuntimeError("multi-process JAX initialization requires an Iris job context")
 
     if proc_index == 0:
-        resolved_port = allocate_tcp_port(port or 0, name="jax")
+        resolved_port = allocate_tcp_port(port or 0, name=_JAX_PORT_NAME)
         coordinator = _register_coordinator(
             job_info, resolved_port, _attempt_endpoint_name(endpoint_name, job_info.attempt_id)
         )
@@ -308,7 +309,7 @@ def initialize_jax(
 
     task_index = job_info.task_index
     if job_info.num_tasks <= 1:
-        resolved_port = allocate_tcp_port(port or 0, name="jax")
+        resolved_port = allocate_tcp_port(port or 0, name=_JAX_PORT_NAME)
         jax.distributed.initialize(
             f"{job_info.advertise_host}:{resolved_port}",
             num_processes=1,
@@ -318,7 +319,7 @@ def initialize_jax(
         return
 
     if task_index == 0:
-        resolved_port = allocate_tcp_port(port or 0, name="jax")
+        resolved_port = allocate_tcp_port(port or 0, name=_JAX_PORT_NAME)
         # Initialization blocks until peers connect, so publish the address first.
         coordinator = _register_coordinator(job_info, resolved_port, endpoint_name)
     else:
