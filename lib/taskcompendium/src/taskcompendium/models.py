@@ -1132,8 +1132,15 @@ class TaskSpec(BaseModel):
         return current
 
     def __eq__(self, other: object) -> bool:
-        # Validation caches do not change the semantic equality of task models.
-        return isinstance(other, TaskSpec) and type(self) is type(other) and self.__dict__ == other.__dict__
+        # Validation caches do not change the semantic equality of task models: a
+        # task validated from an upgraded payload equals one validated from the
+        # re-serialized form when their fields match.
+        if not isinstance(other, TaskSpec) or type(self) is not type(other):
+            return False
+        cache = ("_source_json", "_validated_model_json")
+        mine = {key: value for key, value in self.__dict__.items() if key not in cache}
+        theirs = {key: value for key, value in other.__dict__.items() if key not in cache}
+        return mine == theirs
 
     id: str
     context: ConversationInput
