@@ -19,7 +19,7 @@ from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
-from shellbox.backends.qemu.bundle import IMAGE_METADATA_FILE
+from shellbox.backends.qemu.bundle import IMAGE_METADATA_FILE, QEMU_GUEST_ARCHITECTURE
 from shellbox.backends.qemu.image import QemuAssets, load_qemu_bundle, stage_qemu_image
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage, process_image_cache
 from shellbox.machine import (
@@ -482,7 +482,11 @@ class QemuMachine:
 
 
 class QemuMachineFactory:
-    """Create a private microvm from a bundle or OCI image source."""
+    """Create a private microvm from a bundle or OCI image source.
+
+    Guests are linux/amd64 only (``QEMU_GUEST_ARCHITECTURE``); an image of another architecture
+    fails during preparation. Only amd64 hosts are tested; elsewhere the guest would need TCG emulation.
+    """
 
     backend: Backend = Backend.QEMU
 
@@ -540,7 +544,7 @@ class QemuMachineFactory:
         if isinstance(source, (RegistryImage, DockerfileSource)):
             assert self.image_cache is not None
             cache = process_image_cache(self.image_cache, self.authfile, self.policy)
-            source = await asyncio.to_thread(cache.prepare, source)
+            source = await asyncio.to_thread(cache.prepare, source, QEMU_GUEST_ARCHITECTURE)
         if isinstance(source, PreparedImage):
             assert self.assets is not None and self.bundle_cache is not None
             path = await asyncio.to_thread(stage_qemu_image, source, self.assets, self.bundle_cache)

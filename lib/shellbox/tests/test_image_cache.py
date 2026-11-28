@@ -15,7 +15,20 @@ from pathlib import Path
 import pytest
 from shellbox.backends.local.images import prepare_local_image
 from shellbox.backends.qemu.image import QemuAssets, stage_qemu_image
-from shellbox.image import DockerfileSource, ImageCache, PreparedImage, RegistryImage, prepared_image_workdir
+from shellbox.image import (
+    DockerfileSource,
+    ImageArchitecture,
+    ImageArchitectureMismatch,
+    ImageCache,
+    PreparedImage,
+    RegistryImage,
+    host_architecture,
+    prepared_image_config,
+    prepared_image_workdir,
+)
+
+HOST = host_architecture()
+OTHER = ImageArchitecture.ARM64 if HOST is ImageArchitecture.AMD64 else ImageArchitecture.AMD64
 
 
 @pytest.mark.parametrize("working_directory,expected", [("/task workspace", "/task workspace"), ("", "/")])
@@ -76,8 +89,8 @@ def test_local_image_unpack_applies_layers_and_keeps_each_member_private(tmp_pat
     umoci = shutil.which("umoci")
     if umoci is None:
         pytest.skip("OCI preparation requires umoci; the Shellbox CI lane installs it")
-    first = prepare_local_image(layered_oci_image, tmp_path / "first", umoci=Path(umoci))
-    second = prepare_local_image(layered_oci_image, tmp_path / "second", umoci=Path(umoci))
+    first = prepare_local_image(layered_oci_image, tmp_path / "first", umoci=Path(umoci), architecture=HOST)
+    second = prepare_local_image(layered_oci_image, tmp_path / "second", umoci=Path(umoci), architecture=HOST)
     assert (first.root / "data/payload").read_bytes() == b"original"
     assert not (first.root / "data/deleted").exists()
     (first.root / "data/payload").write_bytes(b"changed")
@@ -106,7 +119,7 @@ def test_local_image_rejects_changed_or_invalid_identity_before_unpack(tmp_path,
         (image.layout / "index.json").write_text(json.dumps(index))
     destination = tmp_path / "unpacked"
     with pytest.raises(ValueError):
-        prepare_local_image(image, destination, umoci=tmp_path / "must-not-run")
+        prepare_local_image(image, destination, umoci=tmp_path / "must-not-run", architecture=HOST)
     assert not destination.exists()
 
 
@@ -121,7 +134,7 @@ def test_pinned_registry_image_reuses_verified_local_layout_offline(tmp_path, la
 
     monkeypatch.setattr(subprocess, "run", unavailable)
     source = RegistryImage(f"registry.invalid/task@{image.manifest_digest}")
-    prepared = ImageCache(cache_dir).prepare(source)
+    prepared = ImageCache(cache_dir).prepare(source, HOST)
     assert prepared.manifest_digest == image.manifest_digest
     assert prepared.layout == destination
     assert prepared_image_workdir(prepared) == "/data"
@@ -137,7 +150,7 @@ def test_pinned_registry_cache_rejects_corruption(tmp_path, layered_oci_image, m
     cache = ImageCache(cache_dir)
     source = RegistryImage(f"registry.invalid/task@{image.manifest_digest}")
     if already_loaded:
-        cache.prepare(source)
+        cache.prepare(source, HOST)
     manifest = json.loads((destination / "blobs/sha256" / image.manifest_digest.split(":")[1]).read_bytes())
     if tampering == "tag":
         index = json.loads((destination / "index.json").read_text())
@@ -152,7 +165,7 @@ def test_pinned_registry_cache_rejects_corruption(tmp_path, layered_oci_image, m
 
     monkeypatch.setattr(subprocess, "run", unavailable)
     with pytest.raises(ValueError):
-        cache.prepare(source)
+        cache.prepare(source, HOST)
 
 
 def test_pinned_registry_cache_still_requires_configured_signature_verification(
@@ -169,21 +182,56 @@ def test_pinned_registry_cache_still_requires_configured_signature_verification(
 
     monkeypatch.setattr(subprocess, "run", rejected)
     with pytest.raises(RuntimeError, match="signature verification rejected"):
-        ImageCache(cache_dir, policy=policy).prepare(RegistryImage(f"registry.invalid/task@{image.manifest_digest}"))
+        ImageCache(cache_dir, policy=policy).prepare(
+            RegistryImage(f"registry.invalid/task@{image.manifest_digest}"), HOST
+        )
 
 
-def test_registry_index_pin_can_resolve_platform_manifest_online(tmp_path, layered_oci_image, monkeypatch):
-    image = layered_oci_image
+def test_registry_index_pin_prepares_each_architecture_separately(tmp_path, oci_image, monkeypatch):
+    platforms = {
+        architecture: oci_image((b"",), {"WorkingDir": f"/{architecture}"}, architecture)
+        for architecture in ImageArchitecture
+    }
 
     def copy(args, **_kwargs):
-        destination = Path(args[-1].removeprefix("oci:").removesuffix(":image"))
-        shutil.copytree(image.layout, destination)
+        # Skopeo resolves an index to the manifest of the architecture it is told to select.
+        selected = platforms[ImageArchitecture(args[args.index("--override-arch") + 1])]
+        shutil.copytree(selected.layout, Path(args[-1].removeprefix("oci:").removesuffix(":image")))
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", copy)
-    prepared = ImageCache(tmp_path / "cache").prepare(RegistryImage(f"registry.invalid/task@sha256:{'0' * 64}"))
-    assert prepared.manifest_digest == image.manifest_digest
-    assert prepared_image_workdir(prepared) == "/data"
+    source = RegistryImage(f"registry.invalid/task@sha256:{'0' * 64}")
+    for architecture in ImageArchitecture:
+        prepared = ImageCache(tmp_path / "cache").prepare(source, architecture)
+        assert prepared.manifest_digest == platforms[architecture].manifest_digest
+        assert prepared_image_config(prepared)["architecture"] == architecture
+        assert prepared_image_workdir(prepared) == f"/{architecture}"
+
+    def unavailable(*_args, **_kwargs):
+        pytest.fail("A later process must reuse the index pin's cached selection offline")
+
+    monkeypatch.setattr(subprocess, "run", unavailable)
+    for architecture in ImageArchitecture:
+        reused = ImageCache(tmp_path / "cache").prepare(source, architecture)
+        assert reused.manifest_digest == platforms[architecture].manifest_digest
+
+
+def test_single_platform_image_of_another_architecture_fails_before_use(tmp_path, oci_image, monkeypatch):
+    foreign = oci_image((b"",), {}, OTHER)
+    cache_dir = tmp_path / "cache"
+    shutil.copytree(foreign.layout, cache_dir / foreign.manifest_digest.replace(":", "-"))
+
+    def unavailable(*_args, **_kwargs):
+        pytest.fail("A cached image of another architecture must fail without external tools")
+
+    monkeypatch.setattr(subprocess, "run", unavailable)
+    reference = f"registry.invalid/task@{foreign.manifest_digest}"
+    with pytest.raises(ImageArchitectureMismatch, match=f"{reference} is linux/{OTHER}.*only linux/{HOST}"):
+        ImageCache(cache_dir).prepare(RegistryImage(reference), HOST)
+    destination = tmp_path / "unpacked"
+    with pytest.raises(ImageArchitectureMismatch):
+        prepare_local_image(foreign, destination, umoci=tmp_path / "must-not-run", architecture=HOST)
+    assert not destination.exists()
 
 
 def test_identical_contexts_share_a_build_and_content_changes_rebuild(tmp_path, monkeypatch):
@@ -242,9 +290,9 @@ def test_identical_contexts_share_a_build_and_content_changes_rebuild(tmp_path, 
 
     monkeypatch.setattr(subprocess, "run", run)
     cache = ImageCache(tmp_path / "cache")
-    first = cache.prepare(DockerfileSource(contexts[0], contexts[0] / "Dockerfile"))
+    first = cache.prepare(DockerfileSource(contexts[0], contexts[0] / "Dockerfile"), ImageArchitecture.AMD64)
     shutil.rmtree(contexts[0])
-    second = cache.prepare(DockerfileSource(contexts[1], contexts[1] / "Dockerfile"))
+    second = cache.prepare(DockerfileSource(contexts[1], contexts[1] / "Dockerfile"), ImageArchitecture.AMD64)
     assert builds == [b"first"]
     assert first.manifest_digest == second.manifest_digest
     assets_dir = tmp_path / "assets"
@@ -277,6 +325,6 @@ def test_identical_contexts_share_a_build_and_content_changes_rebuild(tmp_path, 
     config_path.write_bytes(original_config)
     assert metadata["dockerfile_sha256"] == hashlib.sha256((contexts[1] / "Dockerfile").read_bytes()).hexdigest()
     (contexts[1] / "payload").write_bytes(b"changed")
-    changed = cache.prepare(DockerfileSource(contexts[1], contexts[1] / "Dockerfile"))
+    changed = cache.prepare(DockerfileSource(contexts[1], contexts[1] / "Dockerfile"), ImageArchitecture.AMD64)
     assert builds == [b"first", b"changed"]
     assert changed.manifest_digest != first.manifest_digest

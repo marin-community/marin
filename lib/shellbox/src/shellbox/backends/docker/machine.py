@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from shellbox.image import DockerfileSource, RegistryImage
+from shellbox.image import DockerfileSource, ImageArchitecture, RegistryImage
 from shellbox.machine import (
     LINUX_PROCESS_CAPABILITIES,
     Backend,
@@ -34,7 +34,8 @@ from shellbox.process_session import (
 )
 
 logger = logging.getLogger(__name__)
-IMAGE_PLATFORM = "linux/amd64"
+IMAGE_PLATFORM = ImageArchitecture.AMD64.platform
+"""Docker trials pull and build amd64 images; an arm64 Docker host needs amd64 emulation (binfmt) registered."""
 
 # The parent waits so setsid is not a process-group leader and cannot detach.
 # Keep stdin available because non-interactive shells redirect background jobs to /dev/null.

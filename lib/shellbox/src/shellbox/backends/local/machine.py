@@ -34,7 +34,7 @@ from shellbox.backends.local.cgroup import MachineCgroup, check_cgroup_parent, d
 from shellbox.backends.local.images import PreparedLocalImage, prepare_local_image
 from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
 from shellbox.backends.local.transfers import unpack_local_archive
-from shellbox.image import PreparedImage, RegistryImage, process_image_cache
+from shellbox.image import PreparedImage, RegistryImage, host_architecture, process_image_cache
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     LINUX_PROCESS_CAPABILITIES,
@@ -1189,9 +1189,11 @@ class LocalMachineFactory:
     when none can.
 
     Prepared images use private rootless umoci bundles, without host program mounts. Registry inputs
-    must be digest pinned. Only numeric root image users are supported. ``ttl`` bounds the lifetime of
-    a task. With delegated cgroups, command interruption preserves the task;
-    without delegation it closes every container in the task.
+    must be digest pinned. Bubblewrap is not a virtual machine: images run natively, so the factory
+    prepares them for the host's architecture. A registry index selects that architecture's manifest;
+    an image of another architecture fails before it is unpacked. Only numeric root image users are
+    supported. ``ttl`` bounds the lifetime of a task. With delegated cgroups, command interruption
+    preserves the task; without delegation it closes every container in the task.
     """
 
     backend: Backend = Backend.LOCAL
@@ -1213,6 +1215,7 @@ class LocalMachineFactory:
         umoci: Path = Path("umoci"),
         cgroup_parent: Path | None = None,
     ):
+        self.image_architecture = host_architecture()
         if ttl is not None and ttl <= 0:
             raise ValueError("Local machine TTL must be positive")
         self.ttl = ttl
@@ -1393,9 +1396,11 @@ class LocalMachineFactory:
             prepared = (
                 source
                 if isinstance(source, PreparedImage)
-                else await asyncio.to_thread(self.image_cache.prepare, source)
+                else await asyncio.to_thread(self.image_cache.prepare, source, self.image_architecture)
             )
-            return await asyncio.to_thread(prepare_local_image, prepared, bundle, umoci=self.umoci)
+            return await asyncio.to_thread(
+                prepare_local_image, prepared, bundle, umoci=self.umoci, architecture=self.image_architecture
+            )
 
         preparation = asyncio.create_task(prepare())
         try:

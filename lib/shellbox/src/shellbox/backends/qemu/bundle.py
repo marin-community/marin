@@ -14,7 +14,11 @@ import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath
 
+from shellbox.image import ImageArchitecture, check_image_architecture
+
 IMAGE_METADATA_FILE = "image.json"
+QEMU_GUEST_ARCHITECTURE = ImageArchitecture.AMD64
+"""The only guest architecture: bundles carry ``qemu-system-x86_64`` and an amd64 kernel on any host."""
 IMAGE_REFERENCE_KEY = "image_reference"
 
 
@@ -135,8 +139,7 @@ def _oci_disk(
         manifest = json.loads((oci_layout / "blobs" / algorithm / manifest_hash).read_text())
         config_algorithm, config_hash = manifest["config"]["digest"].split(":", 1)
         image_config = json.loads((oci_layout / "blobs" / config_algorithm / config_hash).read_text())
-        if image_config["os"] != "linux" or image_config["architecture"] != "amd64":
-            raise ValueError("QEMU guest requires a Linux amd64 OCI image")
+        check_image_architecture(image_config, QEMU_GUEST_ARCHITECTURE, image_reference or str(oci_layout))
         owners = _layer_owners(oci_layout, manifest["layers"])
         root = bundle / "rootfs"
         if (root / "harbor").exists() or not (root / "bin/sh").exists():

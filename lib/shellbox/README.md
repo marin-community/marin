@@ -33,6 +33,20 @@ Shared contracts and OCI image preparation live at the package root. Backend mac
 | Iris | Registry image reference | `ALLOW`: public internet only; `DENY`: DNS only on Kubernetes, no network on Docker workers | Iris controller and workers with sandbox profile support |
 | Local | Host programs, Python packages, prepared OCI image or registry reference | allow or deny | Isolated worker with `bwrap` able to create namespaces; OCI images also need `umoci`, registry preparation needs Skopeo |
 
+### Image architecture
+
+Shellbox prepares Linux images only. `ImageArchitecture` names the two it handles, `amd64` and `arm64`, and `host_architecture()` maps the host's machine type to one of them. Each backend runs these architectures:
+
+| Backend | Image architecture |
+| --- | --- |
+| Local | The host's only. Bubblewrap is not a virtual machine and runs image programs natively, so `LocalMachineFactory` prepares every image for the host's architecture. |
+| QEMU | `amd64` only (`QEMU_GUEST_ARCHITECTURE`). Bundles carry `qemu-system-x86_64` and an amd64 kernel. Only amd64 hosts are tested. |
+| Docker, local gVisor | `amd64` (`IMAGE_PLATFORM`) for registry pulls and Dockerfile builds. An arm64 Docker host needs amd64 emulation (binfmt) registered. A local `DockerImage` runs as it is. |
+| Daytona | Whatever Daytona's runners run. Shellbox passes no platform. Our images are amd64. |
+| Iris | The architecture of the worker that runs the sandbox job. Shellbox passes no platform or node constraint. |
+
+`ImageCache.prepare(source, architecture)` and `prepare_image(..., architecture=...)` select `linux/<architecture>`. A reference to a multi-platform index resolves to that architecture's manifest, so one index digest serves hosts of both architectures. A single-platform manifest pins one architecture. Preparing it for another raises `ImageArchitectureMismatch` naming both architectures. A cached layout of another architecture raises the same error before any tool runs, and so does unpacking a `PreparedImage` of another architecture for the local backend. The cache keeps one entry per source and architecture. After an index digest's first preparation, a link in the cache directory records the manifest it selected for each architecture, so later processes reuse the layout without the registry.
+
 The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker
 runtime on the host. The Daytona SDK and current Iris dependencies require
 `--prerelease allow`. A checkout can supply Iris as a workspace dependency.
@@ -381,7 +395,7 @@ machine = await QemuMachineFactory(
 ).create(spec)
 ```
 
-The QEMU factory uses `ImageCache` to prepare each source once per process. Preparation selects `linux/amd64`, copies it to a local OCI layout and caches the layout by its selected manifest digest. Registry references remain snapshots within one process. For a private registry, pass a Skopeo `authfile` path to the factory. The default Skopeo policy accepts unsigned images over verified TLS; pass a Skopeo policy file path as `policy` for signature verification.
+The QEMU factory uses `ImageCache` to prepare each source once per process. Preparation selects `linux/amd64`, the only QEMU guest architecture, copies it to a local OCI layout and caches the layout by its selected manifest digest. Registry references remain snapshots within one process. For a private registry, pass a Skopeo `authfile` path to the factory. The default Skopeo policy accepts unsigned images over verified TLS; pass a Skopeo policy file path as `policy` for signature verification.
 
 For QEMU, `DockerfileSource(context=..., dockerfile=...)` builds with a local Docker daemon and exports the result through Skopeo into the OCI cache. The cache fingerprints the Dockerfile and every path in its build context on each call. An unchanged context builds once per Python process; a changed context triggers a new build. Pin `FROM` by digest for repeatable builds. `QemuMachineFactory` accepts `PreparedImage` and needs `QemuAssets` and a `bundle_cache` to construct a guest bundle. `tests/manual/check_prepared_image.py` compares command output in Docker and QEMU for one registry image. The QEMU bundle cache key includes the prepared image digest, disk size, and caller-supplied `runtime_id`; change `runtime_id` when QEMU, kernel, BusyBox, firmware, or libraries change.
 
@@ -460,7 +474,9 @@ systemd-run --user --unit=shellbox-limits --collect --wait --pipe \
 ```
 
 For an OCI image, pass a `PreparedImage` from `ImageCache.prepare` or a
-`RegistryImage` reference pinned by digest. Trusted host preparation
+`RegistryImage` reference pinned by digest. The image must be built for the
+host's architecture (see [Image architecture](#image-architecture)); pin a
+multi-platform index digest for images that run on both. Trusted host preparation
 resolves the image; `umoci unpack --rootless` then creates a fresh writable root
 for every machine, applying layers and whiteouts. No host program directories
 are mounted into this root. OCI `ENV` becomes the machine environment; use

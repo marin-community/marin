@@ -166,7 +166,7 @@ def local_environment(tmp_path: Path, **kwargs) -> LocalEnvironment:
 def test_local_unsupported_resources_fail_without_allocating_a_sandbox(
     tmp_path, monkeypatch, resources
 ):
-    def acquire(cache, source):
+    def acquire(cache, source, architecture):
         pytest.fail("An unsupported resource request reached image acquisition")
 
     monkeypatch.setattr(ImageCache, "prepare", acquire)
@@ -192,7 +192,7 @@ def test_local_unsupported_resources_fail_without_allocating_a_sandbox(
 def test_local_rejects_ignore_policy_before_allocating_a_sandbox(
     tmp_path, monkeypatch, resource
 ):
-    def acquire(cache, source):
+    def acquire(cache, source, architecture):
         pytest.fail("An ignored resource request reached image acquisition")
 
     monkeypatch.setattr(ImageCache, "prepare", acquire)
@@ -209,7 +209,7 @@ async def test_local_numeric_limits_do_not_bypass_required_containment(
         "shellbox.backends.local.machine.delegated_cgroup_parent", lambda: None
     )
 
-    def acquire(cache, source):
+    def acquire(cache, source, architecture):
         pytest.fail("A worker without containment reached image acquisition")
 
     monkeypatch.setattr(ImageCache, "prepare", acquire)
@@ -239,7 +239,7 @@ def test_local_prepared_services_keep_state_private_and_collect_verifier_logs(
         pytest.skip("The prepared local runtime tests require umoci")
     image = prepared_busybox_image
     image_reference = "offline.test/busybox@" + image.manifest_digest
-    monkeypatch.setattr(ImageCache, "prepare", lambda cache, source: image)
+    monkeypatch.setattr(ImageCache, "prepare", lambda cache, source, architecture: image)
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "host-storage-canary")
     environment_dir = tmp_path / "environment"
     environment_dir.mkdir()
