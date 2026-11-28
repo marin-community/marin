@@ -24,7 +24,6 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import require_secret
 from rigging.timing import Duration
 from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL
-from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 from experiments.evaluation.micro210 import ServingProfileName, micro210_artifact_step, registered_serving_profile
 from experiments.post_training.long_loop.campaign_data import CampaignMix, load_mix, prepare_pools
@@ -42,6 +41,7 @@ from experiments.post_training.long_loop.round_runner import (
     adopted_round_rl,
     load_round,
 )
+from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 REFERENCE = Path(__file__).with_name("campaign") / "mochi131.yaml"
 DEPLOYED_RL_SPEC = Path(__file__).with_name("specs") / "rl.yaml"
