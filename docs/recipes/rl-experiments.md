@@ -17,10 +17,10 @@ The short loop, also called the quick loop, uses gated presets to compare one ch
 | `speed-short` | Generation throughput per GPU | 8 H100s, 512 prompts × four answers. 11m42s and 1.56 H100-hours in the four-proposal comparison. | Separate pass on the EvalLite pool. Gated on throughput and EvalLite pool family mean. | Screen a vLLM wheel, kernel or engine option before testing the full training loop with `speed-medium`. | [Direct GPU comparison](https://github.com/marin-community/marin/pull/11975) |
 | `data-short` | Fraction of prompts with both passing and failing answers | 8 H100s, 256 candidate training prompts × four answers, 10–15 min and about 2 H100-hours | Scores the sampled candidate tasks. Gated on mixed-answer fraction. | Screen a new `--tasks` selection before training on it with `data-medium`. | CPU plan only |
 | `eval-short` | Published model scores | 8 H100s. | Scores the full EvalLite pool without a control comparison. | Evaluate a published checkpoint in a generation-only job. | Ran as written |
-| `speed-medium` | Update time and policy agreement | 40 H100s, 10 updates. 20m12s and 13.47 H100-hours in the four-proposal comparison. | Training metrics on updates 2–10. Gated on speed and mismatch. | Check startup, trainer kernels, parallelism, weight synchronization or numerics. Use `learning-medium` to measure quality after a precision change. | [Direct GPU comparison](https://github.com/marin-community/marin/pull/11975) |
+| `speed-medium` | Update time and policy agreement | 32 H100s, 10 updates. 24 min and 12.9 H100-hours in the Reno comparison. | Training metrics on updates 2–10. Gated on speed and mismatch. | Check startup, trainer kernels, parallelism, weight synchronization or numerics. Use `learning-medium` to measure quality after a precision change. | [Direct GPU comparison](https://github.com/marin-community/marin/pull/12414) |
 | `learning-medium` | EvalLite pool family mean and score gain per GPU-hour | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Gated on EvalLite pool family mean. | Compare objectives, optimizers, sampling, batch shape or initial weights. | CPU plan only |
 | `data-medium` | Learning on a candidate training selection | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Reports scores for the candidate selection. | Train on a `--tasks` selection after it passes the short screen. | CPU plan only |
-| `speed-long` | Sustained asynchronous update time and policy agreement | 40 H100s, 20 updates, 45–75 min and 30–50 H100-hours | Training metrics on updates 3–20. Gated on speed and mismatch. | Measure grading, admission or throughput changes over a longer window. | CPU plan only |
+| `speed-long` | Sustained asynchronous update time and policy agreement | 32 H100s, 20 updates. 32 min and 17.2 H100-hours on Reno. | Training metrics on updates 3–20. Gated on speed and mismatch. | Measure grading, admission or throughput changes over a longer window. | [GPU validation](https://github.com/marin-community/marin/pull/12414) |
 
 ### Long loop
 
@@ -185,11 +185,14 @@ Set `WANDB_API_KEY` before submission. `WANDB_ENTITY` selects the team and defau
 `marin-community`. The `marin-rl` project uses the run-index ID as the run name and group, and the
 native attempt ID as the W&B ID.
 
-For the Snowball presets in the first table, short presets use eight H100s and training
-presets use 40. East is `cw-us-east-02a`. The 40-H100 layout has 32 policy GPUs and eight engine GPUs,
-128 prompts × four answers and a 24,576-token window. Natural replies allow 8,192 tokens.
-These training presets use staleness 2 and TIS. Speed-long has no evaluation,
-checkpoints or export; learner and engine token rates are descriptive telemetry.
+Snowball's short presets use eight H100s. On Reno, `speed-medium` and `speed-long` use
+the `p16-r16` layout, with 16 learner GPUs, Adam state in host memory, two eight-GPU rollout
+engines, and up to 64 concurrent rollout groups. `learning-medium` and `data-medium` use
+`p40`, with 32 learner GPUs and one eight-GPU rollout engine.
+
+Quick-loop training uses 128 prompts × four answers, a 24,576-token context window, a maximum
+staleness of two updates, and truncated importance sampling (TIS). Natural replies allow up to
+8,192 tokens. Speed-long reports learner and engine token rates as descriptive telemetry.
 
 ## Dashboard publication
 
@@ -372,7 +375,7 @@ candidate training tasks with four sampled answers each; it does not evaluate Ev
 Speed-short measures 512 training tasks with four 4,096-token answers before its separate EvalLite pass.
 Learning/data medium evaluate at update 0 and 25; train-long evaluates before training and every ten updates.
 Speed-medium measures update time over updates 2–10, speed-long over 3–20. Their mismatch guard uses the
-selected-token-weighted staleness-0 KL over the measured window. Asynchronous medium runtimes are unmeasured.
+selected-token-weighted staleness-0 KL over the measured window.
 
 Evaluation identity includes stored TaskSpec content and the recorded request. Answers join the manifest
 by task ID and count as scored only after successful verification without an exception or error treatment.
@@ -459,7 +462,6 @@ IDs and TaskSpec digests against the saved per-task results.
 
 | gap | implication and follow-up |
 |---|---|
-| layout-p40-only | calibrated training gates cover the 40-GPU layout; other layouts need qualification |
 | mismatch-is-agreement | mismatch measures policy agreement; exactness claims need an explicit zero-mismatch bound |
 | AAII coverage; no-agentic-tasks | scientific reasoning, coding, General and a single-turn Agents stand-in; multi-turn tools and long context need separate qualification |
 | no-image-sandbox | image-only tasks need a sandbox backend |
@@ -471,8 +473,9 @@ The shared `experiments/post_training/rl.py` builds the CLI and executes a `Mode
 reads a stored run's metrics, scores and invariants. `rl_scoring.py` computes scores from answers,
 and `rl_gate.py` compares a candidate's measurements with indexed controls.
 
-`snowball_rl.py` is Snowball's model entry. Its `SNOWBALL` value contains the presets, the
-`p40` and `e8` layouts, immutable model and task references, and evaluation selections.
+`snowball_rl.py` is Snowball's model entry. Its `SNOWBALL` value contains the presets,
+immutable model and task references, and evaluation selections. Quick-loop presets use
+the `p16-r16`, `p40`, and `e8` layouts.
 The layouts declare GPU type, CPU, memory, disk, priority and both job deadlines; their role plans
 supply the GPU width. Presets declare seed, W&B entity, checkpoint retention and HF export
 independently of dashboard publication. Its `__main__` calls `rl.main(SNOWBALL)`.

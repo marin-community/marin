@@ -62,6 +62,7 @@ DEFAULT_SELECTION_VERSION = "2026.11.25.1"
 DEFAULT_EVAL_LITE_NAME = "eval-lite"
 DEFAULT_EVAL_LITE_VERSION = "2026.11.25.1"
 EVAL_REPLY_TOKENS = 8192
+_RENO_CLUSTER = "cw-rno2a"
 _DEFAULT_TASKS = f"snowball-100k@{DEFAULT_SELECTION_VERSION}"
 _DEFAULT_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
 
@@ -207,6 +208,18 @@ E8 = replace(
     ),
 )
 
+_CPU_OPTIMIZER_OFFLOAD = RecipePatch(
+    trainer=sections.Trainer(
+        policy=sections.Policy(
+            megatron_config=sections.PolicyMegatronConfig(
+                optimizer_config_kwargs=sections.OptimizerConfigKwargs(
+                    optimizer_cpu_offload=True, optimizer_offload_fraction=1.0
+                )
+            )
+        )
+    )
+)
+
 _ASYNC_P40 = Recipe(
     layout=P40,
     fixed_reply_tokens=None,
@@ -228,8 +241,20 @@ _REPORTING_P40 = replace(
 _GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH, training_plan=_P40_PLAN)
 
 # The nightly Iris principal can submit H100 workloads in Reno.
-_RENO_P40 = replace(_ASYNC_P40, layout=replace(P40, cluster="cw-rno2a"))
-_RENO_GENERATING = replace(_GENERATING, layout=replace(E8, cluster=_RENO_P40.layout.cluster))
+_RENO_SPEED_TRAINING = replace(
+    _ASYNC_P40,
+    layout=replace(
+        P40,
+        name="p16-r16",
+        workload=Training(replace(_P40_PLAN, policy_num_nodes=2, num_inference_engines=2)),
+        cluster=_RENO_CLUSTER,
+    ),
+    # At 128 concurrent groups the rollout engines filled future batches before the next policy sync.
+    config=_ASYNC_P40.config.merge(_CPU_OPTIMIZER_OFFLOAD).merge(
+        RecipePatch(trainer=sections.Trainer(rollout_buffer=sections.RolloutBuffer(max_in_flight=64)))
+    ),
+)
+_RENO_GENERATING = replace(_GENERATING, layout=replace(E8, cluster=_RENO_CLUSTER))
 
 _GAPS = ("aaii-coverage", NO_AGENTIC_TASKS, NO_IMAGE_SANDBOX)
 
@@ -267,7 +292,7 @@ _LEARNING_MEDIUM = _snowball(
     checkpoints="best",
     export="best",
     name="learning-medium",
-    recipe=replace(_REPORTING_P40, layout=_RENO_P40.layout),
+    recipe=replace(_REPORTING_P40, layout=replace(P40, cluster=_RENO_CLUSTER)),
     owned_keys=_OWNED_KEYS,
     updates=25,
     measured=range(21, 26),
@@ -342,7 +367,7 @@ _AGENTIC_LAYOUT = replace(
     name="h100x256",
     workload=Training(_AGENTIC_PLAN),
     megatron=replace(P40.megatron, context_parallel_size=5),
-    cluster="cw-rno2a",
+    cluster=_RENO_CLUSTER,
     priority="production",
     # Each job has a 12-hour allocation and resumes from its committed checkpoint.
     job_timeout_seconds=12 * 3600,
@@ -406,21 +431,8 @@ _TRAIN_MEDIUM_TOOLS = shell_tool_preset(
         _TRAIN_LONG.with_updates(10),
         recipe=replace(
             _TRAIN_LONG.recipe,
-            config=_TRAIN_LONG.recipe.config.merge(
-                RecipePatch(
-                    trainer=sections.Trainer(
-                        policy=sections.Policy(
-                            # A full-window trajectory needs the GPU memory for the policy update, so the
-                            # optimizer state stays on the CPU.
-                            megatron_config=sections.PolicyMegatronConfig(
-                                optimizer_config_kwargs=sections.OptimizerConfigKwargs(
-                                    optimizer_cpu_offload=True, optimizer_offload_fraction=1.0
-                                )
-                            )
-                        )
-                    )
-                )
-            ),
+            # Full-window trajectories need GPU memory for the policy update.
+            config=_TRAIN_LONG.recipe.config.merge(_CPU_OPTIMIZER_OFFLOAD),
         ),
         data_settings=frozenset({"shuffle"}),
         checkpoints="none",
@@ -469,9 +481,9 @@ _PRESETS = (
         name="speed-medium",
         checkpoints="none",
         recipe=replace(
-            _RENO_P40,
+            _RENO_SPEED_TRAINING,
             fixed_reply_tokens=4096,
-            config=_RENO_P40.config.merge(
+            config=_RENO_SPEED_TRAINING.config.merge(
                 RecipePatch(
                     trainer=sections.Trainer(algorithm=sections.Algorithm(rloo_n_filter_zero_reward_groups=False))
                 )
@@ -482,21 +494,20 @@ _PRESETS = (
         owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
         guards=_SPEED_GUARDS,
         objectives=_SPEED_OBJECTIVES,
-        gaps=(*_GAPS, "mismatch-is-agreement", "layout-p40-only"),
-        budget="20m12s and 13.5 H100-h in the four-proposal comparison",
+        gaps=(*_GAPS, "mismatch-is-agreement"),
+        budget="24 min; about 13 H100-h",
     ),
     _snowball(
         evaluations=(),
         name="speed-long",
         checkpoints="none",
-        recipe=_RENO_P40,
+        recipe=_RENO_SPEED_TRAINING,
         updates=20,
         measured=range(3, 21),
         owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
         guards=_SPEED_GUARDS,
         objectives=_SPEED_OBJECTIVES,
-        gaps=(*_GAPS, "layout-p40-only"),
-        budget="45-75 min; 30-50 H100-h",
+        budget="32 min; about 17 H100-h",
     ),
     _LEARNING_MEDIUM,
     replace(
