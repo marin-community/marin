@@ -5,13 +5,11 @@
 
 import json
 
-import pytest
 from finestore.rl.licenses import LICENSE_RESOLVER_VERSION, LicenseReceipt
 from huggingface_hub.hf_api import RepoFile
 
 from experiments.post_training.task_curation import license_publication
 from experiments.post_training.task_curation.license_targets import license_evidence
-from infra.marina.apps.rl_data_catalog.server import licensing
 
 DATASET = "fixture/upstream"
 REVISION = "a" * 40
@@ -73,17 +71,3 @@ def package_receipt(wheel: str, wheel_sha: str, metadata: dict) -> LicenseReceip
         bundled_third_party=False,
         model_generated_outputs=False,
     )
-
-
-@pytest.fixture(autouse=True)
-def isolated_rulings(monkeypatch):
-    """Unit tests rule against staged empty rulings; the pinned registry loads only
-    where data-integration runs resolve the committed reference."""
-    monkeypatch.setattr(
-        licensing,
-        "read_registry_json",
-        lambda _reference: {"version": "test", "bans": []},
-    )
-    licensing.license_bans.cache_clear()
-    yield
-    getattr(licensing.license_bans, "cache_clear", lambda: None)()
