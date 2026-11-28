@@ -180,7 +180,8 @@ def _grader_placement(
         # A packaged grader runs in the local bubblewrap runtime. This branch builds its
         # MachineSpec directly instead of through daytona_identity.declared_machine
         # because that module imports the Daytona backend at module level, which this
-        # lock-based path never uses; the workdir default is the shared package workspace.
+        # lock-based path never uses; the workdir default is curation's /app package
+        # workspace, not RL's /workspace.
         machine = MachineSpec(
             source=HostImage(),
             workdir=requirements.working_directory or DEFAULT_WORKSPACE,
