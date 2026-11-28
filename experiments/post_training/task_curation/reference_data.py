@@ -20,16 +20,13 @@ from finestore.rl.registry_reference import RegistryReference, read_registry_byt
 from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 from pydantic import BaseModel, ConfigDict, Field
 
-DataReference = RegistryReference
-"""One pinned document in a reference index; the shape is the registry reference."""
-
 
 class DataReferenceIndex(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     repo: str
     revision: str = Field(pattern=r"^[0-9a-f]{40}$")
-    references: list[DataReference]
+    references: list[RegistryReference]
 
 
 def read_reference_index(path: Path) -> DataReferenceIndex:
@@ -47,19 +44,6 @@ def read_referenced_documents(index_path: Path) -> dict[str, bytes]:
 
 def load_referenced_json(index_path: Path) -> dict[str, Any]:
     return {path: json.loads(data) for path, data in read_referenced_documents(index_path).items()}
-
-
-def read_referenced_document(index_path: Path, path: str) -> bytes:
-    """Download one referenced document by its index path, verifying its bytes."""
-    index = read_reference_index(index_path)
-    reference = next((item for item in index.references if item.path == path), None)
-    if reference is None:
-        raise ValueError(f"Reference index does not list {path}: {index_path}")
-    return read_registry_bytes(reference)
-
-
-def load_referenced_document(index_path: Path, path: str) -> Any:
-    return json.loads(read_referenced_document(index_path, path))
 
 
 def _private_dataset(api: HfApi, repo: str) -> None:
@@ -125,7 +109,7 @@ def commit_reference_documents(
                 raise ValueError(f"Referenced dataset bytes changed: {index.repo}@{commit.oid}:{path}")
         retained = [reference for reference in index.references if reference.path not in documents]
         updated_references = [
-            DataReference(repo=index.repo, revision=commit.oid, path=path, sha256=hashlib.sha256(data).hexdigest())
+            RegistryReference(repo=index.repo, revision=commit.oid, path=path, sha256=hashlib.sha256(data).hexdigest())
             for path, data in sorted(documents.items())
         ]
         updated = DataReferenceIndex(
@@ -136,33 +120,3 @@ def commit_reference_documents(
         index_path.write_text(updated.model_dump_json(indent=2) + "\n")
         return commit.oid
     raise RuntimeError(f"Could not commit to {index.repo} after {max_attempts} attempts") from last_error
-
-
-def create_reference_index(index_path: Path, repo: str, documents: Mapping[str, bytes], *, message: str) -> str:
-    """Seed a fresh reference index: create the private dataset and commit its files."""
-    api = HfApi()
-    api.create_repo(repo_id=repo, repo_type="dataset", private=True, exist_ok=True)
-    _private_dataset(api, repo)
-    commit = api.create_commit(
-        repo_id=repo,
-        repo_type="dataset",
-        commit_message=message,
-        operations=[
-            CommitOperationAdd(path_in_repo=path, path_or_fileobj=data) for path, data in sorted(documents.items())
-        ],
-    )
-    for path, data in documents.items():
-        downloaded = hf_hub_download(repo_id=repo, repo_type="dataset", revision=commit.oid, filename=path)
-        if hashlib.sha256(Path(downloaded).read_bytes()).hexdigest() != hashlib.sha256(data).hexdigest():
-            raise ValueError(f"Referenced dataset bytes changed: {repo}@{commit.oid}:{path}")
-    index = DataReferenceIndex(
-        repo=repo,
-        revision=commit.oid,
-        references=[
-            DataReference(repo=repo, revision=commit.oid, path=path, sha256=hashlib.sha256(data).hexdigest())
-            for path, data in sorted(documents.items())
-        ],
-    )
-    index_path.parent.mkdir(parents=True, exist_ok=True)
-    index_path.write_text(index.model_dump_json(indent=2) + "\n")
-    return commit.oid

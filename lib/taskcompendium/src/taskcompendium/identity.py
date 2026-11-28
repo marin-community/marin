@@ -12,17 +12,6 @@ class TaskDocument(Protocol):
     def source_document(self, *, exclude: frozenset[str] = frozenset()) -> dict[str, Any]: ...
 
 
-def task_spec_json(task: TaskDocument, *, indent: int | None = None) -> str:
-    """Serialize a validated source document without introducing model defaults."""
-    return json.dumps(
-        task.source_document(),
-        indent=indent,
-        separators=(",", ":") if indent is None else None,
-        ensure_ascii=False,
-        allow_nan=False,
-    )
-
-
 def task_spec_sha256(task: TaskDocument) -> str:
     """Hash the stored canonical source document, preserving its schema vintage."""
     return canonical_sha256(task.source_document())

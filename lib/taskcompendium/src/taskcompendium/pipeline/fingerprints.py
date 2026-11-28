@@ -89,8 +89,7 @@ def recipe_code_identity(recipe: SourceRecipe) -> dict[str, str]:
 def semantic_digest(task: TaskSpec, include_reference: bool) -> str:
     """Hash public task semantics, optionally including its private reference."""
     content = task.model_dump(mode="json", exclude={"id": True, "source": True})
-    # Pydantic cannot exclude one key of a plain dict field; drop the reporting
-    # subset after the dump so a task re-filed under another subset keeps its semantics.
+    # The reporting subset is excluded from task identity.
     content.get("labels", {}).pop(SUBSET_LABEL, None)
     # Oracle scripts are executable witnesses, not task semantics.
     content["resources"]["oracle"] = []

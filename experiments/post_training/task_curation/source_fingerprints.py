@@ -23,15 +23,11 @@ from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, format
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.source_fingerprints import (
-    DuplicateGroup,
-    DuplicateReview,
     FingerprintSample,
     PairSimilarity,
     SourceFingerprint,
     SourceLineage,
 )
-
-from infra.marina.apps.rl_data_catalog.server.duplicate_folding import SourceStanding, fold_groups
 
 FINGERPRINT_SEED = 0
 REVIEW_SAMPLE_SIZE = 20
@@ -263,8 +259,3 @@ def candidate_pairs(
         )[:top_k]:
             selected[pair.left, pair.right] = pair
     return [selected[key] for key in sorted(selected, key=lambda pair: tuple(map(original_source_id, pair)))]
-
-
-def duplicate_groups(reviews: list[DuplicateReview], standings: Mapping[str, SourceStanding]) -> list[DuplicateGroup]:
-    """Fold directly measured subsets under their containing source."""
-    return fold_groups(reviews, standings)

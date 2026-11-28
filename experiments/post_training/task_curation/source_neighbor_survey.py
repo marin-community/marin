@@ -30,7 +30,7 @@ from taskcompendium.source_fingerprints import (
 )
 
 from experiments.post_training.task_curation.catalog_identity import canonical_identity_survey, identity_survey_payload
-from experiments.post_training.task_curation.source_fingerprints import SourceStanding, duplicate_groups, pair_similarity
+from experiments.post_training.task_curation.source_fingerprints import pair_similarity
 from experiments.post_training.task_curation.source_population_cache import (
     PopulationLocations,
     cache_population,
@@ -51,6 +51,7 @@ from experiments.post_training.task_curation.task_neighbors import (
     shingles,
     signatures,
 )
+from infra.marina.apps.rl_data_catalog.server.duplicate_folding import SourceStanding, fold_groups
 
 logger = logging.getLogger(__name__)
 
@@ -407,7 +408,7 @@ def rerun(
             row for row in survey.reviews if frozenset((row.similarity.left, row.similarity.right)) not in measured_keys
         )
     standings = {key: SourceStanding(value.task_count) for key, value in fingerprints.items()}
-    groups = duplicate_groups(reviews, standings)
+    groups = fold_groups(reviews, standings)
     folds = [
         {
             member.source_id: group.canonical_source_id
@@ -415,7 +416,7 @@ def rerun(
             for member in group.members
             if member.source_id != group.canonical_source_id
         }
-        for selected in (duplicate_groups(survey.reviews, standings), groups)
+        for selected in (fold_groups(survey.reviews, standings), groups)
     ]
     fold_diff_uri = str(output / "fold-diff.json")
     fold_diff_sha256 = write_json(

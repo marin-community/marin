@@ -25,9 +25,7 @@ from experiments.post_training.task_curation.reference_data import (
     load_referenced_json,
 )
 from experiments.post_training.task_curation.source_fingerprints import (
-    SourceStanding,
     candidate_pairs,
-    duplicate_groups,
     fingerprint_source,
     pair_similarity,
 )
@@ -39,6 +37,7 @@ from experiments.post_training.task_curation.source_population_cache import (
     read_locator_manifest,
 )
 from experiments.post_training.task_curation.task_neighbors import SAMPLE_SIZE, SHINGLE_CACHE_BYTES
+from infra.marina.apps.rl_data_catalog.server.duplicate_folding import SourceStanding, fold_groups
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +169,7 @@ def scan(
         update={
             "generated_at": datetime.now(UTC).isoformat(),
             "reviews": reviews,
-            "groups": duplicate_groups(
+            "groups": fold_groups(
                 reviews,
                 {
                     key: SourceStanding(value.task_count)

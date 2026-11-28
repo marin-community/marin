@@ -15,11 +15,10 @@ from taskcompendium.source_fingerprints import (
 
 from experiments.post_training.task_curation.source_fingerprints import (
     candidate_pairs,
-    duplicate_groups,
     fingerprint_source,
     pair_similarity,
 )
-from infra.marina.apps.rl_data_catalog.server.duplicate_folding import SourceStanding
+from infra.marina.apps.rl_data_catalog.server.duplicate_folding import SourceStanding, fold_groups
 
 
 def document(task_id: str, dataset: str, instruction: str, *, grader: dict | None = None) -> dict:
@@ -158,7 +157,7 @@ def test_duplicate_groups_fold_a_contained_source_under_its_canonical():
         "Small:source": SourceStanding(5),
         "Large:source": SourceStanding(500),
     }
-    groups = duplicate_groups(reviews, standings)
+    groups = fold_groups(reviews, standings)
     assert len(groups) == 1
     group = groups[0]
     assert group.canonical_source_id == "Large:source"
@@ -184,4 +183,4 @@ def test_duplicate_groups_never_fold_on_a_distinct_verdict():
         )
     ]
     standings = {"Small:source": SourceStanding(5), "Large:source": SourceStanding(500)}
-    assert duplicate_groups(reviews, standings) == []
+    assert fold_groups(reviews, standings) == []
