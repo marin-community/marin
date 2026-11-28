@@ -67,3 +67,19 @@ The campaign's `facet-parked-verification-installed.json` identifies both ledger
 and the catalog-specific FACET gate. Make that the final cutover-owned ledger
 write, then launch with the explicit v2 flag. These APIs do not perform the live
 handover, validate the catalog/FACET gate, or stop legacy jobs themselves.
+
+## Grader runtime repairs
+
+TaskCompendium stages the producer's Verifyit source independently of the task's
+frozen environment and records `verifyit_runtime_sha256` in grading diagnostics.
+A released script can therefore require a newer scorer than an older controller
+bundle provides. For a missing scorer or constraint, compare the task's declared
+grader script and parameters against the maintained Verifyit implementation
+before retrying.
+Preserve the original unscored attempt and its runtime digest; deploy repaired
+source through a new controller bundle and keep the source panel pinned.
+
+IFEval's harness language check requires the grader image's optional `langdetect`
+package. Resolve that dependency before entering the per-candidate check loop,
+so a missing package remains grader infrastructure failure. A detector that runs
+but cannot identify the candidate's language fails the constraint normally.

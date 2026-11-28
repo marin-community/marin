@@ -8,6 +8,7 @@ constraint raises ``InvalidTask`` before the candidate is read.
 """
 
 from collections.abc import Mapping, Sequence
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,9 @@ def resolve_checks(
     unknown = sorted({c.name for c in constraints} - set(checks))
     if unknown:
         raise InvalidTask(f"unknown ifeval constraints: {unknown}")
+    if any(c.name == "harness:response_language" for c in constraints):
+        # Dependency failures must escape the per-candidate scoring exception boundary.
+        import_module("langdetect")
     return [(c, checks[c.name]) for c in constraints]
 
 
