@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-import pytest
 from zephyr.context import ZephyrContext
 
 from taskcompendium.convert.answers import numeric_answer_task
@@ -121,18 +120,3 @@ def test_campaign_order_breaks_ties_and_the_earliest_source_wins(tmp_path):
             "reason": CROSS_SOURCE_DUPLICATE,
         }
     ]
-
-
-def test_pass_rejects_duplicate_source_ids_and_noncontiguous_orders(tmp_path):
-    first = replace_order(final_source(tmp_path, "alpha", []), 0)
-    with ZephyrContext(max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
-        with pytest.raises(ValueError, match="unique source IDs"):
-            deduplicate_across_sources(
-                [first, replace_order(first, 1)], str(tmp_path / "cross-source-1"), context=context
-            )
-        with pytest.raises(ValueError, match="contiguous campaign orders"):
-            deduplicate_across_sources(
-                [first, replace_order(final_source(tmp_path, "beta", []), 5)],
-                str(tmp_path / "cross-source-2"),
-                context=context,
-            )

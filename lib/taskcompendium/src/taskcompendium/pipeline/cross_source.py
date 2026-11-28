@@ -129,7 +129,7 @@ def retained_source_rows(source: RetainedSource) -> Iterator[RetainedRow]:
 
 
 def decide_duplicate(_key: str, rows: Iterator[RetainedRow]) -> Iterator[CrossSourceDrop]:
-    """Reduce one contract group to its cross-source drops; groups arrive complete.
+    """Reduce one complete contract group to its drops.
 
     The earliest dedup order wins, ties broken by task ID. The winner stays in
     its own source's ``final/`` view; every later member yields a drop.
@@ -147,7 +147,7 @@ def decide_duplicate(_key: str, rows: Iterator[RetainedRow]) -> Iterator[CrossSo
 
 
 def count_retained_rows(final_path: str) -> int:
-    """The retained row count of one source's ``final/`` view, from parquet metadata."""
+    """Count rows in one source's retained ``final/`` view."""
     total = 0
     for file in _final_files(final_path):
         with StoragePath(file).open("rb") as stream:
@@ -156,7 +156,7 @@ def count_retained_rows(final_path: str) -> int:
 
 
 def write_drop_manifest(path: str, drops: list[CrossSourceDrop]) -> None:
-    """Write one source's cross-source drop manifest; empty sources get an empty file."""
+    """Write one source's cross-source drop manifest; no drops yield an empty file."""
     rows = [drop._asdict() for drop in drops]
     with StoragePath(path).open("wb", auto_mkdir=True) as stream:
         pq.write_table(pa.Table.from_pylist(rows, schema=DROP_SCHEMA), stream, compression="zstd")
@@ -181,9 +181,9 @@ def deduplicate_across_sources(
     if (output / MANIFEST_FILENAME).exists():
         raise FileExistsError(f"Cross-source deduplication output already exists: {output_path}")
 
-    total_rows = sum(count_retained_rows(source.final_path) for source in sources)
+    retained_rows = {source.source_id: count_retained_rows(source.final_path) for source in sources}
+    total_rows = sum(retained_rows.values())
     partitions = min(_MAX_SHARDS, max(1, (total_rows + _ROWS_PER_SHARD - 1) // _ROWS_PER_SHARD))
-    collected: list[CrossSourceDrop] = []
     decisions = execute_phase(
         context,
         Dataset.from_list(list(enumerate(sources)))
@@ -192,15 +192,11 @@ def deduplicate_across_sources(
             key=lambda row: row.key,
             reducer=decide_duplicate,
             num_output_shards=partitions,
-        )
-        .map(lambda drop: drop),
+        ),
         telemetry=telemetry,
         operation="cross-source-dedup",
     ).results
-    for decision in decisions:
-        if not isinstance(decision, CrossSourceDrop):
-            raise ValueError(f"Cross-source dedup returned a non-drop record: {decision!r}")
-        collected.append(decision)
+    collected: list[CrossSourceDrop] = list(decisions)
 
     by_source: dict[str, list[CrossSourceDrop]] = {source.source_id: [] for source in sources}
     for drop in collected:
@@ -212,7 +208,7 @@ def deduplicate_across_sources(
         write_drop_manifest(drop_manifest, source_drops)
         evidence_sources[source.source_id] = SourceCrossSourceEvidence(
             source_id=source.source_id,
-            retained_rows=count_retained_rows(source.final_path),
+            retained_rows=retained_rows[source.source_id],
             cross_source_duplicates=len(source_drops),
             drop_manifest_uri=drop_manifest,
         )
