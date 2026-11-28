@@ -687,6 +687,62 @@ def test_the_next_commit_rewrites_the_manifest_the_previous_holder_published(tmp
     assert manifest.read_text() == "v2"
 
 
+class _HandoffClock:
+    """A fake clock whose every poll sleep lasts ``step`` and passes the lock to a new holder.
+
+    After ``handoffs`` new holders the lock is released. With ``handoffs=None`` it never changes hands.
+    """
+
+    def __init__(self, lock, handoffs: int | None, step: float):
+        self.now = 0.0
+        self._lock = lock
+        self._left = handoffs
+        self._step = step
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        del seconds
+        self.now += self._step
+        if self._left is None:
+            return
+        if self._left == 0:
+            self._lock.unlink()
+            return
+        self._left -= 1
+        handoff = self._lock.with_name("handoff")
+        handoff.write_text(f"holder {self._left}\n")
+        os.replace(handoff, self._lock)
+
+
+def test_a_commit_queued_behind_many_short_holds_waits_past_the_timeout(tmp_path, monkeypatch):
+    timeout = 1.0
+    monkeypatch.setattr(tensorstore_serialization, "_COMMIT_ORDER_TIMEOUT_S", timeout)
+    lock = tmp_path / tensorstore_serialization._COMMIT_ORDER_LOCK_NAME
+    lock.write_text("holder 0\n")
+    clock = _HandoffClock(lock, handoffs=10, step=0.2)
+    monkeypatch.setattr(tensorstore_serialization, "time", clock)
+
+    tensorstore_serialization._CommitOrder(str(tmp_path)).acquire().release()
+
+    assert clock.now > timeout
+
+
+def test_a_commit_times_out_behind_one_hold_longer_than_the_timeout(tmp_path, monkeypatch):
+    timeout = 1.0
+    monkeypatch.setattr(tensorstore_serialization, "_COMMIT_ORDER_TIMEOUT_S", timeout)
+    lock = tmp_path / tensorstore_serialization._COMMIT_ORDER_LOCK_NAME
+    lock.write_text("holder 0\n")
+    clock = _HandoffClock(lock, handoffs=None, step=0.25)
+    monkeypatch.setattr(tensorstore_serialization, "time", clock)
+
+    with pytest.raises(TimeoutError):
+        tensorstore_serialization._CommitOrder(str(tmp_path)).acquire()
+
+    assert clock.now == timeout
+
+
 def test_a_live_remote_writer_keeps_its_lock_file(tmp_path):
     """A lease refreshed by another host means the lock file is still a live commit."""
     lock = tmp_path / "manifest.ocdbt.__lock"

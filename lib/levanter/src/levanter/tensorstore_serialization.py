@@ -59,9 +59,12 @@ _LOCK_FILE_SUFFIX = ".__lock"
 # Orders manifest commits across processes. TensorStore's lock excludes writers but does not
 # refresh another client's cached directory entry, so a commit can rename over a newer manifest.
 _COMMIT_ORDER_LOCK_NAME = ".commit-order.lock"
+# The wait deadline restarts each time the commit-order lock changes hands.
 _COMMIT_ORDER_TIMEOUT_S = 600
 # A live save refreshes this file. The next save removes lock files only after it is gone or stale.
 _WRITER_LEASE_NAME = ".writer-lease"
+# Bounds the total wait to acquire a writer lease.
+_WRITER_LEASE_TIMEOUT = 600
 _WRITER_LEASE_REFRESH_S = 30
 _WRITER_LEASE_STALE_S = 90
 _AT_FDCWD = -100
@@ -430,7 +433,7 @@ class _WriterLease:
         return True
 
     def acquire(self) -> None:
-        deadline = time.monotonic() + _COMMIT_ORDER_TIMEOUT_S
+        deadline = time.monotonic() + _WRITER_LEASE_TIMEOUT
         while not self.try_acquire():
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"Timed out waiting for the checkpoint writer holding {self.path}")
@@ -538,15 +541,31 @@ class _CommitOrder:
         self.directory = directory
         self._path = os.path.join(directory, _COMMIT_ORDER_LOCK_NAME)
 
+    def _holder(self) -> tuple[int, int] | None:
+        """Identifies one hold of the lock: each holder creates a new file."""
+        try:
+            stat = os.stat(self._path)
+        except FileNotFoundError:
+            return None
+        return stat.st_ino, stat.st_mtime_ns
+
     def acquire(self) -> _HeldCommit:
+        holder = self._holder()
         deadline = time.monotonic() + _COMMIT_ORDER_TIMEOUT_S
         while True:
             try:
                 fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
                 break
             except FileExistsError:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError(f"Timed out waiting to commit {self.directory}; {self._path} is still held")
+                current = self._holder()
+                if current != holder:
+                    holder = current
+                    deadline = time.monotonic() + _COMMIT_ORDER_TIMEOUT_S
+                elif time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"Timed out waiting to commit {self.directory}; one commit has held {self._path} "
+                        f"for {_COMMIT_ORDER_TIMEOUT_S} s"
+                    )
                 time.sleep(0.02)
         os.write(fd, f"{socket.gethostname()} {os.getpid()}\n".encode())
         return _HeldCommit(self._path, fd)
