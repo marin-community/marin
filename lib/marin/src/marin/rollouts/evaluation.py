@@ -22,7 +22,7 @@ from evalrecords.records import (
     TaskImageBuild,
     scoring_settings,
 )
-from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, AttemptPhase
+from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, AttemptPhase, attempt_from_row
 from finestore.eval import (
     ARCHIVE_ROLLOUTS_TABLE,
     ARCHIVE_SAMPLES_TABLE,
@@ -402,7 +402,7 @@ class _StoredResponses:
             logger.warning("%s stored no %s responses to reuse", root, benchmark)
         self._attempts: dict[tuple[str, str, int], list[Attempt]] = {}
         for row in self._reader.iter_rows(ATTEMPTS_TABLE):
-            attempt = Attempt.model_validate({name: row[name] for name in Attempt.model_fields})
+            attempt = attempt_from_row(row)
             if attempt.phase is AttemptPhase.FINISHED and attempt.dataset in datasets:
                 key = (datasets[attempt.dataset], attempt.source_row, attempt.trial)
                 self._attempts.setdefault(key, []).append(attempt)
@@ -610,6 +610,7 @@ async def _save_attempt(
     error: str | None,
     prompt_tokens: int | None,
     completion_tokens: int | None,
+    stop_reason: str | None,
 ) -> None:
     trial_id = f"{attempt.dataset}/{attempt.trial}/{attempt.retry}"
     blob = f"evaluation/attempts/{canonical_sha256(attempt.model_dump(mode='json'))}.json"
@@ -621,6 +622,7 @@ async def _save_attempt(
             "result_blob": blob,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
+            "stop_reason": stop_reason,
         }
     )
 
@@ -732,6 +734,7 @@ async def _score_likelihood(
         error,
         sum(value.prompt_tokens for value in usage if value is not None) if known_usage else None,
         sum(value.completion_tokens for value in usage if value is not None) if known_usage else None,
+        stop_reason=None,
     )
     if permanent_error is not None:
         raise permanent_error
@@ -871,8 +874,6 @@ async def _score_rollout(
         if turns
         else None
     )
-    if retry_turn is not None or reused_from_run is not None:
-        prompt_tokens = completion_tokens = 0
     await _save_attempt(
         writer,
         attempt,
@@ -882,6 +883,7 @@ async def _score_rollout(
         grade.error,
         prompt_tokens,
         completion_tokens,
+        stop_reason=rollout.stop_reason,
     )
     if permanent_error is not None:
         raise permanent_error
@@ -891,7 +893,7 @@ async def _score_rollout(
 def _latest_attempts(reader: ReadView) -> dict[tuple[str, str, int], Attempt]:
     latest: dict[tuple[str, str, int], Attempt] = {}
     for row in reader.iter_rows(ATTEMPTS_TABLE):
-        attempt = Attempt.model_validate({name: row[name] for name in Attempt.model_fields})
+        attempt = attempt_from_row(row)
         key = _attempt_key(attempt.dataset, attempt.source_row, attempt.trial)
         old = latest.get(key)
         if old is None or (attempt.retry, attempt.phase == AttemptPhase.FINISHED) > (

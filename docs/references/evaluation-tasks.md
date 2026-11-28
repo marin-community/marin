@@ -334,6 +334,9 @@ FineStore stores `samples`, `rollouts_v1`, `evaluation_attempts`, and
 blobs. The run descriptor binds model and driver identities to corpus/protocol
 snapshots and execution settings. Raw evidence retains named metrics, weights,
 extractions, token likelihoods, eligibility decisions, and each rollout's resolved limits.
+Each finished `evaluation_attempts` row also records the rollout's `stop_reason`,
+which is null for likelihood scoring and in result roots written before the
+column existed.
 Infrastructure failures remain unscored; they do not become synthetic zero scores.
 
 An episode that reaches its turn, token, length, or agent deadline is graded on what it
@@ -347,7 +350,9 @@ without invalidating completed observations; model, source, selection and scorin
 settings must remain identical. Completed logical attempts,
 including zero grades, are skipped. Infrastructure failures retry with the same
 row, trial, and seed and a new physical retry index. A completed model response
-is reused if only grading failed. Model failures make a fresh request. The CLI
+is reused if only grading failed; the retry records that response's token usage
+and stop reason, and its evidence names the reused retry in
+`reused_response_from_retry`. Model failures make a fresh request. The CLI
 uses standard backoff between passes; each pass processes all supplied corpora before
 reporting retryable failures. Solver SDK retries are disabled. Verifyit handles
 judge HTTP retries separately under the source's transport policy.
@@ -387,8 +392,9 @@ configuration must keep the source run's model identity. Judged tasks call the
 judge again, so judge variation also changes grades.
 
 Raw evidence names the source root, its run identity, and the evidence blob in
-`reused_response_from_run`. A reused attempt records zero tokens, as an attempt
-that reuses its own response after a grading failure does. `evaluation/run.json`
+`reused_response_from_run`. A reused attempt records the stored response's token
+usage and stop reason, as an attempt that reuses its own response after a
+grading failure does. `evaluation/run.json`
 lists each source in `response_sources` with its root and run identity, so a
 regraded root differs from a fresh run on the same corpus without opening the
 evidence. Reuse requires the source run's execution revision to match the
@@ -424,6 +430,23 @@ population and supplies group labels. FinanceBench uses means. EconEvals uses a
 weighted mean of `win_rate` over judged games, so 0.5 is parity with the
 baseline: the paper's o3-mini, or o3 for the `-o3` variants. SimpleQA and
 SimpleQAMini use classification summaries.
+
+Generation benchmarks also report `length_stop_count`, the number of scored
+attempts whose rollout stopped with reason `length`, and
+`length_stop_fraction`, that number divided by the scored attempts, for the
+benchmark and for each group label. A population in which a scored attempt has
+no recorded stop reason, as with likelihood scoring or a result root written
+before attempts recorded stop reasons, reports neither.
+
+Stop reason `length` means the model reached a token limit: the request's
+output limit or the context window. The rollout recorder also uses it when a
+prompt leaves no output budget before the first response
+(`GenerationLimitReached`). Such an attempt has no response. When the answer is
+the final message, the attempt gets no grade, so it is an infrastructure
+failure and stays out of both counts; when the answer is a file or machine
+state, it is graded and counts as a length stop. Selection admits only prompts
+that leave an output budget, and the chat and completion transports never raise
+`GenerationLimitReached`.
 
 The shared evaluation CLI and checkpoint menus now select these curated corpora.
 Corpus artifacts are explicit dependencies that finish before inference starts;

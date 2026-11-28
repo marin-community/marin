@@ -19,6 +19,7 @@ from evalrecords.records import JudgeIdentity, TaskEvidence
 from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT
 from evalrecords.rollout_results import terminal_attempts
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
+from finestore.layout import RESERVED_COLUMNS
 from finestore.reader import ReadView
 from finestore.store import DataStore
 from fray.local_backend import LocalClient
@@ -868,7 +869,8 @@ async def test_driver_judge_identity_pins_explicit_and_default_models_across_fai
     graded = [row for row in final_reader.iter_rows(ATTEMPTS_TABLE) if row["outcome"] == "graded"]
     assert len(graded) == 2
     retry = next(row for row in graded if row["retry"] == 1)
-    assert retry["prompt_tokens"] == retry["completion_tokens"] == 0
+    # The retry grades the response its first attempt saved, so it records that response's usage and stop reason.
+    assert (retry["prompt_tokens"], retry["completion_tokens"], retry["stop_reason"]) == (10, 1, "stop")
     assert json.loads(final_reader.read_blob(retry["result_blob"]))["reused_response_from_retry"] == 0
     grade_details = [json.loads(final_reader.read_blob(row["result_blob"]))["grade"]["detail"] for row in graded]
     assert {detail["requested_model"] for detail in grade_details} == {"source-judge", "run-default"}
@@ -1094,6 +1096,16 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
     assert json.loads(reader.read_blob(RUN_OBJECT))["config"]["generation_extra_body"] == {"skip_special_tokens": False}
     samples = [sample_from_archive_row(row) for row in reader.iter_rows(ARCHIVE_SAMPLES_TABLE)]
     assert len([row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["outcome"] == "graded"]) == 13
+    # Both trials of chat/truncated end at the output limit; likelihood scoring has no stop reason.
+    assert Counter(
+        (row["outcome"], row["stop_reason"]) for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"
+    ) == {
+        ("graded", "stop"): 9,
+        ("graded", "length"): 2,
+        ("graded", None): 2,
+        ("infra_error", None): 1,
+        ("invalid_task", None): 1,
+    }
     invalid = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["outcome"] == "invalid_task"]
     assert len(invalid) == 1
     assert invalid[0]["retry"] == 0
@@ -1220,6 +1232,55 @@ async def test_generation_failure_archives_provider_body_and_resumes_only_failed
         assert requests[-1] == requests[0]
         await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
         assert len(requests) == 9
+
+
+def save_before_stop_reasons(source: str, output: str) -> None:
+    """Copy the run descriptor, attempts and evidence of a result root as they were saved before stop reasons."""
+    reader = ReadView(source)
+    attempts = reader.scan(ATTEMPTS_TABLE)
+    assert attempts is not None
+    attempts = attempts.select(
+        [name for name in attempts.column_names if name not in RESERVED_COLUMNS and name != "stop_reason"]
+    )
+    with DataStore.open(output) as store:
+        store.table(
+            ATTEMPTS_TABLE,
+            schema=attempts.schema,
+            primary_key=("dataset", "source_row", "trial", "retry", "phase"),
+            schema_version=1,
+        )
+        with store.transaction() as transaction:
+            transaction.write_object(RUN_OBJECT, reader.read_blob(RUN_OBJECT))
+            for row in attempts.to_pylist():
+                transaction.table(ATTEMPTS_TABLE).add(row)
+                if row["result_blob"] is not None:
+                    transaction.write_object(row["result_blob"], reader.read_blob(row["result_blob"]))
+
+
+@pytest.mark.asyncio
+async def test_resume_retries_attempts_saved_before_stop_reasons_were_recorded(tmp_path, published_corpora, run_config):
+    prompts = []
+
+    async def model(request):
+        prompts.append(request.messages[-1]["content"])
+        if len(prompts) == 1:
+            raise ConnectionError("the endpoint closed the connection")
+        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+    current = str(tmp_path / "current")
+    with pytest.raises(EvaluationInfrastructureError, match="raw evidence is saved"):
+        await run_evaluation(published_corpora, current, run_config, model, machine_factories={})
+    earlier = str(tmp_path / "earlier")
+    save_before_stop_reasons(current, earlier)
+    await run_evaluation(published_corpora, earlier, run_config, model, machine_factories={})
+    assert len(prompts) == 9
+    assert prompts[-1] == prompts[0]
+    finished = [row for row in ReadView(earlier).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert Counter((row["retry"], row["outcome"], row["stop_reason"]) for row in finished) == {
+        (0, "graded", None): 7,
+        (0, "infra_error", None): 1,
+        (1, "graded", "stop"): 1,
+    }
 
 
 @pytest.mark.asyncio
@@ -1718,7 +1779,9 @@ async def test_reuse_answers_identical_requests_with_each_trial_s_own_stored_res
         }
         assert stored_text(raw) == stored_text(stored_raw)
         assert raw["grade"]["reward"] == float(stored_text(raw).lower() == "red")
-        assert (attempt["outcome"], attempt["prompt_tokens"], attempt["completion_tokens"]) == ("graded", 0, 0)
+        assert attempt["outcome"] == "graded"
+        recorded = ("prompt_tokens", "completion_tokens", "stop_reason")
+        assert [attempt[name] for name in recorded] == [stored_attempt[name] for name in recorded] == [3, 1, "stop"]
 
 
 @pytest.mark.asyncio
@@ -1777,7 +1840,7 @@ async def test_reuse_reads_source_responses_concurrently_and_asks_the_model_wher
     assert {attempt["outcome"] for attempt, _ in evidence} == {"graded"}
     assert Counter(
         (stored_text(raw), raw[REUSED_FROM_RUN] is not None, attempt["completion_tokens"]) for attempt, raw in evidence
-    ) == {("red", True, 0): 6, ("Red", False, 1): 3}
+    ) == {("red", True, 1): 6, ("Red", False, 1): 3}
 
 
 @pytest.mark.asyncio
@@ -1914,7 +1977,7 @@ async def test_mixed_reuse_regrades_generations_and_rescores_likelihoods(tmp_pat
                 stored_raw["grade"]["status"],
                 stored_raw["grade"]["reward"],
             )
-            assert attempt["completion_tokens"] == 0
+            assert attempt["completion_tokens"] == stored_attempt["completion_tokens"]
         else:
             assert raw.get(REUSED_FROM_RUN) is None
 
@@ -1962,7 +2025,7 @@ async def test_judged_reuse_keeps_retried_responses_in_the_source_and_the_regrad
     stored = terminal_evidence(source)
     assert sorted(attempt["retry"] for attempt, _ in stored.values()) == [0, 1]
     for key, (attempt, raw) in terminal_evidence(output).items():
-        assert (attempt["outcome"], attempt["retry"], attempt["completion_tokens"]) == ("graded", 1, 0)
+        assert (attempt["outcome"], attempt["retry"], attempt["completion_tokens"]) == ("graded", 1, 1)
         assert raw["reused_response_from_retry"] == 0
         assert raw[REUSED_FROM_RUN]["result_blob"] == stored[key][0]["result_blob"]
 
@@ -2049,3 +2112,22 @@ async def test_a_write_whose_caller_is_cancelled_is_committed_before_the_store_c
         release()
 
     assert ReadView(root).read_blob("evidence/terminal.json") == b"graded"
+
+
+@pytest.mark.asyncio
+async def test_reuse_reads_a_source_saved_before_attempts_recorded_stop_reasons(tmp_path, run_config):
+    config = run_config.model_copy(update={"source_limit": None})
+    strict = publish_colors_corpus(tmp_path, "strict")
+    lenient = publish_colors_corpus(tmp_path, "lenient", converter=convert_ignoring_case)
+    current, earlier, output = (str(tmp_path / name) for name in ("current", "earlier", "regraded"))
+    await run_evaluation((strict,), current, config, ScriptedModel(dict.fromkeys(COLORS, "Red")), machine_factories={})
+    save_before_stop_reasons(current, earlier)
+    refusing = ScriptedModel({})
+
+    await run_evaluation((lenient,), output, config, refusing, machine_factories={}, reuse_from=earlier)
+
+    assert not refusing.asked
+    evidence = terminal_evidence(output).values()
+    assert {(attempt["outcome"], attempt["stop_reason"], raw["grade"]["reward"]) for attempt, raw in evidence} == {
+        ("graded", "stop", 1)
+    }

@@ -28,7 +28,9 @@ from evalrecords.records import (
 from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT
 
 SCORED_OUTCOMES = frozenset({"graded", "submission_failure"})
-SUMMARY_REVISION = "2026.11.08.1"
+SUMMARY_REVISION = "2026.11.26.1"
+# rolloutengine's stop reason for a rollout that reached a token limit.
+LENGTH_STOP_REASON = "length"
 
 
 def terminal_attempts(reader: ReadView) -> dict[tuple[str, str, int], dict]:
@@ -118,6 +120,14 @@ def _reduce(values: list[tuple[str, float, float]], kind: SummaryKind) -> tuple[
     return mean, stderr
 
 
+def _length_stops(prefix: str, stop_reasons: list[str | None]) -> dict[str, float]:
+    """Count the scored attempts that stopped at a token limit, when every one of them recorded a stop reason."""
+    if not stop_reasons or None in stop_reasons:
+        return {}
+    count = stop_reasons.count(LENGTH_STOP_REASON)
+    return {f"{prefix}length_stop_count": count, f"{prefix}length_stop_fraction": count / len(stop_reasons)}
+
+
 def _benchmark_summary(
     protocol: EvaluationProtocol,
     datasets: list[str],
@@ -125,7 +135,7 @@ def _benchmark_summary(
     samples: dict[tuple[str, str], dict],
     results_path: str,
 ) -> dict[str, float]:
-    """Reduce one benchmark's declared metrics, with standard errors and per-group scores."""
+    """Reduce one benchmark's declared metrics, with standard errors, per-group scores and length stops."""
     log_likelihoods = {metric.name for metric in protocol.likelihood_metrics if metric.scoring == "log_likelihood"}
     if protocol.summary is SummaryKind.PERPLEXITY and not log_likelihoods:
         raise ValueError(f"Perplexity summary requires declared log-likelihood metrics for {protocol.benchmark}")
@@ -139,6 +149,8 @@ def _benchmark_summary(
     }
     values = defaultdict(list)
     group_values = defaultdict(lambda: defaultdict(list))
+    stop_reasons: list[str | None] = []
+    group_stop_reasons: defaultdict[str, list[str | None]] = defaultdict(list)
     for attempt in attempts.values():
         if attempt["dataset"] not in datasets or attempt["outcome"] not in SCORED_OUTCOMES:
             continue
@@ -154,6 +166,11 @@ def _benchmark_summary(
             grade = json.loads(sample["grading"]["detail"])
             weights = grade["detail"].get("metric_weights", {})
         sample_groups = json.loads(sample["doc"] or "{}").get("groups", {})
+        # Result roots written before attempts recorded stop reasons have no such column.
+        stop_reason = attempt.get("stop_reason")
+        stop_reasons.append(stop_reason)
+        for group, label in sample_groups.items():
+            group_stop_reasons[f"{group}={label}"].append(stop_reason)
         for metric in protocol.metrics:
             if metric.name not in observed:
                 continue
@@ -180,6 +197,9 @@ def _benchmark_summary(
     for group, group_metrics in group_values.items():
         for metric, observations in group_metrics.items():
             summary[f"{group}/{metric}"] = _reduce(observations, reductions[metric])[0]
+    summary.update(_length_stops("", stop_reasons))
+    for group, reasons in group_stop_reasons.items():
+        summary.update(_length_stops(f"{group}/", reasons))
     return summary
 
 
