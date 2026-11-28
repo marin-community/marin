@@ -24,6 +24,7 @@ then adjudicates the residual classes behaviorally on its sample.
 import hashlib
 import itertools
 import re
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -35,9 +36,15 @@ _HEREDOC_START = re.compile(r"<<-?\s*(['\"]?)(?P<delimiter>[A-Za-z_][A-Za-z_0-9]
 _APPLY_LINE = re.compile(r"^\s*(sudo\s+)?git apply\b")
 _ASSIGNMENT_LINE = re.compile(r"^\s*(?:local\s+)?(?P<name>[A-Za-z_][A-Za-z_0-9]*)=.*<<")
 _FULL_TREE_RESET = re.compile(
-    r"^(?P<indent>\s*)(sudo\s+)?(?P<command>git (checkout -- \.|checkout HEAD -- \.|checkout -f \.|reset --hard.*))\s*$",
+    r"^(?P<indent>\s*)(sudo\s+)?(?P<command>git (checkout -- \.|checkout HEAD -- \.|checkout -f \.|reset\s+[^#\n]*--hard\S*))(?P<suffix>[^\n]*)$",
     re.MULTILINE,
 )
+# The exit-code capture line a golden application's status handler reads right
+# after the excised block (`patch_rc=$?`): once the block is gone the capture
+# would record some unrelated command's status, so the repair pins it to 0 —
+# the removed application's success value — and the script's own gating on it
+# keeps its meaning.
+_STATUS_CAPTURE = re.compile(r"^(?P<indent>[ \t]*)(?:local\s+)?(?P<name>[A-Za-z_][A-Za-z_0-9]*)=\$\?\s*$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -61,6 +68,7 @@ class ResetSite:
     end: int
     line: str
     indent: str = ""
+    suffix: str = ""
 
 
 @dataclass
@@ -179,6 +187,31 @@ def classify_grader(row: OpenSweRow) -> GraderClassification:
         golden_digest=golden_digest,
         test_digest=test_digest,
     )
+    # A grader that never runs cannot be repaired into one that grades: the
+    # verifier executes the upstream bytes verbatim, so a script bash refuses
+    # to parse scores 0 for every agent state, no-op and oracle alike.
+    parse = subprocess.run(["bash", "-n"], input=script.encode(), capture_output=True, timeout=60)
+    if parse.returncode != 0:
+        classification.verdict = "unrepairable"
+        classification.reason = "eval_script_syntax_error"
+        classification.detail = (
+            "the eval_script does not parse under bash: "
+            + parse.stderr.decode(errors="replace").strip()[-400:]
+        )
+        return classification
+    # The verifier's ambiguity rule scores a run 0 when more than one
+    # OPENSWE_EXIT_CODE line reaches its output; a script that echoes the
+    # verdict several times (phased upstream scripts do) therefore can never
+    # award 1, whatever the agent does.
+    markers = re.findall(r"^\s*(?:echo|printf)\b[^\n]*OPENSWE_EXIT_CODE", script, re.MULTILINE)
+    if len(markers) > 1:
+        classification.verdict = "unrepairable"
+        classification.reason = "ambiguous_exit_code"
+        classification.detail = (
+            f"the eval_script echoes the OPENSWE_EXIT_CODE verdict {len(markers)} times; the verifier's "
+            "ambiguity rule scores every such run 0"
+        )
+        return classification
     golden_sites: list[DiffSite] = []
     test_sites: list[DiffSite] = []
     unknown_sites: list[DiffSite] = []
@@ -207,6 +240,7 @@ def classify_grader(row: OpenSweRow) -> GraderClassification:
             end=_line_end(script, match.start()),
             line=match.group("command").strip(),
             indent=match.group("indent"),
+            suffix=match.group("suffix"),
         )
         for match in _FULL_TREE_RESET.finditer(script)
     ]
@@ -303,6 +337,7 @@ def repaired_script(row: OpenSweRow, classification: GraderClassification) -> st
     script = row.eval_script
     excisions: list[tuple[int, int]] = []
     replacements: list[tuple[int, int, str]] = []
+    test_paths = _test_file_paths(row.test_patch or "")
     for site in classification.golden_sites:
         if site.consuming == "assignment":
             body_start = _line_end(script, site.start)
@@ -323,10 +358,26 @@ def repaired_script(row: OpenSweRow, classification: GraderClassification) -> st
             break
         cut_end = site.end
         excisions.append((cut_start, cut_end))
-    test_paths = _test_file_paths(row.test_patch or "")
+        # The status capture that read the excised application's exit code
+        # would now record some unrelated command's status; pin it to 0 — the
+        # removed application's success value — so the script's own gating on
+        # it keeps its meaning.
+        capture = _STATUS_CAPTURE.search(script, cut_end)
+        if capture is not None and all(
+            not script[offset].strip() for offset in range(cut_end, min(capture.start(), len(script)))
+        ):
+            line_end = script.find("\n", capture.end())
+            line_end = len(script) if line_end == -1 else line_end + 1
+            replacements.append(
+                (
+                    capture.start(),
+                    line_end,
+                    f"{capture.group('indent')}{capture.group('name')}=0\n",
+                )
+            )
     for site in classification.reset_sites:
         if test_paths:
-            scoped = f"{site.indent}git checkout HEAD -- " + " ".join(test_paths) + "\n"
+            scoped = f"{site.indent}git checkout HEAD -- " + " ".join(test_paths) + f"{site.suffix}\n"
             replacements.append((site.start, site.end, scoped))
             continue
         cut_start = site.start

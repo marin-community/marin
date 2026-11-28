@@ -167,6 +167,94 @@ def test_reset_drops_when_no_test_files_are_named():
     assert "Resetting to clean state" not in repaired
 
 
+def test_status_capture_after_golden_excision_pins_to_zero():
+    """The capture that read the excised application's exit code would record
+    some unrelated command's status; the repair pins it to 0 so the script's
+    own gating keeps its meaning (gate v5's mrpro-234 and smart_open-845
+    evidence)."""
+    script = (
+        "#!/bin/bash\ncd /testbed\n"
+        "echo \"Applying golden patch...\"\n"
+        f"git apply -v --allow-empty - <<'EOF_114329324912'\n{GOLDEN}EOF_114329324912\n"
+        "\n"
+        "patch_rc=$?\n"
+        "if [ $patch_rc -ne 0 ]; then\n"
+        "  echo \"manual correction\"\n"
+        "fi\n"
+        f"git apply -v --allow-empty - <<'EOF_114329324912'\n{TEST_PATCH}EOF_114329324912\n"
+        'pytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n'
+    )
+    classification = grader_repair.classify_grader(grader_row(eval_script=script))
+    repaired = grader_repair.repaired_script(grader_row(eval_script=script), classification)
+    assert "patch_rc=0" in repaired
+    assert "patch_rc=$?" not in repaired
+    # The test patch's own status capture is untouched.
+    assert "git apply" in repaired
+
+
+def test_suffixed_unscoped_reset_is_found_and_scoped():
+    """Gate v5's missed pattern: `git checkout HEAD -- . 2>/dev/null || true`
+    discards the agent's diff and the reset pattern required the line to end at
+    the command; the pattern now carries trailing constructs into the scoped
+    replacement."""
+    script = (
+        "#!/bin/bash\ncd /testbed\n"
+        f"git apply -v --allow-empty - <<'EOF_114329324912'\n{GOLDEN}EOF_114329324912\n"
+        "git checkout HEAD -- . 2>/dev/null || true\n"
+        f"git apply -v --allow-empty - <<'EOF_114329324912'\n{TEST_PATCH}EOF_114329324912\n"
+        'pytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n'
+    )
+    classification = grader_repair.classify_grader(grader_row(eval_script=script))
+    assert len(classification.reset_sites) == 1
+    assert classification.reset_sites[0].suffix.strip() == "2>/dev/null || true"
+    repaired = grader_repair.repaired_script(grader_row(eval_script=script), classification)
+    assert "git checkout HEAD -- . 2>/dev/null || true" not in repaired
+    assert "git checkout HEAD -- test_w.py 2>/dev/null || true" in repaired
+
+
+def test_script_that_does_not_parse_fails_closed():
+    """A grader bash refuses to parse scores 0 for every agent state; it can
+    never grade, so it cannot be repaired into one that does (gate v5's
+    Coqtail/mqttasgi/production-stack evidence)."""
+    script = (
+        "#!/bin/bash\ncd /testbed\n"
+        "if [ -f x ]; then\n"
+        "    }\n"
+        "fi\n"
+        'pytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n'
+    )
+    classification = grader_repair.classify_grader(grader_row(eval_script=script))
+    assert classification.verdict == "unrepairable"
+    assert classification.reason == "eval_script_syntax_error"
+    assert "does not parse" in classification.detail
+
+
+def test_script_that_echoes_the_verdict_multiple_times_fails_closed():
+    """The verifier's ambiguity rule scores any run with several
+    OPENSWE_EXIT_CODE lines 0; a phased script that echoes the verdict per
+    phase can never award 1 (gate v5's pySBOL2/eiffel evidence)."""
+    script = (
+        "#!/bin/bash\ncd /testbed\n"
+        f"git apply -v --allow-empty - <<'EOF_114329324912'\n{TEST_PATCH}EOF_114329324912\n"
+        'pytest -q tests/a\necho "OPENSWE_EXIT_CODE=$rc1"\n'
+        'pytest -q tests/b\necho "OPENSWE_EXIT_CODE=$rc2"\n'
+    )
+    classification = grader_repair.classify_grader(grader_row(eval_script=script))
+    assert classification.verdict == "unrepairable"
+    assert classification.reason == "ambiguous_exit_code"
+    assert "2 times" in classification.detail
+
+
+def test_single_exit_marker_stays_repairable():
+    script = (
+        "#!/bin/bash\ncd /testbed\n"
+        f"git apply -v --allow-empty - <<'EOF_114329324912'\n{GOLDEN}EOF_114329324912\n"
+        'pytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n'
+    )
+    classification = grader_repair.classify_grader(grader_row(eval_script=script))
+    assert classification.verdict == "repairable"
+
+
 def test_scan_counts_classes():
     rows = [
         grader_row(
