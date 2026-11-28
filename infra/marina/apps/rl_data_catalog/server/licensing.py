@@ -1,13 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""License bans shared by ingest and admission, read from the pinned ruling registry.
-
-The rulings are user decisions, not code: this module loads the versioned ruling
-records the catalog lanes publish to the pinned registry revision named by the
-committed ``license_rulings.json`` reference. Publishing a new ruling family is
-a data commit plus a reference bump; the loader never carries a second copy.
-"""
+"""Load pinned source-wide bans for the license checker and publication gate."""
 
 from functools import cache
 from pathlib import Path

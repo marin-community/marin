@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The pinned ruling registry loader and the ban queries ingest and admission share."""
+"""Tests for the pinned ruling registry loader and source ban queries."""
 
 import hashlib
 from datetime import UTC, datetime
