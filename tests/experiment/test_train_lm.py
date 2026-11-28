@@ -171,20 +171,21 @@ def test_lowers_to_a_runnable_graph():
     assert any(dep.name == "corpus" for dep in spec.deps)
 
 
-def test_train_only_mixture_skips_the_missing_validation_split(tmp_path):
+def test_train_only_mixture_skips_the_missing_validation_split(tmp_path, gpt2_tokenizer_path):
     """A train-only cache in a mixture keeps Levanter's skip-a-missing-split behavior:
     ``as_component()`` emits an empty-URL source, so ``build_caches("validation")`` skips
     the missing split instead of raising (the path every default ``tokenized(...)``
     mixture takes at eval setup).
     """
-    corpus = _corpus()
+    # build_caches loads the tokenizer, so name the checked-in one instead of the gated Hub repo.
+    corpus = tokenized("corpus", source="org/corpus", tokenizer=gpt2_tokenizer_path, version=_V)
     write_record(
         ArtifactRecord(
             name=corpus.name,
             version=corpus.version,
             output_path=corpus.path(str(tmp_path)),
             result_type=_TOKENIZED_CACHE,
-            config={"tokenizer": _TOKENIZER, "format": {"text_key": "text"}},
+            config={"tokenizer": gpt2_tokenizer_path, "format": {"text_key": "text"}},
         )
     )
     ctx = StepContext.for_run(output_path=str(tmp_path / "out"), prefix=str(tmp_path), deps=(corpus,))
