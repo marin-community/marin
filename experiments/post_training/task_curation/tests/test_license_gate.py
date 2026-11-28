@@ -9,11 +9,16 @@ import pytest
 from click.testing import CliRunner
 from finestore.rl.curation import OversightEvidence, OversightLevel
 from finestore.rl.licenses import (
+    LICENSE_RESOLVER_VERSION,
+    LicenseCheckRule,
+    LicenseCheckVerdict,
     LicenseClass,
     LicenseDecision,
     LicenseDecisionKind,
+    LicenseEvidence,
     LicenseReceipt,
     LicenseSourcePin,
+    check_license,
     require_license,
 )
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
@@ -67,6 +72,76 @@ def test_license_evidence_controls_permission(license_id, classification, allowe
     else:
         with pytest.raises(ValueError, match="blocks ingest and admission"):
             require_license(receipt, "Marin:fixture", "train", ban=None)
+
+
+def _kimina_prover_promptset_receipt() -> LicenseReceipt:
+    """The real Kimina-Prover-Promptset receipt shape (revision 3009c548d90160d0): the
+    dataset card declares no licence while the README body claims Apache-2.0."""
+    card = "https://huggingface.co/datasets/project-numina/Kimina-Prover-Promptset/resolve/3009c548d90160d0f5e963d72238610c6732f812/README.md"
+    return LicenseReceipt(
+        resolver_version=LICENSE_RESOLVER_VERSION,
+        source_id="ProjectNumina:Kimina-Prover-Promptset",
+        dataset_id="project-numina/Kimina-Prover-Promptset",
+        revision="3009c548d90160d0f5e963d72238610c6732f812",
+        resolved_at=datetime(2026, 11, 28, tzinfo=UTC).isoformat(),
+        evidence=[
+            LicenseEvidence(
+                url=card,
+                kind="dataset_card",
+                sha256="e" * 64,
+                license_ids=["missing"],
+                quoted_lines=["L1: ---", "L2: dataset_info:", "L3:   features:"],
+            ),
+            LicenseEvidence(
+                url=card,
+                kind="readme_license",
+                sha256="e" * 64,
+                license_ids=["Apache-2.0"],
+                quoted_lines=["L54: The dataset is available under the Apache License, Version 2.0."],
+            ),
+            LicenseEvidence(
+                url=card,
+                kind="readme_notice",
+                sha256="e" * 64,
+                license_ids=[],
+                quoted_lines=["(no license statement in this document)"],
+            ),
+        ],
+        bundled_third_party=False,
+        model_generated_outputs=True,
+    )
+
+
+def test_missing_card_licence_fails_closed_against_permissive_readme_signal():
+    """Regression (coordinator ruling, the real Kimina-Prover-Promptset receipt): a dataset
+    card that declares no licence must FAIL even when the README body claims a permissive
+    licence — the readme signal does not rescue a missing card declaration."""
+    check = check_license(_kimina_prover_promptset_receipt())
+    assert check.verdict is LicenseCheckVerdict.FAIL
+    assert check.rule_id is LicenseCheckRule.MISSING
+    assert check.quote == "L1: ---"
+    with pytest.raises(ValueError, match="blocks ingest and admission"):
+        require_license(_kimina_prover_promptset_receipt(), "ProjectNumina:Kimina-Prover-Promptset", "train", ban=None)
+
+
+def test_unknown_card_licence_id_fails_closed():
+    """An unknown licence id (the licence table does not recognize it) fails closed."""
+    receipt = fixture_license("Marin:fixture", "fixture/data", "a" * 40).model_copy(
+        update={
+            "evidence": [
+                LicenseEvidence(
+                    url="https://example.test/README.md",
+                    kind="dataset_card",
+                    sha256="e" * 64,
+                    license_ids=["some-unheard-of-license-1.0"],
+                    quoted_lines=["L1: ---", "L2: license: some-unheard-of-license-1.0"],
+                )
+            ]
+        }
+    )
+    check = check_license(receipt)
+    assert check.verdict is LicenseCheckVerdict.FAIL
+    assert check.rule_id is LicenseCheckRule.MISSING
 
 
 def test_restrictive_file_overrides_permissive_card_and_affirmative_terms_do_not_restrict():

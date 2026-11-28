@@ -126,7 +126,7 @@ def test_private_publication_prepares_without_writes_then_checks_uploaded_pin(tm
 
 
 def test_publication_states_folder_lineage_license(tmp_path, monkeypatch):
-    card = b"# Dataset\n\n## License\nLicensed under Apache License 2.0.\n"
+    card = b"---\nlicense: apache-2.0\n---\n# Dataset\n\n## License\nLicensed under Apache License 2.0.\n"
     """The repackager ruling: the card states each included folder's upstream license."""
     folder_notice = b"Folder-lineage attribution.\n"
     snapshot_hub(
@@ -171,7 +171,7 @@ def test_publication_states_folder_lineage_license(tmp_path, monkeypatch):
 
 
 def test_publication_states_other_for_divergent_folder_licenses(tmp_path, monkeypatch):
-    card = b"# Dataset\n\n## License\nLicensed under Apache License 2.0.\n"
+    card = b"---\nlicense: apache-2.0\n---\n# Dataset\n\n## License\nLicensed under Apache License 2.0.\n"
     """Several folders with different accepted identifiers publish license: other."""
     snapshot_hub(tmp_path, monkeypatch, {"README.md": card, "endless_v2/README.md": card})
     lineage = {}
@@ -216,7 +216,7 @@ def test_lineage_folder_identifier_requires_an_approved_decision():
 
 def test_publication_preserves_folder_lineage_license_documents(tmp_path, monkeypatch):
     """Folder-lineage upstreams keep license documents in per-dataset subfolders."""
-    card = b"# Dataset\n\n## License\nLicensed under Apache License 2.0.\n"
+    card = b"---\nlicense: apache-2.0\n---\n# Dataset\n\n## License\nLicensed under Apache License 2.0.\n"
     folder_notice = b"Folder-lineage attribution.\n"
     snapshot_hub(
         tmp_path, monkeypatch, {"README.md": card, "endless_v2/README.md": card, "endless_v2/NOTICE": folder_notice}
@@ -256,7 +256,10 @@ def test_publication_preserves_folder_lineage_license_documents(tmp_path, monkey
                 "license_link": "https://example.test/notice",
             },
         ),
-        (b"# Dataset\n\n## License\nLicensed under Apache License 2.0.\n", {"license": "apache-2.0"}),
+        (
+            b"---\nlicense: apache-2.0\n---\n# Dataset\n\n## License\nLicensed under Apache License 2.0.\n",
+            {"license": "apache-2.0"},
+        ),
     ],
 )
 def test_publication_preserves_custom_notice_and_grant_when_readme_evidence_repeats(
@@ -527,7 +530,7 @@ def test_check_publication_passes_on_the_ingest_record_exception(tmp_path, monke
     registered_lineage(monkeypatch, receipt)
     evidence = license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
     assert evidence["verdict"] == "PASS"
-    assert evidence["rule_id"] == "E1"
+    assert evidence["rule_id"] == "F2"
     assert evidence["ingest_exception"]["scope"] == ["train"]
     assert evidence["ingest_exception"]["approved"] is True
 
