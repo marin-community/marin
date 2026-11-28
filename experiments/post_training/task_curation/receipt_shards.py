@@ -8,6 +8,7 @@ source identity — license receipts here, the derived-contract and census
 receipt families as their stages port.
 """
 
+import json
 from collections.abc import Mapping
 from pathlib import Path
 
