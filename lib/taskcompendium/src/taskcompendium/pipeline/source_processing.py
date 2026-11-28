@@ -16,7 +16,7 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import Mode
 from zephyr import counters
@@ -33,6 +33,12 @@ from taskcompendium.pipeline.audit_schema import (
     NORMALIZED_SCHEMA,
     RAW_SCHEMA,
     TASK_SCHEMA,
+)
+from taskcompendium.pipeline.census import (
+    CENSUS_JSON,
+    CensusEngine,
+    CensusEvidence,
+    measure_population,
 )
 from taskcompendium.pipeline.controls import GradingMachines, control_suite
 from taskcompendium.pipeline.conversion import (
@@ -104,14 +110,17 @@ from taskcompendium.pipeline.stages import (
 )
 from taskcompendium.pipeline.transforms import admit_converted_row
 
-SOURCE_PIPELINE_REVISION = "14"
+SOURCE_PIPELINE_REVISION = "15"
 PANEL_ROWS_PER_SHARD = 16
 ROWS_PER_SHARD = 1000
 MAX_PREPARATION_SHARDS = 64
-OUTPUT_VIEWS = ("download", "normalize", "review", "verify", "final")
+CENSUS_VIEW = "census"
+OUTPUT_VIEWS = ("download", "normalize", "review", "verify", "final", CENSUS_VIEW)
 SIDECAR_SHARD = "part-{shard:05d}.parquet"
 UNPROCESSED_REVIEW_TEMPLATE = "review/unprocessed-{shard:05d}.parquet"
 SCRATCH_PHASES = ("sample", "full", "quality", "audited", "filtered", "verified")
+EXPORT_CLEANUP_VIEWS = ("normalize", "review", "verify", "final")
+"""Views the export rebuilds from the checked audit; the census view is published by its own stage."""
 VERIFY_REPORT_PATH = "verify/report.json"
 """A source's verification report, relative to its output."""
 NO_CONTROLS_REASON = "The source declares no controls"
@@ -144,6 +153,8 @@ class SourcePipelineConfig:
     normalized_shards: int
     machines: GradingMachines | None
     judge_connection: JudgeConnection | None = None
+    census: CensusEngine | None = None
+    """Measures the complete converted population without provider calls; ``None`` skips the census."""
 
 
 @dataclass(frozen=True)
@@ -163,6 +174,7 @@ class SourcePipelineResult:
     review_path: str
     verify_path: str
     final_path: str
+    census_path: str | None
     manifest_path: str
     status: SourceStatus
 
@@ -637,6 +649,47 @@ def _verify(run: _SourceRun) -> tuple[dict[str, Any], StoragePath]:
     return verification, verified
 
 
+CENSUS_COLUMNS = ("task_id", "task_json", "normalization_kind", "normalization_reason")
+
+
+def _census_rows(normalize_path: str) -> Iterator[dict[str, Any]]:
+    """Read the complete converted population in its stable shard order."""
+    shards = sorted(StoragePath(prefix_join(normalize_path, "*.parquet")).glob(), key=str)
+    if not shards:
+        raise FileNotFoundError(f"The normalized view has no shards: {normalize_path}")
+    for shard in shards:
+        with shard.open("rb") as stream:
+            for batch in pq.ParquetFile(stream).iter_batches(batch_size=64, columns=CENSUS_COLUMNS):
+                yield from batch.to_pylist()
+
+
+def _census(run: _SourceRun) -> CensusEvidence | None:
+    """Measure the complete converted population when a census engine is configured."""
+    engine = run.config.census
+    recipe = run.recipe
+    if engine is None:
+        return None
+    if recipe.source.revision is None:
+        raise ValueError(f"{recipe.name}: the census requires a pinned source revision")
+    output = run.output / CENSUS_VIEW
+    # A rerun with a different population must not leave the previous census beside it.
+    if output.exists():
+        output.rmtree()
+    with run.telemetry.phase(CENSUS_VIEW):
+        evidence = measure_population(
+            _census_rows(str(run.output / "normalize")),
+            source_name=recipe.name,
+            dataset_id=recipe.source.dataset,
+            dataset_revision=recipe.source.revision,
+            converter_revision=recipe.version,
+            evidence_url=str(output / CENSUS_JSON),
+            engine=engine,
+        )
+    with (output / CENSUS_JSON).open("w", auto_mkdir=True) as stream:
+        stream.write(json.dumps(evidence.manifest_section(), indent=2, sort_keys=True) + "\n")
+    return evidence
+
+
 def _write_download_manifest(run: _SourceRun, population_count: int) -> None:
     recipe, source_input, output = run.recipe, run.source_input, run.output
     inputs = {
@@ -744,7 +797,7 @@ def _export_sidecars(
     output = run.output
     # A recovered panel can expand a formerly deferred source. Remove old
     # derived shards, including unprocessed locators, before publishing that view.
-    for name in OUTPUT_VIEWS[1:]:
+    for name in EXPORT_CLEANUP_VIEWS:
         previous_output = output / name
         if previous_output.exists():
             previous_output.rmtree()
@@ -806,6 +859,7 @@ def _write_manifest(
     expanded: bool,
     unavailable_reviews: int,
     status: SourceStatus,
+    census: CensusEvidence | None = None,
 ) -> None:
     """Write the review and verify reports and manifests, then the source manifest that joins every view."""
     output, recipe, config = run.output, run.recipe, run.config
@@ -822,7 +876,7 @@ def _write_manifest(
         "normalized_shard_limit": config.normalized_shards,
         "source_input": run.source_input,
         "source_file_overrides": {name: asdict(file) for name, file in (run.source_overrides or {}).items()},
-        "datasets": {name: str(output / name) for name in OUTPUT_VIEWS},
+        "datasets": {name: str(output / name) for name in OUTPUT_VIEWS if name != CENSUS_VIEW or census is not None},
         "source_dataset": recipe.source.dataset,
         "source_revision": recipe.source.revision,
         "recipe_revision": recipe.version,
@@ -837,6 +891,7 @@ def _write_manifest(
         "unavailable_reviews": unavailable_reviews,
         "quality": decision.model_dump(mode="json"),
         "verification": report,
+        CENSUS_VIEW: census.manifest_section() if census is not None else None,
         "admission": source_admission(admissions),
         "admission_counts": admissions,
         "processed_rows": verification["input_rows"],
@@ -911,6 +966,9 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
     verification_status = SourceVerificationStatus(verification["verification"]["status"])
     _write_download_manifest(run, panel.sample.population_count)
     admissions = _export_sidecars(run, panel, decision, checked, verification_status, expanded=expanded)
+    # The census is the complete converted population's measurement; a run that
+    # converted only the quality panel cannot bind its counts to the dataset pin.
+    census = _census(run) if (expanded or panel.census) else None
     verification["verification"]["source_path"] = str(run.output / "normalize")
     verification["verification"]["review_path"] = str(run.output / "review")
     status = _source_status(
@@ -928,10 +986,16 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
         expanded=expanded,
         unavailable_reviews=unavailable_reviews,
         status=status,
+        census=census,
     )
     _finish_scratch(run, status)
     return SourcePipelineResult(
-        *(str(run.output / name) for name in OUTPUT_VIEWS),
+        str(run.output / "download"),
+        str(run.output / "normalize"),
+        str(run.output / "review"),
+        str(run.output / "verify"),
+        str(run.output / "final"),
+        str(run.output / CENSUS_VIEW) if census is not None else None,
         manifest_path=str(run.output / "manifest.json"),
         status=status,
     )
