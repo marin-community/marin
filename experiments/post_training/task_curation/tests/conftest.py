@@ -35,6 +35,9 @@ from experiments.post_training.task_curation.tests.license_fixtures import isola
 from experiments.post_training.task_curation.tests.license_fixtures import (
     isolated_license_registry as isolated_license_registry,
 )
+from experiments.post_training.task_curation.tests.license_fixtures import (
+    pinned_dataset_metadata as pinned_dataset_metadata,
+)
 from experiments.post_training.task_curation.tests.local_grader import (
     LEAN_KERNEL_GRADER_IMAGE,
     LocalGraderMachines,

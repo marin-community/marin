@@ -70,12 +70,16 @@ def test_readme_scope_does_not_make_descriptions_or_yaml_a_conflicting_license()
     assert check_license(receipt.model_copy(update={"evidence": [*receipt.evidence, terms]})).rule_id.value == "F1"
 
 
-def test_conflicting_custom_terms_and_unidentified_third_party_terms_escalate():
+def test_unknown_custom_terms_fail_and_unidentified_third_party_terms_escalate():
     receipt = fixture_license("fixture", "fixture/data", "a" * 40)
     custom = license_evidence(
         "https://example.test/LICENSE", b"Contact the publisher for applicable terms.", "license_file"
     )
-    assert check_license(receipt.model_copy(update={"evidence": [*receipt.evidence, custom]})).rule_id.value == "E2"
+    uncertain_custom = receipt.model_copy(update={"evidence": [*receipt.evidence, custom]})
+    check = check_license(uncertain_custom)
+    assert (check.verdict.value, check.rule_id.value) == ("FAIL", "F2")
+    with pytest.raises(ValueError, match="FAIL F2"):
+        require_license(uncertain_custom, uncertain_custom.source_id, "train", ban=None)
     notice = license_evidence(
         "https://example.test/README.md", b"Outputs are subject to separate third-party terms.", "readme_notice"
     )
@@ -153,29 +157,6 @@ def test_resolver_checks_task_content_without_following_source_or_teacher_reposi
     )
     assert set(fetched) == {"README.md", "LICENSE", "benchmark/task/LICENSE.content.md"}
     assert check_license(receipt).rule_id.value == "F1"
-
-
-@pytest.fixture
-def pinned_dataset_metadata(monkeypatch):
-    repositories = {}
-    fetched = []
-    license_resolution._primary_license.cache_clear()
-
-    def info(_api, repository, revision):
-        documents = repositories[repository, revision]
-        return SimpleNamespace(sha=revision, siblings=[SimpleNamespace(rfilename=name) for name in documents])
-
-    def fetch(url, **_kwargs):
-        path = url.split("/datasets/", 1)[1]
-        repository, location = path.split("/resolve/", 1)
-        revision, filename = location.split("/", 1)
-        fetched.append((repository, revision, filename))
-        return repositories[repository, revision][filename]
-
-    monkeypatch.setattr(license_resolution.HfApi, "dataset_info", info)
-    monkeypatch.setattr(license_resolution, "_fetch", fetch)
-    yield repositories, fetched
-    license_resolution._primary_license.cache_clear()
 
 
 @pytest.mark.parametrize("structured", [False, True], ids=["legacy-source-pin", "license-source-yaml"])

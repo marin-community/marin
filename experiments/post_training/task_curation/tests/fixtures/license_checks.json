@@ -188,8 +188,8 @@
         "text": "June 9 Researcher Reciprocity License\n"
       }
     ],
-    "verdict": "ESCALATE",
-    "rule": "E1"
+    "verdict": "FAIL",
+    "rule": "F2"
   },
   {
     "source_id": "P0:andyzorigin/cybench",

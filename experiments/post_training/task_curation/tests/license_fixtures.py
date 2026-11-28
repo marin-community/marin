@@ -6,11 +6,12 @@
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from finestore.rl.licenses import LICENSE_RESOLVER_VERSION, LicenseReceipt
 
-from experiments.post_training.task_curation import license_binding, reference_data
+from experiments.post_training.task_curation import license_binding, license_resolution, reference_data
 from experiments.post_training.task_curation.datasets.lean import numina
 from experiments.post_training.task_curation.license_resolution import license_evidence
 from experiments.post_training.task_curation.source import CatalogConfig, RlDataSource
@@ -50,6 +51,30 @@ def with_license[ConfigT: CatalogConfig](source: RlDataSource[ConfigT]) -> RlDat
         source,
         info=replace(source.info, license_receipt=fixture_license(source.info.id, dataset.name, dataset.revision)),
     )
+
+
+@pytest.fixture
+def pinned_dataset_metadata(monkeypatch):
+    """Pinned metadata and small document reads at the HF network boundary."""
+    repositories = {}
+    fetched = []
+    license_resolution._primary_license.cache_clear()
+
+    def info(_api, repository, revision):
+        documents = repositories[repository, revision]
+        return SimpleNamespace(sha=revision, siblings=[SimpleNamespace(rfilename=name) for name in documents])
+
+    def fetch(url, **_kwargs):
+        path = url.split("/datasets/", 1)[1]
+        repository, location = path.split("/resolve/", 1)
+        revision, filename = location.split("/", 1)
+        fetched.append((repository, revision, filename))
+        return repositories[repository, revision][filename]
+
+    monkeypatch.setattr(license_resolution.HfApi, "dataset_info", info)
+    monkeypatch.setattr(license_resolution, "_fetch", fetch)
+    yield repositories, fetched
+    license_resolution._primary_license.cache_clear()
 
 
 @pytest.fixture(autouse=True)
