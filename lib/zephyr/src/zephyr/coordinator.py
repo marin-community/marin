@@ -24,7 +24,7 @@ from connectrpc.errors import ConnectError
 from fray.actor import ActorGroup, ActorHandle, current_actor
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
-from fray.types import ActorConfig, ResourceConfig
+from fray.types import ActorConfig, EnvironmentConfig, ResourceConfig
 from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from rigging import telemetry
@@ -458,6 +458,7 @@ class ZephyrCoordinator:
         task_resources: ZephyrTaskResources,
         worker_resources: ResourceConfig,
         actor_config: ActorConfig,
+        environment: EnvironmentConfig | None,
     ) -> None:
         """Create the worker group from inside this coordinator's job.
 
@@ -481,6 +482,7 @@ class ZephyrCoordinator:
             count=worker_count,
             resources=worker_resources,
             actor_config=actor_config,
+            environment=environment,
         )
 
     def worker_handles(self, count: int, timeout: float) -> tuple[ActorHandle, ...]:

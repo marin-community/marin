@@ -1,22 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Benchmark examples exercise extraction and the production lexical matcher."""
+"""Benchmark examples exercise extraction, the stage-1 key scan, and the sealed-manifest gate."""
 
 import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
-from marin.datakit.decon import NGramConfig, RequiredEvalManifest, build_eval_bloom, decon_to_parquet
-from marin.datakit.normalize import NormalizedData
+from fray.types import ResourceConfig
+from marin.datakit.decon import ITEM_SCHEMA, build_keys
+from marin.datakit.decon_keys import KeyTable, record_pairs
 
 from experiments.datakit.decontam import pinned_references
+from experiments.datakit.decontam.eval_manifests import validate_required_manifest
+from experiments.datakit.decontam.items import item_row
 from experiments.datakit.decontam.pinned_references import (
     ReferenceFile,
     prepare_references,
@@ -30,44 +34,40 @@ SOURCES = reference_catalog()
 
 
 @pytest.fixture(scope="module")
-def benchmark_decisions(tmp_path_factory):
+def stage_one_candidates(tmp_path_factory):
+    """Each sample's id mapped to the items whose key its exact copy holds, with keys built from the samples as
+    free-text items (as the item table holds the pinned references)."""
     root = tmp_path_factory.mktemp("reference-behavior")
-    evals = root / "evals.parquet"
-    pq.write_table(
-        pa.Table.from_pylist([{"id": name, "text": sample["text"]} for name, sample in SAMPLES.items()]), evals
-    )
-    documents = []
-    for name, sample in SAMPLES.items():
-        tokens = sample["text"].split()
-        near_miss = " ".join(f"replacement{i}" if i % 7 == 0 else token for i, token in enumerate(tokens))
-        documents.extend(
-            [{"id": f"{name}:copy", "text": sample["text"]}, {"id": f"{name}:near-miss", "text": near_miss}]
-        )
-    inputs = root / "inputs"
-    inputs.mkdir()
-    pq.write_table(pa.Table.from_pylist(documents), inputs / "part.parquet")
-    ngram = NGramConfig(ngram_length=13, overlap_threshold=0.5, min_matched_features=2)
+    items = root / "items"
+    items.mkdir()
+    rows = [item_row(name, name, "coverage", sample["text"]) for name, sample in SAMPLES.items()]
+    pq.write_table(pa.Table.from_pylist(rows, schema=ITEM_SCHEMA), items / "references.parquet")
+    reference = root / "reference.parquet"
+    pq.write_table(pa.Table.from_pylist([{"id": "r", "text": "an unrelated document about gardening"}]), reference)
     with set_current_client(LocalClient()):
-        build_eval_bloom(eval_data_sources=str(evals), output_path=str(root / "bloom"), ngram=ngram)
-        result = decon_to_parquet(
-            normalized_data=NormalizedData(main_output_dir=str(inputs), dup_output_dir=str(root / "dups"), counters={}),
-            output_path=str(root / "marked"),
-            prebuilt_bloom_dir=str(root / "bloom"),
-            ngram=ngram,
+        keys = build_keys(
+            items_dir=str(items),
+            reference_shards=[str(reference)],
+            output_path=str(root / "keys"),
+            worker_resources=ResourceConfig(cpu=1, ram="1g"),
+            max_workers=1,
         )
-    rows = pq.read_table(result.main_output_dir).to_pylist()
-    return {row["id"]: row["contaminated"] for row in rows}
+    locators = pq.read_table(keys.locators_path)
+    table = KeyTable(locators.column("key1_hash").to_numpy(), np.arange(locators.num_rows))
+    return {
+        name: {pair.item for pair in record_pairs(f"{name}:copy", sample["text"], table, locators)}
+        for name, sample in SAMPLES.items()
+    }
 
 
 @pytest.mark.parametrize("name", SAMPLES)
-def test_benchmark_problem_is_detected_and_near_miss_is_retained(name, benchmark_decisions):
+def test_benchmark_problem_copy_reaches_stage_two(name, stage_one_candidates):
     source = next(source for source in SOURCES if source.name == name)
     sample = SAMPLES[name]
     [record] = reference_records(iter([sample["row"]]), source)
     assert record["id"] == sample["record_id"]
     assert record["text"] == sample["text"]
-    assert benchmark_decisions[f"{source.name}:copy"] is True
-    assert benchmark_decisions[f"{source.name}:near-miss"] is False
+    assert name in stage_one_candidates[name]
 
 
 def test_empty_configured_family_does_not_publish_manifest(tmp_path, monkeypatch):
@@ -86,7 +86,7 @@ def test_empty_configured_family_does_not_publish_manifest(tmp_path, monkeypatch
     assert not (output / "_manifest.json").exists()
 
 
-def test_changed_reference_bytes_are_rejected_before_bloom_build(tmp_path, monkeypatch):
+def test_changed_reference_bytes_are_rejected_before_the_item_table_is_built(tmp_path, monkeypatch):
     source = next(source for source in SOURCES if source.name == "micro210-gsm8k-0shot")
     raw = tmp_path / "input.parquet"
     pq.write_table(pa.Table.from_pylist([SAMPLES[source.name]["row"]]), raw)
@@ -103,14 +103,7 @@ def test_changed_reference_bytes_are_rejected_before_bloom_build(tmp_path, monke
         pa.Table.from_pylist([{"id": "changed", "text": "A different benchmark problem with changed bytes"}]), artifact
     )
     with pytest.raises(ValueError, match="artifact SHA-256 differs"):
-        build_eval_bloom(
-            eval_data_sources=str(output),
-            output_path=str(tmp_path / "bloom"),
-            additional_required_eval_manifests=(
-                RequiredEvalManifest(str(output / "_manifest.json"), manifest["corpus_version"], (source.name,)),
-            ),
-        )
-    assert not (tmp_path / "bloom" / "_bloom" / "filter.bin").exists()
+        validate_required_manifest(str(output / "_manifest.json"), manifest["corpus_version"], (source.name,))
 
 
 def test_source_pin_update_cannot_reuse_sealed_reference_release(tmp_path, monkeypatch):
@@ -127,16 +120,9 @@ def test_source_pin_update_cannot_reuse_sealed_reference_release(tmp_path, monke
     manifest = prepare_references(str(output), (source,))
     updated = replace(source, revision="a-new-dataset-commit")
     with pytest.raises(ValueError, match="source catalog differs"):
-        build_eval_bloom(
-            eval_data_sources=str(output),
-            output_path=str(tmp_path / "bloom"),
-            additional_required_eval_manifests=(
-                RequiredEvalManifest(
-                    str(output / "_manifest.json"),
-                    manifest["corpus_version"],
-                    (source.name,),
-                    reference_sources_sha256((updated,)),
-                ),
-            ),
+        validate_required_manifest(
+            str(output / "_manifest.json"),
+            manifest["corpus_version"],
+            (source.name,),
+            expected_source_catalog_sha256=reference_sources_sha256((updated,)),
         )
-    assert not (tmp_path / "bloom" / "_bloom" / "filter.bin").exists()

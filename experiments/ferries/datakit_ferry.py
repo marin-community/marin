@@ -17,6 +17,7 @@ from marin.processing.classification.deduplication.cluster_text import ClusterTe
 from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 
+from experiments.datakit.decontam.config import CPU_SCORE_WORKERS
 from experiments.datakit.reference_pipeline import (
     ClusterConfig,
     FuzzyClusterConfig,
@@ -50,6 +51,8 @@ TIER1_SCALE = PipelineScale(
     store=StoreConfig(task_count=None, worker=ResourceConfig(cpu=2, ram="8g", disk="16g")),
     dedup_max_parallelism=128,
     train_centroids_resources=ResourceConfig.with_cpu(cpu=4, ram="16g"),
+    # The GCP cluster has no GPUs.
+    decon_score=CPU_SCORE_WORKERS,
 )
 
 

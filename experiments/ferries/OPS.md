@@ -14,14 +14,16 @@ The commands below are for manual runs.
 
 ## Region prerequisites
 
-The ferry reads two inputs from the region-local `MARIN_PREFIX`. They must be
+The ferry reads three inputs from the region-local `MARIN_PREFIX`. They must be
 present in the region where the ferry runs:
 
 - the quality model: `datakit/models/quality/pooled_junkgate2_marin` (the marin-tokenizer retrain; the e5-era `pooled_junkgate2` dir is refused by the quality step)
-- the decontamination eval corpus: `datakit/decontam/evals/<EVAL_CORPUS_VERSION>`
+- the decontamination item table: `datakit/decontam/items/<ITEMS_VERSION>`, prepared from the eval corpus
+  and the pinned references (see `experiments/datakit/README.md`)
+- the decontamination models: `datakit/decontam/models/encoder-it16-s{0,1}` (about 1.2 GB each)
 
-Both are present in `gs://marin-us-west4` and `gs://marin-eu-west4`. To run a
-ferry in a different region, copy them there first. They are about 250 MB in total.
+To run a ferry in a region without them, copy them there first. The ferries score
+decontamination pairs on CPU workers (`CPU_SCORE_WORKERS`) because the GCP cluster has no GPUs.
 
 Tier 3 also reads the normalized Nemotron-CC v1 split at
 `gs://marin-eu-west4/normalized/nemotron_v1/hq_actual_d6502d2c`. The ferry fails

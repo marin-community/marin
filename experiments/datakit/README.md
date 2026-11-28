@@ -16,8 +16,8 @@ the StepRunner walks at once.
 
 Most stages keep one step per source with its own output dir
 (`datakit/<stage>/<source>_<hash>/`). Global exact dedup, fuzzy candidate
-search, full-text verification, the decontamination DF filter, and the store
-combine sources. Steps write their
+search, full-text verification, the decontamination item table and keys, and the
+store combine sources. Steps write their
 main output under `outputs/main/` plus, where it makes sense, a small site/sample side output
 (`outputs/samples/`, `outputs/flagged_sample/`, …) that the per-stage HTML
 reports ([`reports/`](reports/)) read.
@@ -95,7 +95,8 @@ flowchart TD
     subgraph inputs["external inputs"]
         SRC[("normalized sources<br/>NormalizedData, per source")]
         MODEL[("quality model dir, marin-tokenizer vocabulary<br/>*.eqx + remap + meta + calib_bme.json")]
-        EVALS[("eval corpus<br/>&lt;prefix&gt;/datakit/decontam/evals")]
+        EVALS[("eval corpus + pinned references<br/>&lt;prefix&gt;/datakit/decontam/evals")]
+        DMODELS[("decontamination models<br/>&lt;prefix&gt;/datakit/decontam/models")]
     end
 
     subgraph per_source["per source"]
@@ -112,8 +113,8 @@ flowchart TD
         KM["train K-means + K views<br/>datakit/cluster/train_centroids"]
     end
 
-    BLOOM["eval bloom (shared)<br/>datakit/bloom/_combined_fixed"]
-    DF["eval n-gram DF (cross-source)<br/>datakit/decon_drop/_combined"]
+    ITEMS["eval item table (prepared per region)<br/>datakit/decontam/items/&lt;version&gt;"]
+    KEYS["rarest 20-char key per item (cross-source counts)<br/>datakit/decontam/_keys"]
     EXACT["global exact dedup by record ID<br/>datakit/global_exact_dedup"]
     DEDUP["fuzzy candidate clusters (cross-source)<br/>datakit/dedup"]
     PLAN["sample component sizes<br/>datakit/large_fuzzy_clusters"]
@@ -129,9 +130,9 @@ flowchart TD
     SRC --> DECON
     SRC --> MH
     MODEL --> QUAL
-    EVALS --> BLOOM --> DF --> DECON
-    SRC --> DF
-    BLOOM --> DECON
+    EVALS --> ITEMS --> KEYS --> DECON
+    SRC --> KEYS
+    DMODELS --> DECON
     EMB --> SAMP --> KM --> ASG
     EMB --> ASG
     MH --> DEDUP
@@ -166,9 +167,36 @@ flowchart TD
     STORE -.-> RS
 ```
 
+## Decontamination
+
+The decontamination stages (`marin.datakit.decon`) mark the records that hold a copy of an eval item:
+
+1. The item table holds one row per eval record of the sealed AA, Uncheatable, LMH and pinned-reference
+   corpora, with its question, choices, answer and passage. It is built once with
+   `python -m experiments.datakit.decontam.items` (cpu and lm_eval extras, `HF_TOKEN`) at
+   `datakit/decontam/items/<ITEMS_VERSION>`, and the directory is copied to the same path in each region. A
+   required eval that fails to load, or that has another record count than its manifest, fails the build.
+2. `datakit/decontam/_keys` chooses each item's key: the 20-character window of its normalized letters and
+   digits that the fewest records of a reference sample hold (two shards per source).
+3. Per source, three steps. `datakit/decontam/scan/<source>` scans every record for keys (stage 1); records
+   over 5,000,000 characters are read in overlapping pieces. `datakit/decontam/score/<source>` scores each
+   record–item pair with two fine-tuned mmBERT-base encoders (stage 2, on H100 workers in production).
+   `datakit/decontam/<source>` marks a record when its best pair scores at least `CUTOFF` (0.6); a cutoff
+   change re-runs only this step.
+
+The attributes have the input's shard names and row order: `id`, `partition_id`, `contaminated`,
+`max_score`, and `matched_items`. A sample of flagged records with their excerpts goes to
+`outputs/flagged_sample/`. The measurements behind the method are in
+[`decontam/encoder/README.md`](decontam/encoder/README.md).
+
+Each region that runs the stages needs the item table and the models under its `MARIN_PREFIX`; a run fails
+before its first step when the item table is missing. Score workers sync the `gpu` extra for the CUDA build
+of torch. Every `PipelineScale` names its score workers: `GPU_SCORE_WORKERS`, or `CPU_SCORE_WORKERS` on the
+GCP cluster, which has no GPUs.
+
 ## Evaluation references
 
-The shared decontamination Bloom requires the nine AA benchmarks and the
+The item table requires the nine AA benchmarks and the
 `atlas-benchmark-references-v1` supplement: all 210 selected Micro210 tasks,
 SWE-bench full/Verified/Lite test splits (2,294/500/300), and 120 long-loop
 holdouts. Micro210 protects its selected instances at revision `4564ed08`;
@@ -180,20 +208,14 @@ Prepare the supplement with
 `python -m experiments.datakit.decontam.pinned_references` on a CPU worker in
 the output bucket's region, with the usual `cpu` and `datakit` extras and
 regional `MARIN_PREFIX`. Source commits, input/output SHA-256 values and exact
-counts are sealed in its manifest. Then run the reference pipeline with
-`--target decon-bloom` to build a new Bloom identity. Existing marks require
-an explicit rebuild to use it. The AA/LMH corpus and LMH best-effort policy
-are unchanged.
+counts are sealed in its manifest. Then prepare a new item table (bump
+`ITEM_BUILDER_REVISION` or the reference version). Existing marks require
+an explicit rebuild to use it.
 
 The supplement currently exists only under `s3://marin-us-east-02a/marin`.
-Because its manifest is required, `--target decon-bloom` fails against
+Because its manifest is required, the item table build fails against
 `gs://marin-us-central2` or `gs://marin-eu-west4` until the supplement is
 prepared there with the command above and that region's `MARIN_PREFIX`.
-
-The earlier broader release remains evidence for these benchmark additions:
-[`release-validation.json`](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fdatakit%2Fbloom%2F_combined_fixed_3a94b52b%2Frelease-validation.json)
-at `s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_3a94b52b/release-validation.json`.
-It also contains separate LMH replacements and is not the benchmark-only release.
 
 ## Testbed samples
 
@@ -288,7 +310,7 @@ uv run fsutil ls s3://marin-us-east-02a/marin/datakit/
 | `cluster/quality/fast_transformer/` | Quality classifier: per-source scoring step + training/calibration |
 | `cluster/domain/v0/` | Domain clustering: centroid sampling/training + per-source assignment |
 | `embeddings/luxical/` | Luxical-one document embeddings feeding the domain stage |
-| `decontam/` | Eval-corpus preparation (the decon step itself lives in `marin.datakit.decon`) |
+| `decontam/` | Eval corpus, item table and decontamination policy (the stages live in `marin.datakit.decon`); `encoder/` holds the research that chose the method |
 | `store/datakit_store.py` | Shuffle attribute join → compact per-(cluster, quality) Levanter caches |
 | `reports/` | Per-stage single-page HTML reports (`common.py` + one module/template per stage) |
 | `scripts/` | Manual source triggering and synchronization, tier-2 dataset reproduction, and tier-1 output validation |

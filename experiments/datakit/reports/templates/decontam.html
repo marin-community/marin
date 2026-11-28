@@ -68,15 +68,15 @@ const fmt = n => n >= 1e12 ? (n/1e12).toFixed(2)+"T" : n >= 1e9 ? (n/1e9).toFixe
 const pct = r => { const p = 100*r; return (p >= 1 ? p.toFixed(2) : p.toFixed(4)) + "%"; };
 const esc = s => s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const S = D.stats;
-document.getElementById("meta").textContent = `eval index: ${D.meta.eval_hash_index_path}`;
+document.getElementById("meta").textContent = "each flagged record shows the excerpt of its best pair, the pair score and the matched evals";
 document.getElementById("sampling").textContent = D.meta.sampling;
 const cards = [
   ["contamination", pct(S.contamination_rate), `of ${fmt(S.total_docs)} docs`],
   ["contaminated", fmt(S.contaminated_docs), "docs flagged"],
   ["clean", fmt(S.clean_docs), "docs kept"],
-  ["sources", S.n_sources, "marked against the eval bloom"],
+  ["sources", S.n_sources, "marked against the eval items"],
   ["flagged sampled", fmt(S.n_flagged_sampled), "examples below"],
-  ["evals hit", fmt(S.n_evals_hit), "by sampled matched hashes"],
+  ["evals hit", fmt(S.n_evals_hit), "by sampled flagged records"],
 ];
 document.getElementById("cards").innerHTML = cards.map(([k,v,d]) =>
   `<div class="card"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
@@ -89,15 +89,15 @@ for (const s of D.sources) {
 }
 document.getElementById("srcs").innerHTML = rows;
 document.getElementById("evals").innerHTML = D.eval_hits.length
-  ? `<div class="tablewrap"><table><tr><th class="wide">eval record</th><th>sampled hash hits</th></tr>` +
-    D.eval_hits.map(e => `<tr><td class="wide">${esc(e.eval_id)}</td><td class="num">${fmt(e.hits)}</td></tr>`).join("") +
+  ? `<div class="tablewrap"><table><tr><th class="wide">eval</th><th>sampled flagged records</th></tr>` +
+    D.eval_hits.map(e => `<tr><td class="wide">${esc(e.eval)}</td><td class="num">${fmt(e.hits)}</td></tr>`).join("") +
     `</table></div>`
-  : `<div class="panel" style="color:var(--ink2)">no eval hits — no sampled matched hashes to attribute</div>`;
+  : `<div class="panel" style="color:var(--ink2)">no eval hits — no sampled flagged records to attribute</div>`;
 document.getElementById("flagged").innerHTML = D.flagged.length
   ? D.flagged.map(g =>
       `<h3>${esc(g.source)} <span>${g.rows.length} sampled</span></h3>` +
       g.rows.map(r =>
-        `<details class="drawer"><summary><span class="ov">overlap ${r.max_overlap.toFixed(2)}</span>` +
+        `<details class="drawer"><summary><span class="ov">score ${r.max_score.toFixed(2)} · ${esc(r.evals.join(", "))}</span>` +
         `<span class="id">${esc(r.id)}</span></summary><pre>${esc(r.text)}</pre></details>`).join("")
     ).join("")
   : `<div class="panel" style="color:var(--ink2)">no flagged samples — sampled sources are clean</div>`;

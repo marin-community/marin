@@ -1,1845 +1,266 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for datakit decon step."""
-
-import gzip
-import hashlib
-import json
-import os
-from concurrent.futures import ThreadPoolExecutor
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
-from threading import Barrier
 
-import dupekit
+import numpy as np
+import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
-from marin.datakit import decon
+from fray.types import ResourceConfig
 from marin.datakit.decon import (
-    BestEffortEvalSuite,
-    EvalBloom,
-    NGramConfig,
-    RequiredEvalSuite,
-    _bloom_hash,
-    _extract_ngrams,
-    _load_drop_set,
-    bloom_paths,
-    build_all_source_drop_sets,
-    build_eval_bloom,
-    decon_to_parquet,
-    merge_eval_blooms,
+    ATTRIBUTE_SCHEMA,
+    ITEM_SCHEMA,
+    DeconKeys,
+    ScoreWorkers,
+    _record_scores,
+    build_keys,
+    located_questions,
+    mark_source,
+    scan_source,
+    score_pairs,
+    shared_holders,
 )
+from marin.datakit.decon_keys import (
+    KeyStream,
+    Windows,
+    candidate_windows,
+    excerpt,
+    keys_table,
+    record_readings,
+    text_stream,
+    window_hashes,
+)
+from marin.datakit.decon_tables import parquet_files, read_table
 from marin.datakit.normalize import NormalizedData
+
+PLANETS = "Which planet in our solar system has the largest number of known moons today?"
+PLANET_CHOICES = ["Jupiter", "Saturn", "Uranus", "Neptune"]
+DUCKS = "Janet's ducks lay sixteen eggs per day and she eats three of them for breakfast every morning."
+RESOURCES = ResourceConfig(cpu=1, ram="1g")
 
 
 @pytest.fixture(autouse=True)
-def flow_backend_ctx():
+def local_client():
     with set_current_client(LocalClient()):
         yield
 
 
-def _write_input_parquet(path: Path, records: list[dict]) -> None:
-    """Write datakit-normalized-shaped Parquet (id, text)."""
+@dataclass(frozen=True)
+class QuestionInExcerpt:
+    """A stand-in for the encoder models: 1.0 when the excerpt holds the item's whole question, else 0.2.
+    Each call leaves a file in *calls_dir*."""
+
+    calls_dir: str
+    version: str = "question-in-excerpt"
+
+    def load(self, items_dir: str, device: str):
+        questions = {
+            row["id"]: row["question"]
+            for path in parquet_files(items_dir)
+            for row in read_table(path, ["id", "question"]).to_pylist()
+        }
+
+        def score(pairs: pd.DataFrame) -> np.ndarray:
+            (Path(self.calls_dir) / uuid.uuid4().hex).write_text(str(len(pairs)))
+            return np.array(
+                [
+                    1.0 if text_stream(questions[item]) in text_stream(right) else 0.2
+                    for item, right in zip(pairs["item"], pairs["right"], strict=True)
+                ]
+            )
+
+        return score
+
+
+def _write(path: Path, rows: list[dict], schema: pa.Schema | None = None) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(pa.Table.from_pylist(records), str(path))
+    pq.write_table(pa.Table.from_pylist(rows, schema=schema), str(path))
+    return str(path)
 
 
-def _write_eval_jsonl(path: Path, records: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with gzip.open(path, "wt", encoding="utf-8") as f:
-        for r in records:
-            f.write(json.dumps(r) + "\n")
+def _items(root: Path) -> str:
+    def row(item_id: str, eval_name: str, question: str, choices: list[str]) -> dict:
+        return {
+            "id": item_id,
+            "eval": eval_name,
+            "suite": "test",
+            "question": question,
+            "choices": choices,
+            "answer": "",
+            "prompt": question,
+            "passage": "",
+            "choices_mode": "none",
+            "reason": "",
+        }
+
+    _write(root / "items" / "planets.parquet", [row("planets-0", "planets", PLANETS, PLANET_CHOICES)], ITEM_SCHEMA)
+    _write(root / "items" / "ducks.parquet", [row("ducks-0", "ducks", DUCKS, [])], ITEM_SCHEMA)
+    return str(root / "items")
 
 
-def _read_attributes(output_dir: Path) -> dict[str, dict]:
-    """Concatenate every flat attribute Parquet file under *output_dir* and key by ID."""
-    rows: dict[str, dict] = {}
-    for pf in sorted(output_dir.glob("outputs/main/part-*.parquet")):
-        for row in pq.read_table(str(pf)).to_pylist():
-            rows[row["id"]] = row
-    return rows
-
-
-def _as_source(input_dir: Path) -> NormalizedData:
-    """Wrap a flat directory of test Parquet files as a NormalizedData artifact."""
-    return NormalizedData(
-        main_output_dir=str(input_dir),
-        dup_output_dir=str(input_dir / "_dups_unused"),
-        counters={},
+def _keys(tmp_path: Path) -> DeconKeys:
+    reference = _write(
+        tmp_path / "reference" / "part-00000-of-00001.parquet",
+        [{"id": f"ref-{n}", "text": f"an unrelated reference document number {n} about gardening"} for n in range(20)],
+    )
+    return build_keys(
+        items_dir=_items(tmp_path),
+        reference_shards=[reference],
+        output_path=str(tmp_path / "keys"),
+        worker_resources=RESOURCES,
+        max_workers=1,
     )
 
 
-@pytest.fixture
-def fox_corpus(tmp_path: Path):
-    """Two-partition fox-themed corpus inspired by tests/processing/classification/conftest.py.
-
-    Returns a dict with paths for eval source, input parquet dir, and output dir.
-    """
-    eval_dir = tmp_path / "eval"
-    input_dir = tmp_path / "input"
-    output_dir = tmp_path / "output"
-
-    # Eval source: short questions we want to detect overlap with.
-    eval_records = [
-        {"id": "eval_arctic", "text": "Arctic predators have superior auditory capabilities for hunting beneath snow."},
-        {"id": "eval_red", "text": "Red canids inhabit northern territories worldwide."},
-    ]
-    _write_eval_jsonl(eval_dir / "eval.jsonl.gz", eval_records)
-
-    # Input partitions, datakit-shaped (id/text/partition_id).
-    partition_0 = [
-        {  # verbatim match with eval_arctic → contaminated
-            "id": "doc_arctic_exact",
-            "text": "Arctic predators have superior auditory capabilities for hunting beneath snow.",
-            "partition_id": 0,
-        },
-        {  # 8/9 of 3-grams match eval_arctic (≥ 0.5) → contaminated
-            "id": "doc_arctic_high",
-            "text": "Arctic predators have superior auditory capabilities for hunting beneath thick snow.",
-            "partition_id": 0,
-        },
-        {  # 1/6 3-grams match (one shared phrase) → below 0.5 → gated out
-            "id": "doc_low_overlap",
-            "text": "Many arctic predators have evolved in surprising ways across millennia.",
-            "partition_id": 0,
-        },
-    ]
-    partition_1 = [
-        {  # verbatim match with eval_red → contaminated
-            "id": "doc_red_exact",
-            "text": "Red canids inhabit northern territories worldwide.",
-            "partition_id": 1,
-        },
-        {  # no overlap at all
-            "id": "doc_unique",
-            "text": "Desert mammals possess oversized pinnae for thermal regulation.",
-            "partition_id": 1,
-        },
-    ]
-    _write_input_parquet(input_dir / "part-00000-of-00002.parquet", partition_0)
-    _write_input_parquet(input_dir / "part-00001-of-00002.parquet", partition_1)
-
-    return {
-        "eval_dir": str(eval_dir),
-        "input_dir": str(input_dir),
-        "output_dir": str(output_dir),
+def _source(tmp_path: Path) -> NormalizedData:
+    filler = "Some text about the weather and the city council meeting. " * 20
+    shards = {
+        "part-00000-of-00002.parquet": [
+            {"id": "a0", "text": filler},
+            {"id": "a1", "text": f"{filler}\nQuiz: {PLANETS}\nA) Jupiter B) Saturn C) Uranus D) Neptune\n{filler}"},
+            {"id": "a2", "text": filler},
+        ],
+        "part-00001-of-00002.parquet": [
+            {
+                "id": "b0",
+                "text": f"{filler} Janet's ducks lay sixteen eggs per day and she eats three of them. {filler}",
+            },
+            {"id": "b1", "text": filler},
+        ],
     }
-
-
-def test_decon_ngram_flags_high_overlap_and_gates_low(fox_corpus):
-    """n=3 with threshold=0.5: verbatim and high-overlap records flagged; low-overlap and unique gated out."""
-    attrs = decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
-        eval_data_sources=fox_corpus["eval_dir"],
-        output_path=fox_corpus["output_dir"],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=3, stride=0, overlap_threshold=0.5),
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-    assert attrs.num_partitions == 2
-
-    rows = _read_attributes(Path(fox_corpus["output_dir"]))
-    assert rows["doc_arctic_exact"]["contaminated"] is True
-    assert rows["doc_arctic_exact"]["max_overlap"] == 1.0
-
-    assert rows["doc_arctic_high"]["contaminated"] is True
-    assert rows["doc_arctic_high"]["max_overlap"] >= 0.5
-
-    assert rows["doc_low_overlap"]["contaminated"] is False
-    assert rows["doc_red_exact"]["contaminated"] is True
-    assert rows["doc_unique"]["contaminated"] is False
-    assert rows["doc_unique"]["max_overlap"] == 0.0
-
-
-def test_decon_exact_paragraph_match(fox_corpus):
-    """ngram=None: whole-paragraph match. Verbatim records flagged; near-match gated out (different bytes)."""
-    decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
-        eval_data_sources=fox_corpus["eval_dir"],
-        output_path=fox_corpus["output_dir"],
-        ngram=None,
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-
-    rows = _read_attributes(Path(fox_corpus["output_dir"]))
-    assert rows["doc_arctic_exact"]["contaminated"] is True
-    assert rows["doc_arctic_exact"]["max_overlap"] == 1.0
-
-    # "thick snow" → different bytes → not a paragraph-exact match.
-    assert rows["doc_arctic_high"]["contaminated"] is False
-    assert rows["doc_red_exact"]["contaminated"] is True
-    assert rows["doc_unique"]["contaminated"] is False
-
-
-def test_decon_preserves_partition_filenames(fox_corpus):
-    """Output partition filenames mirror input filenames 1:1 (co-partitioning invariant)."""
-    decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
-        eval_data_sources=fox_corpus["eval_dir"],
-        output_path=fox_corpus["output_dir"],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-    input_names = sorted(p.name for p in Path(fox_corpus["input_dir"]).glob("*.parquet"))
-    output_names = sorted(p.name for p in Path(fox_corpus["output_dir"]).glob("outputs/main/part-*.parquet"))
-    assert input_names == output_names
-
-
-def test_decon_output_schema(fox_corpus):
-    """Output Parquet has flat ID, partition, and decontamination fields."""
-    decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
-        eval_data_sources=fox_corpus["eval_dir"],
-        output_path=fox_corpus["output_dir"],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-    output_files = sorted(Path(fox_corpus["output_dir"]).glob("outputs/main/part-*.parquet"))
-    assert output_files, "expected at least one output partition"
-    schema = pq.read_schema(str(output_files[0]))
-    assert set(schema.names) == {"id", "partition_id", "contaminated", "max_overlap", "matched_hashes"}
-    assert pa.types.is_string(schema.field("id").type)
-    assert pa.types.is_integer(schema.field("partition_id").type)
-    assert pa.types.is_boolean(schema.field("contaminated").type)
-    assert pa.types.is_floating(schema.field("max_overlap").type)
-    assert pa.types.is_list(schema.field("matched_hashes").type)
-    assert schema.field("matched_hashes").type.value_type == pa.uint64()
-
-
-def test_decon_emits_eval_hash_index_sidecar(fox_corpus):
-    """Build writes a hash → eval_id Parquet sidecar with the expected schema."""
-    attrs = decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
-        eval_data_sources=fox_corpus["eval_dir"],
-        output_path=fox_corpus["output_dir"],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-    sidecar = Path(attrs.eval_hash_index_path)
-    assert sidecar.exists(), f"missing sidecar at {sidecar}"
-    schema = pq.read_schema(str(sidecar))
-    assert schema.field("hash").type == pa.uint64()
-    assert pa.types.is_string(schema.field("eval_id").type)
-
-    rows = pq.read_table(str(sidecar)).to_pylist()
-    assert rows, "expected at least one (hash, eval_id) row"
-    eval_ids = {r["eval_id"] for r in rows}
-    # Both eval records contribute to the sidecar.
-    assert eval_ids == {"eval_arctic", "eval_red"}
-
-
-def test_decon_matched_hashes_join_recovers_eval_id(fox_corpus):
-    """A contaminated record's matched_hashes joined with the sidecar attributes back to its eval."""
-    attrs = decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
-        eval_data_sources=fox_corpus["eval_dir"],
-        output_path=fox_corpus["output_dir"],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-    rows = _read_attributes(Path(fox_corpus["output_dir"]))
-    hash_to_eval: dict[int, set[str]] = {}
-    for r in pq.read_table(attrs.eval_hash_index_path).to_pylist():
-        hash_to_eval.setdefault(r["hash"], set()).add(r["eval_id"])
-
-    arctic_evals: set[str] = set()
-    for h in rows["doc_arctic_exact"]["matched_hashes"]:
-        arctic_evals |= hash_to_eval.get(h, set())
-    assert arctic_evals == {"eval_arctic"}
-
-    red_evals: set[str] = set()
-    for h in rows["doc_red_exact"]["matched_hashes"]:
-        red_evals |= hash_to_eval.get(h, set())
-    assert red_evals == {"eval_red"}
-
-    # Clean record has no matched hashes.
-    assert rows["doc_unique"]["matched_hashes"] == []
-
-
-@pytest.mark.parametrize(
-    "threshold, expect_high_flagged",
-    [(0.0, True), (0.5, True), (0.95, False), (1.0, False)],
-)
-def test_decon_overlap_threshold_gates(fox_corpus, threshold, expect_high_flagged):
-    """Threshold gates which records are marked contaminated.
-
-    The high-overlap record (doc_arctic_high) hits ~8/9 of eval_arctic's 3-grams (~0.89).
-    It's flagged at thresholds ≤ 0.89 and gated above; pin the gate behavior across thresholds.
-    """
-    decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
-        eval_data_sources=fox_corpus["eval_dir"],
-        output_path=fox_corpus["output_dir"],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=threshold),
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-    rows = _read_attributes(Path(fox_corpus["output_dir"]))
-    assert rows["doc_arctic_high"]["contaminated"] is expect_high_flagged
-    # Verbatim record always flagged (max_overlap == 1.0).
-    assert rows["doc_arctic_exact"]["contaminated"] is True
-
-
-def test_decon_empty_input_raises(tmp_path: Path):
-    """No .parquet files under input_path → FileNotFoundError."""
-    eval_dir = tmp_path / "eval"
-    input_dir = tmp_path / "input"
-    output_dir = tmp_path / "output"
-    _write_eval_jsonl(eval_dir / "eval.jsonl.gz", [{"id": "x", "text": "anything"}])
-    input_dir.mkdir()
-
-    with pytest.raises(FileNotFoundError):
-        decon_to_parquet(
-            normalized_data=_as_source(input_dir),
-            eval_data_sources=str(eval_dir),
-            output_path=str(output_dir),
-            ngram=NGramConfig(min_matched_features=2, ngram_length=3),
-        )
-
-
-def test_decon_eval_dir_with_sidecar_files_is_safe(tmp_path: Path):
-    """Eval directories with non-data sidecars (README, _SUCCESS, hidden dirs) don't break build.
-
-    Regression: _discover_eval_files previously yielded every non-dot file, then
-    load_file rejected unsupported extensions and raised — killing the whole
-    decon step. The discovery now filters by zephyr.readers.SUPPORTED_EXTENSIONS
-    and skips hidden directories (mirrors normalize._discover_files).
-    """
-    eval_dir = tmp_path / "eval"
-    input_dir = tmp_path / "input"
-    output_dir = tmp_path / "output"
-    eval_dir.mkdir()
-    input_dir.mkdir()
-
-    # The actual eval file
-    _write_eval_jsonl(eval_dir / "eval.jsonl.gz", [{"id": "eval", "text": "Hello big world example"}])
-    # Common sidecar files that would crash load_file:
-    (eval_dir / "README.md").write_text("# Eval corpus\nA description.\n")
-    (eval_dir / "_SUCCESS").write_text("")
-    (eval_dir / ".provenance.json").write_text('{"source": "wherever"}')
-    # Hidden directory with stuff inside (.metrics/, .executor_info/, etc.)
-    (eval_dir / ".metrics").mkdir()
-    (eval_dir / ".metrics" / "stats.json").write_text('{"records": 1}')
-
-    _write_input_parquet(
-        input_dir / "part-00000-of-00001.parquet",
-        [{"id": "doc", "text": "Hello big world example", "partition_id": 0}],
-    )
-
-    # Must not raise.
-    decon_to_parquet(
-        normalized_data=_as_source(input_dir),
-        eval_data_sources=str(eval_dir),
-        output_path=str(output_dir),
-        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
-        estimated_doc_count=1_000,
-        false_positive_rate=1e-9,
-    )
-    # And the legitimate eval record still drove a match.
-    rows = _read_attributes(output_dir)
-    assert rows["doc"]["contaminated"] is True
-
-
-def test_decon_fallback_eval_id_uses_full_path_for_uniqueness(tmp_path: Path):
-    """Eval records without an ``id`` field get fallback eval_ids built from the full path.
-
-    Regression: the fallback used os.path.basename, so two files at e.g.
-    ``source/a/data.jsonl.gz`` and ``source/b/data.jsonl.gz`` would produce the
-    same eval_id (``data.jsonl.gz::0``) for their row 0 — collapsing distinct
-    eval records under one ID. Now uses the full path so they stay distinct.
-    """
-    eval_dir = tmp_path / "eval"
-    input_dir = tmp_path / "input"
-    output_dir = tmp_path / "output"
-    input_dir.mkdir()
-
-    # Two eval files with the same basename in different subdirs. Records lack `id`.
-    _write_eval_jsonl(eval_dir / "a" / "data.jsonl.gz", [{"text": "the quick brown fox jumps over"}])
-    _write_eval_jsonl(eval_dir / "b" / "data.jsonl.gz", [{"text": "a wholly distinct evaluation sentence here"}])
-
-    _write_input_parquet(
-        input_dir / "part-00000-of-00001.parquet",
-        [{"id": "doc", "text": "irrelevant input text", "partition_id": 0}],
-    )
-
-    attrs = decon_to_parquet(
-        normalized_data=_as_source(input_dir),
-        eval_data_sources=str(eval_dir),
-        output_path=str(output_dir),
-        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
-        estimated_doc_count=1_000,
-        false_positive_rate=1e-9,
-    )
-
-    # Sidecar should have two distinct eval_ids, one per eval file.
-    sidecar = pq.read_table(attrs.eval_hash_index_path).to_pylist()
-    eval_ids = {r["eval_id"] for r in sidecar}
-    assert len(eval_ids) == 2, f"expected 2 distinct eval_ids, got {len(eval_ids)}: {eval_ids}"
-    # Both should mention 'data.jsonl.gz' but be path-distinguishable (one under /a/, one under /b/).
-    assert all("data.jsonl.gz" in e for e in eval_ids)
-    assert any("/a/" in e for e in eval_ids)
-    assert any("/b/" in e for e in eval_ids)
-
-
-def test_decon_synthesizes_partition_id_from_shard_index(tmp_path: Path):
-    """Decon synthesizes partition_id from shard.shard_idx (sorted-file order).
-
-    Input records carry only id and text; the output's partition_id column is
-    derived at read time from the shard index, matching the input's
-    part-NNNNN-of-MMMMM naming.
-    """
-    eval_dir = tmp_path / "eval"
-    input_dir = tmp_path / "input"
-    output_dir = tmp_path / "output"
-    input_dir.mkdir()
-    _write_eval_jsonl(eval_dir / "eval.jsonl.gz", [{"id": "eval", "text": "Arctic predators have superior auditory."}])
-
-    # Two flat input partitions, but records do NOT include partition_id.
-    pq.write_table(
-        pa.Table.from_pylist([{"id": "doc0", "text": "Arctic predators have superior auditory."}]),
-        str(input_dir / "part-00000-of-00002.parquet"),
-    )
-    pq.write_table(
-        pa.Table.from_pylist([{"id": "doc1", "text": "Desert mammals possess oversized pinnae."}]),
-        str(input_dir / "part-00001-of-00002.parquet"),
-    )
-
-    decon_to_parquet(
-        normalized_data=_as_source(input_dir),
-        eval_data_sources=str(eval_dir),
-        output_path=str(output_dir),
-        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
-        estimated_doc_count=1_000,
-        false_positive_rate=1e-9,
-    )
-
-    rows = _read_attributes(output_dir)
-    # contaminated decisions still correct
-    assert rows["doc0"]["contaminated"] is True
-    assert rows["doc1"]["contaminated"] is False
-    # partition_id synthesized: doc0 came from shard 0, doc1 from shard 1
-    assert rows["doc0"]["partition_id"] == 0
-    assert rows["doc1"]["partition_id"] == 1
-
-
-def test_decon_paragraphs_below_short_exact_minimum_contribute_nothing(tmp_path: Path):
-    """Paragraphs with fewer than three tokens are skipped in n-gram mode.
-
-    Earlier versions (PR #5656 mid-stack) fell back to whole-paragraph hashing
-    for paragraphs too short to form an n-gram. That created trivial collisions
-    on common short paragraphs like ``"..."``, ``"A."``, etc., generating
-    ~18% phantom-contamination flags in the MMLU vs nemotron-math smoke run. The
-    guarded fallback excludes these short values.
-    """
-    eval_dir = tmp_path / "eval"
-    input_dir = tmp_path / "input"
-    output_dir = tmp_path / "output"
-
-    # Eval has a 2-token paragraph; with n=8 there are no ngrams → no bloom adds.
-    _write_eval_jsonl(eval_dir / "eval.jsonl.gz", [{"id": "short_eval", "text": "Hello world"}])
-    _write_input_parquet(
-        input_dir / "part-00000-of-00001.parquet",
-        [{"id": "doc_short_text", "text": "Hello world", "partition_id": 0}],
-    )
-
-    decon_to_parquet(
-        normalized_data=_as_source(input_dir),
-        eval_data_sources=str(eval_dir),
-        output_path=str(output_dir),
-        ngram=NGramConfig(min_matched_features=2, ngram_length=8, overlap_threshold=0.5),
-        estimated_doc_count=1_000,
-        false_positive_rate=1e-9,
-    )
-    rows = _read_attributes(output_dir)
-    # No matchable ngram → not contaminated, even though text is byte-identical to eval.
-    assert rows["doc_short_text"]["contaminated"] is False
-    assert rows["doc_short_text"]["max_overlap"] == 0.0
-    assert rows["doc_short_text"]["matched_hashes"] == []
-
-
-@pytest.mark.parametrize("short_match", ["September 29, 2011", "2, 3 and 4"])
-def test_decon_does_not_mark_long_document_from_one_short_match(tmp_path: Path, short_match: str):
-    rows = _run_decon_one_shot(
-        tmp_path,
-        eval_records=[{"id": "short_eval", "text": short_match}],
-        input_records=[
-            {
-                "id": "doc",
-                "text": (
-                    "This document has unrelated material before the short value.\n\n"
-                    f"{short_match}\n\n"
-                    "It also has unrelated material after the short value."
-                ),
-                "partition_id": 0,
-            }
-        ],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=13, overlap_threshold=0.5),
-    )
-
-    assert rows["doc"]["contaminated"] is False
-    assert rows["doc"]["max_overlap"] == 1.0
-    assert rows["doc"]["matched_hashes"] == []
-
-
-@pytest.mark.parametrize(
-    ("text", "features"),
-    [
-        ("Distinctive alpha phrase", ["Distinctive alpha phrase"]),
-        ("Alpha beta\n\ngamma", ["Alpha beta gamma"]),
-        (
-            "one two three four five six seven eight nine ten eleven twelve thirteen",
-            ["one two three four five six seven eight nine ten eleven twelve thirteen"],
-        ),
-        (
-            "In which fiscal quarter of 2024 did Atlassian record its second highest revenue?\n\nQ4",
-            ["In which fiscal quarter of 2024 did Atlassian record its second highest revenue?"],
-        ),
-        (
-            "one two three four\n\nfive six seven eight\n\nnine ten eleven twelve\n\nthirteen fourteen",
-            [
-                "one two three four five six seven eight nine ten eleven twelve thirteen",
-                "two three four five six seven eight nine ten eleven twelve thirteen fourteen",
-            ],
-        ),
-    ],
-    ids=["short-exact", "short-record-fallback", "one-ngram", "one-ngram-with-answer", "ngram-record-fallback"],
-)
-def test_decon_complete_record_retains_match_evidence(tmp_path: Path, text: str, features: list[str]):
-    ngram = NGramConfig(min_matched_features=2, ngram_length=13, overlap_threshold=0.5)
-    rows = _run_decon_one_shot(
-        tmp_path,
-        eval_records=[{"id": "eval", "text": text}],
-        input_records=[{"id": "doc", "text": text, "partition_id": 0}],
-        ngram=ngram,
-    )
-
-    row = rows["doc"]
-    assert row["contaminated"] is True
-    assert row["max_overlap"] == 1.0
-    assert set(row["matched_hashes"]) == {_bloom_hash(feature) for feature in features}
-
-
-def test_decon_does_not_index_short_paragraph_from_long_eval_record(tmp_path: Path):
-    long_match = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
-    short_match = "See comment above."
-    rows = _run_decon_one_shot(
-        tmp_path,
-        eval_records=[{"id": "eval", "text": f"{long_match}\n\n{short_match}"}],
-        input_records=[
-            {"id": "long", "text": long_match, "partition_id": 0},
-            {"id": "short", "text": short_match, "partition_id": 0},
-        ],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=13, overlap_threshold=0.5),
-    )
-
-    assert rows["long"]["contaminated"] is True
-    assert rows["short"]["contaminated"] is False
-    assert rows["short"]["matched_hashes"] == []
-
-
-def test_decon_uses_configured_minimum_distinct_features(tmp_path: Path):
-    text = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
-    eval_records = [{"id": "eval", "text": text}]
-    input_records = [{"id": "doc", "text": text, "partition_id": 0}]
-
-    two = _run_decon_one_shot(
-        tmp_path / "two",
-        eval_records=eval_records,
-        input_records=input_records,
-        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5, min_matched_features=2),
-    )
-    three = _run_decon_one_shot(
-        tmp_path / "three",
-        eval_records=eval_records,
-        input_records=input_records,
-        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5, min_matched_features=3),
-    )
-
-    assert two["doc"]["contaminated"] is True
-    assert three["doc"]["contaminated"] is False
-
-
-def test_decon_attributes_only_report_hashes_that_triggered_mark(tmp_path: Path):
-    strong_match = "alpha beta gamma delta epsilon zeta"
-    weak_match = "September 29, 2011"
-    rows = _run_decon_one_shot(
-        tmp_path,
-        eval_records=[
-            {"id": "strong_eval", "text": strong_match},
-            {"id": "weak_eval", "text": weak_match},
-        ],
-        input_records=[
-            {
-                "id": "doc",
-                "text": f"{strong_match}\n\n{weak_match}",
-                "partition_id": 0,
-            }
-        ],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
-    )
-
-    expected = {_bloom_hash(ngram) for ngram in _extract_ngrams(strong_match, 3, 0)}
-    assert rows["doc"]["contaminated"] is True
-    assert set(rows["doc"]["matched_hashes"]) == expected
-
-
-def test_double_newline_delimiter_spans_single_line_breaks(tmp_path: Path):
-    """``paragraph_delimiter="\\n\\n"`` lets n-grams cross single ``\\n`` breaks.
-
-    An eval item wrapped into short lines (each below ``ngram_length``) is
-    invisible under the per-line ``"\\n"`` policy (no line forms an n-gram) but
-    matchable under the true-paragraph ``"\\n\\n"`` policy, since a blank-line
-    block is tokenized as a whole. Pins the short-line recall win (marin#6852).
-    """
-    words = [f"lexeme{i}" for i in range(10)]
-    eval_text = " ".join(words)  # single line
-    wrapped = "\n".join(" ".join(words[i : i + 2]) for i in range(0, len(words), 2))  # 2 words/line
-
-    per_line = _run_decon_one_shot(
-        tmp_path / "nl",
-        eval_records=[{"id": "e", "text": eval_text}],
-        input_records=[{"id": "doc", "text": wrapped, "partition_id": 0}],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=5, overlap_threshold=0.5, paragraph_delimiter="\n"),
-    )
-    assert per_line["doc"]["contaminated"] is False  # short lines form no 5-grams
-
-    true_para = _run_decon_one_shot(
-        tmp_path / "nlnl",
-        eval_records=[{"id": "e", "text": eval_text}],
-        input_records=[{"id": "doc", "text": wrapped, "partition_id": 0}],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=5, overlap_threshold=0.5, paragraph_delimiter="\n\n"),
-    )
-    assert true_para["doc"]["contaminated"] is True
-
-
-def test_double_newline_delimiter_dilutes_isolated_matched_line(tmp_path: Path):
-    """``"\\n\\n"`` measures overlap over the whole block, so a lone matched line
-    among unrelated lines no longer saturates the fraction.
-
-    Under ``"\\n"`` the matched line is its own paragraph → overlap 1.0 → flagged;
-    under ``"\\n\\n"`` it is a small share of the block → below threshold → not
-    flagged. Pins the isolated-line false-positive fix (marin#6852)."""
-    eval_text = "distinctive alpha bravo charlie delta echo foxtrot"  # 7 tokens
-    filler = "\n".join(f"unrelated filler line number {i} here" for i in range(8))
-    block = filler + "\n" + eval_text + "\n" + filler  # all one blank-line-free block
-
-    per_line = _run_decon_one_shot(
-        tmp_path / "nl",
-        eval_records=[{"id": "e", "text": eval_text}],
-        input_records=[{"id": "doc", "text": block, "partition_id": 0}],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=5, overlap_threshold=0.5, paragraph_delimiter="\n"),
-    )
-    assert per_line["doc"]["contaminated"] is True
-
-    true_para = _run_decon_one_shot(
-        tmp_path / "nlnl",
-        eval_records=[{"id": "e", "text": eval_text}],
-        input_records=[{"id": "doc", "text": block, "partition_id": 0}],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=5, overlap_threshold=0.5, paragraph_delimiter="\n\n"),
-    )
-    assert true_para["doc"]["contaminated"] is False
-
-
-# ---------------------------------------------------------------------------
-# Functional boundary tests
-#
-# These exercise reasonable real-world contamination scenarios. Positive cases
-# verify the algorithm catches what it should. Limitation cases are xfail with
-# strict=True — if a future change improves the algorithm enough to handle
-# them, the test will XPASS and force us to update the suite.
-# ---------------------------------------------------------------------------
-
-
-def _run_decon_one_shot(
-    tmp_path: Path,
-    *,
-    eval_records: list[dict],
-    input_records: list[dict],
-    ngram: NGramConfig | None,
-) -> dict[str, dict]:
-    """Build eval + input fixtures, run decon, return id → output row mapping."""
-    eval_dir = tmp_path / "eval"
-    input_dir = tmp_path / "input"
-    output_dir = tmp_path / "output"
-    _write_eval_jsonl(eval_dir / "eval.jsonl.gz", eval_records)
-    _write_input_parquet(input_dir / "part-00000-of-00001.parquet", input_records)
-    decon_to_parquet(
-        normalized_data=_as_source(input_dir),
-        eval_data_sources=str(eval_dir),
-        output_path=str(output_dir),
-        ngram=ngram,
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-    return _read_attributes(output_dir)
-
-
-# ----- Positive cases (decon catches these) -----
-
-
-def test_decon_catches_eval_paragraph_among_other_paragraphs(tmp_path: Path):
-    """Pretraining record with the eval text as one of multiple paragraphs is flagged.
-
-    Per-record score takes the max across paragraphs, so even a single
-    matching paragraph among many is enough.
-    """
-    rows = _run_decon_one_shot(
-        tmp_path,
-        eval_records=[
-            {"id": "eval_q", "text": "What is the speed of light in vacuum"},
-        ],
-        input_records=[
-            {
-                "id": "doc_buried",
-                "partition_id": 0,
-                "text": (
-                    "Various unrelated physics notes go here.\n\n"
-                    "What is the speed of light in vacuum\n\n"
-                    "And here is some commentary after the question."
-                ),
-            },
-        ],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
-    )
-    assert rows["doc_buried"]["contaminated"] is True
-    assert rows["doc_buried"]["max_overlap"] == 1.0
-
-
-def test_decon_catches_multi_paragraph_eval_against_single_paragraph_input(tmp_path: Path):
-    """Eval spans multiple paragraphs; pretraining has same content inline (no newlines).
-
-    Build adds ngrams from each eval paragraph independently. The pretraining
-    paragraph's ngrams that fall inside one eval paragraph's span hit the bloom;
-    boundary-spanning ngrams in pretraining don't (they were never in eval), but
-    enough of them DO hit to clear the threshold.
-    """
-    rows = _run_decon_one_shot(
-        tmp_path,
-        eval_records=[
-            {"id": "eval", "text": "What is the capital of France\nThe capital city is Paris"},
-        ],
-        input_records=[
-            {
-                "id": "doc_inline",
-                "partition_id": 0,
-                "text": "What is the capital of France The capital city is Paris",
-            },
-        ],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
-    )
-    assert rows["doc_inline"]["contaminated"] is True
-    # 7 ngrams in input paragraph, 5 match (the cross-boundary 2 don't): 5/7 ≈ 0.71.
-    assert rows["doc_inline"]["max_overlap"] >= 0.5
-
-
-def test_decon_catches_near_verbatim_with_word_insertion(tmp_path: Path):
-    """Pretraining has eval text with one extra word inserted; most ngrams still match."""
-    rows = _run_decon_one_shot(
-        tmp_path,
-        eval_records=[
-            {"id": "eval", "text": "Arctic predators have superior auditory capabilities for hunting beneath snow"},
-        ],
-        input_records=[
-            {
-                "id": "doc_inserted",
-                "partition_id": 0,
-                # extra word "thick" before "snow"
-                "text": "Arctic predators have superior auditory capabilities for hunting beneath thick snow",
-            },
-        ],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
-    )
-    assert rows["doc_inserted"]["contaminated"] is True
-    assert rows["doc_inserted"]["max_overlap"] >= 0.5
-
-
-# ----- Known limitations (xfail with strict=True — tripwire if behavior improves) -----
-
-
-@pytest.mark.xfail(
-    reason="hashing is case-sensitive; eval and pretraining differing only in case do not match",
-    strict=True,
-)
-def test_decon_misses_case_only_differences(tmp_path: Path):
-    """Pretraining text identical to eval modulo case is NOT detected (limitation)."""
-    rows = _run_decon_one_shot(
-        tmp_path,
-        eval_records=[
-            {"id": "eval", "text": "lorem ipsum dolor sit amet consectetur"},
-        ],
-        input_records=[
-            {
-                "id": "doc_uppercase",
-                "partition_id": 0,
-                "text": "LOREM IPSUM DOLOR SIT AMET CONSECTETUR",
-            },
-        ],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
-    )
-    assert rows["doc_uppercase"]["contaminated"] is True
-
-
-@pytest.mark.xfail(
-    reason="punctuation is part of the token; eval with '?' vs pretraining without does not match",
-    strict=True,
-)
-def test_decon_misses_punctuation_only_differences(tmp_path: Path):
-    """Pretraining text identical to eval modulo trailing punctuation is NOT detected."""
-    rows = _run_decon_one_shot(
-        tmp_path,
-        eval_records=[
-            # tokens end with "?" — every ngram that touches the last token differs
-            {"id": "eval", "text": "Who wrote the play Romeo and Juliet?"},
-        ],
-        input_records=[
-            {
-                "id": "doc_no_qmark",
-                "partition_id": 0,
-                "text": "Who wrote the play Romeo and Juliet",
-            },
-        ],
-        # Use n=8 so EVERY ngram includes the last token and thus changes.
-        ngram=NGramConfig(min_matched_features=2, ngram_length=8, overlap_threshold=0.5),
-    )
-    assert rows["doc_no_qmark"]["contaminated"] is True
-
-
-@pytest.mark.xfail(
-    reason="short eval embedded in a long single paragraph dilutes the overlap fraction below threshold",
-    strict=True,
-)
-def test_decon_misses_short_eval_diluted_in_long_paragraph(tmp_path: Path):
-    """Eval is a short fragment; pretraining wraps it inside a long single paragraph.
-
-    With n=4, the eval contributes ~1 ngram. The pretraining paragraph has many
-    ngrams (the prefix + the eval ngram + the suffix). Score = 1/N → below 0.5.
-    A length-decay or substring-aware scorer (cf. allenai/decon) would catch it.
-    """
-    rows = _run_decon_one_shot(
-        tmp_path,
-        eval_records=[
-            # Eval is 4 tokens → exactly 1 ngram at n=4.
-            {"id": "eval", "text": "atomic number of gold"},
-        ],
-        input_records=[
-            {
-                "id": "doc_buried",
-                "partition_id": 0,
-                # The eval ngram appears verbatim, surrounded by long context.
-                "text": (
-                    "Various trivia facts collected from many encyclopedic sources mention "
-                    "the atomic number of gold among other periodic table chemistry topics "
-                    "alongside copper silver and platinum which are also widely discussed"
-                ),
-            },
-        ],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
-    )
-    assert rows["doc_buried"]["contaminated"] is True
-
-
-@pytest.mark.xfail(
-    reason="paraphrasing changes most tokens; ngram overlap drops below threshold",
-    strict=True,
-)
-def test_decon_misses_paraphrased_eval(tmp_path: Path):
-    """Pretraining expresses the same idea as eval with different words (no ngram overlap)."""
-    rows = _run_decon_one_shot(
-        tmp_path,
-        eval_records=[
-            {"id": "eval", "text": "What is the capital of France"},
-        ],
-        input_records=[
-            {
-                "id": "doc_paraphrased",
-                "partition_id": 0,
-                # Same question, different phrasing — no shared 4-grams.
-                "text": "Which city serves as France's capital",
-            },
-        ],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
-    )
-    assert rows["doc_paraphrased"]["contaminated"] is True
-
-
-@pytest.mark.xfail(
-    reason="word order swap breaks every n-gram window; not detected by sliding-window ngram match",
-    strict=True,
-)
-def test_decon_misses_word_order_permutation(tmp_path: Path):
-    """Pretraining has the same words as eval in a permuted order; ngrams don't match."""
-    rows = _run_decon_one_shot(
-        tmp_path,
-        eval_records=[
-            {"id": "eval", "text": "alpha beta gamma delta epsilon zeta"},
-        ],
-        input_records=[
-            {
-                "id": "doc_permuted",
-                "partition_id": 0,
-                # Same six words, fully reversed.
-                "text": "zeta epsilon delta gamma beta alpha",
-            },
-        ],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
-    )
-    assert rows["doc_permuted"]["contaminated"] is True
-
-
-def test_load_bloom_concurrent_cold_cache_preserves_filter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    bloom = dupekit.Bloom(100, 1e-9)
-    bloom.add(42)
-    source = tmp_path / "filter.bin"
-    source.write_bytes(bloom.save_bytes())
-    cache_dir = tmp_path / "cache"
-    monkeypatch.setattr(decon, "_BLOOM_CACHE_DIR", str(cache_dir))
-
-    all_ready = Barrier(4, timeout=10)
-    original_replace = os.replace
-
-    def replace_after_all_ready(source_path: str, destination_path: str) -> None:
-        all_ready.wait()
-        original_replace(source_path, destination_path)
-
-    monkeypatch.setattr(os, "replace", replace_after_all_ready)
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        futures = [executor.submit(decon._load_bloom, str(source)) for _ in range(4)]
-        loaded = [future.result(timeout=10) for future in futures]
-
-    assert all(42 in item for item in loaded)
-    assert [path.read_bytes() for path in cache_dir.iterdir()] == [source.read_bytes()]
-
-
-# --- prebuilt-bloom path (build_eval_bloom + merge_eval_blooms) ----------
-
-
-def test_build_eval_bloom_then_decon_matches_inline(fox_corpus):
-    """Building bloom separately + decon(prebuilt_bloom_dir=...) gives identical attrs to inline build."""
-    # Path A: inline build.
-    inline_output = Path(fox_corpus["output_dir"]) / "inline"
-    decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
-        eval_data_sources=fox_corpus["eval_dir"],
-        output_path=str(inline_output),
-        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-    inline_rows = _read_attributes(inline_output)
-
-    # Path B: build_eval_bloom -> decon(prebuilt_bloom_dir=...).
-    bloom_dir = Path(fox_corpus["output_dir"]) / "bloom"
-    artifact = build_eval_bloom(
-        eval_data_sources=fox_corpus["eval_dir"],
-        output_path=str(bloom_dir),
-        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-    assert isinstance(artifact, EvalBloom)
-    bp, ip = bloom_paths(str(bloom_dir))
-    assert Path(bp).exists()
-    assert Path(ip).exists()
-    assert artifact.bloom_path == bp
-    assert artifact.eval_hash_index_path == ip
-    assert artifact.n_eval_records == 2  # fox_corpus has 2 eval records
-
-    prebuilt_output = Path(fox_corpus["output_dir"]) / "prebuilt"
-    decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
-        prebuilt_bloom_dir=str(bloom_dir),
-        output_path=str(prebuilt_output),
-        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
-    )
-    prebuilt_rows = _read_attributes(prebuilt_output)
-
-    # Same set of ids, same contamination decisions, same overlap scores.
-    assert set(inline_rows.keys()) == set(prebuilt_rows.keys())
-    for doc_id, inline in inline_rows.items():
-        pre = prebuilt_rows[doc_id]
-        assert pre["contaminated"] == inline["contaminated"]
-        assert pre["max_overlap"] == inline["max_overlap"]
-        assert sorted(pre["matched_hashes"]) == sorted(inline["matched_hashes"])
-
-
-def test_build_eval_bloom_requires_complete_eval_manifest(tmp_path: Path):
-    eval_root = tmp_path / "evals"
-    artifact_path = eval_root / "aa" / "required_eval" / "test.parquet"
-    _write_input_parquet(artifact_path, [{"id": "eval-1", "text": "alpha beta gamma"}])
-    manifest_path = eval_root / "aa" / "_manifest.json"
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "corpus_version": "test-corpus-v1",
-                "required": True,
-                "status": "building",
-                "benchmarks": [
-                    {
-                        "name": "Required Eval",
-                        "artifact": "required_eval/test.parquet",
-                        "expected_records": 1,
-                    }
-                ],
-            }
-        )
-    )
-
-    with pytest.raises(ValueError, match="manifest status is 'building', expected 'complete'"):
-        build_eval_bloom(
-            eval_data_sources=str(eval_root),
-            output_path=str(tmp_path / "bloom"),
-            required_eval_suites=(RequiredEvalSuite(str(manifest_path), ("Required Eval",)),),
-            required_eval_corpus_version="test-corpus-v1",
-        )
-
-    assert not Path(bloom_paths(str(tmp_path / "bloom"))[0]).exists()
-
-
-def test_build_eval_bloom_checks_required_artifact_counts(tmp_path: Path):
-    eval_root = tmp_path / "evals"
-    artifact_path = eval_root / "aa" / "required_eval" / "test.parquet"
-    _write_input_parquet(artifact_path, [{"id": "eval-1", "text": "alpha beta gamma"}])
-    manifest_path = eval_root / "aa" / "_manifest.json"
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "corpus_version": "test-corpus-v1",
-                "required": True,
-                "status": "complete",
-                "benchmarks": [
-                    {
-                        "name": "Required Eval",
-                        "artifact": "required_eval/test.parquet",
-                        "expected_records": 2,
-                    }
-                ],
-            }
-        )
-    )
-
-    with pytest.raises(ValueError, match="Required Eval: manifest expects 2 records, artifact contains 1"):
-        build_eval_bloom(
-            eval_data_sources=str(eval_root),
-            output_path=str(tmp_path / "bloom"),
-            required_eval_suites=(RequiredEvalSuite(str(manifest_path), ("Required Eval",)),),
-            required_eval_corpus_version="test-corpus-v1",
-        )
-
-
-def test_build_eval_bloom_requires_features_for_every_required_record(tmp_path: Path):
-    eval_root = tmp_path / "evals"
-    artifact_path = eval_root / "aa" / "required_eval" / "test.parquet"
-    _write_input_parquet(artifact_path, [{"id": "eval-1", "text": "Hello world"}])
-    manifest_path = eval_root / "aa" / "_manifest.json"
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "corpus_version": "test-corpus-v1",
-                "required": True,
-                "status": "complete",
-                "benchmarks": [
-                    {
-                        "name": "Required Eval",
-                        "artifact": "required_eval/test.parquet",
-                        "expected_records": 1,
-                    }
-                ],
-            }
-        )
-    )
-
-    with pytest.raises(ValueError, match="1 of 1 required eval records produce no matchable features"):
-        build_eval_bloom(
-            eval_data_sources=str(eval_root),
-            output_path=str(tmp_path / "bloom"),
-            ngram=NGramConfig(min_matched_features=2, ngram_length=13),
-            required_eval_suites=(RequiredEvalSuite(str(manifest_path), ("Required Eval",)),),
-            required_eval_corpus_version="test-corpus-v1",
-        )
-
-
-def test_build_eval_bloom_requires_each_required_record_to_self_match(tmp_path: Path):
-    eval_root = tmp_path / "evals"
-    artifact_path = eval_root / "aa" / "required_eval" / "test.parquet"
-    text = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
-    _write_input_parquet(artifact_path, [{"id": "eval-1", "text": text}])
-    manifest_path = eval_root / "aa" / "_manifest.json"
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "corpus_version": "test-corpus-v1",
-                "required": True,
-                "status": "complete",
-                "benchmarks": [
-                    {
-                        "name": "Required Eval",
-                        "artifact": "required_eval/test.parquet",
-                        "expected_records": 1,
-                    }
-                ],
-            }
-        )
-    )
-
-    with pytest.raises(ValueError, match="1 of 1 required eval records do not match an exact copy"):
-        build_eval_bloom(
-            eval_data_sources=str(eval_root),
-            output_path=str(tmp_path / "bloom"),
-            ngram=NGramConfig(ngram_length=13, min_matched_features=3),
-            required_eval_suites=(RequiredEvalSuite(str(manifest_path), ("Required Eval",)),),
-            required_eval_corpus_version="test-corpus-v1",
-        )
-
-
-def _write_required_suite(root: Path, name: str, records: list[dict], *, status: str = "complete") -> Path:
-    _write_input_parquet(root / "eval" / "test.parquet", records)
-    manifest_path = root / "_manifest.json"
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "corpus_version": "test-corpus-v1",
-                "required": True,
-                "status": status,
-                "benchmarks": [{"name": name, "artifact": "eval/test.parquet", "expected_records": len(records)}],
-            }
-        )
-    )
-    return manifest_path
-
-
-def test_build_eval_bloom_indexes_every_required_suite(tmp_path: Path):
-    first = _write_required_suite(tmp_path / "evals" / "first", "First Eval", [{"id": "first-1", "text": "alpha beta"}])
-    second = _write_required_suite(
-        tmp_path / "evals" / "second", "Second Eval", [{"id": "second-1", "text": "gamma delta"}]
-    )
-
-    result = build_eval_bloom(
-        eval_data_sources=str(tmp_path / "evals"),
-        output_path=str(tmp_path / "bloom"),
-        required_eval_suites=(
-            RequiredEvalSuite(str(first), ("First Eval",)),
-            RequiredEvalSuite(str(second), ("Second Eval",)),
-        ),
-        required_eval_corpus_version="test-corpus-v1",
-    )
-
-    index = pq.read_table(result.eval_hash_index_path).to_pylist()
-    assert {row["eval_id"] for row in index} == {"first-1", "second-1"}
-
-
-def test_build_eval_bloom_rejects_any_incomplete_required_suite(tmp_path: Path):
-    first = _write_required_suite(tmp_path / "evals" / "first", "First Eval", [{"id": "first-1", "text": "alpha beta"}])
-    second = _write_required_suite(
-        tmp_path / "evals" / "second", "Second Eval", [{"id": "second-1", "text": "gamma delta"}], status="building"
-    )
-
-    with pytest.raises(ValueError, match="status is 'building'"):
-        build_eval_bloom(
-            eval_data_sources=str(tmp_path / "evals"),
-            output_path=str(tmp_path / "bloom"),
-            required_eval_suites=(
-                RequiredEvalSuite(str(first), ("First Eval",)),
-                RequiredEvalSuite(str(second), ("Second Eval",)),
-            ),
-            required_eval_corpus_version="test-corpus-v1",
-        )
-
-    assert not Path(bloom_paths(str(tmp_path / "bloom"))[0]).exists()
-
-
-def test_build_eval_bloom_uses_only_manifested_best_effort_artifacts(tmp_path: Path):
-    required_root = tmp_path / "required"
-    required_artifact = required_root / "aa" / "required_eval" / "test.parquet"
-    stale_required_artifact = required_root / "aa" / "stale" / "test.parquet"
-    _write_input_parquet(required_artifact, [{"id": "required-1", "text": "alpha beta gamma"}])
-    _write_input_parquet(stale_required_artifact, [{"id": "stale-required-1", "text": "kappa lambda mu"}])
-    required_manifest = required_root / "aa" / "_manifest.json"
-    required_manifest.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "corpus_version": "test-corpus-v1",
-                "required": True,
-                "status": "complete",
-                "benchmarks": [
-                    {
-                        "name": "Required Eval",
-                        "artifact": "required_eval/test.parquet",
-                        "expected_records": 1,
-                    }
-                ],
-            },
-            indent=2,
-        )
-    )
-
-    best_effort_root = required_root / "lmh"
-    included_artifact = best_effort_root / "included" / "eval.parquet"
-    stale_artifact = best_effort_root / "stale" / "eval.parquet"
-    _write_input_parquet(included_artifact, [{"id": "included-1", "text": "delta epsilon zeta"}])
-    _write_input_parquet(stale_artifact, [{"id": "stale-1", "text": "eta theta iota"}])
-    best_effort_manifest = required_root / "lmh" / "_manifest.json"
-    best_effort_manifest.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "corpus_version": "test-corpus-v1",
-                "required": False,
-                "status": "complete_with_failures",
-                "included_leaf_tasks": ["included"],
-                "artifacts": [{"task": "included", "artifact": "included/eval.parquet", "records": 1}],
-                "failed": [{"task": "missing", "reason": "test failure"}],
-            }
-        )
-    )
-
-    result = build_eval_bloom(
-        eval_data_sources=str(required_root),
-        output_path=str(tmp_path / "bloom"),
-        required_eval_suites=(RequiredEvalSuite(str(required_manifest), ("Required Eval",)),),
-        required_eval_corpus_version="test-corpus-v1",
-        best_effort_eval_suite=BestEffortEvalSuite(str(best_effort_manifest), "test-corpus-v1"),
-    )
-
-    assert result.n_eval_records == 2
-    index = pq.read_table(result.eval_hash_index_path).to_pylist()
-    assert {row["eval_id"] for row in index} == {"required-1", "included-1"}
-
-
-@pytest.mark.parametrize(
-    ("required_tasks", "records", "expected_leaves"),
-    [
-        (None, [{"id": "a-1", "text": "alpha beta gamma"}], 1),
-        ({"required": ["required_a", "required_b"]}, [{"id": "a-1", "text": "alpha beta gamma"}], 2),
-        ({"required": ["required_a"]}, [], 1),
-        ({"required": ["required_a"]}, [{"id": "a-1", "text": "alpha beta gamma"}], 2),
-    ],
-    ids=[
-        "manifest-without-required-tasks",
-        "required-leaf-not-included",
-        "required-leaf-without-records",
-        "fewer-leaves-than-expected",
-    ],
-)
-def test_build_eval_bloom_requires_best_effort_required_tasks(
-    tmp_path: Path, required_tasks: dict | None, records: list[dict], expected_leaves: int
-):
-    best_effort_root = tmp_path / "evals" / "lmh"
-    _write_input_parquet(best_effort_root / "required_a" / "eval.parquet", records)
-    manifest = {
-        "schema_version": 1,
-        "corpus_version": "test-corpus-v1",
-        "required": False,
-        "status": "complete_with_failures",
-        "included_leaf_tasks": ["required_a"],
-        "artifacts": [{"task": "required_a", "artifact": "required_a/eval.parquet", "records": len(records)}],
-        "failed": [{"task": "required_b", "reason": "no docs"}],
-    }
-    if required_tasks is not None:
-        manifest["required_tasks"] = required_tasks
-    best_effort_manifest = best_effort_root / "_manifest.json"
-    best_effort_manifest.write_text(json.dumps(manifest))
-
-    with pytest.raises(ValueError, match="incomplete required tasks"):
-        build_eval_bloom(
-            eval_data_sources=str(best_effort_root),
-            output_path=str(tmp_path / "bloom"),
-            best_effort_eval_suite=BestEffortEvalSuite(
-                str(best_effort_manifest), "test-corpus-v1", {"required": expected_leaves}
-            ),
-        )
-
-    assert not Path(bloom_paths(str(tmp_path / "bloom"))[0]).exists()
-
-
-def test_build_eval_bloom_excludes_named_task_dirs(tmp_path: Path):
-    """``exclude_eval_dirs`` drops matching task dirs at read time.
-
-    An already-materialized eval corpus can be pruned without regenerating it:
-    the excluded task's records never enter the bloom or the hash index, while a
-    kept task in the same tree still drives contamination matches.
-    """
-    eval_root = tmp_path / "evals"
-    _write_eval_jsonl(
-        eval_root / "lmh" / "kept_task" / "eval.jsonl.gz", [{"id": "kept-1", "text": "alpha beta gamma delta"}]
-    )
-    _write_eval_jsonl(
-        eval_root / "lmh" / "code2text_python" / "eval.jsonl.gz",
-        [{"id": "excl-1", "text": "epsilon zeta eta theta"}],
-    )
-
-    bloom_dir = tmp_path / "bloom"
-    build_eval_bloom(
-        eval_data_sources=str(eval_root),
-        output_path=str(bloom_dir),
-        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
-        estimated_doc_count=1_000,
-        false_positive_rate=1e-9,
-        exclude_eval_dirs=frozenset({"code2text_python"}),
-    )
-    _, index_path = bloom_paths(str(bloom_dir))
-    eval_ids = set(pq.read_table(index_path).column("eval_id").to_pylist())
-    assert eval_ids == {"kept-1"}, "excluded task dir must not contribute to the hash index"
-
-    # A doc matching the excluded eval text is NOT flagged; the kept one is.
-    input_dir = tmp_path / "input"
-    output_dir = tmp_path / "output"
-    _write_input_parquet(
-        input_dir / "part-00000-of-00001.parquet",
-        [
-            {"id": "hits-kept", "text": "alpha beta gamma delta", "partition_id": 0},
-            {"id": "hits-excluded", "text": "epsilon zeta eta theta", "partition_id": 0},
-        ],
-    )
-    decon_to_parquet(
-        normalized_data=_as_source(input_dir),
-        prebuilt_bloom_dir=str(bloom_dir),
-        output_path=str(output_dir),
-        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
-    )
-    rows = _read_attributes(output_dir)
-    assert rows["hits-kept"]["contaminated"] is True
-    assert rows["hits-excluded"]["contaminated"] is False
-
-
-def test_build_eval_bloom_excludes_direct_file_under_named_task_dir(tmp_path: Path):
-    eval_path = tmp_path / "evals" / "code2text_python" / "eval.parquet"
-    _write_input_parquet(eval_path, [{"id": "excluded-1", "text": "alpha beta gamma"}])
-
-    result = build_eval_bloom(
-        eval_data_sources=str(eval_path),
-        output_path=str(tmp_path / "bloom"),
-        exclude_eval_dirs=frozenset({"code2text_python"}),
-    )
-
-    assert result.n_eval_records == 0
-    assert pq.read_table(result.eval_hash_index_path).num_rows == 0
-
-
-def test_merge_eval_blooms_equals_single_build(tmp_path: Path):
-    """merge_eval_blooms over N per-eval builds detects everything a single combined build does.
-
-    Stronger than 'identical bloom bytes' (bf.update may set the same bits in different order
-    internally); we check the observable behavior end-to-end via decon.
-    """
-    eval_a_dir = tmp_path / "eval_a"
-    eval_b_dir = tmp_path / "eval_b"
-    _write_eval_jsonl(eval_a_dir / "eval.jsonl.gz", [{"id": "ea_1", "text": "alpha beta gamma delta epsilon"}])
-    _write_eval_jsonl(eval_b_dir / "eval.jsonl.gz", [{"id": "eb_1", "text": "uno dos tres cuatro cinco"}])
-
-    input_dir = tmp_path / "input"
-    _write_input_parquet(
-        input_dir / "part-00000-of-00001.parquet",
-        [
-            {"id": "doc_hits_a", "text": "alpha beta gamma delta epsilon", "partition_id": 0},
-            {"id": "doc_hits_b", "text": "uno dos tres cuatro cinco", "partition_id": 0},
-            {"id": "doc_unique", "text": "nothing in common with either eval", "partition_id": 0},
-        ],
-    )
-    src = _as_source(input_dir)
-    ngram = NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5)
-
-    # Combined-build baseline.
-    baseline_out = tmp_path / "out_baseline"
-    decon_to_parquet(
-        normalized_data=src,
-        eval_data_sources=[str(eval_a_dir), str(eval_b_dir)],
-        output_path=str(baseline_out),
-        ngram=ngram,
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-    baseline_rows = _read_attributes(baseline_out)
-
-    # Per-eval builds + merge.
-    bloom_a_dir = tmp_path / "bloom_a"
-    bloom_b_dir = tmp_path / "bloom_b"
-    build_eval_bloom(
-        eval_data_sources=str(eval_a_dir),
-        output_path=str(bloom_a_dir),
-        ngram=ngram,
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-    build_eval_bloom(
-        eval_data_sources=str(eval_b_dir),
-        output_path=str(bloom_b_dir),
-        ngram=ngram,
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-    merged_dir = tmp_path / "bloom_merged"
-    merge_eval_blooms(
-        per_eval_bloom_dirs=[str(bloom_a_dir), str(bloom_b_dir)],
-        output_path=str(merged_dir),
-    )
-
-    merged_out = tmp_path / "out_merged"
-    decon_to_parquet(
-        normalized_data=src,
-        prebuilt_bloom_dir=str(merged_dir),
-        output_path=str(merged_out),
-        ngram=ngram,
-    )
-    merged_rows = _read_attributes(merged_out)
-
-    # Same contamination decisions on every record.
-    for doc_id in ("doc_hits_a", "doc_hits_b", "doc_unique"):
-        assert baseline_rows[doc_id]["contaminated"] == merged_rows[doc_id]["contaminated"], doc_id
-        assert baseline_rows[doc_id]["max_overlap"] == merged_rows[doc_id]["max_overlap"], doc_id
-
-    # And the merged hash-index sidecar contains entries for BOTH per-eval sources.
-    _, merged_index = bloom_paths(str(merged_dir))
-    eval_ids = set(pq.read_table(str(merged_index)).column("eval_id").to_pylist())
-    assert "ea_1" in eval_ids
-    assert "eb_1" in eval_ids
-
-
-def test_decon_to_parquet_requires_exactly_one_of_eval_or_prebuilt(fox_corpus):
-    """Neither / both raise ValueError before any work is done."""
-    src = _as_source(Path(fox_corpus["input_dir"]))
-    out = fox_corpus["output_dir"]
-
-    # neither
-    with pytest.raises(ValueError, match="exactly one"):
-        decon_to_parquet(normalized_data=src, output_path=out, ngram=NGramConfig(min_matched_features=2, ngram_length=3))
-
-    # both
-    with pytest.raises(ValueError, match="exactly one"):
-        decon_to_parquet(
-            normalized_data=src,
-            eval_data_sources=fox_corpus["eval_dir"],
-            prebuilt_bloom_dir="/tmp/whatever",
-            output_path=out,
-            ngram=NGramConfig(min_matched_features=2, ngram_length=3),
-        )
-
-
-def test_merge_eval_blooms_requires_non_empty(tmp_path: Path):
-    with pytest.raises(ValueError):
-        merge_eval_blooms(per_eval_bloom_dirs=[], output_path=str(tmp_path / "out"))
-
-
-# --- cluster D: no-alphabetic-character ngram filter (marin#6852) ------------
-
-
-def test_extract_ngrams_drops_letterless_ngrams():
-    """A 13-gram with no alphabetic character is not emitted; one with a letter is.
-
-    Pins the cluster-D filter: pure numeric sequences and punctuation runs carry
-    no distinctive contamination signal but collide with number-list eval items.
-    """
-    numeric = "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15"
-    assert list(_extract_ngrams(numeric, 13, 0)) == []
-    punct = ", . ; : - / ( ) [ ] { } < >"
-    assert list(_extract_ngrams(punct, 13, 0)) == []
-    # A single letter anywhere in the window keeps it (it now has real content).
-    mixed = "x 2 3 4 5 6 7 8 9 10 11 12 13"
-    assert list(_extract_ngrams(mixed, 13, 0)) == [mixed]
-
-
-def test_build_eval_bloom_indexes_large_record_ngrams(tmp_path: Path):
-    edge_token = "a" * 600_000
-    text = f"{edge_token} beta gamma delta {edge_token}"
-    eval_dir = tmp_path / "eval"
-    _write_eval_jsonl(eval_dir / "eval.jsonl.gz", [{"id": "large", "text": text}])
-
-    result = build_eval_bloom(
-        eval_data_sources=str(eval_dir),
-        output_path=str(tmp_path / "bloom"),
-        ngram=NGramConfig(ngram_length=4, min_matched_features=2),
-        estimated_doc_count=10,
-        false_positive_rate=1e-9,
-    )
-
-    expected_features = (f"{edge_token} beta gamma delta", f"beta gamma delta {edge_token}")
-    expected_hashes = {
-        int.from_bytes(hashlib.blake2b(feature.encode(), digest_size=8).digest(), "big") for feature in expected_features
-    }
-    index_rows = pq.read_table(result.eval_hash_index_path).to_pylist()
-    assert {row["hash"] for row in index_rows} == expected_hashes
-    assert {row["eval_id"] for row in index_rows} == {"large"}
-    assert not (tmp_path / "bloom/_bloom/_index_parts").exists()
-
-
-def test_decon_skips_numeric_only_contamination(tmp_path: Path):
-    """Cluster D: a numeric-list eval item does NOT flag a verbatim numeric-list
-    corpus doc (no alphabetic 13-gram to key on), while a real textual overlap in
-    the same run is still flagged — confirming the filter costs no text recall.
-    """
-    numbers = "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16"
-    text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu"
-    rows = _run_decon_one_shot(
-        tmp_path,
-        eval_records=[
-            {"id": "eval_numbers", "text": numbers},
-            {"id": "eval_text", "text": text},
-        ],
-        input_records=[
-            {"id": "doc_numbers", "partition_id": 0, "text": numbers},  # numeric-only → filtered → not flagged
-            {"id": "doc_text", "partition_id": 0, "text": text},  # real overlap → still flagged
-        ],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=13, overlap_threshold=0.5),
-    )
-    assert rows["doc_numbers"]["contaminated"] is False
-    assert rows["doc_numbers"]["max_overlap"] == 0.0
-    assert rows["doc_numbers"]["matched_hashes"] == []
-    assert rows["doc_text"]["contaminated"] is True
-    assert rows["doc_text"]["max_overlap"] == 1.0
-
-
-def test_merge_eval_blooms_rejects_size_mismatch(tmp_path: Path):
-    """dupekit.Bloom.update requires identical sizing; size mismatch should raise."""
-    eval_a = tmp_path / "eval_a"
-    eval_b = tmp_path / "eval_b"
-    _write_eval_jsonl(eval_a / "e.jsonl.gz", [{"id": "a", "text": "alpha beta gamma delta epsilon zeta eta theta"}])
-    _write_eval_jsonl(eval_b / "e.jsonl.gz", [{"id": "b", "text": "uno dos tres cuatro cinco seis siete ocho"}])
-    ngram = NGramConfig(min_matched_features=2, ngram_length=3)
-
-    build_eval_bloom(
-        eval_data_sources=str(eval_a),
-        output_path=str(tmp_path / "bloom_a"),
-        ngram=ngram,
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-    build_eval_bloom(
-        eval_data_sources=str(eval_b),
-        output_path=str(tmp_path / "bloom_b"),
-        ngram=ngram,
-        estimated_doc_count=100_000,  # different size -> dupekit will reject
-        false_positive_rate=1e-9,
-    )
-    with pytest.raises(ValueError, match="size and max false positive rate"):
-        merge_eval_blooms(
-            per_eval_bloom_dirs=[str(tmp_path / "bloom_a"), str(tmp_path / "bloom_b")],
-            output_path=str(tmp_path / "merged"),
-        )
-
-
-# ---------------------------------------------------------------------------
-# Per-source common-ngram filter (marin#6852)
-# ---------------------------------------------------------------------------
-
-
-def test_source_drop_set_filters_source_ubiquitous_ngram(tmp_path: Path):
-    """An eval ngram present in ~every source doc lands in the drop-set and stops
-    flagging boilerplate-only docs, while a distinctive eval match still flags."""
-    eval_dir = tmp_path / "eval"
-    _write_eval_jsonl(
-        eval_dir / "eval.jsonl.gz",
-        [
-            {"id": "boiler", "text": "be it enacted by the assembled congress today"},
-            {"id": "distinct", "text": "the platypus juggled seventeen luminous kumquats"},
-        ],
-    )
-    bloom_dir = tmp_path / "bloom"
-    build_eval_bloom(
-        eval_data_sources=str(eval_dir),
-        output_path=str(bloom_dir),
-        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-
-    # Source: 20 docs carrying only the boilerplate line + 1 genuine leak.
-    input_dir = tmp_path / "input"
-    docs = [
-        {"id": f"d{i}", "text": "be it enacted by the assembled congress today", "partition_id": 0} for i in range(20)
+    for name, rows in shards.items():
+        _write(tmp_path / "normalized" / name, rows)
+    return NormalizedData(main_output_dir=str(tmp_path / "normalized"), dup_output_dir="", counters={})
+
+
+def _mark(tmp_path: Path, keys: DeconKeys, scorer: QuestionInExcerpt):
+    """The scan, score and mark stages of one source, as the pipeline's three steps run them."""
+    normalized = _source(tmp_path)
+    scan = scan_source(
+        normalized=normalized, keys=keys, output_path=str(tmp_path / "scan"), worker_resources=RESOURCES, max_workers=2
+    )
+    workers = ScoreWorkers(resources=RESOURCES, max_workers=1, pairs_per_worker=100, extras=())
+    scores = score_pairs(scan=scan, keys=keys, scorer=scorer, score_workers=workers, output_path=str(tmp_path / "score"))
+    return mark_source(
+        normalized=normalized,
+        scores=scores,
+        cutoff=0.5,
+        flagged_sample_size=4,
+        output_path=str(tmp_path / "marks"),
+        worker_resources=RESOURCES,
+        max_workers=2,
+    )
+
+
+def test_keys_cover_every_item(tmp_path):
+    keys = _keys(tmp_path)
+    assert keys.counters["keyed_items"] == 2
+    locators = pq.read_table(keys.locators_path).to_pandas()
+    assert set(locators["item"]) == {"planets-0", "ducks-0"}
+
+
+def test_marks_follow_the_input_shards_and_flag_only_the_record_holding_an_item(tmp_path):
+    calls = tmp_path / "calls"
+    calls.mkdir()
+    attributes = _mark(tmp_path, _keys(tmp_path), QuestionInExcerpt(str(calls)))
+    main = Path(attributes.main_output_dir)
+    assert sorted(path.name for path in main.glob("*.parquet")) == [
+        "part-00000-of-00002.parquet",
+        "part-00001-of-00002.parquet",
     ]
-    docs.append({"id": "leak", "text": "the platypus juggled seventeen luminous kumquats", "partition_id": 0})
-    _write_input_parquet(input_dir / "part-00000-of-00001.parquet", docs)
-
-    drop_dir = tmp_path / "drop"
-    result = build_all_source_drop_sets(
-        sources=[("source", str(input_dir))],
-        global_sample_docs=1000,
-        global_common_min_abs=2,
-        global_common_min_sources=2,
-        prebuilt_bloom_dir=str(bloom_dir),
-        output_path=str(drop_dir),
-        ngram=NGramConfig(min_matched_features=2, ngram_length=4, paragraph_delimiter="\n"),
-        sample_docs=1000,
-        common_frac=0.5,
-        common_min_abs=2,
-    )
-    assert result.counters["decon_drop/ngrams_dropped"] > 0
-
-    out_dir = tmp_path / "out"
-    decon_to_parquet(
-        normalized_data=_as_source(input_dir),
-        prebuilt_bloom_dir=str(bloom_dir),
-        output_path=str(out_dir),
-        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5, paragraph_delimiter="\n"),
-        drop_set_dirs=[str(drop_dir / "source")],
-    )
-    rows = _read_attributes(out_dir)
-    assert rows["d0"]["contaminated"] is False
-    assert rows["d0"]["max_overlap"] == 0.0
-    assert rows["d0"]["matched_hashes"] == []
-    assert rows["leak"]["contaminated"] is True  # distinctive leak still flags
+    first = pq.read_table(main / "part-00000-of-00002.parquet")
+    assert first.schema.equals(ATTRIBUTE_SCHEMA)
+    rows = first.to_pylist()
+    assert [row["id"] for row in rows] == ["a0", "a1", "a2"]
+    assert [row["contaminated"] for row in rows] == [False, True, False]
+    assert rows[1]["matched_items"] == ["planets-0"] and rows[1]["max_score"] == 1.0
+    assert {row["partition_id"] for row in rows} == {0}
+    flagged = pq.read_table(Path(attributes.flagged_output_dir) / "part-00000-of-00002.parquet").to_pylist()
+    assert [row["id"] for row in flagged] == ["a1"]
+    assert PLANETS in flagged[0]["text"] and flagged[0]["matched_evals"] == ["planets"]
+    assert attributes.counters["decon/contaminated"] == 1
+    assert attributes.counters["decon/clean"] == 4
 
 
-def test_source_drop_set_empty_leaves_marks_unchanged(tmp_path: Path):
-    """With no ubiquitous ngram, the drop-set is empty and marks are unaffected."""
-    eval_dir = tmp_path / "eval"
-    _write_eval_jsonl(
-        eval_dir / "eval.jsonl.gz", [{"id": "e", "text": "the platypus juggled seventeen luminous kumquats"}]
-    )
-    bloom_dir = tmp_path / "bloom"
-    build_eval_bloom(
-        eval_data_sources=str(eval_dir),
-        output_path=str(bloom_dir),
-        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-    input_dir = tmp_path / "input"
-    _write_input_parquet(
-        input_dir / "part-00000-of-00001.parquet",
-        [{"id": "leak", "text": "the platypus juggled seventeen luminous kumquats", "partition_id": 0}],
-    )
-    drop_dir = tmp_path / "drop"
-    result = build_all_source_drop_sets(
-        sources=[("source", str(input_dir))],
-        global_sample_docs=1000,
-        global_common_min_abs=2,
-        global_common_min_sources=2,
-        prebuilt_bloom_dir=str(bloom_dir),
-        output_path=str(drop_dir),
-        ngram=NGramConfig(min_matched_features=2, ngram_length=4, paragraph_delimiter="\n"),
-        sample_docs=1000,
-        common_frac=0.5,
-        common_min_abs=5,
-    )
-    assert result.counters["decon_drop/ngrams_dropped"] == 0
-    out_dir = tmp_path / "out"
-    decon_to_parquet(
-        normalized_data=_as_source(input_dir),
-        prebuilt_bloom_dir=str(bloom_dir),
-        output_path=str(out_dir),
-        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5, paragraph_delimiter="\n"),
-        drop_set_dirs=[str(drop_dir / "source")],
-    )
-    assert _read_attributes(out_dir)["leak"]["contaminated"] is True
+def test_a_pair_below_the_cutoff_keeps_the_record_with_its_score(tmp_path):
+    calls = tmp_path / "calls"
+    calls.mkdir()
+    attributes = _mark(tmp_path, _keys(tmp_path), QuestionInExcerpt(str(calls)))
+    rows = pq.read_table(Path(attributes.main_output_dir) / "part-00001-of-00002.parquet").to_pylist()
+    # b0 holds the key of the ducks item but not its whole question, so its pair scores 0.2.
+    assert rows[0]["id"] == "b0" and not rows[0]["contaminated"]
+    assert rows[0]["max_score"] == pytest.approx(0.2) and rows[0]["matched_items"] == []
 
 
-def test_build_all_source_drop_sets_rejects_reserved_global_source_name(tmp_path: Path):
-    with pytest.raises(ValueError):
-        build_all_source_drop_sets(
-            sources=[("_global", str(tmp_path / "input"))],
-            prebuilt_bloom_dir=str(tmp_path / "bloom"),
-            output_path=str(tmp_path / "drops"),
-            ngram=NGramConfig(min_matched_features=2, ngram_length=4),
-            sample_docs=100,
-            common_frac=0.5,
-            common_min_abs=3,
-            global_sample_docs=100,
-            global_common_min_abs=6,
-            global_common_min_sources=3,
-        )
+def test_a_record_lists_each_matched_item_once(tmp_path):
+    # A long record gives one pair per distinct excerpt, so one item can reach the cutoff twice.
+    path = tmp_path / "scores.parquet"
+    rows = {"record": ["r", "r"], "item": ["i", "i"], "eval": ["e", "e"], "right": ["a", "b"], "score": [0.9, 0.8]}
+    pq.write_table(pa.table(rows), str(path))
+    best, matched = _record_scores(str(path), cutoff=0.5)
+    assert matched == {"r": [("i", "e")]}
+    assert best["r"] == (0.9, "a")
 
 
-def test_build_all_source_drop_sets_distributes_per_source(tmp_path: Path):
-    """Nested source names load only their exact local drop set."""
-    eval_dir = tmp_path / "eval"
-    _write_eval_jsonl(
-        eval_dir / "eval.jsonl.gz",
-        [
-            {"id": "boiler", "text": "be it enacted by the assembled congress today"},
-            {"id": "distinct", "text": "the platypus juggled seventeen luminous kumquats"},
-        ],
+def test_a_rerun_scores_no_pair_again(tmp_path):
+    calls = tmp_path / "calls"
+    calls.mkdir()
+    keys = _keys(tmp_path)
+    _mark(tmp_path, keys, QuestionInExcerpt(str(calls)))
+    first = len(list(calls.iterdir()))
+    _mark(tmp_path, keys, QuestionInExcerpt(str(calls)))
+    assert first > 0 and len(list(calls.iterdir())) == first
+
+
+def test_a_shared_tie_keys_each_item_off_the_question_stem_that_other_items_share():
+    stem = "Which of the following propositions is an immediate consequence of the given premises?"
+    questions = [
+        f"{stem} {premise}" for premise in ("Henry rides a red bicycle daily", "Mara bakes seven loaves weekly")
+    ]
+    streams = [text_stream(q) for q in questions]
+    hashes, owners, offsets = candidate_windows(streams)
+    ids = np.array(["formal-0", "formal-1"], dtype=object)
+    windows = Windows(hashes, owners, offsets, ids, np.array([KeyStream.QUESTION] * 2, dtype=object))
+    # No window occurs in the reference sample, so the tie order decides the keys.
+    counts = np.zeros(len(hashes), dtype=np.int64)
+    stem_windows = set(window_hashes(text_stream(stem)).tolist())
+    earliest = keys_table(windows, counts).column("key1_hash").to_pylist()
+    shared = keys_table(windows, counts, tie=shared_holders(windows))
+    assert all(key in stem_windows for key in earliest)
+    assert not any(key in stem_windows for key in shared.column("key1_hash").to_pylist())
+
+
+def test_two_key_streams_of_one_item_count_as_one_holder_of_a_shared_window():
+    streams = [text_stream("Henry made two stops during his sixty mile bike trip")] * 2
+    hashes, owners, offsets = candidate_windows(streams)
+    ids = np.array(["gsm8k-0", "gsm8k-0"], dtype=object)
+    windows = Windows(hashes, owners, offsets, ids, np.array([KeyStream.QUESTION, KeyStream.UNLETTERED], dtype=object))
+    assert set(shared_holders(windows).tolist()) == {1}
+
+
+def test_an_excerpt_lands_on_the_exact_copy_after_a_changed_version_when_the_prompt_text_is_left_out():
+    stem = "Jan has three times the number of pets as Marcia. Marcia has two more pets than Cindy."
+    questions = {
+        "gsm8k-0": f"Question: {stem} If Cindy has four pets, how many total pets do the three have?\nAnswer:",
+        "gsm8k-1": "Question: Henry made two stops during his sixty mile bike trip, how far did he go?\nAnswer:",
+    }
+    question = located_questions(questions, {"gsm8k-0": "gsm8k", "gsm8k-1": "gsm8k"})["gsm8k-0"]
+    assert question == text_stream(f"{stem} If Cindy has four pets, how many total pets do the three have?")
+    changed = f"{stem} If Cindy has ten pets, how many pets does Jan have?"
+    record = (
+        f'test_a = "{changed}"\n'
+        + "x = 1\n" * 1000
+        + f'test_b = "{stem} If Cindy has four pets, how many total pets do the three have?"\n'
     )
-    bloom_dir = tmp_path / "bloom"
-    build_eval_bloom(
-        eval_data_sources=str(eval_dir),
-        output_path=str(bloom_dir),
-        ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5),
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-    a_dir = tmp_path / "srcA"
-    _write_input_parquet(
-        a_dir / "part-00000-of-00001.parquet",
-        [{"id": f"a{i}", "text": "be it enacted by the assembled congress today", "partition_id": 0} for i in range(20)],
-    )
-    b_dir = tmp_path / "srcB"
-    _write_input_parquet(
-        b_dir / "part-00000-of-00001.parquet",
-        [{"id": "b0", "text": "the platypus juggled seventeen luminous kumquats", "partition_id": 0}],
-    )
-
-    out = tmp_path / "drops"
-    res = build_all_source_drop_sets(
-        sources=[("finepdfs/fra_Latn", str(a_dir)), ("finepdfs", str(b_dir))],
-        prebuilt_bloom_dir=str(bloom_dir),
-        output_path=str(out),
-        ngram=NGramConfig(min_matched_features=2, ngram_length=4, paragraph_delimiter="\n"),
-        sample_docs=1000,
-        common_frac=0.5,
-        common_min_abs=2,
-        global_sample_docs=1000,
-        global_common_min_abs=100,
-        global_common_min_sources=2,
-    )
-    assert res.num_sources == 2
-    assert len(_load_drop_set(str(out / "finepdfs/fra_Latn"))) > 0  # boilerplate (df=20) dropped
-    assert len(_load_drop_set(str(out / "finepdfs"))) == 0  # does not recursively load the language child
-    assert res.n_global_dropped == 0  # high DF in only one source is not global boilerplate
-
-
-def test_all_source_drop_sets_filters_diffuse_global_boilerplate(tmp_path: Path):
-    """Global DF removes text spread across sources without erasing a source-local leak."""
-    common = "four score and seven years ago our fathers brought forth on this continent a new nation"
-    leak = "the platypus juggled seventeen luminous kumquats beside a silent observatory at midnight"
-    filler = "ordinary source material whose wording shares no evaluation sequence at all today"
-    eval_dir = tmp_path / "eval"
-    _write_eval_jsonl(
-        eval_dir / "eval.jsonl.gz",
-        [
-            {"id": "public_quote", "text": common},
-            {"id": "genuine_leak", "text": leak},
-        ],
-    )
-    ngram = NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5)
-    bloom_dir = tmp_path / "bloom"
-    build_eval_bloom(
-        eval_data_sources=str(eval_dir),
-        output_path=str(bloom_dir),
-        ngram=ngram,
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-
-    sources = []
-    for source_idx in range(4):
-        source_dir = tmp_path / f"source_{source_idx}"
-        rows = [{"id": f"common_{source_idx}_{i}", "text": common, "partition_id": 0} for i in range(2)]
-        rows.extend(
-            {"id": f"filler_{source_idx}_{i}", "text": f"{filler} {source_idx} {i}", "partition_id": 0} for i in range(8)
-        )
-        if source_idx == 0:
-            rows.append({"id": "leak", "text": leak, "partition_id": 0})
-        _write_input_parquet(source_dir / "part-00000-of-00001.parquet", rows)
-        sources.append((f"source_{source_idx}", str(source_dir)))
-
-    out = tmp_path / "drops"
-    result = build_all_source_drop_sets(
-        sources=sources,
-        prebuilt_bloom_dir=str(bloom_dir),
-        output_path=str(out),
-        ngram=ngram,
-        sample_docs=100,
-        common_frac=0.5,
-        common_min_abs=3,
-        global_sample_docs=100,
-        global_common_min_abs=6,
-        global_common_min_sources=3,
-    )
-    assert all(not _load_drop_set(str(out / source_name)) for source_name, _ in sources)
-    assert _load_drop_set(result.global_output_dir)
-    global_rows = pq.read_table(Path(result.global_output_dir) / "drop.parquet").to_pylist()
-    assert {row["document_frequency"] for row in global_rows} == {8}
-    assert {row["source_frequency"] for row in global_rows} == {4}
-
-    marked = tmp_path / "marked"
-    decon_to_parquet(
-        normalized_data=_as_source(Path(sources[0][1])),
-        prebuilt_bloom_dir=str(bloom_dir),
-        output_path=str(marked),
-        ngram=ngram,
-        drop_set_dirs=[str(out / "source_0"), result.global_output_dir],
-    )
-    rows = _read_attributes(marked)
-    assert rows["common_0_0"]["contaminated"] is False
-    assert rows["leak"]["contaminated"] is True
-
-
-def test_all_source_drop_sets_parallel_sample_respects_document_limits(tmp_path: Path):
-    common = "four score and seven years ago our fathers brought forth a new nation"
-    late_leak = "the platypus juggled seventeen luminous kumquats beside a silent observatory"
-    filler = "ordinary source material with no shared evaluation sequence"
-    eval_dir = tmp_path / "eval"
-    _write_eval_jsonl(
-        eval_dir / "eval.jsonl.gz",
-        [{"id": "common", "text": common}, {"id": "late", "text": late_leak}],
-    )
-    ngram = NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5)
-    bloom_dir = tmp_path / "bloom"
-    build_eval_bloom(
-        eval_data_sources=str(eval_dir),
-        output_path=str(bloom_dir),
-        ngram=ngram,
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-
-    source_dir = tmp_path / "source"
-    texts = [common, common, common, filler, filler, filler, late_leak, late_leak]
-    for file_index in range(4):
-        rows = [
-            {"id": f"doc_{row_index}", "text": texts[row_index], "partition_id": file_index}
-            for row_index in range(file_index * 2, file_index * 2 + 2)
-        ]
-        _write_input_parquet(source_dir / f"part-{file_index:05d}-of-00004.parquet", rows)
-
-    out = tmp_path / "drops"
-    result = build_all_source_drop_sets(
-        sources=[("source", str(source_dir))],
-        prebuilt_bloom_dir=str(bloom_dir),
-        output_path=str(out),
-        ngram=ngram,
-        sample_docs=3,
-        common_frac=0.5,
-        common_min_abs=2,
-        global_sample_docs=6,
-        global_common_min_abs=2,
-        global_common_min_sources=1,
-    )
-    assert result.counters["decon_drop/global_documents_sampled"] == 6
-
-    marked = tmp_path / "marked"
-    decon_to_parquet(
-        normalized_data=_as_source(source_dir),
-        prebuilt_bloom_dir=str(bloom_dir),
-        output_path=str(marked),
-        ngram=ngram,
-        drop_set_dirs=[str(out / "source"), result.global_output_dir],
-    )
-    rows = _read_attributes(marked)
-    assert rows["doc_0"]["contaminated"] is False
-    assert rows["doc_6"]["contaminated"] is True
-
-
-def test_decon_flagged_sample_sidecar(fox_corpus):
-    """flagged_sample_size writes an `outputs/flagged_sample` sidecar of contaminated
-    docs + text, so reports read O(sample) instead of rescanning the corpus."""
-    decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
-        eval_data_sources=fox_corpus["eval_dir"],
-        output_path=fox_corpus["output_dir"],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=3, overlap_threshold=0.5),
-        flagged_sample_size=10,
-        estimated_doc_count=10_000,
-        false_positive_rate=1e-9,
-    )
-    side = sorted(Path(fox_corpus["output_dir"]).glob("outputs/flagged_sample/*.parquet"))
-    assert side, "expected an outputs/flagged_sample sidecar"
-    rows = [r for f in side for r in pq.read_table(str(f)).to_pylist()]
-    ids = {r["id"] for r in rows}
-    assert "doc_arctic_exact" in ids and "doc_red_exact" in ids  # flagged docs captured
-    assert "doc_unique" not in ids  # clean doc not sampled
-    assert all(r["text"] and r["matched_hashes"] for r in rows)  # text + hashes present
+    full = text_stream(questions["gsm8k-0"])
+    key, offset = full[8:28], 8
+    with_prompt, _, _ = excerpt(record_readings(record), len(questions["gsm8k-0"]), full, key, offset)
+    without, _, _ = excerpt(record_readings(record), len(questions["gsm8k-0"]), question, key, offset)
+    assert "four pets, how many total" not in with_prompt
+    assert "four pets, how many total" in without

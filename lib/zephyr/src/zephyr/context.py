@@ -24,7 +24,7 @@ from fray.actor import ActorGroup, ActorHandle
 from fray.client import Client
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
-from fray.types import ActorConfig, ResourceConfig
+from fray.types import ActorConfig, EnvironmentConfig, ResourceConfig
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.cross_region import TransferBudgetExceeded
 from rigging.filesystem.storage_path import StoragePath
@@ -230,6 +230,8 @@ class ZephyrContext:
             Parquet ranges target four tasks per worker; overlapping row groups
             are reread.
         resources: CPU, memory, and device resources for each worker.
+        worker_environment: Environment of the worker job, for workers that need other dependencies than the
+            driver (for example the CUDA build of torch on GPU workers). ``None`` reuses the driver's environment.
         coordinator_resources: Resources for the coordinator actor.
         chunk_storage_prefix: Storage prefix for shared data, chunks, and results.
         name: Name prefix for actor groups.
@@ -251,6 +253,7 @@ class ZephyrContext:
     max_workers: int | None = None
     intra_shard_execution: IntraShardExecution = IntraShardExecution.OFF
     resources: ResourceConfig | None = None
+    worker_environment: EnvironmentConfig | None = None
     coordinator_resources: ResourceConfig = field(
         default_factory=lambda: ResourceConfig(cpu=0.1, ram="4g", preemptible=False)
     )
@@ -410,6 +413,7 @@ class ZephyrContext:
                 ZephyrTaskResources.from_resource_config(self.resources),
                 self.resources,
                 ActorConfig(max_concurrency=100, max_task_retries=10),
+                self.worker_environment,
             ).result()
             ready_wait = float(os.environ.get("ZEPHYR_WORKERS_READY_WAIT") or 12 * 60 * 60)
             coordinator.worker_handles.remote(1, ready_wait).result(timeout=ready_wait)

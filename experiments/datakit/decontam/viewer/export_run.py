@@ -1,355 +1,140 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Export a testbed decon run to a compact JSON for the decon viewer app.
+"""Export a testbed decon run to a compact JSON for the decon viewer (:mod:`experiments.datakit.decontam.viewer.report`).
 
-Runs on CW/reno (needs read access to the sample + decon + eval-bloom outputs).
-Rebuilds the decon DAG (``target`` + ``exclude`` must match the run) to locate
-each source's decon output and its sample, then per source computes the flag
-rate and samples flagged docs with their text, ``max_overlap``, and matched eval
-families (``matched_hashes → eval_hash_index → eval_id → family``).
+Runs where the testbed marks live. Rebuilds the testbed decon DAG (``--target-tokens-b`` and ``--exclude`` must
+match the run) to locate each source's marks, then per source takes the flag rate from the mark counters and
+samples flagged records from the mark-time flagged sample: the excerpt of the record's best pair, its score,
+and the matched items with their texts from the item table.
 
     uv run iris --cluster=cw-rno2a job run -e MARIN_PREFIX s3://marin-us-east-02a/marin \\
         -- python experiments/datakit/decontam/viewer/export_run.py \\
            --target-tokens-b 0.1 --exclude finetranslations ghalogs/public \\
            --label baseline --out s3://marin-us-east-02a/marin/user/rav/decon_viewer/runs
 
-The JSON is written to ``<out>/<label>.json``; pull it down to feed ``app.py``.
+The JSON is written to ``<out>/<label>.json``.
 """
 
 import argparse
 import json
 import logging
 import random
-import re
 from collections import Counter
 
-import pyarrow.parquet as pq
-from marin.datakit.decon import NGramConfig, _bloom_hash, _extract_features, bloom_paths
-from rigging.filesystem.cluster_config import marin_prefix
+from marin.datakit.decon import DeconAttributes, DeconKeys
+from marin.datakit.decon_tables import parquet_files, read_table
+from marin.execution.artifact import read_artifact
+from marin.execution.step_spec import StepSpec
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.datakit.testbed.decon_arm import (
-    MIN_MATCHED_FEATURES,
-    NGRAM_LENGTH,
-    PARAGRAPH_DELIMITER,
-    build_testbed_decon_steps,
-)
+from experiments.datakit.decontam.pair_text import ItemText, item_texts
+from experiments.datakit.testbed.decon_arm import build_testbed_decon_steps
 
 logger = logging.getLogger(__name__)
 
-_SPLIT_RE = re.compile(r"^(.*)-(validation|test|training|train|dev|eval)-\d+$")
-# Uncheatable Eval ids are ``uncheatable-<subset>-<record>``; the artifact sits in ``uncheatable/<subset>/``.
-_UNCHEATABLE_ID_RE = re.compile(r"^uncheatable-(?P<subset>[a-z0-9_]+)-\d+$")
-_SAMPLES_PER_SOURCE = 60
-_MAX_MATCHED_EVALS = 5
-_MAX_MATCHED_NGRAMS = 12
-# Chars of context kept on each side of the overlapping span when windowing the
-# doc / eval text, so the highlighted overlap is always visible (the overlap can
-# sit thousands of chars into a long eval passage or doc).
-_CONTEXT_CHARS = 700
-
-_WORD_RE = re.compile(r"\S+")
+SAMPLES_PER_SOURCE = 60
+MAX_MATCHED_ITEMS = 5
+TOP_EVALS = 12
+_FLAGGED_COLUMNS = ["id", "text", "max_score", "matched_items", "matched_evals"]
 
 
-def _window(text: str, ngrams: list[str], ctx: int = _CONTEXT_CHARS) -> str:
-    """Return a slice of *text* centered on the first of *ngrams* it contains.
-
-    Keeps the original whitespace/newlines within the window (readability) and
-    guarantees the overlapping span is present so the viewer can highlight it in
-    both columns. Falls back to the head when no n-gram is located."""
-    matches = list(_WORD_RE.finditer(text))
-    words = [m.group(0) for m in matches]
-    for ng in ngrams:
-        toks = ng.split()
-        n = len(toks)
-        for i in range(len(words) - n + 1):
-            if words[i : i + n] == toks:
-                a = max(0, matches[i].start() - ctx)
-                b = min(len(text), matches[i + n - 1].end() + ctx)
-                return ("…" if a > 0 else "") + text[a:b] + ("…" if b < len(text) else "")
-    return text[: 2 * ctx] + ("…" if len(text) > 2 * ctx else "")
-
-
-def _overlapping_ngrams(text: str, matched_hashes: set[int], ngram: NGramConfig) -> list[str]:
-    """Return the matching text for the hashes that caused the mark."""
-    seen: set[str] = set()
-    out: list[str] = []
-    for feature in _extract_features(text, ngram):
-        if feature not in seen and _bloom_hash(feature) in matched_hashes:
-            seen.add(feature)
-            out.append(feature)
-            if len(out) >= _MAX_MATCHED_NGRAMS:
-                return out
-    return out
-
-
-def eval_id_to_family(eval_id: str) -> str:
-    if uncheatable := _UNCHEATABLE_ID_RE.match(eval_id):
-        return f"uncheatable_{uncheatable['subset']}"
-    m = _SPLIT_RE.match(eval_id)
-    return m.group(1) if m else eval_id
-
-
-def _eval_artifact_dir(eval_id: str) -> str:
-    """Return the name of the corpus directory that holds *eval_id*'s artifact."""
-    if uncheatable := _UNCHEATABLE_ID_RE.match(eval_id):
-        return uncheatable["subset"]
-    return eval_id_to_family(eval_id)
-
-
-def _load_eval_texts(eval_ids: set[str]) -> dict[str, str]:
-    """Load the text of each matched eval record from the staged eval corpus.
-
-    Only reads the eval files whose task (parent dir, recovered from the eval_id)
-    is referenced, so it stays cheap despite the corpus being ~250 MB.
-    """
-    if not eval_ids:
-        return {}
-    tasks = {_eval_artifact_dir(e) for e in eval_ids}
-    fs, root = url_to_fs(f"{marin_prefix()}/datakit/decontam/evals")
-    files = [f for f in fs.find(root) if f.endswith(".parquet") and f.split("/")[-2] in tasks]
-    texts: dict[str, str] = {}
-    for f in files:
-        with fs.open(f, "rb") as fh:
-            tbl = pq.read_table(fh, columns=["id", "text"])
-        for i, t in zip(tbl.column("id").to_pylist(), tbl.column("text").to_pylist(), strict=True):
-            if i in eval_ids:
-                texts[i] = t
-    return texts
-
-
-_READ_BATCH_ROWS = 131072
-
-
-def _read_parquet(path: str, columns: list[str] | None = None):
-    """Yield record batches (not whole tables) so a huge file — e.g. the 36M-row
-    eval_hash_index — never materializes at once and OOMs the exporter."""
-    fs, resolved = url_to_fs(path)
-    files = sorted(f for f in fs.find(resolved) if f.endswith(".parquet"))
-    for f in files:
-        with fs.open(f, "rb") as fh:
-            yield from pq.ParquetFile(fh).iter_batches(batch_size=_READ_BATCH_ROWS, columns=columns)
-
-
-def _counts_from_artifact(output_dir: str) -> tuple[int, int] | None:
-    """(n_docs, n_flagged) from the decon step's artifact counters — no doc scan.
-
-    Scales to any corpus size: the mark already tallied ``decon/contaminated`` and
-    ``decon/clean``, so counting never needs to re-read the (billions of) rows."""
-    fs, resolved = url_to_fs(f"{output_dir.rstrip('/')}/.artifact.json")
-    if not fs.exists(resolved):
-        return None
-    with fs.open(resolved) as fh:
-        c = json.load(fh).get("result", {}).get("counters", {})
-    flag, clean = int(c.get("decon/contaminated", 0)), int(c.get("decon/clean", 0))
-    return flag + clean, flag
-
-
-def _flagged_from_sidecar(output_dir: str, k: int, rng: random.Random) -> list[dict] | None:
-    """Reservoir of ``k`` flagged docs (with text) from the mark-time
-    ``outputs/flagged_sample`` sidecar, or None if the run didn't write one.
-    O(sample), not O(corpus)."""
-    fs, root = url_to_fs(f"{output_dir.rstrip('/')}/outputs/flagged_sample")
-    files = sorted(f for f in fs.find(root) if f.endswith(".parquet")) if fs.exists(root) else []
-    if not files:
-        return None
+def sample_flagged(flagged_dir: str, limit: int, rng: random.Random) -> list[dict]:
+    """Up to *limit* flagged records of one source, from its shuffled flagged-sample files."""
+    files = parquet_files(flagged_dir)
+    rng.shuffle(files)
     rows: list[dict] = []
-    seen = 0
-    for f in files:
-        with fs.open(f, "rb") as fh:
-            tbl = pq.read_table(fh, columns=["id", "text", "max_overlap", "matched_hashes"])
-        for did, text, ov, mh in zip(
-            tbl.column("id").to_pylist(),
-            tbl.column("text").to_pylist(),
-            tbl.column("max_overlap").to_pylist(),
-            tbl.column("matched_hashes").to_pylist(),
-            strict=True,
-        ):
-            seen += 1
-            row = {"id": did, "text": text, "max_overlap": ov, "matched_hashes": mh or []}
-            if len(rows) < k:
-                rows.append(row)
-            elif (j := rng.randint(0, seen - 1)) < k:
-                rows[j] = row
-    return rows
+    for path in files:
+        rows += read_table(path, _FLAGGED_COLUMNS).to_pylist()
+        if len(rows) >= limit:
+            break
+    return rows[:limit]
 
 
-def _source_rows(decon_out: str, k: int, rng: random.Random) -> tuple[int, int, list[dict]]:
-    """Fallback for runs without a ``_flagged`` sidecar: (n_docs, n_flagged,
-    reservoir[{id, max_overlap, matched_hashes}]) by streaming the full attributes.
+def item_evals(items_dir: str) -> dict[str, str]:
+    """The eval of every item of the item table, by item id."""
+    evals: dict[str, str] = {}
+    for path in parquet_files(items_dir):
+        columns = read_table(path, ["id", "eval"]).to_pydict()
+        evals.update(zip(columns["id"], columns["eval"], strict=True))
+    return evals
 
-    Reservoir-samples ``k`` flagged rows in one pass so a precision-poor source
-    with millions of flags doesn't materialize them all — but it still reads every
-    row, so prefer the sidecar (see :func:`_flagged_from_sidecar`) at scale.
-    """
-    n_docs = n_flagged = 0
-    reservoir: list[dict] = []
-    columns = ["id", "contaminated", "max_overlap", "matched_hashes"]
-    for tbl in _read_parquet(f"{decon_out.rstrip('/')}/outputs/main", columns=columns):
-        ids = tbl.column("id").to_pylist()
-        contaminated = tbl.column("contaminated").to_pylist()
-        max_overlap = tbl.column("max_overlap").to_pylist()
-        matched_hashes = tbl.column("matched_hashes").to_pylist()
-        n_docs += len(ids)
-        for did, is_contaminated, overlap, hashes in zip(ids, contaminated, max_overlap, matched_hashes, strict=True):
-            if not is_contaminated:
-                continue
-            n_flagged += 1
-            row = {"id": did, "max_overlap": overlap, "matched_hashes": hashes or []}
-            if len(reservoir) < k:
-                reservoir.append(row)
-            else:
-                j = rng.randint(0, n_flagged - 1)
-                if j < k:
-                    reservoir[j] = row
-    return n_docs, n_flagged, reservoir
+
+def flagged_doc(row: dict, texts: dict[str, ItemText], evals: dict[str, str]) -> dict:
+    """One flagged record for the viewer: its excerpt, score, evals, and its matched items' texts."""
+    items = list(row["matched_items"])[:MAX_MATCHED_ITEMS]
+    return {
+        "id": str(row["id"]),
+        "max_score": float(row["max_score"]),
+        "evals": list(row["matched_evals"]),
+        # The viewer highlights the question of each matched item in both columns.
+        "highlights": [texts[item].question for item in items if item in texts],
+        "matched_items": [
+            {"item": item, "eval": evals.get(item, ""), "text": texts[item].question if item in texts else ""}
+            for item in items
+        ],
+        "text": str(row["text"]),
+    }
+
+
+def export_marks(marks: dict[str, StepSpec], items_dir: str, samples_per_source: int, seed: int) -> list[dict]:
+    """Per source: record and flag counts from the mark counters, the most matched evals, and sampled flagged
+    records (:func:`flagged_doc`), sorted by flag rate."""
+    texts, evals_of = item_texts(items_dir), item_evals(items_dir)
+    sources = []
+    for name, step in sorted(marks.items()):
+        attrs = read_artifact(step.output_path, DeconAttributes)
+        contaminated = int(attrs.counters.get("decon/contaminated", 0))
+        total = contaminated + int(attrs.counters.get("decon/clean", 0))
+        rows = sample_flagged(str(attrs.flagged_output_dir), samples_per_source, random.Random(f"{seed}:{name}"))
+        evals = Counter(eval_name for row in rows for eval_name in row["matched_evals"])
+        sources.append(
+            {
+                "name": name,
+                "docs": total,
+                "flagged": contaminated,
+                "rate": contaminated / total if total else 0.0,
+                "top_evals": evals.most_common(TOP_EVALS),
+                "samples": [flagged_doc(row, texts, evals_of) for row in rows],
+            }
+        )
+        logger.info("source %s: %d/%d flagged", name, contaminated, total)
+    return sorted(sources, key=lambda source: source["rate"], reverse=True)
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--target-tokens-b", type=float, required=True)
-    ap.add_argument("--exclude", nargs="*", default=None)
-    ap.add_argument("--label", required=True, help="run label (json basename)")
-    ap.add_argument("--out", required=True, help="output dir (JSON written to <out>/<label>.json)")
-    ap.add_argument("--only", nargs="*", default=None, help="restrict export to these sources")
-    ap.add_argument("--samples", type=int, default=_SAMPLES_PER_SOURCE)
-    ap.add_argument("--sample-root", default=None, help="match the decon run's --sample-root (pre-materialized root)")
-    args = ap.parse_args()
-    rng = random.Random(0)
-    ngram = NGramConfig(
-        ngram_length=NGRAM_LENGTH,
-        paragraph_delimiter=PARAGRAPH_DELIMITER,
-        min_matched_features=MIN_MATCHED_FEATURES,
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--target-tokens-b", type=float, required=True)
+    parser.add_argument("--exclude", nargs="*", default=None)
+    parser.add_argument("--label", required=True, help="run label (json basename)")
+    parser.add_argument("--out", required=True, help="output dir (JSON written to <out>/<label>.json)")
+    parser.add_argument("--only", nargs="*", default=None, help="restrict export to these sources")
+    parser.add_argument("--samples", type=int, default=SAMPLES_PER_SOURCE)
+    parser.add_argument(
+        "--sample-root", default=None, help="match the decon run's --sample-root (pre-materialized root)"
     )
-
+    parser.add_argument("--seed", type=int, default=0)
+    args = parser.parse_args()
     steps = build_testbed_decon_steps(
         target_total_tokens_b=args.target_tokens_b,
-        only_sources=args.only,  # validates against the source set (raises on typos)
+        only_sources=args.only,
         exclude_sources=frozenset(args.exclude or ()),
         sample_root=args.sample_root,
     )
-    bloom_step = next(s for s in steps if s.name.startswith("datakit/bloom/"))
-    decon_steps = [s for s in steps if s.name.startswith("datakit/testbed_decon/")]
-    _, index_path = bloom_paths(bloom_step.output_path)
-
-    # First pass: per-source rate + collect the matched hashes we actually need.
-    per_source: list[dict] = []
-    needed_hashes: set[int] = set()
-    for ds in decon_steps:
-        source = ds.name.removeprefix("datakit/testbed_decon/")
-        # Doc text lives at the mark input: a pre-materialized root (input_dir) or
-        # the normalized sample-step output.
-        sample_path = (
-            ds.hash_attrs.get("input_dir")
-            or next(d for d in ds.deps if d.name.startswith("data/datakit/normalized/")).output_path
-        )
-        # Scale to any corpus size: counts from the artifact, flagged examples from
-        # the mark-time sidecar. Only fall back to a full-attributes scan when a run
-        # predates those (no sidecar); then counts come from the scan too.
-        counts = _counts_from_artifact(ds.output_path)
-        sampled = _flagged_from_sidecar(ds.output_path, args.samples, rng)
-        if sampled is None or counts is None:
-            n_docs, n_flagged, scan_sampled = _source_rows(ds.output_path, args.samples, rng)
-            if sampled is None:
-                sampled = scan_sampled  # from scan: no text yet, filled in second pass
-            if counts is not None:
-                n_docs, n_flagged = counts
-        else:
-            n_docs, n_flagged = counts
-        for row in sampled:
-            needed_hashes.update(row["matched_hashes"])
-        per_source.append(
-            {
-                "name": source,
-                "docs": n_docs,
-                "flagged": n_flagged,
-                "rate": (n_flagged / n_docs) if n_docs else 0.0,
-                "sample_path": sample_path,
-                "sampled": sampled,
-            }
-        )
-        logger.info("source %s: %d/%d flagged (%.4f%%)", source, n_flagged, n_docs, 100 * per_source[-1]["rate"])
-
-    # Load needed hash → eval_id rows from the index. Keep the eval ids (not just
-    # the family) so we can also surface the matched eval TEXT.
-    hash_to_evals: dict[int, set[str]] = {}
-    for tbl in _read_parquet(index_path):
-        hs = tbl.column("hash").to_pylist()
-        eids = tbl.column("eval_id").to_pylist()
-        for h, eid in zip(hs, eids, strict=True):
-            if h in needed_hashes:
-                hash_to_evals.setdefault(h, set()).add(str(eid))
-    needed_eval_ids: set[str] = set().union(*hash_to_evals.values()) if hash_to_evals else set()
-    eval_texts = _load_eval_texts(needed_eval_ids)
-    logger.info(
-        "resolved %d hashes -> %d eval ids (%d with text)", len(hash_to_evals), len(needed_eval_ids), len(eval_texts)
-    )
-
-    # Second pass: attach doc text + eval attribution (family counts + matched eval records w/ text).
-    for src in per_source:
-        sampled = src.pop("sampled")
-        # Sidecar rows already carry text; only the scan fallback needs a text lookup.
-        want_ids = {r["id"] for r in sampled if not r.get("text")}
-        id_to_text: dict[str, str] = {}
-        if want_ids:
-            for tbl in _read_parquet(src["sample_path"], columns=["id", "text"]):
-                ids = tbl.column("id").to_pylist()
-                txt = tbl.column("text").to_pylist()
-                for did, t in zip(ids, txt, strict=True):
-                    if did in want_ids:
-                        id_to_text[did] = t
-        fam_counter: Counter = Counter()
-        docs = []
-        for r in sampled:
-            fams: Counter = Counter()
-            eval_hits: Counter = Counter()
-            for h in r["matched_hashes"]:
-                for eid in hash_to_evals.get(h, ()):  # a hash can map to >1 eval record
-                    fams[eval_id_to_family(eid)] += 1
-                    eval_hits[eid] += 1
-            fam_counter.update(fams.keys())
-            full_text = r.get("text") or id_to_text.get(r["id"], "") or ""
-            matched_ngrams = _overlapping_ngrams(full_text, set(r["matched_hashes"]), ngram)
-            # Window doc + eval text around the shared span so the overlap is
-            # visible (and highlightable) in both columns of the report.
-            matched_evals = [
-                {
-                    "eval_id": eid,
-                    "family": eval_id_to_family(eid),
-                    "hits": hits,
-                    "text": _window(eval_texts.get(eid, "") or "", matched_ngrams),
-                }
-                for eid, hits in eval_hits.most_common(_MAX_MATCHED_EVALS)
-            ]
-            docs.append(
-                {
-                    "id": r["id"],
-                    "max_overlap": r["max_overlap"],
-                    "n_matched": len(r["matched_hashes"]),
-                    "families": fams.most_common(8),
-                    "matched_ngrams": matched_ngrams,
-                    "matched_evals": matched_evals,
-                    "text": _window(full_text, matched_ngrams),
-                }
-            )
-        src["top_families"] = fam_counter.most_common(12)
-        src["samples"] = docs
-
+    items_dir = str(read_artifact(steps.keys.output_path, DeconKeys).items_dir)
     run = {
         "label": args.label,
         "target_tokens_b": args.target_tokens_b,
         "exclude": args.exclude or [],
-        "root": per_source[0]["sample_path"].rsplit("/", 1)[0] if per_source else None,
-        "sources": sorted(per_source, key=lambda s: s["rate"], reverse=True),
+        "sources": export_marks(steps.marks, items_dir, args.samples, args.seed),
     }
     out_path = prefix_join(args.out, f"{args.label}.json")
     fs, _ = url_to_fs(out_path)
     with fs.open(out_path, "w") as f:
         json.dump(run, f)
-    logger.info("wrote %s (%d sources)", out_path, len(per_source))
+    logger.info("wrote %s (%d sources)", out_path, len(run["sources"]))
 
 
 if __name__ == "__main__":

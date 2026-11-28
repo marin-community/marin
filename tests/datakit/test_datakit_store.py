@@ -194,7 +194,6 @@ def _build_inputs(tmp_path):
             main_output_dir=dirs["decon"],
             flagged_output_dir="",
             num_partitions=2,
-            eval_hash_index_path="",
             counters={},
         )
     }

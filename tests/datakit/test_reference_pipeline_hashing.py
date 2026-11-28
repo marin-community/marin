@@ -71,17 +71,16 @@ def test_output_prefix_routes_every_step_without_changing_identity():
 
     assert routed.keys() == default.keys()
     for name, step in routed.items():
+        if step.fn is None:
+            continue  # a pre-built input, such as the prepared item table, stays where it was prepared
         assert step.output_path.startswith("gs://marin-test-region/tmp/ttl=1d/ferry/"), name
         assert step.name_with_hash == default[name].name_with_hash, name
 
 
-def test_no_region_path_in_hash_attrs_except_known_bloom_gap():
+def test_no_region_path_in_hash_attrs():
     # A region-specific gs:// path in a hash means byte-identical data gets a
-    # different output path per region. The only remaining leak is the decontam
-    # bloom's eval root (tracked follow-up); everything else must be clean.
+    # different output path per region.
     for step in _build().all_steps:
-        if step.name == "datakit/bloom/_combined_fixed":
-            continue
         assert "gs://" not in json.dumps(step.hash_attrs, default=str), f"{step.name} leaks a gs:// path into its hash"
 
 
@@ -118,8 +117,8 @@ def test_minhash_params_rekey_minhash_and_dedup():
     assert changed["datakit/dedup"].hash_id != base["datakit/dedup"].hash_id
 
 
-def test_decon_drop_set_tracks_normalized_source_identity():
-    base = _steps_by_name(_build())["datakit/decon_drop/_combined"].hash_id
+def test_decon_keys_track_normalized_source_identity():
+    base = _steps_by_name(_build())["datakit/decontam/_keys"].hash_id
     sources = _sources()
     sources["a"] = dataclasses.replace(sources["a"], hash_attrs={"revision": 1})
     changed = reference_datakit_steps(
@@ -128,7 +127,7 @@ def test_decon_drop_set_tracks_normalized_source_identity():
         quality_model_version="pooled-junkgate2",
         scale=SMOKE_SCALE,
     )
-    assert _steps_by_name(changed)["datakit/decon_drop/_combined"].hash_id != base
+    assert _steps_by_name(changed)["datakit/decontam/_keys"].hash_id != base
 
 
 def test_decontamination_mark_subset_preserves_full_graph_identity():
@@ -137,18 +136,8 @@ def test_decontamination_mark_subset_preserves_full_graph_identity():
     subset = decontamination_steps(sources, scale=SMOKE_SCALE, mark_source_names=["a"])
 
     assert list(subset.marks) == ["a"]
-    assert subset.bloom.hash_id == full.bloom.hash_id
-    assert subset.drop_sets.hash_id == full.drop_sets.hash_id
+    assert subset.keys.hash_id == full.keys.hash_id
     assert subset.marks["a"].hash_id == full.marks["a"].hash_id
-
-
-def test_decontamination_eval_root_rekeys_bloom(monkeypatch):
-    monkeypatch.setenv("MARIN_PREFIX", "gs://first-region")
-    first = decontamination_steps(_sources(), scale=SMOKE_SCALE)
-    monkeypatch.setenv("MARIN_PREFIX", "gs://second-region")
-    second = decontamination_steps(_sources(), scale=SMOKE_SCALE)
-
-    assert first.bloom.hash_id != second.bloom.hash_id
 
 
 def test_centroid_seed_rekeys_training():
