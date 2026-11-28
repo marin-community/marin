@@ -2,7 +2,8 @@
 # and chat template. Served data- and expert-parallel with tensor_parallel_size 1, streaming shards across the
 # ranks. The grug reasoning parser splits <|start_think|>...<|end_think|> from the answer; the TPU stack lacks
 # it, so this entry serves on H100s. The template defaults to /think and maps enable_thinking=false to /nothink,
-# which the model often ignores.
+# which the model often ignores. The model can emit several think spans in one turn; the grug_multi_think
+# plugin parser routes all of them to reasoning, where grug leaves every span after the first in the answer.
 name: marin-snowball-67b-a2b-v0.1
 location: open-athena/Marin-Snowball-67B-A2B-v0.1
 revision: adc0078a19a4383bc998fcdb43867b3360baf5f3
@@ -19,12 +20,14 @@ serve:
   max_num_batched_tokens: 7168
   max_num_seqs: 32
   tool_call_parser: hermes
-  reasoning_parser: grug
+  reasoning_parser: grug_multi_think
   auto_overrides: false
   vllm_extra_args:
   - --enable-expert-parallel
   - --model-loader-extra-config
   - '{"distributed":true}'
+  - --reasoning-parser-plugin
+  - experiments/evaluation/serve/vllm_plugins/grug_multi_think.py
 agent:
   agent_kwargs:
     thinking_format: chat-template

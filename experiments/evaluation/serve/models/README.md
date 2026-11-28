@@ -79,10 +79,13 @@ an exact `vllm_version`, and a plugin requirement pinned to a release or commit.
 part of the model catalog and the recorded effective serving configuration. The plugin is installed
 in the same isolated environment as vLLM; TPU serving does not accept these GPU-specific settings.
 
-A Marin-owned tool-call parser lives in `experiments/evaluation/serve/vllm_plugins/`. Load it with
-`--tool-parser-plugin` in `vllm_extra_args`, giving the file's path from the repository root, and
-select it with `tool_call_parser`. Iris runs the server from the root of the job's workspace bundle,
-and vLLM fails at startup when the file is missing or the parser name is unregistered.
+Marin-owned tool-call and reasoning parsers live in `experiments/evaluation/serve/vllm_plugins/`.
+Load a tool-call parser with `--tool-parser-plugin` in `vllm_extra_args`, giving the file's path from
+the repository root, and select it with `tool_call_parser`. Load a reasoning parser the same way with
+`--reasoning-parser-plugin` and select it with `reasoning_parser`; vLLM also imports that file in each
+engine process, whose structured-output gate looks the reasoning parser up by name. Iris runs the
+server from the root of the job's workspace bundle, and vLLM fails at startup when the file is missing
+or the parser name is unregistered.
 
 A GPU model that needs upstream support not yet in a vLLM release can pin a nightly build. Set
 `vllm_source: upstream`, `vllm_nightly.commit` to the full upstream `main` commit,
