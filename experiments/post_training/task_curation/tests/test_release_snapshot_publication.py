@@ -108,6 +108,29 @@ def test_verify_survey_alignment_refuses_mismatch(tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("status", "population", "accepted"),
+    [("Excluded", None, True), ("Available", None, False), ("Excluded", {"measured_tasks": 3}, False)],
+)
+def test_identity_coverage_allows_only_unpopulated_excluded_inventory(tmp_path, status, population, accepted):
+    current = {
+        "Test:One": {"status": "Available", "actor_census_input": {"measured_tasks": 2}},
+        "Test:Unfingerprinted": {"status": status, "actor_census_input": population},
+    }
+    binding = {"catalog_root": "s3://test/catalog", "snapshot_id": "assembly-test-v1"}
+    documents = {
+        "identity_receipt": {**binding, "fingerprints": {"Test:One": {"task_count": 2}}},
+        "backend_receipt": {**binding, "sources": [{"source_id": source_id} for source_id in current]},
+    }
+    refs = {name: _write_json(tmp_path, name + ".json", document) for name, document in documents.items()}
+    inputs = _inputs(tmp_path, refs=refs)
+    if not accepted:
+        with pytest.raises(ValueError, match=r"missing.*Test:Unfingerprinted"):
+            sp.verify_survey_alignment(inputs, current)
+        return
+    assert sp.verify_survey_alignment(inputs, current) == (documents["identity_receipt"], documents["backend_receipt"])
+
+
+@pytest.mark.parametrize(
     ("survey", "field"),
     [
         (None, None),

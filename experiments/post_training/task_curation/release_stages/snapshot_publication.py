@@ -198,11 +198,18 @@ def verify_no_prior_drift(
 
 
 def verify_survey_alignment(inputs: SnapshotPublicationInputs, current: dict[str, dict]) -> tuple[dict, dict]:
-    """Both surveys must bind this publication and cover exactly its population."""
+    """Bind both surveys; only Excluded sources without a population may lack identity evidence."""
     identity = _read_ref(inputs.identity_receipt)
     backend = _read_ref(inputs.backend_receipt)
-    if set(identity["fingerprints"]) != set(current):
-        raise ValueError("identity fingerprints do not cover exactly the current declarations")
+    fingerprints = set(identity["fingerprints"])
+    missing = sorted(
+        source_id
+        for source_id in set(current) - fingerprints
+        if current[source_id].get("status") != "Excluded" or current[source_id].get("actor_census_input") is not None
+    )
+    extra = sorted(fingerprints - set(current))
+    if missing or extra:
+        raise ValueError(f"identity fingerprints do not cover the declared populations (missing {missing}, extra {extra})")
     if {row["source_id"] for row in backend["sources"]} != set(current):
         raise ValueError("backend sources do not cover exactly the current declarations")
     expected = (inputs.catalog_root, inputs.snapshot_id)

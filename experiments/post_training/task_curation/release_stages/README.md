@@ -231,6 +231,11 @@ Use the regional root's artifact prefix (for example, the regional bucket's
 `marin` directory) so the completed upstream artifacts remain cached. This is
 the same maintained graph and plan; no stage inputs are reconstructed by hand.
 
+Snapshot publication requires identity fingerprints for every declared population.
+An `Excluded` inventory entry without an `actor_census_input` may have no
+fingerprint. All other missing fingerprints, unknown source IDs, backend coverage
+gaps and survey publication-binding mismatches refuse publication.
+
 ### Per-source parallelism and sizing
 
 The heavy stages fan out across sources inside one job; the worker counts ride the
