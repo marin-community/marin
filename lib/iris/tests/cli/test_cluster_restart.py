@@ -87,6 +87,7 @@ def test_controller_restart_failure_preserves_or_requests_rollback(
 
     assert result.exit_code == 1
     if rollback_probe_fails:
+        # An uncaught restart exception also exits 1 under CliRunner.
         assert isinstance(result.exception, SystemExit)
     record = read_rollout_record(remote_state_dir)
     if rollback_probe_fails:

@@ -788,7 +788,7 @@ def test_restart_controller_storage_health_credential_failure_does_not_change_de
     provider.shutdown()
 
 
-def test_restart_controller_apply_failure_is_not_prebootstrap():
+def test_restart_controller_apply_failure_is_not_classified_as_prestart():
     provider, k8s = _make_provider()
     config = _make_cluster_config()
     _seed_prerequisites(k8s, config)

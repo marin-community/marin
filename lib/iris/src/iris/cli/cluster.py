@@ -1372,7 +1372,7 @@ def controller_restart(
     else:
         pre_deploy_checkpoint = _take_pre_deploy_checkpoint(ctx, controller_url, checkpoint_timeout)
 
-    active_image = config.controller.image
+    configured_image = config.controller.image
     new_image = _build_forward_image(
         ctx,
         config,
@@ -1399,7 +1399,7 @@ def controller_restart(
         click.echo(f"Controller restart did not begin: {e}", err=True)
         safe_record = prior_record or RolloutRecord(
             phase=RolloutPhase.COMMITTED,
-            image=active_image,
+            image=configured_image,
             updated_at_ms=int(time.time() * 1000),
         )
         _record_rollout(remote_state_dir, safe_record)
