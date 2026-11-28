@@ -1,26 +1,29 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build the Megatron-DCP -> Levanter-canonical parameter mapping for RL checkpoints.
+"""Megatron-DCP -> Levanter-canonical parameter mapping for the RL checkpoints.
 
-The RL trainer initializes its FP32 master weights from the BF16 HF export of the
-SFT checkpoint, so Megatron-side tensors keep the HF export orientation
-([out, in] for projections). Mapping entries therefore carry ``transpose=True``
-for the tensors that HF_MAP marks as transposed, and the measurement slices in
-Levanter orientation after the transpose.
+The SkyRL grug Megatron model stores FP32 master weights as full stacked tensors
+under ``chained_<i>.optimizer.state.fp32_param.<megatron path>``, with the HF
+export orientation ([out, in] projections, fused gate+up and fused q|k|v rows).
+This module emits, per Levanter canonical tensor, the read entry the measurement
+needs: the DCP key, the Megatron global shape, which axes swap (transpose), and
+the fused-axis range for qkv / gate+up fusion.
 
-The mapping is shape- and name-driven; ``build_mapping`` reports anything it
-cannot place so the heuristics can be refined without touching checkpoints.
+Orientation for square projections (w_o, expert matrices) is ambiguous from
+shapes alone; the measurement resolves it empirically on the <=3-update anchor
+pairs (a mis-oriented square tensor shows a ~100% delta on a 1-update pair).
 """
 
 from __future__ import annotations
 
 import json
 import re
-from collections import defaultdict
-from dataclasses import dataclass, field
 
-# Levanter canonical name -> (role regex hints, Levanter shape, transpose-from-HF)
+import numpy as np
+
+# Levanter canonical tensor shapes (stacked leading dim = layer), used by the
+# HF side for shape-driven orientation checks and by the mapping builder.
 LEVANTER_SHAPES = {
     "token_embed": ([128256, 6144], False),
     "output_proj": ([6144, 128256], True),
@@ -60,86 +63,165 @@ LEVANTER_SHAPES = {
     "stacked_blocks/stacked/mlp/expert_mlp/w_down": ([48, 384, 3072, 3072], True),
 }
 
-# Match order matters: expert patterns before shared/router patterns.
-ROLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
-    # (canonical-name regex anchor, subgroup, key regex over the DCP key)
-    (
-        "stacked_blocks/stacked/mlp/expert_mlp/w_gate",
-        "expert",
-        re.compile(r"gate_proj|w_gate|fc1|linear_fc1|gate", re.I),
+# Megatron key fragments per canonical tensor. {N} placeholders are resolved
+# against the checkpoint's own key inventory (shared experts carry an index).
+# fused: (megatron axis, start, stop) selects this tensor out of a fused axis.
+MEGATRON_LAYOUT = {
+    "token_embed": ("embedding.word_embeddings.weight", False, None),
+    "output_proj": ("output_layer.weight", True, None),
+    "embed_norm/weight": ("embed_norm.norm.weight", False, None),
+    "final_norm/weight": ("decoder.final_layernorm.norm.weight", False, None),
+    "embed_gated_norm/w_down": ("embed_norm.down_proj.weight", True, None),
+    "embed_gated_norm/w_up": ("embed_norm.up_proj.weight", True, None),
+    "final_gated_norm/w_down": ("decoder.final_layernorm.down_proj.weight", True, None),
+    "final_gated_norm/w_up": ("decoder.final_layernorm.up_proj.weight", True, None),
+    "stacked_blocks/stacked/rms_attn/weight": ("decoder.layers.input_layernorm.norm.weight", False, None),
+    "stacked_blocks/stacked/rms_mlp/weight": ("decoder.layers.pre_mlp_layernorm.norm.weight", False, None),
+    "stacked_blocks/stacked/attn/w_q": (
+        "decoder.layers.self_attention.linear_qkv.weight",
+        True,
+        {"dim": 1, "layout": "qkv", "part": "q", "lev_extent": 6144},
     ),
-    ("stacked_blocks/stacked/mlp/expert_mlp/w_up", "expert", re.compile(r"up_proj|w_up|linear_fc1[2]?|up", re.I)),
-    ("stacked_blocks/stacked/mlp/expert_mlp/w_down", "expert", re.compile(r"down_proj|w_down|linear_fc2|down", re.I)),
-]
+    "stacked_blocks/stacked/attn/w_k": (
+        "decoder.layers.self_attention.linear_qkv.weight",
+        True,
+        {"dim": 1, "layout": "qkv", "part": "k", "lev_extent": 1536},
+    ),
+    "stacked_blocks/stacked/attn/w_v": (
+        "decoder.layers.self_attention.linear_qkv.weight",
+        True,
+        {"dim": 1, "layout": "qkv", "part": "v", "lev_extent": 1536},
+    ),
+    "stacked_blocks/stacked/attn/w_o": ("decoder.layers.self_attention.linear_proj.weight", True, None),
+    "stacked_blocks/stacked/attn/attn_gate": ("decoder.layers.self_attention.attn_gate.weight", True, None),
+    "stacked_blocks/stacked/attn/sconv_k/weight": ("decoder.layers.self_attention.sconv_k.weight", False, None),
+    "stacked_blocks/stacked/sconv_attn/weight": ("decoder.layers.self_attention.sconv_attn.weight", False, None),
+    "stacked_blocks/stacked/sconv_mlp/weight": ("decoder.layers.sconv_mlp.weight", False, None),
+    "stacked_blocks/stacked/attn_gated_norm/w_down": ("decoder.layers.input_layernorm.down_proj.weight", True, None),
+    "stacked_blocks/stacked/attn_gated_norm/w_up": ("decoder.layers.input_layernorm.up_proj.weight", True, None),
+    "stacked_blocks/stacked/mlp_gated_norm/w_down": ("decoder.layers.pre_mlp_layernorm.down_proj.weight", True, None),
+    "stacked_blocks/stacked/mlp_gated_norm/w_up": ("decoder.layers.pre_mlp_layernorm.up_proj.weight", True, None),
+    "stacked_blocks/stacked/mlp/router": ("decoder.layers.mlp.router.weight", True, None),
+    "stacked_blocks/stacked/mlp/router_bias": ("decoder.layers.mlp.router.expert_bias", False, None),
+    "stacked_blocks/stacked/mlp/latent_norm/weight": ("decoder.layers.mlp.latent_norm.weight", False, None),
+    "stacked_blocks/stacked/mlp/w_latent_down": ("decoder.layers.mlp.fc1_latent_proj.weight", True, None),
+    "stacked_blocks/stacked/mlp/w_latent_up": ("decoder.layers.mlp.fc2_latent_proj.weight", True, None),
+    "stacked_blocks/stacked/shared/{N}/w_gate": (
+        "decoder.layers.mlp.shared_experts.experts.{N}.linear_fc1.weight",
+        True,
+        (1, 0, 3072),
+    ),
+    "stacked_blocks/stacked/shared/{N}/w_up": (
+        "decoder.layers.mlp.shared_experts.experts.{N}.linear_fc1.weight",
+        True,
+        (1, 3072, 6144),
+    ),
+    "stacked_blocks/stacked/shared/{N}/w_down": (
+        "decoder.layers.mlp.shared_experts.experts.{N}.linear_fc2.weight",
+        True,
+        None,
+    ),
+    "stacked_blocks/stacked/mlp/expert_mlp/w_gate": (
+        "decoder.layers.mlp.experts.experts.linear_fc1.weight",
+        True,
+        (2, 0, 3072),
+    ),
+    "stacked_blocks/stacked/mlp/expert_mlp/w_up": (
+        "decoder.layers.mlp.experts.experts.linear_fc1.weight",
+        True,
+        (2, 3072, 6144),
+    ),
+    "stacked_blocks/stacked/mlp/expert_mlp/w_down": ("decoder.layers.mlp.experts.experts.linear_fc2.weight", True, None),
+}
 
 
-@dataclass
-class MapResult:
-    mapping: dict = field(default_factory=dict)
-    unmapped: list = field(default_factory=list)
-    notes: list = field(default_factory=list)
+def _find_key(entries_by_key: dict, fragment: str):
+    """Find the fp32_param key ending with ``fragment``; returns (key, size) or None."""
+    for key, size in entries_by_key.items():
+        if key.startswith("chained_") and ".optimizer.state.fp32_param." in key and key.endswith("." + fragment):
+            return key, size
+    return None
 
 
-def _is_master_weight(row: dict) -> bool:
-    key = row["key"]
-    dtype = row["dtype"]
-    return "float32" in dtype and ("fp32_from_fp16" in key or "optimizer" in key)
+def build_mapping(entries: list[dict]) -> tuple[dict, list[str]]:
+    """Emit the mapping for one checkpoint from its inventory entries.
 
-
-def build_mapping(entries: list[dict], layers_per_stage: int | None = None) -> MapResult:
-    """Map DCP entries to Levanter canonical names.
-
-    ``entries`` is the compact inventory from MegatronInventory.entries().
-    Returns the mapping plus diagnostics; unmapped families are listed, not fatal.
+    Returns ({canonical_name: entry}, notes). Entries:
+      {"key": dcp_key, "shape": [...], "transpose": bool,
+       "fused": {"dim": int, "start": int, "stop": int}
+                | {"dim": int, "layout": "qkv", "part": "q"|"k"|"v"}
+                | None}
     """
-    result = MapResult()
-    masters = [row for row in entries if _is_master_weight(row)]
-    result.notes.append(f"entries={len(entries)} master_candidates={len(masters)}")
-    if not masters:
-        result.unmapped.append({"reason": "no fp32 master candidates found", "sample": entries[:10]})
-        return result
+    notes: list[str] = []
+    by_key = {row["key"]: row["size"] for row in entries}
+    prefix = "chained_0.optimizer.state.fp32_param."
+    mapping: dict[str, dict] = {}
+    for canonical, (fragment, transpose, fused) in MEGATRON_LAYOUT.items():
+        fused_spec = None
+        if fused is not None:
+            fused_spec = (
+                dict(fused) if isinstance(fused, dict) else {"dim": fused[0], "start": fused[1], "stop": fused[2]}
+            )
+        if "{N}" in canonical:
+            for n in (0, 1):
+                found = _find_key(by_key, fragment.replace("{N}", str(n)))
+                name = canonical.replace("{N}", str(n))
+                if found is None:
+                    notes.append(f"missing: {name} ({fragment})")
+                    continue
+                key, size = found
+                mapping[name] = {
+                    "key": key,
+                    "shape": size,
+                    "transpose": transpose,
+                    "fused": fused_spec,
+                }
+            continue
+        found = _find_key(by_key, fragment)
+        if found is None:
+            # Fall back to a prefix-relative match for keys without the chained_ wrapper.
+            direct = by_key.get(prefix + fragment)
+            found = (prefix + fragment, direct) if direct else None
+        if found is None:
+            notes.append(f"missing: {canonical} ({fragment})")
+            continue
+        key, size = found
+        mapping[canonical] = {
+            "key": key,
+            "shape": size,
+            "transpose": transpose,
+            "fused": fused_spec,
+        }
+    notes.append(f"mapped {len(mapping)} canonical tensors")
+    return mapping, notes
 
-    # Family grouping: strip digits to see the key structure.
-    families: dict[str, list[dict]] = defaultdict(list)
-    for row in masters:
-        families[re.sub(r"\d+", "N", row["key"])].append(row)
-    result.notes.append(
-        "families: "
-        + json.dumps(
-            {
-                name: {"count": len(rows), "size": rows[0]["size"], "dtype": rows[0]["dtype"]}
-                for name, rows in sorted(families.items())[:80]
-            },
-            indent=1,
-            default=str,
-        )[:4000]
+
+def qkv_row_index(part: str, num_groups: int = 12, heads_per_group: int = 4, head_dim: int = 128):
+    """Megatron interleaved qkv row order: per group [q heads | k | v]."""
+    group_rows = (heads_per_group + 2) * head_dim
+    offset = {"q": 0, "k": heads_per_group * head_dim, "v": (heads_per_group + 1) * head_dim}[part]
+    width = heads_per_group * head_dim if part == "q" else head_dim
+    return np.concatenate(
+        [np.arange(g * group_rows + offset, g * group_rows + offset + width) for g in range(num_groups)]
     )
 
-    # The real mapping pass runs after the key layout is known; for now attach
-    # every family to the preview so the layout can be finalized offline.
-    result.unmapped.append({"reason": "mapping pass pending layout confirmation"})
-    return result
 
-
-def preview(entries: list[dict], limit: int = 12) -> dict:
+def preview(entries: list[dict], limit: int = 8) -> dict:
     """Compact preview of an inventory: family stats plus example keys."""
     families: dict[str, dict] = {}
     for row in entries:
         family = re.sub(r"\d+", "N", row["key"])
-        stat = families.setdefault(family, {"count": 0, "dtypes": set(), "sizes": set(), "examples": []})
+        stat = families.setdefault(family, {"count": 0, "sizes": set(), "examples": []})
         stat["count"] += 1
-        stat["dtypes"].add(row["dtype"])
         stat["sizes"].add(tuple(row["size"]))
         if len(stat["examples"]) < limit:
-            chunk_files = sorted({c["file"] for c in row["chunks"]})[:4]
-            offsets = [c["offsets"] for c in row["chunks"][:3]]
-            stat["examples"].append({"key": row["key"], "files": chunk_files, "offsets": offsets})
-    out = {}
-    for family, stat in families.items():
-        out[family] = {
-            "count": stat["count"],
-            "dtypes": sorted(stat["dtypes"]),
-            "sizes": [list(s) for s in stat["sizes"]][:4],
-            "examples": stat["examples"],
-        }
-    return out
+            stat["examples"].append({"key": row["key"], "n_chunks": row["n_chunks"]})
+    return json.loads(
+        json.dumps(
+            {
+                family: {"count": s["count"], "sizes": [list(x) for x in s["sizes"]][:3], "examples": s["examples"]}
+                for family, s in sorted(families.items())
+            },
+            default=str,
+        )
+    )

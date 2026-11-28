@@ -18,6 +18,7 @@ Smoke test (one tiny tensor, local):
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import logging
 import posixpath
@@ -27,8 +28,8 @@ from dataclasses import dataclass
 import fsspec
 import numpy as np
 import registry
-from megatron_map import LEVANTER_SHAPES
-from readers import LevanterReader, SafetensorsReader, configure_object_storage, load_megatron_keys
+from megatron_map import LEVANTER_SHAPES, qkv_row_index
+from readers import LevanterReader, SafetensorsReader, configure_object_storage, load_megatron_block
 from registry import (
     CHECKPOINTS,
     LEVANTER,
@@ -170,18 +171,18 @@ def simple_requests(sample: Sample) -> list[SliceRequest]:
     for tensor in registry.GROUPS["norm_scales"]["gated_norm_projections"]:
         if "stacked_blocks" in tensor:
             for layer in sample.layers:
-                add(tensor, "norm_scales", "gated_norm_projections", layer=layer, slices=(layer,), hf_slices=(layer,))
+                add(tensor, "norm_scales", "gated_norm_projections", layer=layer, slices=(layer,), hf_slices=())
         else:
             add(tensor, "norm_scales", "gated_norm_projections")
     for layer in sample.router_layers:
-        add("stacked_blocks/stacked/mlp/router", "router", "router", layer=layer, slices=(layer,), hf_slices=(layer,))
+        add("stacked_blocks/stacked/mlp/router", "router", "router", layer=layer, slices=(layer,), hf_slices=())
         add(
             "stacked_blocks/stacked/mlp/router_bias",
             "router",
             "router_bias",
             layer=layer,
             slices=(layer,),
-            hf_slices=(layer,),
+            hf_slices=(),
         )
     for layer in sample.layers:
         add(
@@ -337,9 +338,13 @@ class HFSide:
             return tuple(shape)
         return None
 
-    def _read_one(self, tensor: str, layer: int | None, hf_slices, expected=None) -> np.ndarray:
+    def _read_one(
+        self, tensor: str, layer: int | None, hf_slices, expected=None, expert: int | None = None
+    ) -> np.ndarray:
         _, transpose = HF_MAP[tensor]
         name = self._hf_name(tensor, layer)
+        if expert is not None:
+            name = name.replace("{E}", str(expert))
         key = (name, hf_slices)
         if key not in self._cache:
             self._cache[key] = self.reader.read_f32(name, hf_slices)
@@ -347,7 +352,16 @@ class HFSide:
         if expected is None and layer is not None:
             stacked = self._expected_stacked_shape(tensor)
             if stacked is not None and len(stacked) > 1:
-                expected = stacked[1:]
+                # Narrow the full per-layer expectation to the requested HF slice.
+                narrowed = []
+                for dim, size in enumerate(stacked[1:]):
+                    spec = hf_slices[dim] if dim < len(hf_slices) else slice(None)
+                    if isinstance(spec, int):
+                        narrowed.append(1)
+                    else:
+                        start, stop, _ = spec.indices(size)
+                        narrowed.append(stop - start)
+                expected = tuple(narrowed)
         if expected is not None and arr.shape != tuple(expected):
             if tuple(arr.shape) == tuple(expected)[::-1] and len(expected) == 2:
                 logger.info(
@@ -380,69 +394,219 @@ class HFSide:
         for layer in range(req.layer_start, req.layer_start + req.layer_count):
             for expert in range(req.expert_start, req.expert_start + req.expert_count):
                 matrix = self._read_one(
-                    f"stacked_blocks/stacked/mlp/expert_mlp/{req.part}", layer, (), expected=(3072, 3072)
+                    f"stacked_blocks/stacked/mlp/expert_mlp/{req.part}",
+                    layer,
+                    (),
+                    expected=(3072, 3072),
+                    expert=expert,
                 )
                 out[(layer, expert)] = np.ascontiguousarray(matrix[d2 : d2 + w2, d3 : d3 + w3])
         return out
 
 
 class MegatronSide:
-    """RL side: assembles FP32 master-weight tensors for mapped keys.
+    """RL side: reads FP32 master weights for mapped keys via chunk streaming.
 
-    Mapping entries carry an optional ``transpose`` (Megatron masters keep the
-    HF export orientation) and an optional ``row`` index for grouped storage
-    (one tensor holding several experts along its leading dim).
+    Mapping entries carry the DCP key, the Megatron global shape, a transpose
+    flag (Megatron keeps the HF export orientation) and an optional fused-axis
+    range (q|k|v rows; gate|up rows) selecting this canonical tensor out of a
+    fused Megatron tensor.
     """
 
     def __init__(self, checkpoint: Checkpoint, mapping: dict):
         self.checkpoint = checkpoint
-        self.mapping = mapping  # canonical tensor name -> list of variant entries
+        self.mapping = mapping  # canonical tensor name -> entry
         self.sample = SAMPLE
 
-    def _lookup(self, name: str, layer: int | None, expert: int | None) -> dict:
-        entries = self.mapping.get(name)
-        if not entries:
+    def _entry(self, name: str) -> dict:
+        entry = self.mapping.get(name)
+        if entry is None:
             raise KeyError(f"no Megatron mapping for {name}")
-        for entry in entries:
-            if entry.get("layer") == layer and entry.get("expert") == expert:
-                return entry
-        raise KeyError(f"no Megatron mapping for {name} layer={layer} expert={expert}")
+        return entry
 
-    def _assemble(self, keys: dict[str, tuple[int, ...]]) -> dict[str, np.ndarray]:
-        return load_megatron_keys(self.checkpoint, keys)
+    def _lev_shape(self, entry: dict) -> tuple[int, ...]:
+        shape = entry["shape"]
+        perm = _axis_perm(len(shape), entry["transpose"])
+        fused = entry.get("fused")
+        lev = []
+        for p in perm:  # lev dim order follows perm
+            extent = shape[p]
+            if fused and p == fused["dim"] and fused.get("layout") != "qkv":
+                extent = fused["stop"] - fused["start"]
+            if fused and p == fused["dim"] and fused.get("layout") == "qkv":
+                extent = fused["lev_extent"]
+            lev.append(extent)
+        return tuple(lev)
+
+    def _plan(self, entry: dict, lev_slices: tuple) -> tuple[tuple, tuple]:
+        """Translate a Levanter-orientation slice into a Megatron-orientation slice."""
+        perm = _axis_perm(len(entry["shape"]), entry["transpose"])
+        fused = entry.get("fused")
+        lev_shape = self._lev_shape(entry)
+        meg_slices: list = [slice(None)] * len(entry["shape"])
+        for i, p in enumerate(perm):
+            spec = lev_slices[i] if i < len(lev_slices) else slice(None)
+            if isinstance(spec, int):
+                spec = slice(spec, spec + 1)
+            start, stop, _ = spec.indices(lev_shape[i])
+            if fused and p == fused["dim"]:
+                if fused.get("layout") == "qkv":
+                    meg_slices[p] = slice(None)  # read the whole fused axis; gather below
+                    continue
+                start += fused["start"]
+                stop += fused["start"]
+            meg_slices[p] = slice(start, stop)
+        normalized = tuple(lev_slices[i] if i < len(lev_slices) else slice(None) for i in range(len(lev_shape)))
+        return tuple(meg_slices), normalized
 
     def read(self, req: SliceRequest) -> np.ndarray:
-        entry = self._lookup(req.tensor, req.layer, None)
-        arrays = self._assemble({entry["key"]: tuple(entry["shape"])})
-        arr = arrays[entry["key"]].astype(np.float32)
-        if entry.get("row") is not None:
-            arr = arr[entry["row"]]
-        if entry.get("transpose"):
-            arr = np.ascontiguousarray(arr.T)
-        if req.slices:
-            arr = arr[tuple(req.slices)]
-        return np.ascontiguousarray(arr)
+        entry = self._entry(req.tensor)
+        meg_slices, lev_slices = self._plan(entry, req.slices)
+        block = load_megatron_block(self.checkpoint, entry["key"], meg_slices)
+        lev_block = np.transpose(block, _axis_perm(block.ndim, entry["transpose"]))
+        fused = entry.get("fused")
+        if fused and fused.get("layout") == "qkv":
+            # Megatron interleaves the fused qkv rows per query group; gather the
+            # requested part into natural head order along the fused output axis.
+            rows = qkv_row_index(fused["part"])
+            fused_axis = _axis_perm(block.ndim, entry["transpose"]).index(fused["dim"])
+            index: list = [slice(None)] * block.ndim
+            index[fused_axis] = rows
+            lev_block = np.ascontiguousarray(lev_block[tuple(index)])
+        out = lev_block[tuple(slice(None) for _ in lev_slices)]
+        return np.ascontiguousarray(out.reshape(_requested_shape(lev_slices, self._lev_shape(entry))))
 
     def read_experts(self, req: ExpertRequest) -> dict[tuple[int, int], np.ndarray]:
-        name = f"stacked_blocks/stacked/mlp/expert_mlp/{req.part}"
-        wanted: dict[str, tuple[int, ...]] = {}
-        entries: dict[tuple[int, int], dict] = {}
-        for layer in range(req.layer_start, req.layer_start + req.layer_count):
-            for expert in range(req.expert_start, req.expert_start + req.expert_count):
-                entry = self._lookup(name, layer, expert)
-                entries[(layer, expert)] = entry
-                wanted[entry["key"]] = tuple(entry["shape"])
-        arrays = self._assemble(wanted)
         d2, w2, d3, w3 = self.sample.expert_area
         out = {}
-        for (layer, expert), entry in entries.items():
-            arr = arrays[entry["key"]].astype(np.float32)
-            if entry.get("row") is not None:
-                arr = arr[entry["row"]]
-            if entry.get("transpose"):
-                arr = np.ascontiguousarray(arr.T)
-            out[(layer, expert)] = np.ascontiguousarray(arr[d2 : d2 + w2, d3 : d3 + w3])
+        for layer in range(req.layer_start, req.layer_start + req.layer_count):
+            for expert in range(req.expert_start, req.expert_start + req.expert_count):
+                name = f"stacked_blocks/stacked/mlp/expert_mlp/{req.part}"
+                out[(layer, expert)] = self.read(
+                    SliceRequest(
+                        name,
+                        "expert_banks",
+                        req.part,
+                        layer,
+                        (layer, expert, slice(d2, d2 + w2), slice(d3, d3 + w3)),
+                        (),
+                    )
+                )
         return out
+
+
+def _axis_perm(n_dims: int, transpose: bool) -> tuple[int, ...]:
+    """Axis permutation from Megatron to Levanter orientation.
+
+    Stacked leading dims stay in place; projection axes swap. 2-D transposed
+    tensors reverse fully ([vocab, hidden] <-> [hidden, vocab]).
+    """
+    if not transpose:
+        return tuple(range(n_dims))
+    if n_dims == 2:
+        return (1, 0)
+    if n_dims == 3:
+        return (0, 2, 1)
+    if n_dims == 4:
+        return (0, 1, 3, 2)
+    raise ValueError(f"unsupported ndim {n_dims}")
+
+
+def _requested_shape(lev_slices: tuple, lev_shape: tuple[int, ...]) -> tuple[int, ...]:
+    out = []
+    for i, s in enumerate(lev_slices):
+        if isinstance(s, int):
+            out.append(1)
+        else:
+            start, stop, _ = s.indices(lev_shape[i])
+            out.append(stop - start)
+    return tuple(out)
+
+
+# Orientation-ambiguous tensors: square projections and fused gate|up halves.
+# The probe measures each candidate on a <=2-update anchor pair; the correct
+# orientation gives a ~1e-5 relative delta, a wrong one ~1e0.
+ORIENTABLE = (
+    ("stacked_blocks/stacked/attn/w_o", "transpose"),
+    ("stacked_blocks/stacked/mlp/expert_mlp/w_down", "transpose"),
+    ("stacked_blocks/stacked/mlp/expert_mlp/w_gate", "fused"),
+    ("stacked_blocks/stacked/mlp/expert_mlp/w_up", "fused"),
+    ("stacked_blocks/stacked/shared/0/w_down", "transpose"),
+    ("stacked_blocks/stacked/shared/1/w_down", "transpose"),
+    ("stacked_blocks/stacked/shared/0/w_gate", "fused"),
+    ("stacked_blocks/stacked/shared/0/w_up", "fused"),
+    ("stacked_blocks/stacked/shared/1/w_gate", "fused"),
+    ("stacked_blocks/stacked/shared/1/w_up", "fused"),
+)
+
+
+def _flipped_entry(entry: dict, kind: str) -> dict:
+    entry = copy.deepcopy(entry)
+    if kind == "transpose":
+        entry["transpose"] = not entry["transpose"]
+    elif kind == "fused":
+        start, stop = entry["fused"]["start"], entry["fused"]["stop"]
+        span = stop - start
+        if start == 0:
+            entry["fused"]["start"], entry["fused"]["stop"] = span, 2 * span
+        else:
+            entry["fused"]["start"], entry["fused"]["stop"] = 0, span
+    return entry
+
+
+def orientation_probe(pair: Pair, sample: Sample, mapping_a, mapping_b) -> dict:
+    """Resolve ambiguous orientations on a short-update anchor pair.
+
+    Returns {canonical_name: {"kind": ..., "scores": {...}, "flipped": bool}};
+    the caller applies it with ``apply_orientation``.
+    """
+    a_ckpt, b_ckpt = CHECKPOINTS[pair.side_a], CHECKPOINTS[pair.side_b]
+    side_a = make_side(a_ckpt, sample, mapping_a)
+    requests = {req.tensor: req for req in simple_requests(sample)}
+    choices = {}
+    for name, kind in ORIENTABLE:
+        req = requests.get(name)
+        if req is None:
+            continue
+        try:
+            arr_a = side_a.read(req)
+            entry = (mapping_b or mapping_a).get(name)
+            scores = {}
+            for label, variant in (("default", entry), ("flipped", _flipped_entry(entry, kind))):
+                trial = MegatronSide(b_ckpt if CHECKPOINTS[pair.side_b].kind == MEGATRON else a_ckpt, {name: variant})
+                arr_b = trial.read(req)
+                stats = slice_stats(arr_a, arr_b, "as-stored")
+                scores[label] = (stats.sum_d2 / stats.sum_w2) ** 0.5 if stats.sum_w2 else 0.0
+            flipped = scores["flipped"] < scores["default"] * 0.5
+            choices[name] = {"kind": kind, "scores": scores, "flipped": flipped}
+            logger.info(
+                "orientation %s (%s): default=%.3e flipped=%.3e -> %s",
+                name,
+                kind,
+                scores["default"],
+                scores["flipped"],
+                "FLIP" if flipped else "keep",
+            )
+        except Exception as error:  # probe is best-effort
+            logger.warning("orientation probe failed for %s: %s", name, error)
+    return choices
+
+
+def apply_orientation(mapping: dict, choices: dict) -> dict:
+    mapping = copy.deepcopy(mapping)
+    for name, choice in choices.items():
+        if choice.get("flipped") and name in mapping:
+            entry = mapping[name]
+            if choice["kind"] == "transpose":
+                entry["transpose"] = not entry["transpose"]
+            elif choice["kind"] == "fused":
+                lo, hi = entry["fused"]["start"], entry["fused"]["stop"]
+                span = hi - lo
+                if lo == 0:
+                    entry["fused"]["start"], entry["fused"]["stop"] = span, 2 * span
+                else:
+                    entry["fused"]["start"], entry["fused"]["stop"] = 0, span
+    return mapping
 
 
 # ---------------------------------------------------------------------------
@@ -627,6 +791,15 @@ def load_mapping(mapping_dir: str, checkpoint: Checkpoint) -> dict:
         return json.load(handle)
 
 
+def _save_mapping(mapping_dir: str, checkpoint_id: str, mapping: dict) -> None:
+    path = posixpath.join(mapping_dir, f"{checkpoint_id}-mapping.json")
+    fs, _ = fsspec.url_to_fs(path)
+    fs.makedirs(mapping_dir, exist_ok=True)
+    with fs.open(path, "wb") as handle:
+        handle.write(json.dumps(mapping, indent=1, default=str).encode())
+    logger.info("saved mapping %s", path)
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -648,6 +821,34 @@ def main() -> None:
 
     pairs = registry.pairs_for(args.stage, args.pairs)
     logger.info("measuring %d pairs: %s", len(pairs), [p.id for p in pairs])
+
+    # Resolve ambiguous Megatron-side orientations on the shortest-update anchor
+    # pair before measuring anything.
+    anchor = next(
+        (
+            p
+            for p in pairs
+            if p.updates <= 2 and (CHECKPOINTS[p.side_a].kind == MEGATRON or CHECKPOINTS[p.side_b].kind == MEGATRON)
+        ),
+        None,
+    )
+    if anchor and not args.limit_tensors:
+        logger.info("orientation probe on %s", anchor.id)
+        mapping_a = (
+            load_mapping(args.mapping_dir, CHECKPOINTS[anchor.side_a])
+            if CHECKPOINTS[anchor.side_a].kind == MEGATRON
+            else None
+        )
+        mapping_b = (
+            load_mapping(args.mapping_dir, CHECKPOINTS[anchor.side_b])
+            if CHECKPOINTS[anchor.side_b].kind == MEGATRON
+            else None
+        )
+        choices = orientation_probe(anchor, SAMPLE, mapping_a, mapping_b)
+        for side, mapping in (("a", mapping_a), ("b", mapping_b)):
+            checkpoint = CHECKPOINTS[anchor.side_a] if side == "a" else CHECKPOINTS[anchor.side_b]
+            if checkpoint.kind == MEGATRON and mapping:
+                _save_mapping(args.mapping_dir, checkpoint.id, apply_orientation(mapping, choices))
 
     all_rows: list[dict] = []
     all_summary: list[dict] = []

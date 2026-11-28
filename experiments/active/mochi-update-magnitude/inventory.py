@@ -67,20 +67,22 @@ def main() -> None:
         elif checkpoint.kind == MEGATRON:
             inventory = MegatronInventory(checkpoint)
             entries = inventory.entries()
-            mapping = build_mapping(entries)
+            mapping, notes = build_mapping(entries)
             preview_payload = {
                 "uri": checkpoint.uri,
                 "key_count": len(entries),
                 "preview": preview(entries),
-                "mapping_notes": mapping.notes,
+                "mapping_notes": notes,
             }
             name = f"{checkpoint.id}-preview.json"
             path = write_json(args.out, name, preview_payload)
+            mapping_path = write_json(args.out, f"{checkpoint.id}-mapping.json", mapping)
             logger.info(
-                "megatron inventory %s: %d keys -> %s (%.1fs)",
+                "megatron inventory %s: %d keys -> %s, mapping %s (%.1fs)",
                 checkpoint.id,
                 len(entries),
                 path,
+                mapping_path,
                 time.monotonic() - started,
             )
     if levanter_manifests:

@@ -13,6 +13,7 @@ import asyncio
 import io
 import json
 import os
+import pickle
 import posixpath
 import urllib.parse
 from collections import OrderedDict
@@ -23,10 +24,28 @@ from typing import ClassVar
 import fsspec
 import numpy as np
 import tensorstore as ts
-from levanter.tensorstore_serialization import build_kvstore_spec
 from registry import Checkpoint
 from rigging.filesystem.cluster_config import StoreType, data_config
 from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials, s3_endpoint
+
+
+def _build_kvstore_spec(path: str) -> dict:
+    """Tensorstore kvstore spec for an s3:// URI (virtual-hosted endpoint, tensorstore #285)."""
+    parsed = urllib.parse.urlparse(path)
+    if parsed.scheme != "s3":
+        raise ValueError(f"only s3:// checkpoint URIs are supported, got {path}")
+    bucket = parsed.netloc
+    spec: dict = {"driver": "s3", "path": parsed.path.lstrip("/")}
+    endpoint = os.environ.get("AWS_ENDPOINT_URL")
+    if endpoint:
+        scheme, _, host = endpoint.partition("://")
+        spec["endpoint"] = f"{scheme}://{bucket}.{host}"
+    else:
+        spec["bucket"] = bucket
+    region = os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION")
+    if region:
+        spec["aws_region"] = region
+    return spec
 
 
 def configure_object_storage() -> None:
@@ -76,7 +95,7 @@ class LevanterReader:
     # -- storage plumbing ---------------------------------------------------
 
     def _kvstore_spec(self) -> dict:
-        return build_kvstore_spec(self.checkpoint.uri)
+        return _build_kvstore_spec(self.checkpoint.uri)
 
     def _apply_signing_region(self, spec: dict) -> dict:
         """CoreWeave buckets sign against their declared signing region, not AWS_DEFAULT_REGION.
@@ -356,14 +375,19 @@ _MEGATRON_METADATA_CACHE: dict[str, object] = {}
 
 
 def _megatron_metadata(checkpoint: Checkpoint):
-    """Load the DCP ``.metadata`` pickle over fsspec (torch's FileSystemReader mangles s3://)."""
+    """Unpickle the DCP ``.metadata`` over fsspec.
+
+    SkyRL's direct-S3 writer stores ``.metadata`` as a raw pickle of torch's
+    Metadata object (not a torch.save zip), and torch's FileSystemReader cannot
+    open s3:// URIs anyway (it collapses the scheme).
+    """
     _require_torch()
     if checkpoint.uri in _MEGATRON_METADATA_CACHE:
         return _MEGATRON_METADATA_CACHE[checkpoint.uri]
     uri = checkpoint.uri.rstrip("/") + "/.metadata"
     fs, _ = fsspec.url_to_fs(uri)
     with fs.open(uri, "rb") as handle:
-        metadata = torch.load(handle, map_location="cpu", weights_only=False)
+        metadata = pickle.load(handle)
     _MEGATRON_METADATA_CACHE[checkpoint.uri] = metadata
     return metadata
 
@@ -378,29 +402,49 @@ class MegatronInventory:
     def entries(self) -> list[dict]:
         rows = []
         for key, meta in self.metadata.state_dict_metadata.items():
+            if not hasattr(meta, "size"):
+                continue  # BytesStorageMetadata (_extra_state) has no tensor geometry
             dtype = str(getattr(getattr(meta, "property", None), "dtype", "unknown"))
             size = [int(s) for s in meta.size]
             chunks = []
             for chunk in getattr(meta, "chunks", []):
                 chunks.append(
                     {
-                        "offsets": [[int(o) for o in off] for off in chunk.offsets],
-                        "sizes": [[int(s) for s in sz] for sz in chunk.sizes],
+                        "offsets": [int(o) for o in chunk.offsets],
+                        "sizes": [int(s) for s in chunk.sizes],
                     }
                 )
             rows.append({"key": key, "dtype": dtype, "size": size, "n_chunks": len(chunks), "chunks": chunks})
         return rows
 
 
-def load_megatron_keys(checkpoint: Checkpoint, keys: dict[str, tuple[int, ...]], dtype=None) -> dict[str, np.ndarray]:
-    """Assemble full tensors for the given DCP keys via fsspec byte-range reads.
+def load_megatron_block(checkpoint: Checkpoint, key: str, meg_slices: tuple) -> np.ndarray:
+    """Read one hyper-rect of a DCP tensor by streaming only intersecting chunks.
 
-    torch's FileSystemReader cannot open s3:// URIs directly (it collapses the
-    scheme), so read each chunk's serialized bytes at its recorded (offset,
-    length) and place it at the MetadataIndex flat offset of the global tensor.
+    Each chunk is one torch.save payload at a recorded (offset, length) byte
+    range; chunk offsets are multi-dim and match ``storage_data`` fqns exactly.
+    torch's own FileSystemReader cannot open s3:// URIs (it collapses the
+    scheme), hence this reader.
     """
     _require_torch()
     metadata = _megatron_metadata(checkpoint)
+    meta = metadata.state_dict_metadata[key]
+    shape = tuple(int(s) for s in meta.size)
+    resolved = []
+    for dim in range(len(shape)):
+        spec = meg_slices[dim] if dim < len(meg_slices) else slice(None)
+        if isinstance(spec, int):
+            spec = slice(spec, spec + 1)
+        start, stop, step = spec.indices(shape[dim])
+        if step != 1:
+            raise ValueError(f"strided slices unsupported: {spec}")
+        resolved.append(slice(start, stop))
+
+    by_offsets: dict[tuple, object] = {}
+    for index, info in metadata.storage_data.items():
+        if getattr(index, "fqn", getattr(index, "key", None)) == key and index.offset is not None:
+            by_offsets[tuple(int(o) for o in index.offset)] = info
+
     root = checkpoint.uri.rstrip("/")
     fs, _ = fsspec.url_to_fs(root)
     shard_cache: dict[str, object] = {}
@@ -412,16 +456,39 @@ def load_megatron_keys(checkpoint: Checkpoint, keys: dict[str, tuple[int, ...]],
         handle.seek(offset)
         return handle.read(length)
 
+    buffer = np.empty(tuple(s.stop - s.start for s in resolved), dtype=np.float32)
+    placed = 0
+    for chunk in meta.chunks:
+        chunk_offsets = tuple(int(o) for o in chunk.offsets)
+        info = by_offsets.get(chunk_offsets)
+        if info is None:
+            continue
+        overlap = []
+        touches = True
+        for c_off, c_size, req in zip(chunk_offsets, [int(s) for s in chunk.sizes], resolved, strict=False):
+            lo = max(c_off, req.start)
+            hi = min(c_off + c_size, req.stop)
+            if lo >= hi:
+                touches = False
+                break
+            overlap.append((lo, hi))
+        if not touches:
+            continue
+        payload = read_shard_range(info.relative_path, info.offset, info.length)
+        piece = torch.load(io.BytesIO(payload), map_location="cpu", weights_only=True)
+        piece_np = piece.numpy()
+        src = tuple(slice(lo - c_off, hi - c_off) for (lo, hi), c_off in zip(overlap, chunk_offsets, strict=False))
+        dst = tuple(slice(lo - req.start, hi - req.start) for (lo, hi), req in zip(overlap, resolved, strict=False))
+        buffer[dst] = piece_np[src]
+        placed += 1
+    if placed == 0:
+        raise KeyError(f"no DCP chunks intersect {key} {meg_slices}")
+    return buffer
+
+
+def load_megatron_keys(checkpoint: Checkpoint, keys: dict[str, tuple[int, ...]], dtype=None) -> dict[str, np.ndarray]:
+    """Assemble full tensors for the given DCP keys via chunk streaming."""
     outputs = {}
     for key, shape in keys.items():
-        meta = metadata.state_dict_metadata[key]
-        target_dtype = dtype or getattr(getattr(meta, "property", None), "dtype", torch.float32)
-        flat = torch.empty(int(np.prod(shape)), dtype=target_dtype)
-        for index, info in metadata.storage_data.items():
-            if getattr(index, "key", None) != key or index.offset is None:
-                continue
-            payload = read_shard_range(info.relative_path, info.offset, info.length)
-            piece = torch.load(io.BytesIO(payload), map_location="cpu", weights_only=True)
-            flat[index.offset : index.offset + piece.numel()] = piece.reshape(-1)
-        outputs[key] = flat.reshape(tuple(shape)).numpy()
+        outputs[key] = load_megatron_block(checkpoint, key, tuple(slice(None, s) for s in shape))
     return outputs
