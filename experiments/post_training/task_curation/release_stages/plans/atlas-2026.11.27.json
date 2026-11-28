@@ -1,37 +1,38 @@
 {
-  "kind": "atlas-release-config",
-  "release_id": "atlas-2026.11.27",
   "cluster": "cw-us-east-02a",
   "freeze_source_revision": "4575c6990764595891d0ea1cb513f9268152170b",
+  "kind": "atlas-release-config",
+  "preview_base_version": 41,
   "prior_release": {
-    "release_id": "r40",
-    "declarations": {
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v25/declarations/declarations.json",
-      "sha256": "12d347977a99c5a4e03b2158aee1f472de5c19beb30b00c2148f2aa7814de042"
-    },
-    "identity": {
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v25/identity-backend/source-identities.json",
-      "sha256": "fc4fd738b251b9fa3e242a025ff4d371836158856a6e3dc32d23da44189f30df"
-    },
     "backend": {
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v25/identity-backend/backend-map.json",
-      "sha256": "d7543e7f5a43ab246ad0098e3fe8ee25cab0c4778799e3bd84b665c1f5465625"
-    },
-    "composed_release": {
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v25/compose/composed/attempt-359271684387/release.json",
-      "sha256": "b4418d74ba92a2d58fd2be9e6897ab894bb149e00d4391be1f466021037a5cca"
+      "sha256": "d7543e7f5a43ab246ad0098e3fe8ee25cab0c4778799e3bd84b665c1f5465625",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v25/identity-backend/backend-map.json"
     },
     "composed_coverage": {
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v25/compose/composed/attempt-359271684387/coverage.json",
-      "sha256": "95dd790f9900da8a4db0a17c2287e2b370e0ab1ff4475720afe66168b6827974"
+      "sha256": "95dd790f9900da8a4db0a17c2287e2b370e0ab1ff4475720afe66168b6827974",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v25/compose/composed/attempt-359271684387/coverage.json"
     },
+    "composed_release": {
+      "sha256": "b4418d74ba92a2d58fd2be9e6897ab894bb149e00d4391be1f466021037a5cca",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v25/compose/composed/attempt-359271684387/release.json"
+    },
+    "declarations": {
+      "sha256": "12d347977a99c5a4e03b2158aee1f472de5c19beb30b00c2148f2aa7814de042",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v25/declarations/declarations.json"
+    },
+    "identity": {
+      "sha256": "fc4fd738b251b9fa3e242a025ff4d371836158856a6e3dc32d23da44189f30df",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v25/identity-backend/source-identities.json"
+    },
+    "release_id": "r40",
     "source_counts": {
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v25/package-inputs/source-counts.json",
-      "sha256": "9aefdb72a595e1ea083b042e805307b8936e6e47f79f6a063247f7998950210e"
+      "sha256": "9aefdb72a595e1ea083b042e805307b8936e6e47f79f6a063247f7998950210e",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v25/package-inputs/source-counts.json"
     }
   },
-  "removed_sources": [],
-  "qc_exclusions": [],
+  "prior_snapshot_id": "assembly-projection-refresh-20261127-v10-fallback",
   "production_version": 76,
-  "preview_base_version": 41
+  "qc_exclusions": [],
+  "release_id": "atlas-2026.11.27",
+  "removed_sources": []
 }

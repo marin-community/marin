@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any
 
 from marin.execution.artifact import read_record, result_type_name
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.atlas_deployment import (
@@ -123,6 +123,99 @@ class PriorCatalogState(BaseModel):
     available_source_ids: tuple[str, ...]
     snapshot_uri: str
     snapshot_sha256: str
+    declarations: dict[str, dict] = Field(default_factory=dict)
+
+
+def seal_prior_state(declarations: dict[str, dict], query: Query, load_id: str, *, release_root: str) -> dict[str, dict]:
+    """Seal the served declarations and surveys as the re-cut's retained prior state."""
+    backend, identity = reconstruct_prior_surveys(query, load_id)
+    refs = {}
+    for name, document in (
+        ("declarations", {"kind": "atlas-prior-state-declarations", "declarations": declarations}),
+        ("backend", backend),
+        ("identity", identity),
+    ):
+        raw = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
+        path = StoragePath(f"{release_root}/prior-state/{name}.json")
+        if path.exists():
+            if path.read_bytes() != raw:
+                raise ValueError(f"sealed prior-state artifact {path} exists with different content")
+        else:
+            path.write_bytes(raw, auto_mkdir=True)
+        if path.read_bytes() != raw:
+            raise ValueError(f"sealed prior-state artifact readback mismatch at {path}")
+        refs[name] = {"uri": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
+    return refs
+
+
+def reconstruct_prior_surveys(query: Query, load_id: str) -> tuple[dict, dict]:
+    """Reconstruct the served load's backend and identity survey documents from SQL.
+
+    The load stages its surveys split across tables: the survey metadata rows, the
+    per-source backend capabilities, the capability matrix cells, the per-source
+    fingerprints and duplicate groups, and the pair reviews. This reassembles the
+    two documents the identity-backend compose consumes as its retained prior, in
+    the exact shapes :class:`BackendSurvey` and :class:`SourceIdentitySurvey`
+    validate.
+    """
+    from taskcompendium.backend_requirements import BackendSurvey  # noqa: PLC0415 — beside its only use
+    from taskcompendium.source_fingerprints import (  # noqa: PLC0415 — beside its only use
+        DuplicateGroup,
+        SourceIdentitySurvey,
+    )
+
+    def one(sql: str, parameters: dict) -> dict:
+        rows = query(sql, parameters)["rows"]
+        if len(rows) != 1:
+            raise ValueError(f"the prior load {load_id} carries {len(rows)} survey rows, expected exactly 1")
+        return rows[0]
+
+    backend_row = one("SELECT survey, survey_id FROM atlas_backend_surveys WHERE load_id=:load", {"load": load_id})
+    backend = dict(backend_row["survey"])
+    backend["sources"] = [
+        row["capabilities"]
+        for row in query(
+            "SELECT capabilities FROM atlas_backend_sources WHERE load_id=:load ORDER BY source_id", {"load": load_id}
+        )["rows"]
+    ]
+    backend["matrix"] = [
+        row["cell"]
+        for row in query(
+            "SELECT cell FROM atlas_backend_cells WHERE load_id=:load ORDER BY backend, requirement", {"load": load_id}
+        )["rows"]
+    ]
+    BackendSurvey.model_validate(backend)
+
+    identity_row = one("SELECT metadata, survey_id FROM atlas_identity_surveys WHERE load_id=:load", {"load": load_id})
+    identity = dict(identity_row["metadata"])
+    fingerprints = {
+        row["id"]: row["source_fingerprint"]
+        for row in query(
+            "SELECT id, source_fingerprint FROM atlas_sources WHERE load_id=:load"
+            " AND source_fingerprint IS NOT NULL ORDER BY id",
+            {"load": load_id},
+        )["rows"]
+    }
+    reviews = [
+        row["review"]
+        for row in query(
+            "SELECT review FROM atlas_duplicate_reviews WHERE load_id=:load ORDER BY left_source", {"load": load_id}
+        )["rows"]
+    ]
+    groups_by_id: dict[str, dict] = {}
+    for row in query(
+        "SELECT id, duplicate_group FROM atlas_sources WHERE load_id=:load AND duplicate_group IS NOT NULL ORDER BY id",
+        {"load": load_id},
+    )["rows"]:
+        group = row["duplicate_group"]
+        groups_by_id.setdefault(group["group_id"], group)
+    identity["fingerprints"] = fingerprints
+    identity["reviews"] = reviews
+    identity["groups"] = [
+        DuplicateGroup.model_validate(group).model_dump(mode="json") for group in groups_by_id.values()
+    ]
+    SourceIdentitySurvey.model_validate(identity)
+    return backend, identity
 
 
 def _verify_freeze(repo_root: Path, revision: str) -> str:
@@ -258,7 +351,7 @@ def _resolve_population(source_id: str, source: Any, region_prefix: str) -> tupl
         pinned = getattr(population, name)
         if not str(pinned).startswith(region_prefix):
             raise ValueError(
-                f"population {name} for {source_id} is outside the release region prefix" f" {region_prefix}: {pinned}"
+                f"population {name} for {source_id} is outside the release region prefix {region_prefix}: {pinned}"
             )
     if population.task_count != binding.measured_tasks:
         raise ValueError(
@@ -339,6 +432,14 @@ def read_prior_catalog_state(
         source.id
         for source in catalog.sources(snapshot.snapshot_id, pending_stage_of=lambda sid: pending_stage(sid, receipts))
     )
+    declarations = {
+        canonical_source_id(source.id): (
+            source.declaration.model_dump(mode="json")
+            if hasattr(source.declaration, "model_dump")
+            else source.declaration
+        )
+        for source in catalog.sources(snapshot.snapshot_id, pending_stage_of=lambda sid: pending_stage(sid, receipts))
+    }
     load_row = query("SELECT load_id FROM atlas_current WHERE name='latest'", {})["rows"]
     if len(load_row) != 1 or not load_row[0].get("load_id"):
         raise ValueError(f"the catalog pointer carries no selected load: {load_row!r}")
@@ -379,6 +480,7 @@ def read_prior_catalog_state(
         available_source_ids=canonical_ids(available),
         snapshot_uri=snapshot_uri,
         snapshot_sha256=snapshot_sha256,
+        declarations=declarations,
     )
 
 
@@ -474,6 +576,24 @@ def derive_release_plan(
 
     prior_pins = _verify_prior_pins(config)
     prior_declarations = _verify_prior_pin(prior_pins["declarations"], "prior_release.declarations")
+
+    # The authoritative prior is the served catalog state. A fresh cut finds the
+    # catalog still serving the config's pinned prior snapshot; a re-cut of this
+    # release finds it serving a snapshot this release published, and retains
+    # against what is SERVED: the compose and the declaration drift gate read the
+    # served declarations and surveys, not the older prior-release pin.
+    recut = prior.snapshot_id != config.prior_snapshot_id
+    if recut:
+        state_refs = seal_prior_state(
+            prior.declarations,
+            lambda sql, parameters: query(sql, parameters),
+            prior.load_id,
+            release_root=f"{deployment.region_prefix}preview-release/{config.release_id}-{artifact_version}",
+        )
+        prior_pins["declarations"] = ArtifactRef(**state_refs["declarations"])
+        prior_pins["identity"] = ArtifactRef(**state_refs["identity"])
+        prior_pins["backend"] = ArtifactRef(**state_refs["backend"])
+
     prior_curriculum = _verify_prior_pin(prior_pins["composed_release"], "prior_release.composed_release")
     prior_inventory = {canonical_source_id(row["id"]): row for row in prior_curriculum["inventory"]}
     replacements = {

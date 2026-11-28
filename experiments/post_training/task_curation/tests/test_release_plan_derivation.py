@@ -22,9 +22,13 @@ import pyarrow.parquet as pq
 import pytest
 from finestore.rl.curation import ActorCensusInput, QualifiedSourceDeclaration, SourceOrigin, source_identifier
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
+from rigging.filesystem.storage_path import StoragePath
+from shellbox.machine import Backend
+from shellbox.requirements import Requirement
 from taskcompendium.backend_requirements import backend_schema_sha256
 
 from experiments.post_training.task_curation import atlas_deployment
+from experiments.post_training.task_curation.atlas_deployment import region_deployment
 from experiments.post_training.task_curation.grader_drift import (
     GraderDriftReference,
     MainRecipeReference,
@@ -284,10 +288,13 @@ def _applet_query(prior_load_id: str, curriculum_load_id: str, panels: list[str]
     return query
 
 
-def _catalog_factory(source_ids: tuple[str, ...]):
+def _catalog_factory(source_ids: tuple[str, ...], declarations: dict[str, dict] | None = None):
+    declarations = declarations or {}
     catalog = SimpleNamespace(
         current=lambda: SimpleNamespace(snapshot_id="assembly-prior-v1"),
-        sources=lambda snapshot_id, pending_stage_of=None: [SimpleNamespace(id=source_id) for source_id in source_ids],
+        sources=lambda snapshot_id, pending_stage_of=None: [
+            SimpleNamespace(id=source_id, declaration=declarations.get(source_id, {})) for source_id in source_ids
+        ],
     )
     return lambda root: catalog
 
@@ -329,6 +336,7 @@ def _config(prior: PriorRelease, **overrides) -> ReleaseConfig:
         cluster=CLUSTER,
         freeze_source_revision=FREEZE_REVISION,
         prior_release=prior,
+        prior_snapshot_id="assembly-prior-v1",
         production_version=41,
         preview_base_version=30,
     )
@@ -377,6 +385,131 @@ def _contract_receipts_factory(measured_tasks: dict[str, int]):
         for source_id, tasks in measured_tasks.items()
     }
     return lambda: receipts
+
+
+def test_recut_retains_against_the_served_state(tmp_path, frozen_layer, deployment, monkeypatch):
+    """A re-cut (the catalog serves a snapshot this release published, not the config's
+    pinned prior snapshot) retains against what is SERVED: the compose and the
+    declaration drift gate read the served declarations and surveys, sealed under the
+    release prefix as the retained prior state."""
+    layer = _source_layer(tmp_path, (RETAINED_ID, TARGET_ID))
+    prior = _prior_pins(tmp_path, _declaration_dump(layer))
+    config = _config(prior, prior_snapshot_id="assembly-config-prior-snapshot-v1")
+
+    served_declarations = _declaration_dump(layer)
+    survey = {
+        "catalog_root": "s3://example/catalog",
+        "snapshot_id": "assembly-served-prior-v1",
+        "generated_at": "2026-11-23T00:00:00Z",
+        "git_revision": "c" * 40,
+        "schema_sha256": "0" * 64,
+        "runtime_defaults": {
+            "agent": {
+                "network": "deny",
+                "cpus": 1,
+                "memory_mb": 512,
+                "storage_mb": 1024,
+                "gpus": 0,
+                "user": None,
+                "startup_timeout": 60.0,
+                "cleanup_timeout": 30.0,
+            },
+            "grader": {
+                "network": "deny",
+                "cpus": 1,
+                "memory_mb": 512,
+                "storage_mb": 1024,
+                "gpus": 0,
+                "user": None,
+                "startup_timeout": 60.0,
+                "cleanup_timeout": 30.0,
+            },
+        },
+        "matrix": [
+            {"backend": backend, "requirement": requirement, "support": "supported", "evidence": [], "note": ""}
+            for backend in sorted({b.value for b in Backend} | {"iris"})
+            for requirement in [r.value for r in Requirement]
+        ],
+        "deployment_limits": {},
+        "deployment_classes": {},
+        "sources": [],
+    }
+    identity_survey = {
+        "catalog_root": "s3://example/catalog",
+        "snapshot_id": "assembly-served-prior-v1",
+        "generated_at": "2026-11-23T00:00:00Z",
+        "fingerprints": {},
+        "reviews": [],
+        "groups": [],
+        "judge": None,
+    }
+
+    def query(sql: str, parameters: dict) -> dict:
+        if "FROM atlas_current" in sql:
+            return {"rows": [{"load_id": PRIOR_LOAD_ID}]}
+        if "FROM curriculum_current" in sql:
+            return {"rows": [{"load_id": PRIOR_CURRICULUM_LOAD_ID}]}
+        if "FROM atlas_review_current" in sql:
+            return {"rows": []}
+        if "FROM atlas_sources" in sql:
+            if "declaration->>'status'" in sql:
+                return {"rows": [{"source_id": RETAINED_ID}]}
+            if "source_fingerprint IS NOT NULL" in sql:
+                return {"rows": []}
+            if "duplicate_group IS NOT NULL" in sql:
+                return {"rows": []}
+            return {"rows": [{"source_id": source_id} for source_id in sorted(served_declarations)]}
+        if "FROM atlas_backend_surveys" in sql:
+            return {"rows": [{"survey": survey, "survey_id": "served-survey"}]}
+        if "FROM atlas_identity_surveys" in sql:
+            return {"rows": [{"metadata": identity_survey, "survey_id": "served-identity"}]}
+        if "FROM atlas_backend_sources" in sql:
+            return {"rows": []}
+        if "FROM atlas_backend_cells" in sql:
+            return {"rows": [{"cell": cell} for cell in survey["matrix"]]}
+        if "FROM atlas_duplicate_reviews" in sql:
+            return {"rows": []}
+        raise AssertionError(f"unexpected derivation query: {sql}")
+
+    monkeypatch.setattr(plan_derivation, "derived_contract_receipts", _contract_receipts_factory({TARGET_ID: 2}))
+    derived = derive_release_plan(
+        config,
+        repo_root=REPO_ROOT,
+        query=query,
+        sources_fn=lambda: layer,
+        prior_catalog_reader=lambda root, q: read_prior_catalog_state(
+            root,
+            q,
+            catalog_factory=_catalog_factory((RETAINED_ID,), declarations=served_declarations),
+            receipt_keys_fn=lambda: {},
+        ),
+        drift_reference_fn=lambda root, revision, declared: GraderDriftReference(
+            main=MainRecipeReference(revision="e" * 40, merge_base=revision),
+            sources={
+                source_id: SealedRecipeReference(source_id=source_id, converter_revision=revision)
+                for source_id in declared
+            },
+        ),
+    )
+
+    plan = ReleasePlan.model_validate(derived.plan_document)
+    plan.validate_shape()
+    pins = plan.pins
+    assert pins.prior_declarations.uri.endswith("prior-state/declarations.json")
+    assert pins.prior_identity.uri.endswith("prior-state/identity.json")
+    assert pins.prior_backend.uri.endswith("prior-state/backend.json")
+    deployment = region_deployment(CLUSTER)
+    release_root = f"{deployment.region_prefix}preview-release/testrelease-{FREEZE_ARTIFACT_VERSION}"
+    sealed = json.loads(StoragePath(f"{release_root}/prior-state/declarations.json").read_bytes())
+    # the retained prior state carries exactly the served catalog's rows
+    assert sorted(sealed["declarations"]) == sorted(
+        source_id for source_id in served_declarations if source_id in (RETAINED_ID,)
+    )
+    assert sealed["declarations"][RETAINED_ID] == served_declarations[RETAINED_ID]
+    backend = json.loads(StoragePath(f"{release_root}/prior-state/backend.json").read_bytes())
+    assert backend["snapshot_id"] == "assembly-served-prior-v1"
+    identity = json.loads(StoragePath(f"{release_root}/prior-state/identity.json").read_bytes())
+    assert identity["snapshot_id"] == "assembly-served-prior-v1"
 
 
 def test_derive_release_plan_from_fixture_state(tmp_path, frozen_layer, deployment, monkeypatch):

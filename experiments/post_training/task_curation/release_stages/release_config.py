@@ -87,6 +87,10 @@ class ReleaseConfig(BaseModel):
     cluster: str
     freeze_source_revision: str
     prior_release: PriorRelease
+    prior_snapshot_id: str
+    """The snapshot id the prior release served. When the catalog's current snapshot
+    differs, the derivation re-cuts this release: the retained prior state pins come
+    from what is SERVED, not from the config's prior-release documents."""
     removed_sources: tuple[RemovedSource, ...] = ()
     qc_exclusions: tuple[ExcludedSource, ...] = ()
     production_version: int | None = None

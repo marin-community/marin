@@ -28,6 +28,7 @@ from experiments.post_training.task_curation.census_binding import (
     audit_receipt_evidence,
     bind_actor_census,
     integrity_summary_for_actor,
+    receipt_from_census,
 )
 from experiments.post_training.task_curation.census_binding import (
     main as census_binding_main,
@@ -303,6 +304,24 @@ def test_receipt_evidence_audit_requires_an_embedded_result(tmp_path):
     path.write_text(json.dumps({"config": {}}) + "\n")
     with pytest.raises(ValueError, match="no embedded result"):
         audit_receipt_evidence({source.info.id: with_evidence_url(census_receipt(source), str(path))})
+
+
+def test_receipt_writer_rejects_a_workspace_evidence_path():
+    """The census-stage receipt writer records durable actor-artifact paths only: a
+    census record whose population path is an ephemeral in-region workspace path
+    refuses at write time (the pending-stage-cleanup re-cut migration's regression)."""
+    census = {
+        "source_id": "Test:workspace-bound",
+        "dataset_id": "open-athena/example-source",
+        "dataset_revision": "1" * 40,
+        "converter_version": "harbor-cohort-taskspec-v1",
+        "converter_revision": "c" * 40,
+        "task_count": 10,
+        "task_specs_sha256": "d" * 64,
+        "path": "/workspace/census/example",
+    }
+    with pytest.raises(ValueError, match="ephemeral in-region workspace path"):
+        receipt_from_census(census, None)
 
 
 def test_census_binding_writer_refuses_a_record_its_evidence_contradicts(tmp_path, monkeypatch):
