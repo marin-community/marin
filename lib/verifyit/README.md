@@ -66,11 +66,13 @@ Thousands separators require groups of three digits. Multiple literals such as `
 `2 + 2`, malformed numbers and nonfinite values are malformed submissions and receive reward `0.0`.
 
 Default math references must parse as one whole LaTeX expression. Each member of a LIST
-reference must parse separately. A partial parse makes the task invalid; TaskCompendium rejects
-such a row during conversion as `invalid_reference`.
-For a multiple-choice reference such as `\textbf{(D)}\ 7`, the grader parses the
-value and accepts the correct letter or an equivalent value. A reply that gives both must
-match both.
+reference must parse separately. TaskCompendium rejects partial parses and undefined
+expressions during conversion as `invalid_reference`.
+For a multiple-choice reference such as `\textbf{(D)}\ 7`, the grader accepts
+the correct letter or an equivalent value. When the value has a partial parse, no parse,
+or an undefined expression, it must match verbatim if supplied. A reply that gives
+both must match both. References that list several labels, such as `(A) and (C)`,
+use whole-expression grading.
 
 Scalar `MathSpec` contracts may set `positive_symbols = ["a_1", "a_2"]` when the public problem
 explicitly states those symbols are positive. If ordinary comparison fails, the grader checks

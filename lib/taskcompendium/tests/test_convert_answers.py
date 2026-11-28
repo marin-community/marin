@@ -45,6 +45,7 @@ def reward(task: TaskSpec | ImportRejection, answer: str) -> float | None:
         (math_answer_task(ROW, prompt=" ", answer="1"), DEFECT, "missing_prompt"),
         (math_answer_task(ROW, prompt="Add.", answer=""), DEFECT, "invalid_reference"),
         (math_answer_task(ROW, prompt="Solve.", answer=r"$\boxed{\epsilon \approx$"), DEFECT, "invalid_reference"),
+        (math_answer_task(ROW, prompt="Divide.", answer=r"\frac{1}{0}"), DEFECT, "invalid_reference"),
         (
             numeric_answer_task(ROW, prompt="Add.", answer="seven", tolerance_abs=0, tolerance_rel=0),
             DEFECT,
@@ -74,6 +75,7 @@ def reward(task: TaskSpec | ImportRejection, answer: str) -> float | None:
         "math_blank_prompt",
         "math_blank_reference",
         "math_unparseable_reference",
+        "math_undefined_reference",
         "numeric_word_reference",
         "numeric_missing_reference",
         "mcq_key_beyond_options",
@@ -97,6 +99,16 @@ def test_math_partial_reference_is_rejected_during_conversion(answer):
     converted = math_answer_task(ROW, prompt="Solve.", answer=answer)
     assert isinstance(converted, ImportRejection)
     assert (converted.kind, converted.reason) == (DEFECT, "invalid_reference")
+
+
+def test_math_choice_with_undefined_value_converts_and_grades_without_symbolic_comparison():
+    answer = r"\textbf{(C)}\ 8:00\text{ p.m.}"
+    task = math_answer_task(ROW, prompt="What time is it?", answer=answer)
+
+    assert reward(task, r"\boxed{C}") == 1.0
+    assert reward(task, rf"\boxed{{{answer}}}") == 1.0
+    assert reward(task, r"\boxed{(C) 9:00\text{ p.m.}}") == 0.0
+    assert reward(task, r"\boxed{(B) 8:00\text{ p.m.}}") == 0.0
 
 
 @pytest.mark.parametrize(
