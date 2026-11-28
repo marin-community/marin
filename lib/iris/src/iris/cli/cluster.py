@@ -230,7 +230,7 @@ def _build_and_push_image(
 
 @dataclass(frozen=True)
 class ClusterImageBuild:
-    """One image and platform selected for a forward deploy."""
+    """One image target and platform spec selected for a forward deploy."""
 
     image_type: str
     tag: str

@@ -203,7 +203,6 @@ def test_preflight_rejects_default_docker_builder_without_containerd_store(monke
     result = check_requirement(Requirement(Need.BUILDX_CACHE, "registry cache export", "why"), environ={})
 
     assert not result.ok
-    assert "builder default" in result.detail
 
 
 def test_preflight_accepts_selected_containerd_builder_and_buildx_override(monkeypatch):

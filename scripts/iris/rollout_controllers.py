@@ -29,7 +29,7 @@ from urllib.parse import urlencode, urlsplit
 
 import click
 import yaml
-from iris.cli.build import get_git_sha, registry_cache_repository
+from iris.cli.build import GHCR_HOST, _ghcr_image_reference, get_git_sha, registry_cache_repository
 from iris.cli.cluster import _parse_ghcr_tag, cluster_image_builds
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, connect_controller, rpc_client
 from iris.client.client import IrisClient
@@ -64,7 +64,9 @@ DIRTY_FILES_SHOWN = 5
 PROBE_TIMEOUT = 30.0
 REGISTRY_CACHE_DRIVERS = frozenset({"docker-container", "kubernetes", "remote"})
 CONTAINERD_DRIVER_TYPE = "io.containerd.snapshotter.v1"
-GHCR_HOST = "ghcr.io"
+MISSING_GHCR_CREDENTIALS = "UNVERIFIED: Docker has no GHCR credentials; log in with write:packages"
+INVALID_CREDENTIAL_HELPER_RESPONSE = "UNVERIFIED: Docker credential helper returned invalid data"
+INVALID_GHCR_TOKEN_RESPONSE = "UNVERIFIED: GHCR returned an invalid token response"
 
 # Where kubectl and the kubernetes client look when no path is pinned and KUBECONFIG is
 # unset. A cluster config may name a context without a file and still deploy.
@@ -414,7 +416,7 @@ def requirements(config: IrisClusterConfig, *, s3_env: Sequence[str] | None = No
             needs.append(Requirement(Need.GHCR_PUSH, target.tag, "the configured image must be published to GHCR"))
             continue
         org, image, _ = parsed
-        repositories.update({f"{GHCR_HOST}/{org}/{image}", registry_cache_repository(org)})
+        repositories.update({_ghcr_image_reference(image, org), registry_cache_repository(org)})
     needs.extend(
         Requirement(Need.GHCR_PUSH, repository, "the image build pushes this image or registry cache")
         for repository in sorted(repositories)
@@ -557,56 +559,7 @@ def check_buildx_cache(requirement: Requirement, *, environ: Mapping[str, str]) 
     )
 
 
-def _docker_ghcr_credentials(environ: Mapping[str, str]) -> DockerCredential:
-    config_dir = Path(environ.get("DOCKER_CONFIG", str(Path(environ.get("HOME", "~")).expanduser() / ".docker")))
-    config_path = config_dir / "config.json"
-    if not config_path.is_file():
-        raise RegistryProbeError("UNVERIFIED: Docker has no GHCR credentials; log in with write:packages")
-    try:
-        config = json.loads(config_path.read_text())
-    except (OSError, json.JSONDecodeError):
-        raise RegistryProbeError("UNVERIFIED: Docker config could not be read") from None
-    if not isinstance(config, dict):
-        raise RegistryProbeError("UNVERIFIED: Docker config has an invalid format")
-
-    helpers = config.get("credHelpers") or {}
-    if not isinstance(helpers, dict):
-        raise RegistryProbeError("UNVERIFIED: Docker credential helpers have an invalid format")
-    helper = helpers.get(GHCR_HOST) or config.get("credsStore")
-    if helper:
-        try:
-            result = subprocess.run(
-                [f"docker-credential-{helper}", "get"],
-                input=GHCR_HOST,
-                capture_output=True,
-                text=True,
-                timeout=PROBE_TIMEOUT,
-                env=environ,
-            )
-        except FileNotFoundError:
-            raise RegistryProbeError("UNVERIFIED: Docker credential helper is unavailable") from None
-        except subprocess.TimeoutExpired:
-            raise RegistryProbeError("UNVERIFIED: Docker credential helper timed out") from None
-        if result.returncode:
-            raise RegistryProbeError("UNVERIFIED: Docker credential helper did not return GHCR credentials")
-        try:
-            credential = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            raise RegistryProbeError("UNVERIFIED: Docker credential helper returned invalid data") from None
-        if not isinstance(credential, dict):
-            raise RegistryProbeError("UNVERIFIED: Docker credential helper returned invalid data")
-        username, secret = credential.get("Username"), credential.get("Secret")
-    else:
-        auths = config.get("auths") or {}
-        if not isinstance(auths, dict):
-            raise RegistryProbeError("UNVERIFIED: Docker auth entries have an invalid format")
-        entry = auths.get(GHCR_HOST) or auths.get(f"https://{GHCR_HOST}")
-        if not isinstance(entry, dict) or not entry.get("auth"):
-            raise RegistryProbeError("UNVERIFIED: Docker has no GHCR credentials; log in with write:packages")
-        try:
-            username, secret = base64.b64decode(entry["auth"], validate=True).decode().split(":", 1)
-        except (ValueError, TypeError, binascii.Error):
-            raise RegistryProbeError("UNVERIFIED: Docker GHCR auth entry is invalid") from None
+def _validated_docker_credential(username: object, secret: object) -> DockerCredential:
     if (
         not isinstance(username, str)
         or not isinstance(secret, str)
@@ -616,6 +569,64 @@ def _docker_ghcr_credentials(environ: Mapping[str, str]) -> DockerCredential:
     ):
         raise RegistryProbeError("UNVERIFIED: Docker GHCR credentials cannot be used for a push probe")
     return DockerCredential(username, secret)
+
+
+def _credential_from_helper(helper: str, environ: Mapping[str, str]) -> DockerCredential:
+    try:
+        result = subprocess.run(
+            [f"docker-credential-{helper}", "get"],
+            input=GHCR_HOST,
+            capture_output=True,
+            text=True,
+            timeout=PROBE_TIMEOUT,
+            env=environ,
+        )
+    except FileNotFoundError:
+        raise RegistryProbeError("UNVERIFIED: Docker credential helper is unavailable") from None
+    except subprocess.TimeoutExpired:
+        raise RegistryProbeError("UNVERIFIED: Docker credential helper timed out") from None
+    if result.returncode:
+        raise RegistryProbeError("UNVERIFIED: Docker credential helper did not return GHCR credentials")
+    try:
+        credential = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        raise RegistryProbeError(INVALID_CREDENTIAL_HELPER_RESPONSE) from None
+    if not isinstance(credential, dict):
+        raise RegistryProbeError(INVALID_CREDENTIAL_HELPER_RESPONSE)
+    return _validated_docker_credential(credential.get("Username"), credential.get("Secret"))
+
+
+def _credential_from_auths(auths: object) -> DockerCredential:
+    if not isinstance(auths, dict):
+        raise RegistryProbeError("UNVERIFIED: Docker auth entries have an invalid format")
+    entry = auths.get(GHCR_HOST) or auths.get(f"https://{GHCR_HOST}")
+    if not isinstance(entry, dict) or not entry.get("auth"):
+        raise RegistryProbeError(MISSING_GHCR_CREDENTIALS)
+    try:
+        username, secret = base64.b64decode(entry["auth"], validate=True).decode().split(":", 1)
+    except (ValueError, TypeError, binascii.Error):
+        raise RegistryProbeError("UNVERIFIED: Docker GHCR auth entry is invalid") from None
+    return _validated_docker_credential(username, secret)
+
+
+def _docker_ghcr_credentials(environ: Mapping[str, str]) -> DockerCredential:
+    config_dir = Path(environ.get("DOCKER_CONFIG", str(Path(environ.get("HOME", "~")).expanduser() / ".docker")))
+    config_path = config_dir / "config.json"
+    if not config_path.is_file():
+        raise RegistryProbeError(MISSING_GHCR_CREDENTIALS)
+    try:
+        config = json.loads(config_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        raise RegistryProbeError("UNVERIFIED: Docker config could not be read") from None
+    if not isinstance(config, dict):
+        raise RegistryProbeError("UNVERIFIED: Docker config has an invalid format")
+    helpers = config.get("credHelpers") or {}
+    if not isinstance(helpers, dict):
+        raise RegistryProbeError("UNVERIFIED: Docker credential helpers have an invalid format")
+    helper = helpers.get(GHCR_HOST) or config.get("credsStore")
+    if helper:
+        return _credential_from_helper(helper, environ)
+    return _credential_from_auths(config.get("auths") or {})
 
 
 def _ghcr_request(method: str, path: str, authorization: str) -> RegistryResponse:
@@ -641,9 +652,9 @@ def _ghcr_push_token(repository: str, credentials: DockerCredential) -> str:
     try:
         token_response = json.loads(response.body)
     except json.JSONDecodeError:
-        raise RegistryProbeError("UNVERIFIED: GHCR returned an invalid token response") from None
+        raise RegistryProbeError(INVALID_GHCR_TOKEN_RESPONSE) from None
     if not isinstance(token_response, dict):
-        raise RegistryProbeError("UNVERIFIED: GHCR returned an invalid token response")
+        raise RegistryProbeError(INVALID_GHCR_TOKEN_RESPONSE)
     token = token_response.get("token") or token_response.get("access_token")
     if not isinstance(token, str) or not token:
         raise RegistryProbeError("UNVERIFIED: GHCR returned no registry token")
