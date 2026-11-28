@@ -13,6 +13,11 @@ from typing import Literal
 
 import dupekit
 import pyarrow as pa
+from finestore.rl.source_identity import (
+    canonical_source_id,
+    canonical_source_map,
+    original_source_id,
+)
 from taskcompendium.identity import canonical_sha256, task_identity, task_spec_sha256
 from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, format_conversation
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
@@ -27,11 +32,6 @@ from taskcompendium.source_fingerprints import (
 )
 
 from infra.marina.apps.rl_data_catalog.server.duplicate_folding import SourceStanding, fold_groups
-from finestore.rl.source_identity import (
-    canonical_source_id,
-    canonical_source_map,
-    original_source_id,
-)
 
 FINGERPRINT_SEED = 0
 REVIEW_SAMPLE_SIZE = 20

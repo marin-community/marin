@@ -15,13 +15,14 @@ from typing import Final, Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.registry_reference import read_registry_json
+from finestore.rl.source_identity import original_source_id
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.source_fingerprints import CURRENT_OVERLAP_VERSION, SourceFingerprint, SourceIdentitySurvey
 
-from finestore.rl.registry_reference import read_registry_json
 from experiments.post_training.task_curation.task_neighbors import (
     SHINGLE_CACHE_BYTES,
     PopulationIndex,
@@ -29,7 +30,6 @@ from experiments.post_training.task_curation.task_neighbors import (
     content_rows,
     strip_boilerplate,
 )
-from finestore.rl.source_identity import original_source_id
 
 logger = logging.getLogger(__name__)
 

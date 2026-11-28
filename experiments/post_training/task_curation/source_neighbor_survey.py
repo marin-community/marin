@@ -16,6 +16,7 @@ from multiprocessing import get_context
 from pathlib import Path
 from typing import Literal
 
+from finestore.rl.source_identity import canonical_source_id, original_source_id
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -50,7 +51,6 @@ from experiments.post_training.task_curation.task_neighbors import (
     shingles,
     signatures,
 )
-from finestore.rl.source_identity import canonical_source_id, original_source_id
 
 logger = logging.getLogger(__name__)
 

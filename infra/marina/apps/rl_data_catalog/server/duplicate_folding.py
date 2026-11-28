@@ -8,9 +8,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from taskcompendium.source_fingerprints import DuplicateGroup, DuplicateGroupMember, DuplicateLabel, DuplicateReview
-
 from finestore.rl.source_identity import canonical_source_id, original_source_id
+from taskcompendium.source_fingerprints import DuplicateGroup, DuplicateGroupMember, DuplicateLabel, DuplicateReview
 
 CONTAINMENT_THRESHOLD = 0.95
 QUALITY_RANK = {"FULL": 2, "SAMPLE": 1, "QUICK": 0, None: -1}

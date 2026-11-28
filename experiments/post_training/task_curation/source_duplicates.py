@@ -6,14 +6,13 @@
 import argparse
 import hashlib
 import json
-
-from collections.abc import Iterable
-
-import pyarrow as pq
 import logging
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pyarrow.parquet as pq
+from finestore.rl.source_identity import canonical_source_id, canonical_source_map
 from pydantic import ValidationError
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.source_fingerprints import DuplicateLabel, PairSimilarity, SourceFingerprint, SourceIdentitySurvey
@@ -40,9 +39,9 @@ from experiments.post_training.task_curation.source_population_cache import (
     read_locator_manifest,
 )
 from experiments.post_training.task_curation.task_neighbors import SAMPLE_SIZE, SHINGLE_CACHE_BYTES
-from finestore.rl.source_identity import canonical_source_id, canonical_source_map
 
 logger = logging.getLogger(__name__)
+
 
 def converted_specs(paths: list[Path], column: str, runtime_column: str | None = None) -> Iterable[dict]:
     """Stream converted spec JSON without retaining private task payloads."""
@@ -58,7 +57,6 @@ def converted_specs(paths: list[Path], column: str, runtime_column: str | None =
                     yield task
                     continue
                 yield {"task": task, "runtime": json.loads(row[runtime_column])}
-
 
 
 def load_acknowledgements(path: Path) -> dict[str, str]:
