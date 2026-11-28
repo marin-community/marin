@@ -494,12 +494,12 @@ def derive_archive_plan(
             # The graph omitted the step because the round's accounting settings cannot support
             # it; record the accounting as missing evidence with the exact reasons and the
             # pointer for a future complete accounting.
-            revision = resolved_spec.get("accounting_pin_revision") or {}
+            pin_revision = resolved_spec.get("accounting_pin_revision") or {}
             loss = accounting_settings.get("source_loss_metadata") or {}
-            reason = revision.get("reason") or (
+            reason = pin_revision.get("reason") or (
                 "the round's pinned source-loss metadata did not cover the consumed mixture"
             )
-            future = revision.get("loss_metadata") or {}
+            future = pin_revision.get("loss_metadata") or {}
             missing["sft_data_accounting"] = (
                 "SFT data accounting was omitted: the round's accounting settings cannot support it "
                 f"({reason}; no measured step seconds was pinned). "

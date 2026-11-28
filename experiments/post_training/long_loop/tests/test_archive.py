@@ -786,3 +786,4 @@ def test_archive_records_omitted_sft_accounting_as_missing_evidence(tmp_path):
     assert revision["loss_metadata"]["source"] in missing
     assert revision["loss_metadata"]["sha256"] in missing
     assert plan["provenance"]["sft_data_accounting_future"] == revision["loss_metadata"]
+    assert len(plan["provenance"]["marin_commit"]) == 40
