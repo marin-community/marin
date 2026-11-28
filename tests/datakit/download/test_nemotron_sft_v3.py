@@ -5,10 +5,18 @@ import hashlib
 import json
 
 import msgspec
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from marin.datakit.download import nemotron_chat_prompts
+from marin.datakit.download.audit_exclusions import load_excluded_ids
 from marin.datakit.download.nemotron_chat_prompts import restore_chat_row
-from marin.datakit.download.nemotron_sft_v3 import load_jsonl_with_skips, row_to_chat_doc
+from marin.datakit.download.nemotron_sft_v3 import (
+    MATH_PROOFS_V1_LEAN_EXCLUSION_FILES,
+    _transform_chat,
+    load_jsonl_with_skips,
+    row_to_chat_doc,
+)
 
 
 def test_v3_chat_reconstruction_preserves_the_original_seed_prompt():
@@ -204,3 +212,44 @@ def test_load_jsonl_with_skips_only_ignores_pinned_bad_lines(tmp_path):
     assert list(load_jsonl_with_skips(str(path), frozenset({2}))) == [{"id": 1}, {"id": 2}]
     with pytest.raises(msgspec.DecodeError):
         list(load_jsonl_with_skips(str(path), frozenset()))
+
+
+def test_lean_rows_on_the_failed_attempt_list_are_dropped(tmp_path):
+    answers = {
+        "failed-attempt": "```lean4\ntheorem two : 1 + 1 = 2 := by\n  linarith [missing_lemma]\n```",
+        "verified-proof": "```lean4\ntheorem two : 1 + 1 = 2 := by\n  norm_num\n```",
+    }
+    source = tmp_path / "input" / "data" / "lean.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "".join(
+            json.dumps(
+                {
+                    "uuid": uuid,
+                    "messages": [
+                        {"role": "user", "content": "Prove that 1 + 1 = 2 in Lean 4."},
+                        {"role": "assistant", "content": answer},
+                    ],
+                }
+            )
+            + "\n"
+            for uuid, answer in answers.items()
+        )
+    )
+    for exclusion_file in MATH_PROOFS_V1_LEAN_EXCLUSION_FILES:
+        exclusions = tmp_path / "exclusions" / exclusion_file
+        exclusions.parent.mkdir(parents=True)
+        pq.write_table(pa.table({"uuid": ["failed-attempt"]}), exclusions)
+
+    _transform_chat(
+        str(tmp_path / "input"),
+        str(tmp_path / "output"),
+        family="math_proofs_v1",
+        partition_name="lean",
+        excluded_uuids=load_excluded_ids(
+            str(tmp_path / "exclusions"), exclusion_files=MATH_PROOFS_V1_LEAN_EXCLUSION_FILES, id_column="uuid"
+        ),
+    )
+
+    documents = [doc for path in (tmp_path / "output").glob("*.parquet") for doc in pq.read_table(path).to_pylist()]
+    assert [doc["source_id"] for doc in documents] == ["verified-proof"]

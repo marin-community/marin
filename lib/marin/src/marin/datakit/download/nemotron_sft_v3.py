@@ -15,8 +15,9 @@ from openai_harmony import Message
 from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
-from zephyr.dataset import Dataset
+from zephyr.dataset import Dataset, ShardInfo
 from zephyr.readers import open_file
+from zephyr.worker_context import zephyr_worker_ctx
 
 from marin.datakit.chat_normalize import (
     CHAT_SCHEMA,
@@ -24,6 +25,7 @@ from marin.datakit.chat_normalize import (
     validate_chat_messages,
     validate_tool_definitions,
 )
+from marin.datakit.download.audit_exclusions import audit_exclusion_step, load_excluded_ids
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.nemotron_chat_prompts import SEED_DATASET_REVISIONS, restore_chat_prompts
 from marin.datakit.download.rollout_transforms import load_parquet_batched, openai_chat_document
@@ -36,6 +38,20 @@ _RESTORED_CHAT_FAMILY = "instruction_following_chat_v3"
 _RESTORED_CHAT_PARTITION = "chat"
 _SWE_V2_FAMILY = "swe_v2"
 _SWE_V2_AGENTLESS_PARTITION = "agentless"
+_MATH_PROOFS_V1_FAMILY = "math_proofs_v1"
+_MATH_PROOFS_V1_REVISION = "97229c590831adfe96202f5cd071d444d535bf91"
+_LEAN_PARTITION = "lean"
+_UUID_FIELD = "uuid"
+_EXCLUDED_UUIDS_KEY = "excluded_uuids"
+# Row list from the audit of the pinned Lean proofs revision, keyed by `uuid`. The source keeps every round of
+# its prove, compile and fix loop as a row, so the rounds that failed are rows too. The list applies to the pinned
+# source revision only, so a new source revision needs a new list.
+#   failed_attempts.parquet: the proof the source's generator compiled for the row is the failed proof that a
+#     "fix this proof" prompt of the same source quotes together with its compiler errors.
+MATH_PROOFS_V1_LEAN_EXCLUSION_REVISION = "437e11154172dba4e09e6efda005eb7bf9203c6e"
+MATH_PROOFS_V1_LEAN_EXCLUSION_FILES = (
+    f"math_proofs_v1_lean/pinned_{_MATH_PROOFS_V1_REVISION[:8]}/failed_attempts.parquet",
+)
 # The source response uses separate reasoning_content, so this wire-format request conflicts with Marin's template.
 _SWE_V2_AGENTLESS_FORMAT_SUFFIX = (
     "\n\nOutput format requirement: Please put your reasoning tokens in a separate code block, starting with <think> "
@@ -155,10 +171,10 @@ NEMOTRON_SFT_V3_REPOSITORIES: Mapping[str, tuple[str, str, Mapping[str, str]]] =
                 "8e793210e175b6406c752a870f585f62de98c0d3",
                 {"high": "data/high_part*.parquet", "medium": "data/medium.parquet", "low": "data/low.parquet"},
             ),
-            "math_proofs_v1": (
+            _MATH_PROOFS_V1_FAMILY: (
                 "nvidia/Nemotron-Math-Proofs-v1",
-                "97229c590831adfe96202f5cd071d444d535bf91",
-                {"lean": "data/lean.jsonl"},
+                _MATH_PROOFS_V1_REVISION,
+                {_LEAN_PARTITION: "data/lean.jsonl"},
             ),
             "math_proofs_v2": (
                 "nvidia/Nemotron-Math-Proofs-v2",
@@ -346,7 +362,7 @@ def row_to_chat_doc(row: dict, *, family: str, partition_name: str) -> list[dict
         document = openai_chat_document(
             messages,
             hf_dataset_id,
-            source_id=row.get("uuid") or None,
+            source_id=row.get(_UUID_FIELD) or None,
             chat_template_kwargs=kwargs,
         )
         normalized_messages = [Message.from_dict(message) for message in document["messages"]]
@@ -398,7 +414,19 @@ def download_nemotron_sft_v3_step(family: str) -> StepSpec:
     )
 
 
-def _transform_chat(input_path: str, output_path: str, *, family: str, partition_name: str) -> None:
+def _drop_excluded_rows(rows: Iterator[dict], _: ShardInfo) -> Iterator[dict]:
+    """Drop the rows on the audit lists.
+
+    Workers read the list from Zephyr shared data. A list held in the plan would be sent with every coordinator
+    request, and the Lean list has several hundred thousand IDs.
+    """
+    excluded_uuids: frozenset[str] = zephyr_worker_ctx().get_shared(_EXCLUDED_UUIDS_KEY)
+    return (row for row in rows if row.get(_UUID_FIELD) not in excluded_uuids)
+
+
+def _transform_chat(
+    input_path: str, output_path: str, *, family: str, partition_name: str, excluded_uuids: frozenset[str]
+) -> None:
     _, _, partitions = NEMOTRON_SFT_V3_REPOSITORIES[family]
     file_glob = partitions[partition_name]
     files = Dataset.from_files(prefix_join(input_path, file_glob))
@@ -409,6 +437,12 @@ def _transform_chat(input_path: str, output_path: str, *, family: str, partition
     else:
         rows = files.load_jsonl()
 
+    context = ZephyrContext(
+        name=f"nemotron-sft-chat-{family}-{partition_name}", resources=ResourceConfig(cpu=1, ram="16g")
+    )
+    if excluded_uuids:
+        context.put(_EXCLUDED_UUIDS_KEY, excluded_uuids)
+        rows = rows.map_shard(_drop_excluded_rows)
     pipeline = rows.flat_map(
         lambda row: row_to_chat_doc(row, family=family, partition_name=partition_name)
     ).write_parquet(
@@ -416,18 +450,41 @@ def _transform_chat(input_path: str, output_path: str, *, family: str, partition
         schema=SOURCE_CHAT_SCHEMA,
         skip_existing=True,
     )
-    ZephyrContext(
-        name=f"nemotron-sft-chat-{family}-{partition_name}", resources=ResourceConfig(cpu=1, ram="16g")
-    ).execute(pipeline)
+    context.execute(pipeline)
 
 
 def _processed_chat_step(download: StepSpec, *, family: str, partition_name: str) -> StepSpec:
+    deps = [download]
+    exclusions = None
+    exclusion_files: tuple[str, ...] = ()
+    if (family, partition_name) == (_MATH_PROOFS_V1_FAMILY, _LEAN_PARTITION):
+        exclusion_files = MATH_PROOFS_V1_LEAN_EXCLUSION_FILES
+    if exclusion_files:
+        exclusions = audit_exclusion_step(
+            f"raw/nemotron_sft_v3_audit_exclusions/{family}/{partition_name}",
+            revision=MATH_PROOFS_V1_LEAN_EXCLUSION_REVISION,
+            exclusion_files=exclusion_files,
+        )
+        deps.append(exclusions)
+
+    def transform(output_path: str) -> None:
+        excluded_uuids = frozenset()
+        if exclusions:
+            excluded_uuids = load_excluded_ids(
+                exclusions.output_path, exclusion_files=exclusion_files, id_column=_UUID_FIELD
+            )
+        _transform_chat(
+            download.output_path,
+            output_path,
+            family=family,
+            partition_name=partition_name,
+            excluded_uuids=excluded_uuids,
+        )
+
     return StepSpec(
         name=f"processed-chat/nemotron_sft_v3/{family}/{partition_name}",
-        deps=[download],
-        fn=lambda output_path: _transform_chat(
-            download.output_path, output_path, family=family, partition_name=partition_name
-        ),
+        deps=deps,
+        fn=transform,
         hash_attrs={"family": family, "partition": partition_name, "version": TRANSFORM_VERSION},
     )
 
