@@ -9,7 +9,6 @@ committed ``license_rulings.json`` reference. Publishing a new ruling family is
 a data commit plus a reference bump; the loader never carries a second copy.
 """
 
-import json
 from functools import cache
 from pathlib import Path
 from typing import Any

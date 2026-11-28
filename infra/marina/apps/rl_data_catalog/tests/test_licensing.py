@@ -3,11 +3,12 @@
 
 """The pinned ruling registry loader and the ban queries ingest and admission share."""
 
-import json
+import hashlib
 from datetime import UTC, datetime
 
 import pytest
 from finestore.rl.licenses import LicenseBan, LicenseReceipt, LicenseSourcePin
+from finestore.rl.registry_reference import RegistryReference
 
 from infra.marina.apps.rl_data_catalog.server import licensing
 
@@ -37,8 +38,6 @@ def resolved_pin(dataset_id: str) -> LicenseSourcePin:
 
 
 def license_evidence(dataset_id: str, content: str) -> dict:
-    import hashlib
-
     return {
         "url": f"https://example.test/{dataset_id}/LICENSE",
         "kind": "license_file",
@@ -119,15 +118,17 @@ def test_declaration_ban_reads_the_declared_receipt(rulings):
         }
     )
     declared = receipt("Banned:source", "example/test-dataset", None)
-    declaration = {"id": "Banned:source", "dataset_id": "example/test-dataset", "license_receipt": declared.model_dump(mode="json")}
+    declaration = {
+        "id": "Banned:source",
+        "dataset_id": "example/test-dataset",
+        "license_receipt": declared.model_dump(mode="json"),
+    }
     assert licensing.declaration_license_ban(declaration) is not None
     assert licensing.declaration_license_ban({"id": "Banned:source", "dataset_id": "example/test-dataset"}) is not None
 
 
 def test_committed_reference_pins_a_versioned_ruling_family():
     """The committed reference names the exact registry revision the loader reads."""
-    from finestore.rl.registry_reference import RegistryReference
-
     reference = RegistryReference.model_validate_json(licensing.RULINGS_REFERENCE.read_bytes())
     assert reference.repo == "open-athena/marin-rl-data-atlas-registry"
     assert "license_rulings" in reference.path
@@ -139,6 +140,4 @@ def test_committed_reference_resolves_the_published_rulings():
     """The pinned revision still carries the published ruling bytes (network)."""
     document = licensing.license_bans()
     assert document
-    assert all(
-        ban.issue_url.startswith("https://github.com/marin-community/marin/issues/") for ban in document.values()
-    )
+    assert all(ban.issue_url.startswith("https://github.com/marin-community/marin/issues/") for ban in document.values())
