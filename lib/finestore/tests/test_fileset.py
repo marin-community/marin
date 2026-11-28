@@ -2,15 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+from itertools import count
 from pathlib import Path
 from types import SimpleNamespace
 
 import finestore.fileset as fileset_module
 import pytest
+import rigging.timing as timing
 from finestore.fileset import (
     FileSetFetchDeadlineError,
     FileSetFetchLimitError,
     FileSetFetchLimits,
+    FileSetPublishLimitError,
     FineStoreDirectory,
     fetch_file_set,
 )
@@ -187,6 +190,20 @@ def test_file_set_mirror_excludes_preexisting_local_files(tmp_path):
     assert fetch_file_set(root, str(tmp_path / "reloaded")) == {"fresh"}
 
 
+@pytest.mark.parametrize(("max_files", "max_bytes"), [(1, 100), (10, 4)])
+def test_file_set_mirror_refuses_to_publish_an_unfetchable_snapshot(tmp_path, max_files, max_bytes):
+    root = str(tmp_path / "remote")
+    local = tmp_path / "local"
+    limits = FileSetFetchLimits(max_files=max_files, max_bytes=max_bytes, timeout=60)
+    mirror = FineStoreDirectory(root, str(local), flush_interval=3600, fetch_limits=limits)
+    (local / "a").write_bytes(b"one")
+    (local / "b").write_bytes(b"two")
+
+    with pytest.raises(FileSetPublishLimitError):
+        mirror.close()
+    assert fetch_file_set(root, str(tmp_path / "reloaded")) == set()
+
+
 @pytest.mark.parametrize(
     ("max_files", "max_bytes", "message"),
     [(1, 100, "files"), (10, 4, "bytes")],
@@ -210,12 +227,14 @@ def test_file_set_fetch_deadline_and_progress_are_visible(tmp_path, monkeypatch,
         store.write_object("b", b"two")
         store.flush()
 
-    clock = iter([0.0, 0.0, 0.0, 0.3, 0.3, 1.1])
-    monkeypatch.setattr(fileset_module, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+    ticks = count()
+    fake_time = SimpleNamespace(monotonic=lambda: next(ticks) * 0.2)
+    monkeypatch.setattr(fileset_module, "time", fake_time)
+    monkeypatch.setattr(timing, "time", fake_time)
     limits = FileSetFetchLimits(max_files=10, max_bytes=100, timeout=1, log_interval=0.1)
     with caplog.at_level("INFO"), pytest.raises(FileSetFetchDeadlineError, match="deadline"):
         fetch_file_set(root, str(tmp_path / "local"), limits=limits)
-    assert "File-set fetch progress" in caplog.text
+    assert any(record.args[:4] == (1, 1, 0, 3) for record in caplog.records if isinstance(record.args, tuple))
 
 
 def test_file_set_rejects_unsafe_committed_paths(tmp_path):

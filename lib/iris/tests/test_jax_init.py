@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 import rigging.timing as timing
 from finestore.fileset import FineStoreDirectory, fetch_file_set
+from rigging.provenance import LAUNCH_PROVENANCE_ENV
 
 pytest.importorskip("jax")
 
@@ -329,7 +330,7 @@ def _isolated_jax_cache_config():
             os.environ.pop("IRIS_TASK_RESOURCES", None)
             # Off a real launch by default, so the autotune cache stays node-local
             # and never reaches for object storage.
-            os.environ.pop("MARIN_PROVENANCE", None)
+            os.environ.pop(LAUNCH_PROVENANCE_ENV, None)
             _read_iris_resource_proto.cache_clear()
             yield
     finally:
@@ -483,7 +484,7 @@ def test_launch_provenance_mirrors_the_autotune_cache_to_object_storage(tmp_path
     calls: list[tuple[str, str]] = []
 
     with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
-        os.environ["MARIN_PROVENANCE"] = "{}"
+        os.environ[LAUNCH_PROVENANCE_ENV] = "{}"
         with (
             patch.object(jax_cache_module, "sync_file_set_cache", lambda prefix, local: calls.append((prefix, local))),
             patch.object(jax_cache_module, "get_job_info", return_value=_make_job_info(task_index=0, num_tasks=8)),
@@ -511,7 +512,7 @@ def test_disabled_autotuning_fetches_without_publishing_host_leftovers(tmp_path,
         return mirror
 
     with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
-        os.environ["MARIN_PROVENANCE"] = "{}"
+        os.environ[LAUNCH_PROVENANCE_ENV] = "{}"
         os.environ["XLA_FLAGS"] = xla_flags
         autotune_dir = scratch_cache_dir / "xla" / "per-fusion-autotune"
         autotune_dir.mkdir(parents=True)
@@ -536,7 +537,7 @@ def test_non_primary_task_fetches_without_uploading_autotune_cache(tmp_path) -> 
     uploads: list[tuple[str, str]] = []
 
     with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
-        os.environ["MARIN_PROVENANCE"] = "{}"
+        os.environ[LAUNCH_PROVENANCE_ENV] = "{}"
         with (
             patch.object(
                 jax_cache_module, "fetch_file_set_cache", lambda prefix, local: fetches.append((prefix, local))
@@ -562,7 +563,7 @@ def test_multigpu_task_fetches_autotune_cache_once_per_node(tmp_path, process_in
     uploads: list[tuple[str, str]] = []
 
     with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
-        os.environ["MARIN_PROVENANCE"] = "{}"
+        os.environ[LAUNCH_PROVENANCE_ENV] = "{}"
         os.environ[jax_cache_module.IRIS_MULTIGPU_PROCESS_COUNT_ENV] = "16"
         os.environ[jax_cache_module.IRIS_MULTIGPU_PROCESS_INDEX_ENV] = str(process_index)
         with (
@@ -598,7 +599,7 @@ def test_autotune_cache_stays_node_local_without_a_launch_provenance(tmp_path) -
 
 def test_autotune_file_set_fetch_failure_aborts_startup(tmp_path) -> None:
     with _isolated_jax_cache_config(), _gpu_task(tmp_path):
-        os.environ["MARIN_PROVENANCE"] = "{}"
+        os.environ[LAUNCH_PROVENANCE_ENV] = "{}"
         os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
         with (
             patch.object(jax_cache_module, "_file_set_cache_root", return_value="gs://cache/tree"),
@@ -611,7 +612,7 @@ def test_autotune_file_set_fetch_failure_aborts_startup(tmp_path) -> None:
 
 def test_autotune_cache_local_directory_uses_build_tree_hash(tmp_path) -> None:
     with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
-        os.environ["MARIN_PROVENANCE"] = "{}"
+        os.environ[LAUNCH_PROVENANCE_ENV] = "{}"
         os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
         with (
             patch.object(jax_cache_module, "launch_provenance", return_value=SimpleNamespace(tree_hash="build-a")),

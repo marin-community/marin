@@ -228,7 +228,8 @@ Two adapters build cache behavior on this primitive:
   missing or different files are atomically replaced. `FileSetFetchLimits` lets callers
   cap the number of files, logical bytes, and elapsed fetch time. A cap or deadline
   raises a dedicated error; other fetch failures also reach the caller. A mirror
-  excludes every file present at construction from later uploads.
+  excludes every file present at construction from later uploads and keeps
+  subsequent uploads within the fetch limits when supplied.
 
 Both adapters are caches: callers choose whether a failure is a miss or a startup error. Cache
 cleanup does not acknowledge persistence or return a commit token. Use

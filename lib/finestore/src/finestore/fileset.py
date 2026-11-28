@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass
 
 from rigging.filesystem.atomic import atomic_rename
+from rigging.timing import Deadline
 
 from finestore.layout import BlobTables
 from finestore.reader import BlobDescriptor, ReadView
@@ -36,6 +37,10 @@ class FileSetFetchDeadlineError(TimeoutError):
     """A committed file-set fetch passed its startup deadline."""
 
 
+class FileSetPublishLimitError(RuntimeError):
+    """New files would make the remote set exceed its fetch budget."""
+
+
 @dataclass(frozen=True)
 class FileSetFetchLimits:
     """Bound a fetch by logical files, bytes, and elapsed seconds."""
@@ -53,29 +58,62 @@ def _safe_relative(name: str) -> pathlib.PurePosixPath:
     return relative
 
 
+def _local_files(directory: pathlib.Path) -> set[str]:
+    return {path.relative_to(directory).as_posix() for path in directory.rglob("*") if path.is_file()}
+
+
+def _check_deadline(deadline: Deadline | None) -> None:
+    if deadline is not None and deadline.expired():
+        raise FileSetFetchDeadlineError("file-set fetch deadline exceeded")
+
+
+def _local_matches_blob(
+    target: pathlib.Path, descriptor: BlobDescriptor, view: ReadView, deadline: Deadline | None
+) -> bool:
+    try:
+        local_stat = target.lstat()
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISREG(local_stat.st_mode) or (descriptor.size is not None and local_stat.st_size != descriptor.size):
+        return False
+    try:
+        current = target.open("rb")
+    except OSError:
+        return False
+    with current:
+        for part in view.blob_parts(descriptor):
+            _check_deadline(deadline)
+            if current.read(len(part)) != part:
+                return False
+        return not current.read(1)
+
+
+def _write_blob(target: pathlib.Path, descriptor: BlobDescriptor, view: ReadView, deadline: Deadline | None) -> None:
+    with atomic_rename(str(target)) as staged:
+        with pathlib.Path(staged).open("wb") as output:
+            for part in view.blob_parts(descriptor):
+                _check_deadline(deadline)
+                output.write(part)
+
+
 def fetch_file_set(root: str, local: str, *, limits: FileSetFetchLimits | None = None) -> set[str]:
-    """Materialize one pinned file set within optional descriptor and time limits."""
+    """Materialize a pinned set and return all relative paths, including matching local files."""
     destination = pathlib.Path(local)
     destination.mkdir(parents=True, exist_ok=True)
     fetched = set()
     started = time.monotonic()
+    deadline = Deadline.from_seconds(limits.timeout) if limits is not None else None
     next_log = started + (limits.log_interval if limits else DEFAULT_FETCH_LOG_INTERVAL)
     files_written = 0
     files_skipped = 0
     total_bytes = 0
-
-    def check_deadline() -> None:
-        if limits is not None and time.monotonic() - started >= limits.timeout:
-            raise FileSetFetchDeadlineError(
-                f"file-set fetch deadline of {limits.timeout}s exceeded at {len(fetched)} files"
-            )
 
     view = ReadView(root)
     for row in view.iter_rows(
         BlobTables.DESCRIPTORS,
         columns=BlobDescriptor.COLUMNS,
     ):
-        check_deadline()
+        _check_deadline(deadline)
         descriptor = BlobDescriptor.from_row(row)
         if limits is not None:
             if len(fetched) + 1 > limits.max_files:
@@ -87,38 +125,12 @@ def fetch_file_set(root: str, local: str, *, limits: FileSetFetchLimits | None =
         relative = _safe_relative(descriptor.name)
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            local_stat = target.lstat()
-        except FileNotFoundError:
-            local_stat = None
-        if (
-            local_stat is not None
-            and stat.S_ISREG(local_stat.st_mode)
-            and (descriptor.size is None or local_stat.st_size == descriptor.size)
-        ):
-            try:
-                current = target.open("rb")
-            except OSError:
-                current = None
-            if current is not None:
-                with current:
-                    matches = True
-                    for part in view.blob_parts(descriptor):
-                        check_deadline()
-                        if current.read(len(part)) != part:
-                            matches = False
-                            break
-                    if matches and not current.read(1):
-                        fetched.add(relative.as_posix())
-                        files_skipped += 1
-        if relative.as_posix() not in fetched:
-            with atomic_rename(str(target)) as staged:
-                with pathlib.Path(staged).open("wb") as output:
-                    for part in view.blob_parts(descriptor):
-                        check_deadline()
-                        output.write(part)
-            fetched.add(relative.as_posix())
+        if _local_matches_blob(target, descriptor, view, deadline):
+            files_skipped += 1
+        else:
+            _write_blob(target, descriptor, view, deadline)
             files_written += 1
+        fetched.add(relative.as_posix())
         total_bytes += descriptor.size or 0
         now = time.monotonic()
         if now >= next_log:
@@ -133,7 +145,7 @@ def fetch_file_set(root: str, local: str, *, limits: FileSetFetchLimits | None =
                 len(fetched) / elapsed,
             )
             next_log = now + (limits.log_interval if limits else DEFAULT_FETCH_LOG_INTERVAL)
-    check_deadline()
+    _check_deadline(deadline)
     logger.info(
         "File-set fetch complete: %d files (%d written, %d skipped), %d bytes in %.1fs",
         len(fetched),
@@ -166,8 +178,11 @@ class FineStoreDirectory:
         self._root = root
         self._local = pathlib.Path(local)
         self._local.mkdir(parents=True, exist_ok=True)
-        fetch_file_set(self._root, local, limits=fetch_limits)
-        self._known = {path.relative_to(self._local).as_posix() for path in self._local.rglob("*") if path.is_file()}
+        fetched = fetch_file_set(self._root, local, limits=fetch_limits)
+        self._known = _local_files(self._local)
+        self._fetch_limits = fetch_limits
+        self._published_files = len(fetched)
+        self._published_bytes = sum((self._local / name).stat().st_size for name in fetched)
         self._store = DataStore.open(self._root)
         self._flush_interval = flush_interval
         self._max_batch_data_bytes = max_batch_data_bytes
@@ -183,26 +198,35 @@ class FineStoreDirectory:
     def flush(self) -> None:
         """Publish files added since the last sync in target-bounded multi-file transactions."""
         with self._flush_lock:
-            present = {path.relative_to(self._local).as_posix() for path in self._local.rglob("*") if path.is_file()}
+            present = _local_files(self._local)
             pending = sorted(present - self._known)
             if not pending:
                 return
+            if self._fetch_limits is not None:
+                if self._published_files + len(pending) > self._fetch_limits.max_files:
+                    raise FileSetPublishLimitError(f"file-set publish exceeds {self._fetch_limits.max_files} files")
+                pending_bytes = sum((self._local / name).stat().st_size for name in pending)
+                if self._published_bytes + pending_bytes > self._fetch_limits.max_bytes:
+                    raise FileSetPublishLimitError(f"file-set publish exceeds {self._fetch_limits.max_bytes} bytes")
             batch = []
             batch_bytes = 0
             for relative in pending:
                 data = (self._local / relative).read_bytes()
+                if (
+                    self._fetch_limits is not None
+                    and self._published_bytes + batch_bytes + len(data) > self._fetch_limits.max_bytes
+                ):
+                    raise FileSetPublishLimitError(f"file-set publish exceeds {self._fetch_limits.max_bytes} bytes")
                 if batch and (
                     batch_bytes + len(data) > self._max_batch_data_bytes or len(batch) >= self._max_batch_files
                 ):
                     self._commit(batch)
-                    self._known.update(name for name, _data in batch)
                     batch = []
                     batch_bytes = 0
                 batch.append((relative, data))
                 batch_bytes += len(data)
             if batch:
                 self._commit(batch)
-                self._known.update(name for name, _data in batch)
 
     def close(self) -> None:
         """Stop synchronization and publish one final file-set commit."""
@@ -212,9 +236,11 @@ class FineStoreDirectory:
         self._stop.set()
         if threading.current_thread() is not self._thread:
             self._thread.join()
-        self.flush()
-        self._store.close()
-        atexit.unregister(self._close_at_exit)
+        try:
+            self.flush()
+        finally:
+            self._store.close()
+            atexit.unregister(self._close_at_exit)
 
     def _close_at_exit(self) -> None:
         if self._closed:
@@ -234,6 +260,9 @@ class FineStoreDirectory:
         while not self._stop.wait(self._flush_interval):
             try:
                 self.flush()
+            except FileSetPublishLimitError as exc:
+                logger.warning("FineStore directory synchronization stopped: %s", exc)
+                return
             except OSError as exc:
                 logger.warning("FineStore directory synchronization failed: %s", exc)
         if self._flush_at_stop.is_set():
@@ -246,3 +275,6 @@ class FineStoreDirectory:
         with self._store.unbounded_transaction() as transaction:
             for relative, data in files:
                 transaction.write_object(relative, data)
+        self._known.update(name for name, _data in files)
+        self._published_files += len(files)
+        self._published_bytes += sum(len(data) for _name, data in files)
