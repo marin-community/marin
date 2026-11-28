@@ -71,6 +71,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import secret_path
 
 from experiments.post_training.task_curation.datasets.derived_contract_measurements import derived_contract_receipts
 from experiments.post_training.task_curation.derived_contract_census import DerivedContractReceipt
@@ -749,6 +750,7 @@ def _execute_stage(stage: str, config: dict) -> dict:
 # by bundle inheritance).
 # The uv extra carrying the CPU torch wheels the Harrier embedder imports.
 EMBED_CPU_DEPENDENCY_GROUP = "cpu"
+ADC_SECRET_NAME = "GOOGLE_APPLICATION_CREDENTIALS_JSON"
 
 STAGE_CHILD_ENV_KEYS = (
     "ATLAS_RELEASE_SOURCE_REVISION",
@@ -760,6 +762,7 @@ STAGE_CHILD_ENV_KEYS = (
     # cache hides a missing token only until a pin moves to an uncached revision.
     "HF_TOKEN",
     "MARIN_IAP_CREDENTIAL_JSON",
+    "GOOGLE_APPLICATION_CREDENTIALS",
 )
 
 
@@ -768,13 +771,16 @@ def _stage_child_env() -> dict[str, str]:
     return {key: value for key in STAGE_CHILD_ENV_KEYS if (value := os.environ.get(key))}
 
 
-def _materialize_job_credentials() -> None:
-    """Write the submitter-passed marin IAP credential record into this job's HOME.
+def materialize_job_credentials() -> None:
+    """Configure the job's mounted ADC and submitter-passed Marin IAP record.
 
     Iris children inherit the workspace bundle but neither the parent environment nor
     its filesystem; the record travels as MARIN_IAP_CREDENTIAL_JSON and the marina
     client reads it from the credentials directory.
     """
+    adc = secret_path(ADC_SECRET_NAME)
+    if adc.is_file():
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(adc)
     raw = os.environ.get("MARIN_IAP_CREDENTIAL_JSON")
     if not raw:
         return
@@ -787,7 +793,7 @@ def _materialize_job_credentials() -> None:
 
 def _execute_stage_node(node: str, stage: str, receipt_key: str, config: dict) -> None:
     """Worker-side dispatch for a cluster stage: run it, then seal its graph receipt."""
-    _materialize_job_credentials()
+    materialize_job_credentials()
     proof = _execute_stage(stage, config)
     document = {
         "kind": GRAPH_RECEIPT_KIND,

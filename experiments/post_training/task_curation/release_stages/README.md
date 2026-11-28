@@ -28,6 +28,15 @@ instead of exporting environment variables.
 Credentials are infrastructure access, not pipeline configuration — nothing
 outside the repository supplies any pipeline input.
 
+For private GCS references such as the difficulty seal, submit forwards the
+operator's application default credentials as an Iris file secret. It reads
+`GOOGLE_APPLICATION_CREDENTIALS` when configured, otherwise the gcloud ADC file
+under `CLOUDSDK_CONFIG` or `~/.config/gcloud`. The root and ordinary stage children
+configure Google's client libraries to use the mounted file. Credential contents
+are never included in the workspace bundle or command arguments.
+Use `submit --job-name <name>` when the root must be registered before submission;
+otherwise submit generates a release-scoped name.
+
 Repository-relative pins (for example the registry index under `plans/`) resolve
 from the checkout root: run `atlas-release` from the checkout.
 

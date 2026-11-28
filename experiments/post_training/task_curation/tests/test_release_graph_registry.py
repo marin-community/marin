@@ -844,10 +844,10 @@ def test_materialize_job_credentials_writes_the_marin_record(monkeypatch, tmp_pa
     raw = json.dumps({"cluster": "marin", "endpoint": "https://marina.oa.dev", "edge_refresh_token": "tok"})
     monkeypatch.setenv("MARIN_IAP_CREDENTIAL_JSON", raw)
     monkeypatch.setattr(release_graph_module.Path, "home", staticmethod(lambda: tmp_path))
-    release_graph_module._materialize_job_credentials()
+    release_graph_module.materialize_job_credentials()
     record = tmp_path / ".config/marin/credentials/marin.json"
     assert record.read_text() == raw
-    release_graph_module._materialize_job_credentials()  # idempotent: the record stays
+    release_graph_module.materialize_job_credentials()  # idempotent: the record stays
     assert record.read_text() == raw
 
 

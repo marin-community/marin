@@ -9,8 +9,11 @@ import shlex
 from pathlib import Path
 
 import pytest
+from google.auth import default as default_credentials
+from google.oauth2.credentials import Credentials
 from marin.execution import lazy
 from rigging.filesystem.step_status import read_step_status
+from rigging.secrets import forwarded_secrets
 
 from experiments.post_training.task_curation.release_stages import __main__ as entry_point
 from experiments.post_training.task_curation.release_stages import graph as release_graph_module
@@ -201,6 +204,54 @@ def test_submit_environment_carries_the_hf_login(monkeypatch, tmp_path):
     monkeypatch.setattr(entry_point, "get_token", lambda: None)
     with pytest.raises(ValueError, match="Hugging Face login"):
         entry_point._submit_environment()
+
+
+@pytest.mark.parametrize("credential_source", ["explicit", "gcloud", "configured_gcloud"])
+def test_submitted_adc_authenticates_root_and_stage_children(tmp_path, monkeypatch, credential_source):
+    """The private difficulty manifest must use ADC in both root and stage jobs."""
+    monkeypatch.setattr(entry_point.Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    monkeypatch.delenv("CLOUDSDK_CONFIG", raising=False)
+    monkeypatch.delenv("MARIN_IAP_CREDENTIAL_JSON", raising=False)
+    if credential_source == "explicit":
+        adc = tmp_path / "explicit-adc.json"
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(adc))
+    else:
+        sdk = tmp_path / ("custom-gcloud" if credential_source == "configured_gcloud" else ".config/gcloud")
+        if credential_source == "configured_gcloud":
+            monkeypatch.setenv("CLOUDSDK_CONFIG", str(sdk))
+        adc = sdk / "application_default_credentials.json"
+    adc.parent.mkdir(parents=True, exist_ok=True)
+    adc.write_text(
+        json.dumps(
+            {
+                "type": "authorized_user",
+                "client_id": "fixture-client",
+                "client_secret": "fixture-secret",
+                "refresh_token": "fixture-refresh",
+            }
+        )
+    )
+    submitted = entry_point._submit_secrets()
+    mounted = tmp_path / "mounted-secrets"
+    mounted.mkdir()
+    for name, value in submitted.items():
+        (mounted / name).write_text(value)
+    adc.unlink()  # The submitter's filesystem is absent in-region.
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(mounted))
+    monkeypatch.setenv("CLOUDSDK_CONFIG", str(tmp_path / "no-cloud-sdk"))
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    release_graph_module.materialize_job_credentials()
+    root_credentials, _ = default_credentials()
+    assert isinstance(root_credentials, Credentials)
+    assert root_credentials.refresh_token == "fixture-refresh"
+    assert forwarded_secrets()[release_graph_module.ADC_SECRET_NAME] == submitted[release_graph_module.ADC_SECRET_NAME]
+    child_env = release_graph_module._stage_child_env()
+    assert child_env["GOOGLE_APPLICATION_CREDENTIALS"] == str(mounted / release_graph_module.ADC_SECRET_NAME)
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", child_env["GOOGLE_APPLICATION_CREDENTIALS"])
+    child_credentials, _ = default_credentials()
+    assert isinstance(child_credentials, Credentials)
+    assert child_credentials.refresh_token == "fixture-refresh"
 
 
 def test_submit_mode_submits_the_run_job(tmp_path, plan_document, monkeypatch):

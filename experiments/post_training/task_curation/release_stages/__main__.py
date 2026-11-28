@@ -72,6 +72,7 @@ from experiments.post_training.task_curation.release_stages import (
 from experiments.post_training.task_curation.release_stages import guard, preflight_slices
 from experiments.post_training.task_curation.release_stages import preflight as preflight_module
 from experiments.post_training.task_curation.release_stages.graph import (
+    ADC_SECRET_NAME,
     REPO_ROOT,
     STAGE_CHILD_ENV_KEYS,
     PreflightPolicy,
@@ -79,6 +80,7 @@ from experiments.post_training.task_curation.release_stages.graph import (
     ReleasePlan,
     graph_nodes,
     load_plan,
+    materialize_job_credentials,
     release_graph,
 )
 from experiments.post_training.task_curation.release_stages.guard import (
@@ -283,7 +285,9 @@ def mode_release(args) -> int:
         # Compose the P0 submitter: the sealed plan travels by storage URI, the
         # bundle bundles at the newest landed tip containing the freeze, and the
         # root job auto-resumes at the same version.
-        submission = SimpleNamespace(version=derived.release_id, plan=plan_ref["uri"], cluster=config.cluster, stage=[])
+        submission = SimpleNamespace(
+            version=derived.release_id, plan=plan_ref["uri"], cluster=config.cluster, stage=[], job_name=None
+        )
         return _submit_root(submission)
     plan = ReleasePlan.model_validate(derived.plan_document)
     plan.validate_shape()
@@ -490,8 +494,8 @@ def _submit_environment() -> dict[str, str]:
     """The root job's environment: the named allowlist and the credential record."""
     env = {}
     for key in STAGE_CHILD_ENV_KEYS:
-        if key == "MARIN_IAP_CREDENTIAL_JSON":
-            continue  # delivered from the credential record below, not the caller's env
+        if key in ("MARIN_IAP_CREDENTIAL_JSON", "GOOGLE_APPLICATION_CREDENTIALS"):
+            continue  # Credentials are read below; submitter-local file paths never travel.
         value = os.environ.get(key)
         if value:
             env[key] = value
@@ -506,6 +510,16 @@ def _submit_environment() -> dict[str, str]:
     elif os.environ.get("MARIN_IAP_CREDENTIAL_JSON"):
         env["MARIN_IAP_CREDENTIAL_JSON"] = os.environ["MARIN_IAP_CREDENTIAL_JSON"]
     return env
+
+
+def _submit_secrets() -> dict[str, str]:
+    """Deliver the submitter's ADC as an inherited Iris file secret."""
+    configured = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if configured:
+        return {ADC_SECRET_NAME: Path(configured).read_text()}
+    cloud_sdk = Path(os.environ.get("CLOUDSDK_CONFIG", Path.home() / ".config/gcloud"))
+    adc = cloud_sdk / "application_default_credentials.json"
+    return {ADC_SECRET_NAME: adc.read_text()} if adc.is_file() else {}
 
 
 def _root_command(
@@ -593,7 +607,7 @@ def _submit_root(args) -> int:
     try:
         (snapshot / "atlas-landing-log.jsonl").write_bytes(_bundled_landing_log(landing_log, revision))
         command = _root_command(plan, relative, revision, stages)
-        name = f"atlas-release-{plan.release_id}-{plan.artifact_version}-{uuid.uuid4().hex[:8]}"
+        name = args.job_name or f"atlas-release-{plan.release_id}-{plan.artifact_version}-{uuid.uuid4().hex[:8]}"
         with connect_controller(cluster_name=args.cluster) as endpoint:
             with IrisClient.remote(
                 endpoint.url,
@@ -607,7 +621,7 @@ def _submit_root(args) -> int:
                     resources=ResourceSpec(
                         cpu=_ROOT_JOB_CPU, memory=f"{_ROOT_JOB_MEMORY_GB}GB", disk=f"{_ROOT_JOB_DISK_GB}GB"
                     ),
-                    environment=EnvironmentSpec(env_vars=_submit_environment()),
+                    environment=EnvironmentSpec(env_vars=_submit_environment(), secrets=_submit_secrets()),
                     priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
                     scheduling_timeout=Duration.from_hours(1),
                     timeout=Duration.from_hours(_ROOT_JOB_TIMEOUT_HOURS),
@@ -737,6 +751,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     submit_parser = modes.add_parser("submit", help="Submit the release's root job to an in-region cluster")
     submit_parser.add_argument("--cluster", required=True, help="The cluster to submit to (e.g. cw-us-east-02a)")
+    submit_parser.add_argument("--job-name", help="Preallocated root job name for registration before submission")
     submit_parser.add_argument("--stage", action="append", default=[], help="Build only this node and its dependencies")
     return parser
 
@@ -763,6 +778,7 @@ def main(argv: list[str] | None = None) -> int:
         "submit": mode_submit,
     }
     try:
+        materialize_job_credentials()
         return handlers[args.mode](args)
     except Exception as error:
         print(f"ATLAS-RELEASE REFUSED: {str(error)[:600]}", file=sys.stderr)
