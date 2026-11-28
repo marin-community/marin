@@ -231,8 +231,8 @@ def qualified_source():
     }
 
 
-@pytest.mark.parametrize("old_dataset_id", [None, "meaningful-old-value"])
-def test_catalog_reader_removes_nested_struct_fill_but_rejects_nonnull_extras(archive_root, old_dataset_id):
+@pytest.mark.parametrize("retired_value", [None, "meaningful-old-value"])
+def test_catalog_reader_removes_nested_struct_fill_but_rejects_nonnull_extras(archive_root, retired_value):
     declaration = QualifiedSourceDeclaration.model_validate(qualified_source())
     row = SnapshotSource(
         snapshot_id="nested-fill",
@@ -243,7 +243,7 @@ def test_catalog_reader_removes_nested_struct_fill_but_rejects_nonnull_extras(ar
         latest_attempt_status="skipped",
         reason=None,
     ).model_dump(mode="json")
-    row["declaration"]["pipeline"]["retired_field"] = old_dataset_id
+    row["declaration"]["pipeline"]["retired_field"] = retired_value
     historical = pa.schema(
         [pa.field("declaration", pa.struct([pa.field("pipeline", pa.struct([pa.field("retired_field", pa.string())]))]))]
     )
@@ -252,7 +252,7 @@ def test_catalog_reader_removes_nested_struct_fill_but_rejects_nonnull_extras(ar
         store.table(INVENTORY, primary_key=("snapshot_id", "id"), schema=schema)
         with store.transaction() as transaction:
             transaction.table(INVENTORY).add(row)
-    if old_dataset_id is not None:
+    if retired_value is not None:
         with pytest.raises(ValueError):
             list(CurationCatalog(archive_root).sources("nested-fill"))
         return

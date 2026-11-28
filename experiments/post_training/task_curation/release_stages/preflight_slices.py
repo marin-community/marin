@@ -30,6 +30,8 @@ import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+from marin.execution.artifact import RECORD_FILENAME, read_record
+from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.release_stages import (
@@ -607,9 +609,6 @@ def _upstream_witness(node: str, plan: ReleasePlan) -> tuple[dict[str, str], dic
     write-once seals. The witness receipt binds those upstream records so a changed
     upstream stales the gate exactly like a changed slice input.
     """
-    from marin.execution.artifact import RECORD_FILENAME, read_record  # noqa: PLC0415 — beside its only use
-    from rigging.filesystem.cluster_config import marin_prefix  # noqa: PLC0415 — beside its only use
-
     handle = release_graph(plan).stages[node]
     digests: dict[str, str] = {}
     evidence: dict[str, str] = {}
