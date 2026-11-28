@@ -122,7 +122,10 @@ def _selected_sources(sources: tuple[str, ...], mode: SourceProcessingMode) -> d
             if source.pipeline is not None and not {"deprecated", "excluded"}.intersection(source.info.tags)
         }
         pending = {source.name: source for source in PENDING_MEASUREMENT_SOURCES if source.name in sources}
-        catalog = {**registered, **pending, **measured_pending_sources(), **catalog}
+        catalog = {**registered, **pending, **catalog}
+        # An explicit "<name>-retained" selection runs the pending source's measured
+        # retained cohort, whose population and decontamination receipt share one pin.
+        catalog.update(measured_pending_sources(set(sources)))
     unknown = set(sources) - catalog.keys()
     if unknown:
         raise click.UsageError(f"Unknown source: {', '.join(sorted(unknown))}")

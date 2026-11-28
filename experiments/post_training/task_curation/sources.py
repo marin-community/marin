@@ -316,19 +316,23 @@ PENDING_MEASUREMENT_SOURCES = (
 )
 
 
-def measured_pending_sources() -> dict[str, RlDataSource]:
-    """Pending-intake sources whose verified retained release binds, keyed by invocation name.
+def measured_pending_sources(selected: set[str]) -> dict[str, RlDataSource]:
+    """Pending-intake sources whose retained cohort an explicit ``-retained`` selection runs.
 
-    A pending source with a registered retained receipt runs over its retained pin — the
-    same measured-receipt binding the configured sources and the declaration audit's
-    handed-on rows get — so its population and its decontamination receipt share a pin.
+    A pending source's verified retained release is its live population: selecting the
+    cohort's ``<name>-retained`` invocation binds the same measured receipts the
+    declaration audit's handed-on rows get, so the campaign's population and its
+    decontamination receipt share one pin. Nothing is read unless a selection names a
+    retained cohort.
     """
-    retained_ids = set(retained_release_receipts())
-    handed_on = [source for source in PENDING_MEASUREMENT_SOURCES if source.info.id in retained_ids]
+    if not selected:
+        return {}
+    cohort_names = {f"{source.name}-retained": source for source in PENDING_MEASUREMENT_SOURCES}
+    handed_on = [cohort_names[name] for name in selected if name in cohort_names]
     if not handed_on:
         return {}
     bound = bind_measured_receipts(handed_on)
-    return {original.name: bound_source for original, bound_source in zip(handed_on, bound, strict=True)}
+    return {f"{source.name}-retained": bound_source for source, bound_source in zip(handed_on, bound, strict=True)}
 
 
 def configured_sources() -> list[RlDataSource]:
