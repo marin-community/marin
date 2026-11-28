@@ -100,7 +100,9 @@ _RL_POST_TRAINING_LINK = {
     "asDropdown": False,
     "icon": "dashboard",
     "includeVars": True,
-    "keepTime": True,
+    # keepTime would carry the 3h home/runs range into a board whose engine panels
+    # only load at 1h on large runs; let the board open at its own default range.
+    "keepTime": False,
     "targetBlank": False,
     "title": "RL Post-training",
     "type": "link",
