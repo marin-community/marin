@@ -1437,3 +1437,11 @@ def test_derivation_binds_the_registered_difficulty_seal(tmp_path, frozen_layer,
     plan = ReleasePlan.model_validate(derived.plan_document)
     assert plan.difficulty_snapshot is not None
     assert plan.difficulty_snapshot.sha256 == "d" * 64
+
+
+def test_registry_index_pin_is_repo_relative():
+    """The derivation's registry-index pin carries the repo-relative path (the stage
+    reads the bundled file by digest) — never the deriving machine's absolute path."""
+    ref = plan_derivation._read_registry_index(("TaskTrove:GAIR__OpenSWE__openswe_oss",))
+    assert ref.uri == "experiments/post_training/task_curation/release_stages/plans/registry-index.json"
+    assert not ref.uri.startswith("/")

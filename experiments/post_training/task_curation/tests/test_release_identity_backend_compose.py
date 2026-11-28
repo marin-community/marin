@@ -644,3 +644,29 @@ def test_failing_run_emits_a_fail_row(tmp_path):
     assert [row["kind"] for row in rows] == ["STAGE_START", "STAGE_FAIL"]
     assert rows[-1]["state"] == "FAILED"
     assert "schema" in rows[-1]["evidence"]["error"]
+
+
+def test_registry_index_reads_the_bundled_file_by_digest(monkeypatch):
+    """The registry index travels as a digest, not a path: the compose stage reads the
+    bundled repo-relative file and verifies the plan pin's sha256 — a deriving
+    machine's absolute path must never become a stage's read path (the v45 child
+    remote_job-885fdbf2 refused on exactly that)."""
+    from experiments.post_training.task_curation.release_stages import identity_backend_compose
+    from experiments.post_training.task_curation.release_stages.identity_backend_compose import (
+        REGISTRY_INDEX_RELPATH,
+        _REPO_ROOT,
+        read_bundled_registry_index,
+    )
+    from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+
+    payload = (_REPO_ROOT / REGISTRY_INDEX_RELPATH).read_bytes()
+    digest = hashlib.sha256(payload).hexdigest()
+    index = read_bundled_registry_index(ArtifactRef(uri="experiments/ignored/by/the/reader.json", sha256=digest))
+    assert isinstance(index.get("revision"), str) and index["revision"]
+
+    # a pin that does not match the bundled bytes reads through the storage layer
+    sentinel = {"revision": "fixture-revision"}
+    monkeypatch.setattr(identity_backend_compose, "read_ref", lambda pin: sentinel)
+    assert (
+        read_bundled_registry_index(ArtifactRef(uri="s3://bucket/fixture-index.json", sha256="0" * 64)) is sentinel
+    )

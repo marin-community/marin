@@ -86,6 +86,7 @@ DERIVATION_RECEIPT_NAME = "derivation-receipt.json"
 # The in-repo fingerprint index the identity compose reads targets from; a module
 # constant so tests can point the derivation at a fixture index.
 REGISTRY_INDEX_PATH = Path(__file__).parent / "plans" / "registry-index.json"
+REGISTRY_INDEX_RELPATH = Path("experiments/post_training/task_curation/release_stages/plans/registry-index.json")
 
 # The measured dependency pins the requirement vocabulary the release's surveys
 # were measured under; the module file's digest and the schema digest are both
@@ -341,7 +342,10 @@ def _read_registry_index(targets: tuple[str, ...]) -> ArtifactRef:
             f"the registry index at the freeze revision lacks {len(missing)} target entries;"
             " refresh the export before the cut: " + str(sorted(missing)[:5])
         )
-    return ArtifactRef(uri=str(REGISTRY_INDEX_PATH), sha256=hashlib.sha256(payload).hexdigest())
+    # The pin carries the repo-relative path: the stage reads the bundled file and
+    # verifies this digest — a deriving machine's absolute path never reaches a
+    # stage input.
+    return ArtifactRef(uri=REGISTRY_INDEX_RELPATH.as_posix(), sha256=hashlib.sha256(payload).hexdigest())
 
 
 def _measured_dependency(repo_root: Path, revision: str) -> dict:
