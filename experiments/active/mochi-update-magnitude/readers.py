@@ -10,12 +10,14 @@ All access is read-only. Byte volume is bounded by the fixed sample in
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import posixpath
 import urllib.parse
 from collections import OrderedDict
 from dataclasses import dataclass
+from itertools import product
 from typing import ClassVar
 
 import fsspec
@@ -162,8 +164,6 @@ class LevanterReader:
     async def _read_impl(self, array_path: str, slices: tuple) -> np.ndarray:
         ranges, _ = self._covered_chunks(array_path, slices)
         # Cartesian product of covered chunks (a dim spans >1 chunk only for band reads).
-        from itertools import product
-
         choices = [[(index, within) for index, within in dim_ranges] for dim_ranges in ranges]
         combos = list(product(*choices))
         pieces = []
@@ -343,14 +343,8 @@ class SafetensorsReader:
 # torch is Linux-only in this repo's dependency set; guard it as an optional dep.
 try:
     import torch
-    from torch.distributed.checkpoint import FileSystemReader
-    from torch.distributed.checkpoint.default_planner import DefaultLoadPlanner
-    from torch.distributed.checkpoint.state_dict_loader import _load_state_dict
 except ModuleNotFoundError:  # pragma: no cover - macOS dev checkouts
     torch = None
-    FileSystemReader = None
-    DefaultLoadPlanner = None
-    _load_state_dict = None
 
 
 def _require_torch():
@@ -358,13 +352,28 @@ def _require_torch():
         raise RuntimeError("torch is required for Megatron checkpoints but is not installed " "(Linux-only dependency)")
 
 
+_MEGATRON_METADATA_CACHE: dict[str, object] = {}
+
+
+def _megatron_metadata(checkpoint: Checkpoint):
+    """Load the DCP ``.metadata`` pickle over fsspec (torch's FileSystemReader mangles s3://)."""
+    _require_torch()
+    if checkpoint.uri in _MEGATRON_METADATA_CACHE:
+        return _MEGATRON_METADATA_CACHE[checkpoint.uri]
+    uri = checkpoint.uri.rstrip("/") + "/.metadata"
+    fs, _ = fsspec.url_to_fs(uri)
+    with fs.open(uri, "rb") as handle:
+        metadata = torch.load(handle, map_location="cpu", weights_only=False)
+    _MEGATRON_METADATA_CACHE[checkpoint.uri] = metadata
+    return metadata
+
+
 class MegatronInventory:
     """Parse a policy DCP ``.metadata`` into a compact key inventory (no tensor IO)."""
 
     def __init__(self, checkpoint: Checkpoint):
-        _require_torch()
-        self.reader = FileSystemReader(checkpoint.uri)
-        self.metadata = self.reader.read_metadata()
+        self.checkpoint = checkpoint
+        self.metadata = _megatron_metadata(checkpoint)
 
     def entries(self) -> list[dict]:
         rows = []
@@ -373,12 +382,10 @@ class MegatronInventory:
             size = [int(s) for s in meta.size]
             chunks = []
             for chunk in getattr(meta, "chunks", []):
-                storage = self.metadata.storage_data.get(chunk)
                 chunks.append(
                     {
                         "offsets": [[int(o) for o in off] for off in chunk.offsets],
                         "sizes": [[int(s) for s in sz] for sz in chunk.sizes],
-                        "file": storage.relative_path if storage is not None else None,
                     }
                 )
             rows.append({"key": key, "dtype": dtype, "size": size, "n_chunks": len(chunks), "chunks": chunks})
@@ -386,10 +393,35 @@ class MegatronInventory:
 
 
 def load_megatron_keys(checkpoint: Checkpoint, keys: dict[str, tuple[int, ...]], dtype=None) -> dict[str, np.ndarray]:
-    """Assemble full tensors for the given DCP keys from S3 via byte-range reads."""
+    """Assemble full tensors for the given DCP keys via fsspec byte-range reads.
+
+    torch's FileSystemReader cannot open s3:// URIs directly (it collapses the
+    scheme), so read each chunk's serialized bytes at its recorded (offset,
+    length) and place it at the MetadataIndex flat offset of the global tensor.
+    """
     _require_torch()
-    reader = FileSystemReader(checkpoint.uri)
-    state_dict = {key: torch.empty(shape, dtype=dtype or torch.float32) for key, shape in keys.items()}
-    planner = DefaultLoadPlanner(allow_partial_load=True)
-    _load_state_dict(state_dict, storage_reader=reader, planner=planner, no_dist=True)
-    return {key: tensor.numpy() for key, tensor in state_dict.items()}
+    metadata = _megatron_metadata(checkpoint)
+    root = checkpoint.uri.rstrip("/")
+    fs, _ = fsspec.url_to_fs(root)
+    shard_cache: dict[str, object] = {}
+
+    def read_shard_range(relative_path: str, offset: int, length: int) -> bytes:
+        if relative_path not in shard_cache:
+            shard_cache[relative_path] = fs.open(posixpath.join(root, relative_path), "rb")
+        handle = shard_cache[relative_path]
+        handle.seek(offset)
+        return handle.read(length)
+
+    outputs = {}
+    for key, shape in keys.items():
+        meta = metadata.state_dict_metadata[key]
+        target_dtype = dtype or getattr(getattr(meta, "property", None), "dtype", torch.float32)
+        flat = torch.empty(int(np.prod(shape)), dtype=target_dtype)
+        for index, info in metadata.storage_data.items():
+            if getattr(index, "key", None) != key or index.offset is None:
+                continue
+            payload = read_shard_range(info.relative_path, info.offset, info.length)
+            piece = torch.load(io.BytesIO(payload), map_location="cpu", weights_only=True)
+            flat[index.offset : index.offset + piece.numel()] = piece.reshape(-1)
+        outputs[key] = flat.reshape(tuple(shape)).numpy()
+    return outputs
