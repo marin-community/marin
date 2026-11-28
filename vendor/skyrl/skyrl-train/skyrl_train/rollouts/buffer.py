@@ -27,8 +27,9 @@ from skyrl_train.group_admission import (
     TrainingGroupInvariantError,
 )
 from skyrl_train.grader_reporting import GraderStats, GraderSummary
+from skyrl_train.metric_names import curriculum_metric_prefix
 from skyrl_train.rollout_observability import rollout_wait
-from skyrl_train.rollouts.loader import JudgedGroup
+from skyrl_train.rollouts.prompt_order import JudgedGroup
 from skyrl_train.telemetry import GeneratedWork
 from skyrl_train.trajectory_runners.trajectory_processing import get_outcome_rewards, get_trajectory_passes
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import NormalizedReward
@@ -43,6 +44,10 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
     rollout_successes,
 )
 from skyrl_train.trajectory_runners.types import BatchFields, RewardShapingComponents
+
+SAMPLING_SOURCE = "sampling_source"
+CONSUMED = "consumed"
+type SourceRejections = dict[int, collections.Counter[tuple[str, AdmissionRejection]]]
 
 
 @dataclass(frozen=True)
@@ -124,13 +129,16 @@ class GroupRewards:
     optimization: tuple[float, ...]
     outcome: tuple[float, ...]
     passed: bool
+    verified_scores: tuple[float | None, ...] | None = None
 
     @classmethod
     def from_batch(cls, batch: TrajectoryBatch) -> GroupRewards:
+        scores = normalized_verifier_scores(batch)
         return cls(
             optimization=tuple(NormalizedReward.from_output(reward).total for reward in batch["rewards"]),
             outcome=tuple(get_outcome_rewards(batch)),
             passed=any(get_trajectory_passes(batch)),
+            verified_scores=tuple(scores) if scores is not None else None,
         )
 
 
@@ -182,7 +190,6 @@ class RowFacts:
         rewards = GroupRewards.from_batch(batch)
         results = batch.get("verification_results")
         reward_sign_totals = tuple(float(np.sum(reward)) for reward in batch["rewards"])
-        scores = normalized_verifier_scores(batch)
         graded = frozenset(graded_row_indices(batch))
         policy_steps = batch.get("rollout_policy_steps")
         masks = [np.asarray(mask) for mask in batch["loss_masks"]]
@@ -235,7 +242,7 @@ class RowFacts:
             if results is not None
             else (None,) * count,
             graded=tuple(index in graded for index in range(count)),
-            verifier_scores=tuple(scores) if scores is not None else None,
+            verifier_scores=rewards.verified_scores,
             verifier_agents=tuple(
                 agent if result is not None and isinstance(agent := result.diagnostics.get("agent"), str) else None
                 for result in results
@@ -264,6 +271,7 @@ class RolloutVerdict:
     work: GeneratedWork
     row_facts: RowFacts | None = None
     grader_stats: GraderStats | None = None
+    rejected_verifier_scores: tuple[float | None, ...] | None = None
 
     @property
     def trainable(self) -> bool:
@@ -286,14 +294,23 @@ class RolloutContentPolicy:
                 uid=group.uid, group=group, decision=decision, invariant=self.admission.invariant
             )
         batch = group.trajectory_batch
-        work = GeneratedWork.from_batch(batch["response_ids"], batch.get("is_last_step"))
+        work = GeneratedWork.from_batch(batch["response_ids"], batch.get("is_last_step"), batch.get("rollout_metrics"))
         grader_stats = None
         if self.report_graders:
             metadata = group.prompt["input"].metadata
             grader_stats = GraderStats()
             grader_stats.add(batch, repeat(metadata, len(batch["rewards"])))
         if not decision.accepted:
-            return RolloutVerdict(group.uid, decision.rejections, None, None, work, grader_stats=grader_stats)
+            scores = normalized_verifier_scores(batch) if SAMPLING_SOURCE in group.prompt else None
+            return RolloutVerdict(
+                group.uid,
+                decision.rejections,
+                None,
+                None,
+                work,
+                grader_stats=grader_stats,
+                rejected_verifier_scores=tuple(scores) if scores is not None else None,
+            )
         facts = RowFacts.from_batch(batch)
         return RolloutVerdict(group.uid, (), self.selection.evaluate(group), facts.rewards, work, facts, grader_stats)
 
@@ -308,7 +325,9 @@ async def write_trajectory_batch(task: RolloutTask, writer: RolloutWriter, batch
         await writer.write_rollout(
             task.lease, RolloutGroup(batch, task.prompt["uid"], task.lease.policy_step, task.prompt)
         )
-    return sum(len(response) for response in batch["response_ids"])
+    return GeneratedWork.from_batch(
+        batch["response_ids"], batch.get("is_last_step"), batch.get("rollout_metrics")
+    ).paid_tokens
 
 
 @dataclass(frozen=True)
@@ -335,6 +354,25 @@ class ReadyRollout:
     verdict: RolloutVerdict
     payload: object | None
     committed_at: float | None
+    committed_unix_ns: int | None = None
+
+
+@dataclass(frozen=True)
+class SamplingGroupResult:
+    """Replay evidence for a dispatched lease. Only judged groups have a feedback batch."""
+
+    lease_id: str
+    committed_unix_ns: int
+    dispatch_step: int
+    feedback_batch: int | None
+    sample_count: int
+    verified_scores: tuple[float | None, ...] | None
+    served_turns: int = 0
+    served_length_stops: int = 0
+    unprojected_length_stops: int = 0
+    abandoned_retry_tokens: int = 0
+    unobserved_calls: int = 0
+    unobserved_token_limit: int = 0
 
 
 @dataclass(frozen=True)
@@ -345,6 +383,16 @@ class GroupDisposition:
     disposition: str
     tokens: int
     dwell_seconds: float | None
+    sampling_result: SamplingGroupResult | None = None
+
+
+@dataclass(frozen=True)
+class DiscardedCandidate:
+    """A filtered group's feedback awaiting the training step assigned to its batch."""
+
+    batch_id: int
+    uid: str
+    rewards: GroupRewards
 
 
 @dataclass(frozen=True)
@@ -354,6 +402,10 @@ class BufferSnapshot:
     ready: list[ReadyRollout]
     retries: list[dict]
     leases: frozenset[str]
+    discarded: tuple[DiscardedCandidate, ...] = ()
+    source_rejections: SourceRejections | None = None
+    sampling_dispositions: tuple[GroupDisposition, ...] = ()
+    family_order: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -399,18 +451,30 @@ class _SelectionStats:
 
     inspected: int = 0
     rejections: collections.Counter[AdmissionRejection] = field(default_factory=collections.Counter)
+    source_rejections: collections.Counter[tuple[str, AdmissionRejection]] = field(default_factory=collections.Counter)
     candidates: int = 0
     candidate_samples: int = 0
     samples_per_group: int | None = None
     optimization_reward_sum: float = 0.0
     outcome_reward_sum: float = 0.0
     passed: int = 0
-    dynamic_discarded: int = 0
+    discarded: list[DiscardedCandidate] = field(default_factory=list)
     judged: list[JudgedGroup] = field(default_factory=list)
 
-    def reject(self, rejection: AdmissionRejection) -> None:
+    def reject(self, rejection: AdmissionRejection, source: str | None, count: int = 1) -> None:
+        self.inspected += count
+        self.rejections[rejection] += count
+        if source is not None:
+            self.source_rejections[source, rejection] += count
+
+    def observe_judged(self, uid: str, rewards: GroupRewards) -> None:
         self.inspected += 1
-        self.rejections[rejection] += 1
+        self.judged.append(JudgedGroup(uid, rewards.optimization, rewards.verified_scores))
+
+    def discard(self, candidate: DiscardedCandidate) -> None:
+        self.observe_judged(candidate.uid, candidate.rewards)
+        self.observe_candidate(candidate.rewards)
+        self.discarded.append(candidate)
 
     def observe_candidate(self, rewards: GroupRewards) -> None:
         sample_count = len(rewards.optimization)
@@ -433,13 +497,17 @@ class _SelectionStats:
             "async/rejected_count": rejected,
             "async/rejected_rate": rejected / self.inspected,
             **{f"async/rejected_count/{reason.value}": self.rejections[reason] for reason in AdmissionRejection},
+            **{
+                f"{curriculum_metric_prefix(source)}rejected/{reason.value}": count
+                for (source, reason), count in self.source_rejections.items()
+            },
         }
         if dynamic_sampling is DynamicSamplingType.FILTER:
             metrics.update(
                 {
                     "async/dynamic_sampling/candidate_count": self.candidates,
-                    "async/dynamic_sampling/discarded_count": self.dynamic_discarded,
-                    "async/dynamic_sampling/discarded_rate": self.dynamic_discarded / self.candidates,
+                    "async/dynamic_sampling/discarded_count": len(self.discarded),
+                    "async/dynamic_sampling/discarded_rate": len(self.discarded) / self.candidates,
                     "async/dynamic_sampling/candidate_trajectory_count": self.candidate_samples,
                     "async/dynamic_sampling/candidate_optimization_reward_mean": (
                         self.optimization_reward_sum / self.candidate_samples
@@ -616,7 +684,14 @@ class RolloutBuffer:
                 verdict = replace(verdict, grader_stats=None)
             self._ready.append(
                 ReadyRollout(
-                    lease_id, lease.policy_step, lease.batch_id, prompt, verdict, payload.value, time.monotonic()
+                    lease_id,
+                    lease.policy_step,
+                    lease.batch_id,
+                    prompt,
+                    verdict,
+                    payload.value,
+                    time.monotonic(),
+                    time.time_ns() if SAMPLING_SOURCE in prompt else None,
                 )
             )
             self._select()
@@ -686,7 +761,7 @@ class RolloutBuffer:
             selection = None
             if self._batch_complete():
                 for rollout in self._admitted[self._policy_step]:
-                    self._dispose(rollout, "consumed")
+                    self._dispose(rollout, CONSUMED, feedback_batch=self._policy_step)
                 stats = self._stats.pop(self._policy_step)
                 metrics = stats.metrics(self.config.dynamic_sampling)
                 if self.config.groups_per_family:
@@ -743,7 +818,19 @@ class RolloutBuffer:
             for rollout in groups
         ]
         return BufferSnapshot(
-            ready=[*admitted, *self._ready], retries=list(self._retries), leases=frozenset(self._leases)
+            ready=[*admitted, *self._ready],
+            retries=list(self._retries),
+            leases=frozenset(self._leases),
+            discarded=tuple(candidate for stats in self._stats.values() for candidate in stats.discarded),
+            source_rejections={
+                batch_id: stats.source_rejections.copy()
+                for batch_id, stats in self._stats.items()
+                if stats.source_rejections
+            },
+            sampling_dispositions=tuple(
+                outcome for outcome in self._dispositions if outcome.sampling_result is not None
+            ),
+            family_order=tuple(self._family_order),
         )
 
     async def restore(self, snapshot: BufferSnapshot) -> None:
@@ -758,18 +845,43 @@ class RolloutBuffer:
                     for (_, family), count in occupied.items()
                 ):
                     raise ValueError(f"Checkpoint rollout groups do not fit {GROUPS_PER_FAMILY_KEY}")
+            if snapshot.family_order:
+                if set(snapshot.family_order) != self.config.groups_per_family.keys():
+                    raise ValueError(f"Checkpoint family order does not match {GROUPS_PER_FAMILY_KEY}")
+                self._family_order = collections.deque(snapshot.family_order)
             self._ready.extend(snapshot.ready)
             self._retries.extend(snapshot.retries)
+            self._dispositions.extend(snapshot.sampling_dispositions)
+            for candidate in snapshot.discarded:
+                self._stats[candidate.batch_id].discard(candidate)
+            for batch_id, counts in (snapshot.source_rejections or {}).items():
+                for (source, reason), count in counts.items():
+                    self._stats[batch_id].reject(reason, source, count)
 
     def _reject(self, stats: _SelectionStats, rollout: ReadyRollout, rejection: AdmissionRejection) -> None:
-        stats.reject(rejection)
+        stats.reject(rejection, rollout.prompt.get(SAMPLING_SOURCE))
         self._dispose(rollout, rejection.value)
 
-    def _dispose(self, rollout: ReadyRollout, disposition: str) -> None:
+    def _dispose(self, rollout: ReadyRollout, disposition: str, *, feedback_batch: int | None = None) -> None:
         dwell = None if rollout.committed_at is None else time.monotonic() - rollout.committed_at
-        self._dispositions.append(
-            GroupDisposition(rollout.verdict.uid, disposition, rollout.verdict.work.generated_token_count, dwell)
-        )
+        verdict = rollout.verdict
+        result = None
+        if rollout.committed_unix_ns is not None:
+            result = SamplingGroupResult(
+                rollout.lease_id,
+                rollout.committed_unix_ns,
+                rollout.policy_step,
+                feedback_batch,
+                verdict.work.sample_count,
+                verdict.rewards.verified_scores if verdict.rewards is not None else verdict.rejected_verifier_scores,
+                served_turns=verdict.work.served_turns,
+                served_length_stops=verdict.work.served_length_stops,
+                unprojected_length_stops=verdict.work.unprojected_length_stops,
+                abandoned_retry_tokens=verdict.work.abandoned_retry_tokens,
+                unobserved_calls=verdict.work.unobserved_calls,
+                unobserved_token_limit=verdict.work.unobserved_token_limit,
+            )
+        self._dispositions.append(GroupDisposition(verdict.uid, disposition, verdict.work.paid_tokens, dwell, result))
 
     def _batch_complete(self) -> bool:
         return not self._batch_taken and len(self._admitted[self._policy_step]) == self.config.batch_size
@@ -804,14 +916,13 @@ class RolloutBuffer:
             elif any(admitted_rollout.verdict.uid == verdict.uid for admitted_rollout in batch):
                 self._reject(stats, rollout, AdmissionRejection.DUPLICATE_UID)
             else:
-                stats.inspected += 1
-                stats.judged.append(JudgedGroup(verdict.uid, verdict.rewards.optimization))
+                if verdict.selection is not GroupSelectionResult.KEEP:
+                    stats.discard(DiscardedCandidate(batch_id, verdict.uid, verdict.rewards))
+                    self._dispose(rollout, verdict.selection.value, feedback_batch=batch_id)
+                    continue
+                stats.observe_judged(verdict.uid, verdict.rewards)
                 if self.config.dynamic_sampling is DynamicSamplingType.FILTER:
                     stats.observe_candidate(verdict.rewards)
-                if verdict.selection is not GroupSelectionResult.KEEP:
-                    stats.dynamic_discarded += 1
-                    self._dispose(rollout, verdict.selection.value)
-                    continue
                 batch.append(rollout)
                 admitted[batch_id] += 1
                 if batch_id == self._policy_step:

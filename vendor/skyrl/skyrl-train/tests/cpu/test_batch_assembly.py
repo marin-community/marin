@@ -13,8 +13,9 @@ from skyrl_train.config.driver_validation import validate_cfg
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING
-from skyrl_train.batch_metrics import reward_metrics
+from skyrl_train.batch_metrics import nonzero_advantage_tokens_by_group, reward_metrics
 from skyrl_train.rollouts.buffer import RowFacts
+from skyrl_train.training_batch import TrainingInputBatch
 
 import torch
 from omegaconf import OmegaConf, open_dict
@@ -44,6 +45,22 @@ from skyrl_train.utils.advantage_estimators import (
 class RecordedRows:
     def set_trajectory_sink(self, sink):
         pass
+
+
+def test_final_advantage_counts_match_across_rank_slices():
+    batch = TrainingInputBatch(
+        {
+            "advantages": torch.tensor([[1.0, 0.0], [0.0, -2.0], [3.0, 4.0], [-1.0, 0.0]]),
+            "loss_mask": torch.tensor([[0, 1], [1, 1], [1, 0], [0, 0]]),
+        }
+    )
+    uids = ("masked", "split", "split")
+    expected = {"split": 2, "masked": 0}
+    assert nonzero_advantage_tokens_by_group(batch, uids) == expected
+    first_rank = nonzero_advantage_tokens_by_group(batch[:2], uids[:2])
+    second_rank = nonzero_advantage_tokens_by_group(batch[2:], uids[2:])
+    first_rank.update(second_rank)
+    assert first_rank == expected
 
 
 @pytest.fixture

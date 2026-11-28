@@ -68,6 +68,7 @@ from skyrl_gym.task_records import fold_grades, skipped_grade
 from skyrl_train.inference_engines.base import ChatContinuation, InferenceEngineInterface, InferenceEngineInput
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
+from skyrl_train.inference_engines.generation_usage import measure_engine_generation
 from skyrl_train.rollouts.buffer import RolloutTask, RolloutWriter, write_trajectory_batch
 from skyrl_train.rollouts.group_grading import GROUP_GRADERS, GroupGrader, grade_groups
 from skyrl_train.rollouts.machines import OwnedMachineFactory, TaskMachineError
@@ -83,7 +84,10 @@ from skyrl_train.trajectory_runners.model_clients import (
     DirectModelClient,
     GenerationBudgetExceededError,
     ModelClient,
+    ModelClientOutput,
     ModelServerError,
+    chat_row_options,
+    generation_token_budget,
 )
 from skyrl_train.rollouts.task_projections import (
     StepTaskProjection,
@@ -92,6 +96,7 @@ from skyrl_train.rollouts.task_projections import (
 )
 from skyrl_train.rollouts.training_record import (
     REASONING_VIOLATION_TOKEN_METADATA_KEY,
+    ModelGenerationUsage,
     TrainingRollout,
     reject_malformed_reasoning,
     rollout_with_verifier_failure,
@@ -122,6 +127,42 @@ async def _tokenize(
     return result
 
 
+async def _generate_with_usage(
+    client: ModelClient,
+    request: InferenceEngineInput,
+    limit: int,
+    usage: ModelGenerationUsage,
+) -> ModelClientOutput:
+    selected_tokens = 0
+    unresolved = True
+    with measure_engine_generation(limit) as meter:
+        try:
+            output = await client.generate(request)
+            if output["token_provenance"] != TokenProvenance.ENGINE:
+                raise RolloutContractError("The canonical rollout engine requires exact model tokens")
+            selected_tokens = len(output["response_ids"][0])
+            unresolved = False
+            if not meter.calls:
+                usage.turns += 1
+                usage.tokens += selected_tokens
+                usage.length_stops += int(output["stop_reasons"][0] == "length")
+            return output
+        except ContextLengthExceededError:
+            unresolved = False
+            raise
+        finally:
+            if meter.calls:
+                usage.tokens += meter.tokens
+                usage.turns += meter.turns
+                usage.length_stops += meter.length_stops
+                usage.abandoned_retry_tokens += max(0, meter.tokens - selected_tokens)
+                usage.unobserved_calls += meter.unobserved_calls
+                usage.unobserved_token_limit += meter.unobserved_token_limit
+            elif unresolved:
+                usage.unobserved_calls += 1
+                usage.unobserved_token_limit += limit
+
+
 async def _model_turn(
     client: ModelClient,
     request: ModelRequest,
@@ -131,6 +172,7 @@ async def _model_turn(
     max_prompt_length: int | None,
     chat_template_kwargs: dict[str, Any],
     session_id: str,
+    usage: ModelGenerationUsage,
 ) -> ModelTurn:
     """Convert an inference response to the common exact-token record."""
     options = dict(request.options)
@@ -147,16 +189,17 @@ async def _model_turn(
         with rollout_wait("model_client_await"):
             if request.prompt_token_ids is not None:
                 prompt_ids = list(request.prompt_token_ids)
-                remaining = max_context_length - len(prompt_ids)
-                if remaining <= 0 or (max_prompt_length is not None and len(prompt_ids) > max_prompt_length):
-                    raise GenerationLimitReached(tuple(prompt_ids))
                 raw_sampling = {**sampling_params, **options}
-                raw_sampling["max_tokens"] = min(int(raw_sampling.get("max_tokens", remaining)), remaining)
                 model_input = InferenceEngineInput(
                     prompt_token_ids=[prompt_ids],
                     session_ids=[session_id],
                     sampling_params=raw_sampling,
+                    max_context_length=max_context_length,
+                    max_prompt_length=max_prompt_length,
                 )
+                limit = generation_token_budget(model_input, prompt_ids, {})
+                assert limit is not None
+                raw_sampling["max_tokens"] = limit
             else:
                 model_input = InferenceEngineInput(
                     prompts=[list(request.messages)],
@@ -167,11 +210,14 @@ async def _model_turn(
                     max_context_length=max_context_length,
                     max_prompt_length=max_prompt_length,
                 )
-            output = await client.generate(model_input)
+                # Rendering happens on the serving client. The pinned continuation is a
+                # lower bound on input length, so the output allowance is an upper bound.
+                known_prompt = list(request.continuation.served_token_ids) if request.continuation else []
+                limit = generation_token_budget(model_input, known_prompt, chat_row_options(options).options)
+                assert limit is not None
+            output = await _generate_with_usage(client, model_input, limit, usage)
     except GenerationBudgetExceededError as error:
         raise GenerationLimitReached(error.prompt_token_ids) from error
-    if output["token_provenance"] != TokenProvenance.ENGINE:
-        raise RolloutContractError("The canonical rollout engine requires exact model tokens")
     logprobs = output.get("response_logprobs")
     if logprobs is not None and any(not math.isfinite(value) for value in logprobs[0]):
         raise RolloutContractError("Behavior logprobs must be finite")
@@ -501,6 +547,7 @@ class TaskRolloutWorker:
             attempt_id = session_id
             external_agent = lowered.harness in agents
             identity = request.rows[index].metadata.evaluation_identity
+            usage = ModelGenerationUsage()
 
             async def model(request):
                 try:
@@ -512,6 +559,7 @@ class TaskRolloutWorker:
                         max_prompt_length=None if external_agent else max_input_length,
                         chat_template_kwargs=self.chat_template_kwargs,
                         session_id=attempt_id,
+                        usage=usage,
                     )
                 except (GenerationLimitReached, ContextLengthExceededError) as error:
                     raise ContextRejected(
@@ -545,7 +593,10 @@ class TaskRolloutWorker:
                 ):
                     delay = None
                 if delay is None:
-                    return replace(result, metrics={**result.metrics, "rollout_retries": float(retries)})
+                    return replace(
+                        result, generation_usage=usage, metrics={**result.metrics, "rollout_retries": float(retries)}
+                    )
+                usage.abandoned_retry_tokens = usage.tokens
                 logger.info("Retrying task {} after an infrastructure failure", task.id)
                 with rollout_wait("retry_backoff"):
                     await self.retry_wait(delay)

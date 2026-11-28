@@ -5,20 +5,26 @@ from __future__ import annotations
 import asyncio
 import collections
 import dataclasses
-from collections.abc import Awaitable, Callable
+import json
+import time
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
+import numpy as np
 import ray
 from loguru import logger
 from omegaconf import DictConfig
 from ray.actor import ActorHandle
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
+from taskcompendium.chat import ChatFunction, message_text
 
+from marinskyrl.distillation import DistillationObjectiveKind, compile_distillation_plan_from_config
 from marinskyrl.environment_contract import TrainingType
 from marinskyrl.runtime_options import PolicyLossType
-from marinskyrl.distillation import DistillationObjectiveKind, compile_distillation_plan_from_config
+from skyrlrecipe.declared import PromptAcquisition
+from skyrl_train.adaptive_sampling import AdaptiveSourceOrder
 from skyrl_train.config.rollout_validation import (
     FAMILY_COLUMN,
     GROUPS_PER_FAMILY_KEY,
@@ -28,8 +34,19 @@ from skyrl_train.config.rollout_validation import (
     validate_family_pools,
     validate_groups_per_family,
 )
-from skyrl_train.curriculum import CurriculumConfig, CurriculumOrder, SamplingKind
+from skyrl_train.config.sampling import (
+    ADAPTIVE_SOURCE_KINDS,
+    SamplingKind,
+    validate_sampling_reversion,
+)
+from skyrl_train.contextual_sampling import (
+    PromptThompsonOrder,
+    PublicPrompt,
+    public_prompt_digest,
+)
+from skyrl_train.curriculum import CurriculumConfig, CurriculumOrder
 from skyrl_train.dataset import PromptDataset
+from skyrl_train.dataset.tasks import TaskDataset
 from skyrl_train.domain_sampling import DomainWeightedOrder
 from skyrl_train.dynamic_sampling import (
     DynamicSamplingType,
@@ -37,26 +54,38 @@ from skyrl_train.dynamic_sampling import (
     resolve_dynamic_sampling_criteria,
 )
 from skyrl_train.grader_reporting import write_grader_report
+from rolloutengine.models import (
+    GROSS_ROLLOUT_TOKENS_METRIC,
+    UNOBSERVED_ROLLOUT_CALLS_METRIC,
+    UNOBSERVED_ROLLOUT_TOKEN_LIMIT_METRIC,
+)
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.rollouts.buffer import (
+    CONSUMED,
+    SAMPLING_SOURCE,
     Admission,
     AdmittedRollout,
     BufferSnapshot,
+    DiscardedCandidate,
+    GroupDisposition,
     ReadyRollout,
     RolloutBuffer,
     RolloutBufferConfig,
     RowFacts,
     RolloutContentPolicy,
     RolloutGroup,
+    RolloutLease,
     RolloutTask,
+    SourceRejections,
 )
-from skyrl_train.rollouts.loader import PromptLoader, PromptLoaderState, PromptGroupDataset, PromptOrder, SeededPasses
+from skyrl_train.rollouts.loader import PromptLoader, PromptLoaderState, PromptGroupDataset, SeededPasses
+from skyrl_train.rollouts.prompt_order import PromptFeedback, PromptOrder, PromptPrediction, SamplingFeedbackPhase
 from skyrl_train.rollouts.payloads import MemoryPayloads, ObjectStorePayloads, PayloadStore
 from skyrl_train.rollouts.payloads import RolloutReader, PAYLOAD_IO_THREADS
 from skyrl_train.rollout_observability import dispatch_wait, observe_rollout_call, record_group_disposition
 from skyrl_train.rollouts.workers import RolloutWorkers
-from skyrl_train.telemetry import record_generated_work, record_rollout_buffer
+from skyrl_train.telemetry import record_event, record_generated_work, record_rollout_buffer
 from skyrl_train.trajectory_runners.trajectory_processing import prepare_trajectory_request
 from skyrl_train.trajectory_runners.types import TrajectoryRequestBatch
 from skyrl_train.config.objective_spec import rollout_logprobs_required
@@ -97,6 +126,10 @@ class TrainingContextState:
     loader: PromptLoaderState
     ready: list[ReadyRollout]
     object_store_root: str | None
+    discarded: tuple[DiscardedCandidate, ...] = ()
+    source_rejections: SourceRejections | None = None
+    sampling_dispositions: tuple[GroupDisposition, ...] = ()
+    family_order: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -106,9 +139,43 @@ class RolloutBatchMetadata:
     batch_id: int
     groups: tuple[AdmittedRollout, ...]
     metrics: dict[str, float]
+    sampling_receipts_enabled: bool = False
+    sampling_dispositions: tuple[GroupDisposition, ...] = ()
 
 
-def prompt_order_from_config(config: DictConfig, dataset: PromptGroupDataset) -> PromptOrder:
+def _public_message_text(message: dict[str, Any]) -> str:
+    content = message.get("content")
+    calls = message.get("tool_calls")
+    if message.get("role") != "assistant" or not calls:
+        return message_text(content)
+    text = "" if content is None else message_text(content)
+    # Public tool calls distinguish conversations even when the assistant has no text.
+    # The provider's transport IDs do not change the requested action.
+    functions = [ChatFunction.model_validate(call["function"]) for call in calls]
+    actions = [function.model_dump(mode="json") for function in functions]
+    return text + "\n" + json.dumps(actions, ensure_ascii=False, sort_keys=True)
+
+
+def _public_prompt_texts(dataset: PromptDataset) -> list[str]:
+    # Read only the model-visible prompt column. Canonical prepared rows store messages as JSON.
+    texts = []
+    for prompt in dataset.dataframe.with_format(None)[dataset.prompt_key]:
+        if isinstance(dataset, TaskDataset) and isinstance(prompt, str):
+            prompt = json.loads(prompt)
+        if isinstance(prompt, str):
+            texts.append(prompt)
+            continue
+        texts.append("\n".join(_public_message_text(message) for message in prompt))
+    return texts
+
+
+def prompt_order_from_config(
+    config: DictConfig,
+    dataset: PromptGroupDataset,
+    *,
+    held_out: Sequence[PromptDataset] = (),
+    groups_per_family: Mapping[str, int] | None = None,
+) -> PromptOrder:
     """Build the loader's prompt order: seeded passes by default, or the ``data.sampling`` order."""
     sampling = config.data.sampling
     if sampling.kind is None:
@@ -119,8 +186,50 @@ def prompt_order_from_config(config: DictConfig, dataset: PromptGroupDataset) ->
         raise ValueError(f"data.sampling.kind requires a prompt dataset, got {type(dataset).__name__}")
     seed = sampling.seed if sampling.seed is not None else config.trainer.seed
     batch_size = config.trainer.train_batch_size
-    if SamplingKind(sampling.kind) is SamplingKind.DOMAIN_WEIGHTED:
+    kind = SamplingKind(sampling.kind)
+    validate_sampling_reversion(sampling)
+    if kind is SamplingKind.DOMAIN_WEIGHTED:
         return DomainWeightedOrder(dataset.dataframe, sampling.domain_weights, seed=seed, window_size=batch_size)
+    if kind in PromptAcquisition:
+        samples = config.generator.n_samples_per_prompt
+        if samples < 2:
+            raise ValueError("prompt-thompson requires at least two samples per prompt")
+        prepared = dataset.dataframe.with_format(None)
+        sources = prepared[sampling.source_column]
+        families = prepared[FAMILY_COLUMN] if groups_per_family else [None] * len(dataset)
+        prompts = [
+            PublicPrompt(dataset.uid(index), source, text, family)
+            for index, (source, text, family) in enumerate(
+                zip(sources, _public_prompt_texts(dataset), families, strict=True)
+            )
+        ]
+        held_out_digests = {public_prompt_digest(text) for panel in held_out for text in _public_prompt_texts(panel)}
+        return PromptThompsonOrder(
+            prompts,
+            held_out_digests,
+            sampling.domain_weights,
+            acquisition=PromptAcquisition(kind),
+            seed=seed,
+            window_size=batch_size,
+            decay=sampling.decay,
+            epsilon=sampling.epsilon,
+            reference_tokens=max(1, samples * config.generator.sampling_params.max_generate_length // 2),
+            groups_per_family=groups_per_family,
+        )
+    if kind in ADAPTIVE_SOURCE_KINDS:
+        if config.generator.n_samples_per_prompt < 2:
+            raise ValueError("adaptive-source requires at least two samples per prompt")
+        return AdaptiveSourceOrder(
+            dataset.dataframe.with_format(None)[sampling.source_column],
+            sampling.domain_weights,
+            seed=seed,
+            window_size=batch_size,
+            decay=sampling.decay,
+            epsilon=sampling.epsilon,
+            prior_alpha=sampling.prior_alpha,
+            prior_beta=sampling.prior_beta,
+            posterior_rng=np.random.default_rng(seed) if kind is SamplingKind.ADAPTIVE_SOURCE_THOMPSON else None,
+        )
     curriculum = CurriculumConfig.from_dict_config(sampling, group_size=config.generator.n_samples_per_prompt)
     return CurriculumOrder(dataset, curriculum, seed=seed, window_size=batch_size)
 
@@ -129,6 +238,94 @@ def start_rollout_buffer(config: RolloutBufferConfig) -> ActorHandle:
     """Start the rollout buffer actor on this node, beside the trainer that reads every payload through it."""
     node = NodeAffinitySchedulingStrategy(node_id=ray.get_runtime_context().get_node_id(), soft=False)
     return ray.remote(RolloutBuffer).options(num_cpus=0, scheduling_strategy=node).remote(config)
+
+
+def record_sampling_assignment(lease: RolloutLease, prompt: dict, prediction: PromptPrediction | None) -> None:
+    """Record a training dispatch and optional fitted-model predictions."""
+    metadata = prompt["input"].metadata
+    identity = metadata.evaluation_identity
+    record_event(
+        "sampling_group_assigned",
+        {
+            "lease_id": lease.lease_id,
+            "group_uid": prompt["uid"],
+            "assigned_unix_ns": time.time_ns(),
+            "policy_step": lease.policy_step,
+            "target_batch": lease.batch_id,
+            "task_id": metadata.task_id,
+            "task_digest": identity.task_digest if identity is not None else None,
+            "source": prompt[SAMPLING_SOURCE],
+            "family": lease.family or (identity.strata.family if identity is not None else None),
+            **(dataclasses.asdict(prediction) if prediction is not None else {}),
+        },
+    )
+
+
+def record_sampling_result(outcome: GroupDisposition, admission_batch: int) -> None:
+    """Emit verifier coverage and generated cost for a completed sampled lease."""
+    result = outcome.sampling_result
+    if result is None:
+        return
+    scores = [score for score in result.verified_scores or () if score is not None]
+    record_event(
+        "sampling_group_result",
+        {
+            "lease_id": result.lease_id,
+            "group_uid": outcome.uid,
+            "committed_unix_ns": result.committed_unix_ns,
+            "feedback_batch": result.feedback_batch,
+            "admission_batch": admission_batch,
+            "dispatch_step": result.dispatch_step,
+            "disposition": outcome.disposition,
+            "generated_tokens": outcome.tokens,
+            "served_turns": result.served_turns,
+            "served_length_stops": result.served_length_stops,
+            "unprojected_length_stops": result.unprojected_length_stops,
+            "abandoned_retry_tokens": result.abandoned_retry_tokens,
+            "unobserved_generation_calls": result.unobserved_calls,
+            "unobserved_generation_token_limit": result.unobserved_token_limit,
+            "sample_count": result.sample_count,
+            "verified_zero": scores.count(0.0),
+            "verified_one": scores.count(1.0),
+            "verified_partial": sum(0 < score < 1 for score in scores),
+            "verified_missing": result.sample_count - len(scores),
+            "verified_sum": sum(scores),
+            "verified_min": min(scores, default=None),
+            "verified_max": max(scores, default=None),
+        },
+    )
+
+
+def _record_admission(admission: Admission, trace_rollouts: bool, step: int, max_untrained_groups: int) -> None:
+    for outcome in admission.dispositions:
+        record_sampling_result(outcome, admission.batch_id)
+        if trace_rollouts:
+            record_group_disposition(
+                disposition=outcome.disposition,
+                tokens=outcome.tokens,
+                step=step,
+                dwell_seconds=outcome.dwell_seconds,
+            )
+    for policy_step, work in admission.generated:
+        record_generated_work(work, policy_step)
+    record_rollout_buffer(admission.ready_count, max_untrained_groups)
+
+
+def _record_sampling_feedback(step: int) -> None:
+    record_event("sampling_feedback_observed", {"feedback_batch": step, "observed_unix_ns": time.time_ns()})
+
+
+def record_sampling_training(batch: RolloutBatchMetadata, nonzero_advantage_tokens: collections.Counter[str]) -> None:
+    """Emit one optimizer-input receipt for each selected group, including groups with zero signal."""
+    for group in batch.groups:
+        record_event(
+            "sampling_group_trained",
+            {
+                "group_uid": group.uid,
+                "training_step": batch.batch_id,
+                "nonzero_advantage_tokens": nonzero_advantage_tokens[group.uid],
+            },
+        )
 
 
 @dataclass(frozen=True)
@@ -185,7 +382,14 @@ class TrainingContext:
         self._submission_allowed.set()
 
     @classmethod
-    def from_config(cls, config: DictConfig, dataset: PromptGroupDataset, workers: RolloutWorkers) -> TrainingContext:
+    def from_config(
+        cls,
+        config: DictConfig,
+        dataset: PromptGroupDataset,
+        workers: RolloutWorkers,
+        *,
+        held_out: Sequence[PromptDataset] = (),
+    ) -> TrainingContext:
         algorithm = config.trainer.algorithm
         dynamic_sampling = algorithm.dynamic_sampling
         selection = GroupSelectionPolicy(
@@ -233,10 +437,11 @@ class TrainingContext:
         )
         object_store_root = config.trainer.rollout_buffer.object_store_root
         report_graders = bool(config.trainer.get("dump_grader_report", False))
+        order = prompt_order_from_config(config, dataset, held_out=held_out, groups_per_family=groups_per_family)
         return cls(
             PromptLoader(
                 dataset,
-                prompt_order_from_config(config, dataset),
+                order,
                 batch_size=batch_size,
                 minimum_pool_size=buffer_config.max_untrained_groups + SPARE_PROMPTS_PER_POOL,
                 max_stale_retries=config.trainer.rollout_buffer.max_stale_retries,
@@ -342,22 +547,26 @@ class TrainingContext:
         """Wait for a selected batch without reading its trajectory payloads."""
         loop = asyncio.get_running_loop()
         groups: list[AdmittedRollout] = []
+        gross_tokens = 0
+        unobserved_calls = 0
+        unobserved_token_limit = 0
+        sampling_dispositions: list[GroupDisposition] = []
+        phase = self.loader.order.feedback_phase
+        sampling_receipts_enabled = phase is not SamplingFeedbackPhase.NONE
+        tracks_prompt_feedback = phase is SamplingFeedbackPhase.OPTIMIZER
         deadline = loop.time() + stall_timeout
         while True:
             timeout = max(deadline - loop.time(), 0.0)
             admission = await self.wait(self._buffer.admit.remote(timeout))
             await self._release(admission)
-            for policy_step, work in admission.generated:
-                record_generated_work(work, policy_step)
-            if self._rollout_spans:
-                for outcome in admission.dispositions:
-                    record_group_disposition(
-                        disposition=outcome.disposition,
-                        tokens=outcome.tokens,
-                        step=self._policy_step,
-                        dwell_seconds=outcome.dwell_seconds,
-                    )
-            record_rollout_buffer(admission.ready_count, self.config.max_untrained_groups)
+            # Every commit appears once in generated, before rejection or admission.
+            for _, work in admission.generated:
+                gross_tokens += work.paid_tokens
+                unobserved_calls += work.unobserved_calls
+                unobserved_token_limit += work.unobserved_token_limit
+            _record_admission(admission, self._rollout_spans, self._policy_step, self.config.max_untrained_groups)
+            if tracks_prompt_feedback:
+                sampling_dispositions.extend(admission.dispositions)
             if admission.admitted:
                 admitted = tuple(admission.admitted)
                 groups.extend(admitted)
@@ -370,21 +579,59 @@ class TrainingContext:
                 if any(group.index != index for index, group in enumerate(groups)):
                     raise ValueError("selected batch group indices are not ordered from zero")
                 await self._write_grader_report()
+                sampling_metrics = self.loader.observe(admission.selection.judged)
+                if phase is SamplingFeedbackPhase.ADMISSION:
+                    _record_sampling_feedback(admission.batch_id)
                 return RolloutBatchMetadata(
                     self._policy_step,
                     tuple(groups),
-                    {**admission.selection.metrics, **self.loader.observe(admission.selection.judged)},
+                    {
+                        **admission.selection.metrics,
+                        **sampling_metrics,
+                        GROSS_ROLLOUT_TOKENS_METRIC: gross_tokens,
+                        UNOBSERVED_ROLLOUT_CALLS_METRIC: unobserved_calls,
+                        UNOBSERVED_ROLLOUT_TOKEN_LIMIT_METRIC: unobserved_token_limit,
+                    },
+                    sampling_receipts_enabled=sampling_receipts_enabled,
+                    sampling_dispositions=tuple(sampling_dispositions),
                 )
 
-    async def state_dict(self) -> TrainingContextState:
-        """Capture every dispatched group that no trained batch has consumed.
+    def finish_sampling_step(
+        self, batch: RolloutBatchMetadata, counts: collections.Counter[str] | None
+    ) -> dict[str, float]:
+        """Update the prompt policy only once optimizer participation is known."""
+        if counts is not None:
+            record_sampling_training(batch, counts)
+        if self.loader.order.feedback_phase is not SamplingFeedbackPhase.OPTIMIZER:
+            return {}
+        feedback = []
+        for outcome in batch.sampling_dispositions:
+            result = outcome.sampling_result
+            if result is None:
+                raise ValueError(f"Prompt Thompson outcome has no dispatch receipt: {outcome.uid}")
+            feedback.append(
+                PromptFeedback(
+                    lease_id=result.lease_id,
+                    uid=outcome.uid,
+                    dispatch_step=result.dispatch_step,
+                    sample_count=result.sample_count,
+                    verified_scores=result.verified_scores,
+                    generated_tokens=outcome.tokens,
+                    nonzero_advantage_tokens=(
+                        counts[outcome.uid] if counts is not None and outcome.disposition == CONSUMED else None
+                    ),
+                )
+            )
+        metrics = self.loader.order.finish_step(batch.batch_id, feedback)
+        _record_sampling_feedback(batch.batch_id)
+        return metrics
 
-        The loader position and in-flight tasks are read together, before the buffer snapshot, so a task
-        that commits meanwhile appears in the buffer and not also among the prompts to regenerate.
-        """
-        in_flight = dict(self._in_flight)
-        loader = self.loader.state_dict()
-        snapshot: BufferSnapshot = await self._buffer.snapshot.remote()
+    async def state_dict(self) -> TrainingContextState:
+        """Capture each unconsumed dispatch once, as a buffered group or a prompt to regenerate."""
+        async with self._uids_released:
+            in_flight = dict(self._in_flight)
+            loader = self.loader.state_dict()
+            snapshot: BufferSnapshot = await self._buffer.snapshot.remote()
         uncommitted = [task.prompt for lease_id, task in in_flight.items() if lease_id in snapshot.leases]
         payloads = await asyncio.gather(*(self._payloads.checkpoint(rollout.payload) for rollout in snapshot.ready))
         ready = [
@@ -399,7 +646,13 @@ class TrainingContext:
         ]
         retries = [*loader.retries, *snapshot.retries, *uncommitted]
         return TrainingContextState(
-            dataclasses.replace(loader, retries=retries), ready, self._payloads.object_store_root
+            dataclasses.replace(loader, retries=retries),
+            ready,
+            self._payloads.object_store_root,
+            snapshot.discarded,
+            snapshot.source_rejections,
+            snapshot.sampling_dispositions,
+            snapshot.family_order,
         )
 
     async def load_state_dict(self, state: TrainingContextState) -> None:
@@ -430,7 +683,17 @@ class TrainingContext:
                     ready[index].verdict, row_facts=RowFacts.from_batch(group.trajectory_batch)
                 )
                 ready[index] = dataclasses.replace(ready[index], verdict=verdict)
-        await self._buffer.restore.remote(BufferSnapshot(ready=ready, retries=[], leases=frozenset()))
+        await self._buffer.restore.remote(
+            BufferSnapshot(
+                ready=ready,
+                retries=[],
+                leases=frozenset(),
+                discarded=state.discarded,
+                source_rejections=state.source_rejections,
+                sampling_dispositions=state.sampling_dispositions,
+                family_order=state.family_order,
+            )
+        )
         self._live_uids.update(rollout.verdict.uid for rollout in ready)
         logger.info(
             "Restored rollout state: {} committed groups and {} prompts to regenerate",
@@ -453,7 +716,11 @@ class TrainingContext:
                 # A lease or prompt wait may span an evaluation boundary. Keep the
                 # single acquired lease, but do not submit its generation yet.
                 await self._submission_allowed.wait()
-                task = RolloutTask(lease, prompt, self._request_spec.request(prompt, lease.policy_step))
+                request = self._request_spec.request(prompt, lease.policy_step)
+                if (source := self.loader.order.assign(prompt["uid"])) is not None:
+                    prompt = {**prompt, SAMPLING_SOURCE: source}
+                    record_sampling_assignment(lease, prompt, self.loader.order.dispatch_prediction(prompt["uid"]))
+                task = RolloutTask(lease, prompt, request)
                 self._in_flight[lease.lease_id] = task
                 running = asyncio.create_task(self._run(task))
                 self._running.add(running)

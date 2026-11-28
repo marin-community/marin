@@ -9,9 +9,10 @@ from skyrl_train.config.objective_spec import KLEstimator, LossReduction
 from skyrl_train.config.query_bias import GrugQueryBiasUpdateMode
 from skyrl_train.config.reasoning_span_penalty import ReasoningSpanPenaltyTarget
 from skyrl_train.config.rollout_validation import BatchPolicy
+from skyrl_train.config.sampling import SamplingKind
 from skyrl_train.config.trajectory_selection import TrajectorySelectorKind
 from skyrl_train.config.weight_sync_pause import WeightSyncPauseMode
-from skyrl_train.curriculum import SamplingKind, WeightingKind
+from skyrl_train.curriculum import WeightingKind
 from skyrl_train.dataset.preference_pairs import PreferencePairFormat
 from skyrl_train.dynamic_sampling import DynamicSamplingRewardSource, DynamicSamplingType
 from skyrl_train.error_treatment import ErrorTreatment
@@ -151,6 +152,7 @@ TYPES = MappingProxyType(
         "data.sampling.kind": _literal(SamplingKind) + " | None",
         "data.sampling.weighting": _literal(WeightingKind),
         "data.sampling.domain_weights": "NumberMap",
+        "data.sampling.source_column": 'Literal["data_source", "teacher_route", "family"]',
         "data.sampling.seed": "NonNegativeInt | None",
         "trainer.collective_phase_diagnostics": "bool | None",
         "generator.error_handling.passthrough_exceptions": "tuple[str, ...]",
@@ -174,6 +176,8 @@ TYPES = MappingProxyType(
         "trainer.algorithm.dynamic_sampling.max_mean_reward": "int | float | None",
         "trainer.algorithm.group_admission.stall_timeout": "int | float | None",
         "trainer.distillation_token_budget": "PositiveInt | None",
+        "trainer.rollout_token_budget": "PositiveInt | None",
+        "trainer.rollout_token_eval_milestones": "tuple[PositiveInt, ...]",
         "trainer.rope_theta": "int | float | None",
         "generator.trajectory_retention.reward_below": "int | float | None",
         "generator.trajectory_retention.reward_above": "int | float | None",

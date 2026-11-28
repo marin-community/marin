@@ -462,6 +462,35 @@ loads step two and advances to step four, a complete final export, and a
 successful evaluation artifact. This smoke checks pipeline handoffs. Use
 the nightly learning gates to assess learning behavior.
 
+### Stop at a rollout token budget
+
+Set `trainer.rollout_token_budget` with
+`trainer.rollout_buffer.max_staleness_steps=0`. SkyRL counts observed response
+tokens from completed training groups, including admission rejects and tokens
+discarded during retries. Calls that lose their engine response contribute an
+uncertainty bound in `rollout/unobserved_generation_token_limit`. The stopping
+counter uses observed tokens. Published run evidence reports the observed total
+for completed checkpoint-lineage updates and its upper bound when all those
+updates recorded the missing-response limit. Check the bound and reconcile
+interrupted attempts before comparing paid spend.
+
+After the first completed training step that reaches the budget, SkyRL evaluates
+the current policy on `data.val_data` and closes training. Put the full held-out
+panel in `data.val_data`. Evaluation output tokens are outside the training
+budget. The final total can exceed the budget by work observed in the last step.
+Use `rollout/gross_response_tokens` and `rollout/gross_response_tokens_total` to
+check the stopping update and compare actual spend. A run ending below budget
+fails.
+
+With `trainer.resume_mode=latest`, the budget resumes from the gross total
+saved alongside the policy and optimizer. Use the same budget when continuing
+a checkpoint. A nonzero checkpoint needs a saved total for its step. Import
+older checkpoints without a total as a new stage with
+`trainer.reset_global_step_on_resume=true`. A retry that restores a checkpoint
+already at the budget runs the terminal evaluation without another training
+update. Generation after the last complete checkpoint is tracked by attempt
+and falls outside the restored total.
+
 ## Author typed recipes
 
 Experiments can import `SkyRLRecipe` and generated section classes from `skyrlrecipe`, the

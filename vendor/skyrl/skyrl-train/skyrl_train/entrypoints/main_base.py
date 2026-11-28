@@ -9,6 +9,7 @@ from collections.abc import Mapping
 
 from finestore.rl.run_records import AttemptRecord, write_attempt
 from skyrl_gym.task_factories import EpisodeFactory
+from skyrlrecipe.declared import PromptAcquisition
 
 from ray.util.placement_group import placement_group, PlacementGroup
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
@@ -418,7 +419,10 @@ class BasePPOExp:
         probe = self.cfg.trainer.mismatch_probe
         needs_probe_prompts = probe.enabled and probe.reuse_probe is None
         needs_additional_evaluation = bool(self.evaluation_profiles)
-        if (self.cfg.trainer.eval_interval > 0 or needs_probe_prompts or needs_additional_evaluation) and data_files:
+        needs_primary_evaluation = (
+            self.cfg.trainer.eval_interval > 0 or self.cfg.trainer.rollout_token_budget is not None
+        )
+        if (needs_primary_evaluation or needs_probe_prompts or needs_additional_evaluation) and data_files:
             return self._build_eval_dataset(data_files)
         return None
 
@@ -562,14 +566,21 @@ class BasePPOExp:
         from skyrl_train.trainer import RayPPOTrainer  # noqa: PLC0415
         from skyrl_train.callbacks.builtin import create_default_callbacks  # noqa: PLC0415
 
+        additional_eval_datasets = self.get_additional_eval_datasets()
+        held_out = [*additional_eval_datasets.values()]
+        if eval_dataset is not None:
+            held_out.append(eval_dataset)
+        elif cfg.data.sampling.kind in PromptAcquisition and cfg.data.val_data:
+            # Check the primary panel even when the trainer has no scheduled evaluation.
+            held_out.append(self._build_eval_dataset(cfg.data.val_data))
         return RayPPOTrainer(
-            context=TrainingContext.from_config(cfg, train_dataset, trajectory_runner),
+            context=TrainingContext.from_config(cfg, train_dataset, trajectory_runner, held_out=held_out),
             cfg=cfg,
             tracker=tracker,
             tokenizer=tokenizer,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            additional_eval_datasets=self.get_additional_eval_datasets(),
+            additional_eval_datasets=additional_eval_datasets,
             callbacks=create_default_callbacks(cfg, evaluation_profiles=self.evaluation_profiles),
             inference_engine_client=inference_engine_client,
             trajectory_runner=trajectory_runner,

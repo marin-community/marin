@@ -710,6 +710,36 @@ def _idle_pinned_host_bytes(_worker) -> int:
     return stats["allocated_bytes.current"] - stats["active_bytes.current"]
 
 
+@pytest.mark.parametrize("warm_first_shard", [False, True])
+def test_cpu_offloaded_adam_restores_lazy_moments(warm_first_shard):
+    require_hoppers(1)
+    params = [torch.nn.Parameter(torch.zeros(32, device="cuda")) for _ in range(2)]
+    optimizer = HybridDeviceOptimizer(
+        params, offload_fraction=1.0, cpu_optimizer_cls=torch.optim.AdamW,
+        gpu_optimizer_cls=torch.optim.AdamW, param_update_in_fp32=True,
+        overlap_cpu_optimizer_d2h_h2d=False, lr=1e-3,
+    )
+    if warm_first_shard:
+        params[0].grad = torch.ones_like(params[0])
+        optimizer.step()
+    torch.cuda.synchronize()
+    weights = [p.detach().cpu().clone() for p in params]
+    saved = copy.deepcopy(optimizer.state_dict())
+    for p in params:
+        p.grad = torch.ones_like(p)
+    optimizer.step()
+    torch.cuda.synchronize()
+    expected = [p.detach().cpu().clone() for p in params]
+    with torch.no_grad():
+        for p, w in zip(params, weights, strict=True):
+            p.copy_(w)
+    optimizer.load_state_dict(saved)
+    optimizer.step()
+    torch.cuda.synchronize()
+    for p, value in zip(params, expected, strict=True):
+        torch.testing.assert_close(p.detach().cpu(), value, rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_cpu_offloaded_optimizer_load_does_not_stage_moments_on_cuda(dtype):
     require_hoppers(1)

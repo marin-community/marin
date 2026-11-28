@@ -10,6 +10,7 @@ import pytest
 
 from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
 from rolloutengine.models import ModelRequest
+from skyrl_train.rollouts.training_record import ModelGenerationUsage
 from skyrl_train.rollouts.agent_backend import AgentInferenceBackend, TRIAL_HEADER
 from skyrl_train.rollouts.task_worker import _model_turn
 from skyrl_train.inference_engines.base import InferenceEngineInput
@@ -188,6 +189,7 @@ async def test_tool_call_history_renders_without_reply_terminators(agent_transpo
             max_prompt_length=HISTORY_CONTEXT_LENGTH,
             chat_template_kwargs={},
             session_id=AGENT_TRIAL_ID,
+            usage=ModelGenerationUsage(),
         )
 
     messages = [{"role": "user", "content": "go"}]

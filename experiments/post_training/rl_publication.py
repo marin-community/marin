@@ -55,9 +55,9 @@ from experiments.post_training.rl_measurements import (
     evaluation_protocol,
     evaluation_status,
     lineage_windows,
+    measured_training,
     read_run_inputs,
     recorded_lineage,
-    training_invariants,
 )
 
 logger = logging.getLogger(__name__)
@@ -87,6 +87,7 @@ def run_label(inputs: RunInputs) -> str:
 
 @dataclass(frozen=True)
 class _TerminalMeasurements:
+    measured_updates: range
     failed_facts: list[str] = field(default_factory=list)
     evaluations: list[Comparison] = field(default_factory=list)
     optimizer_steps: int | None = None
@@ -111,7 +112,17 @@ def _terminal_measurements(
         and history[-1].record.resumed_step in (None, 0)
     )
     metrics = read_attempt_metrics(launch.export_root, attempt_id)
-    invariants = training_invariants(preset, metrics) if attempt.metrics_started_at is not None else ()
+    measured = measured_training(preset, metrics, launch.rollout_token_budget)
+    measured_preset, invariants = measured.preset, measured.invariants
+    if attempt.metrics_started_at is None:
+        invariants = ()
+    elif (spend := measured.spend) is not None:
+        evidence.append(f"Completed checkpoint-lineage updates observed {spend.observed:,} response tokens.")
+        evidence.append(
+            "The response-token upper bound is unavailable for this checkpoint lineage."
+            if spend.upper_bound is None
+            else f"The completed-update upper bound including unobserved requests is {spend.upper_bound:,} tokens."
+        )
     failed = [fact.name for fact in invariants if not fact.holds]
     evaluations = []
     has_evaluation = bool(launch.validation_data or launch.evaluation_data) or any(
@@ -155,7 +166,14 @@ def _terminal_measurements(
     )
     if elapsed_excluding_eval is None and isinstance(preset.recipe.layout.workload, presets.Training):
         evidence.append("Training time excluding evaluation is unknown for this checkpoint lineage.")
-    return _TerminalMeasurements(failed, evaluations, optimizer_steps, elapsed, elapsed_excluding_eval)
+    return _TerminalMeasurements(
+        measured_updates=measured_preset.measured,
+        failed_facts=failed,
+        evaluations=evaluations,
+        optimizer_steps=optimizer_steps,
+        elapsed_seconds=elapsed,
+        elapsed_excluding_eval_seconds=elapsed_excluding_eval,
+    )
 
 
 def _read_grader_report(launch: RecordedLaunch, attempt_id: str, evidence: list[str]) -> GraderReport | None:
@@ -240,7 +258,7 @@ def build_record(
     measured = (
         _terminal_measurements(run_output, preset, attempt, launch, evidence, inputs)
         if terminal
-        else _TerminalMeasurements()
+        else _TerminalMeasurements(preset.measured)
     )
     failed = list(measured.failed_facts)
     if interrupted:
@@ -278,7 +296,7 @@ def build_record(
         started_at=started,
         completed_at=finished if terminal else None,
         planned_updates=preset.recipe.layout.workload.update_count(preset.updates),
-        measured_updates=list(preset.measured),
+        measured_updates=list(measured.measured_updates),
         iris_job_id=result.iris_job_id or launch.coordinator_iris_job_id,
         wandb_url=tracking.get("wandb_url"),
         grafana_url=attempt_grafana_url(attempt, launch),

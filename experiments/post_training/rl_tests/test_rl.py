@@ -38,6 +38,7 @@ from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
+from skyrlrecipe import RecipePatch, sections
 from skyrlrecipe.documents import merge_mappings, set_path
 
 from experiments.post_training import rl as snowball
@@ -50,6 +51,7 @@ from experiments.post_training.mochi_assets import (
     MOCHI_TOKENIZER_URI,
 )
 from experiments.post_training.mochi_rl import MOCHI
+from experiments.post_training.rl_presets import Generation
 from experiments.post_training.rl_tests import model_entry_fixture
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
@@ -70,6 +72,7 @@ from experiments.post_training.rl_tests.fixtures import (
 )
 from experiments.post_training.rl_tests.fixtures import write_json as _json
 from experiments.post_training.skyrl_test_support import read_skyrl_metrics, run_native_test, selection_summary
+from experiments.post_training.snowball_sampler import SAMPLER
 from experiments.post_training.snowball_sft import OPENTHOUGHTS_32K_4NODE
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, VALIDATION_FILENAME
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
@@ -81,6 +84,36 @@ def test_preset_table_rejects_duplicate_names():
     table = snowball_model.SNOWBALL
     with pytest.raises(ValueError, match="Duplicate preset name 'eval-short'"):
         replace(table, presets=(*table.presets, table.by_name["eval-short"]))
+
+
+def test_native_launch_preserves_numeric_like_run_index_fingerprints(selection, tmp_path, monkeypatch):
+    table = snowball_model.SNOWBALL
+    preset = table.by_name["speed-short"]
+    planned = snowball.build_experiment(preset, table=table)
+    (step,) = planned.runs
+    config = materialized_config(step, str(tmp_path))
+    index = RunIndexIdentity(
+        run_id="indexed-run",
+        model=table.model,
+        preset=preset.name,
+        preset_version="1243e785",
+        base_preset_version="1029e733",
+        user="test-user",
+        branch="test-branch",
+        source_revision="60c74110",
+        dirty=False,
+    )
+    monkeypatch.setenv(RUN_INDEX_ENV, json.dumps({config.run_id: index.model_dump(mode="json")}))
+    path = tmp_path / "indexed-launch.yaml"
+
+    def capture(launch, **_):
+        path.write_text(launch.launch_config_yaml)
+
+    monkeypatch.setattr(snowball, "run_skyrl", capture)
+    assert planned.inputs is not None
+    snowball._run_rl(config, inputs=planned.inputs, issue=None)
+    (parsed,) = gate.compose_configs([str(path)])
+    assert RunIndexIdentity.model_validate(parsed["run"]["index"]) == index
 
 
 def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch):
@@ -137,6 +170,88 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
     del recorded["skyrl"]["environment"]["task_sessions"]["agent_harnesses"]
     del recorded["skyrl"]["trajectory_runner"]["max_concurrent_training_machine_tasks"]
     assert gate.config_version(recorded) == gate.config_version(planned)
+
+
+def test_snowball_sampler_presets_plan_native_launches(selection, tmp_path):
+    selections = {key for preset in SAMPLER.presets for key in (preset.tasks, preset.held_out_tasks)}
+    for key in selections:
+        artifact = recipe.selection_artifact(key)
+        _json(Path(artifact.path()) / "summary.json", selection_summary(1400))
+
+    paths = []
+    for preset in SAMPLER.presets:
+        (step,) = snowball.build_experiment(preset, table=SAMPLER).runs
+        path = tmp_path / f"{preset.name}.yaml"
+        path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
+        paths.append(str(path))
+
+    for preset, config in zip(SAMPLER.presets, gate.compose_configs(paths, validate_driver=True), strict=True):
+        assert config["skyrl"]["trainer"]["max_steps"] == preset.updates
+        (train,) = config["inputs"]["train_data"]
+        (evaluation,) = config["inputs"]["validation_data"]
+        assert train["uri"] == recipe.selection_artifact(preset.tasks).path()
+        assert evaluation["uri"] == recipe.selection_artifact(preset.held_out_tasks).path()
+
+
+def test_standalone_evaluation_admission_respects_native_serving_capacity(selection, tmp_path):
+    table = snowball_model.SNOWBALL
+    preset = table.by_name["eval-short"]
+    layout = preset.recipe.layout
+    workload = layout.workload
+    assert isinstance(workload, Generation)
+    (evaluation,) = preset.evaluations
+    selection_path = Path(recipe.selection_artifact(preset.held_out_tasks).path()) / "summary.json"
+    cases = {
+        # rows, answers per row, logical engines, runner ceiling, admitted requests
+        "tiny": (2, 2, 1, None, 4),
+        "e4": (624, 1, 1, None, 32),
+        "runner-ceiling": (624, 1, 1, 12, 12),
+        "two-engines": (624, 1, 2, None, 64),
+    }
+    paths = []
+    for name, (rows, answers, engines, ceiling, _) in cases.items():
+        _json(selection_path, selection_summary(rows))
+        plan = replace(
+            workload.plan,
+            gpus_per_node=4,
+            num_inference_engines=engines,
+            inference_engine_data_parallel_size=4,
+            inference_engine_expert_parallel_size=4,
+        )
+        config = preset.recipe.config.merge(
+            RecipePatch(
+                generator=sections.Generator(max_num_seqs=8),
+                trajectory_runner=(
+                    sections.TrajectoryRunner(max_concurrent_tasks=ceiling)
+                    if ceiling is not None
+                    else sections.TrajectoryRunner()
+                ),
+            )
+        )
+        case = replace(
+            preset,
+            recipe=replace(
+                preset.recipe,
+                layout=replace(layout, workload=replace(workload, plan=plan)),
+                config=config,
+                training_plan=None,
+            ),
+            evaluations=(replace(evaluation, profile=evaluation.profile.replace(n_samples_per_prompt=answers)),),
+        )
+        (step,) = snowball.build_experiment(case, table=table).runs
+        path = tmp_path / f"{name}.yaml"
+        path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
+        paths.append(str(path))
+
+    composed = gate.compose_configs(paths, validate_driver=True)
+    for config, (_, answers, engines, _, expected) in zip(composed, cases.values(), strict=True):
+        native = config["skyrl"]
+        assert config["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
+        assert native["trajectory_runner"]["max_concurrent_tasks"] == expected
+        assert native["generator"]["eval_n_samples_per_prompt"] == answers
+        assert native["generator"]["num_inference_engines"] == engines
+        assert native["generator"]["inference_engine_data_parallel_size"] == 4
+        assert native["generator"]["max_num_seqs"] == 8
 
 
 def test_snowball_held_out_evaluations_use_full_eval_lite(selection, tmp_path):

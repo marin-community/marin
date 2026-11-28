@@ -101,9 +101,9 @@ def test_source_option_selects_catalog_order_without_changing_identity(tmp_path,
     subset = runner.invoke(main, [*arguments(tmp_path), "--source", "third", "--source", "first"])
     assert full.exit_code == 0, full.output
     assert subset.exit_code == 0, subset.output
-    planned = json.loads(full.output)["sources"]
+    planned = json.loads(full.stdout)["sources"]
     assert len(planned) == 4 and planned[-1]["name"] == "data/rl/numbers"
-    assert json.loads(subset.output)["sources"] == [planned[0], planned[2]]
+    assert json.loads(subset.stdout)["sources"] == [planned[0], planned[2]]
 
     unknown = runner.invoke(main, [*arguments(tmp_path), "--source", "unknown", "--run"])
     assert unknown.exit_code == 2
@@ -166,7 +166,7 @@ def test_remote_planning_uses_cw_instead_of_ambient_gcs(tmp_path, catalog, monke
         options += ["--artifact-root", root]
     result = CliRunner().invoke(main, options)
     assert result.exit_code == 0, result.output
-    plan = json.loads(result.output)
+    plan = json.loads(result.stdout)
     assert plan["chunk_storage_prefix"] == f"{root or 's3://marin-us-east-02a/marin'}/.zephyr/rl-data-campaign"
     assert os.environ["MARIN_PREFIX"] == previous
     assert not (tmp_path / "report.json").exists()
@@ -194,7 +194,7 @@ def test_quick_cli_plans_then_converts_once_in_request_order(tmp_path, monkeypat
     runner = CliRunner()
     result = runner.invoke(main, args)
     assert result.exit_code == 0, result.output
-    assert [source["name"] for source in json.loads(result.output)["sources"]] == ["math500", "aime24"]
+    assert [source["name"] for source in json.loads(result.stdout)["sources"]] == ["math500", "aime24"]
     assert not output.exists()
     assert not cache.exists()
 
@@ -265,7 +265,7 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
     runner = CliRunner()
     planned = runner.invoke(main, options)
     assert planned.exit_code == 0, planned.output
-    assert len(json.loads(planned.output)["sources"]) == 1
+    assert len(json.loads(planned.stdout)["sources"]) == 1
     assert not report.exists()
     assert not (tmp_path / "downloads").exists()
     assert not (tmp_path / "artifacts").exists()

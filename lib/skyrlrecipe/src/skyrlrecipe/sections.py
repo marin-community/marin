@@ -16,19 +16,38 @@ from .sampling import EvalSamplingParams
 
 class Sampling(Section):
     kind: (
-        Literal["domain-weighted", "naive", "thompson", "learnability", "grade-uniform", "grade-adaptive", "grade-prior"]
+        Literal[
+            "domain-weighted",
+            "adaptive-source",
+            "adaptive-source-thompson",
+            "prompt-thompson-source",
+            "prompt-thompson-contextual",
+            "prompt-thompson-cost-aware",
+            "prompt-thompson-within-source-cost-aware",
+            "prompt-thompson-within-source-pass-cost-aware",
+            "naive",
+            "thompson",
+            "learnability",
+            "grade-uniform",
+            "grade-adaptive",
+            "grade-prior",
+        ]
         | None
     ) = field(None)
-    """null = seeded passes (data.shuffle); domain-weighted|naive|thompson|learnability|grade-uniform|grade-
-    adaptive|grade-prior"""
+    "null uses seeded passes with data.shuffle"
     domain_weights: NumberMap = field({})
-    "exact teacher-route mixture in every train_batch_size prompts drawn when kind=domain-weighted"
+    "domain-weighted requires route shares. Adaptive source and prompt orders use row counts when empty."
+    source_column: Literal["data_source", "teacher_route", "family"] = field("data_source")
+    "adaptive source label on each prepared training row"
     decay: int | float = field(0.95)
-    "per-step multiplicative decay of bin sufficient stats"
+    "per-step multiplicative decay of observations"
     epsilon: int | float = field(0.05)
-    "per-bin probability floor (thompson/learnability/grade-prior)"
+    """adaptive-source and unconstrained prompt-thompson use reference shares for this fraction of their draws.
+    Within-source cost-aware policies explore within the scheduled source. The pass variant explores among that
+    source's least-visited eligible prompts. adaptive-source-thompson, thompson, learnability and grade-prior
+    floor each bin at epsilon / bin count before renormalization."""
     reversion_mass: int | float = field(0.0)
-    "per-step pseudo-evidence pulling every bin's belief toward the weight-curve peak"
+    "bin curriculum pseudo-evidence per step toward the weight-curve peak"
     instance_decay: int | float = field(0.7)
     "per-visit decay of per-row evidence (rows are visited too rarely for per-step decay)"
     prior_alpha: int | float = field(1.0)
@@ -553,6 +572,12 @@ class Trainer(Section):
     distillation_token_budget: PositiveInt | None = field(None)
     """Optional OPD stage boundary. Stops after the first optimizer batch whose cumulative teacher-scored tokens
     reach the budget."""
+    rollout_token_budget: PositiveInt | None = field(None)
+    """A synchronous run stops and evaluates the primary panel after the first completed training step to reach this
+    many observed training response tokens across all groups."""
+    rollout_token_eval_milestones: tuple[PositiveInt, ...] = field([])
+    """Evaluate the primary panel on the first completed training step to cross each cumulative training response
+    token milestone below the terminal budget."""
     reset_distillation_token_count_on_resume: bool = field(False)
     reset_global_step_on_resume: bool = field(False)
     callbacks: tuple[Callback, ...] | None = field(None)

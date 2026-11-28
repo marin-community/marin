@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from collections import Counter
 from types import SimpleNamespace
 
 import pytest
@@ -16,11 +17,13 @@ from taskcompendium.grading_result import (
     Outcome,
 )
 
-from skyrl_train.dynamic_sampling import GroupSelectionPolicy
+from skyrl_train.dynamic_sampling import DynamicSamplingType, GroupSelectionPolicy
 from skyrl_train.grader_reporting import GraderStats, write_grader_report
 from skyrl_train.io import io
+from skyrl_train.metric_names import ABANDONED_RETRY_TOKENS, SERVED_TOKENS, UNOBSERVED_CALLS, UNOBSERVED_TOKEN_LIMIT
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.rollouts.buffer import (
+    SAMPLING_SOURCE,
     BatchPolicy,
     PayloadReference,
     RolloutBuffer,
@@ -28,6 +31,8 @@ from skyrl_train.rollouts.buffer import (
     RolloutContentPolicy,
     RolloutGroup,
 )
+from skyrl_train.rollouts.prompt_order import JudgedGroup
+from skyrl_train.rollouts import context as rollout_context
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.rollouts.training_record import TrainingRollout
 from skyrl_train.task_inputs import TrajectoryMetadata
@@ -62,6 +67,103 @@ def projected_failure_rollout(failure: ErrorIdentity, grade: GradeResult) -> Tra
     batch = projection.project([rollout], TaskRequestBatch(rows=(task_input(lowered_task(text_task())),)))
     batch["is_last_step"] = [True]
     return batch
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resume", [False, True])
+async def test_judged_feedback_includes_prefetched_discards_across_resume(resume, monkeypatch):
+    policy = RolloutContentPolicy(
+        GroupAdmissionPolicy(
+            GroupAdvantageInvariant.exact_physical(physical_group_size=2), rollout_logprobs_required=False
+        ),
+        GroupSelectionPolicy(DynamicSamplingType.FILTER),
+    )
+    config = RolloutBufferConfig(
+        batch_size=1,
+        max_in_flight=2,
+        max_staleness_steps=1,
+        batch_policy=BatchPolicy.FULL_BATCH,
+        dynamic_sampling=DynamicSamplingType.FILTER,
+        max_candidate_groups=3,
+    )
+    buffer = RolloutBuffer(config)
+
+    async def commit(lease, uid, rewards, results, *, loss_masks=((1,), (1,))):
+        prompt = {SAMPLING_SOURCE: "math"}
+        batch = TrajectoryBatch(
+            prompt_token_ids=[[1], [1]],
+            response_ids=[[2], [3]],
+            loss_masks=loss_masks,
+            rewards=rewards,
+            verification_results=results,
+        )
+        if uid == "3":
+            # The rejected group also served three tokens before an infrastructure retry.
+            batch["rollout_metrics"] = {
+                SERVED_TOKENS: 5,
+                ABANDONED_RETRY_TOKENS: 3,
+                UNOBSERVED_CALLS: 1,
+                UNOBSERVED_TOKEN_LIMIT: 8,
+            }
+        verdict = policy.verdict(RolloutGroup(batch, uid, lease.policy_step, prompt))
+        await buffer.commit(lease.lease_id, prompt, verdict, PayloadReference(None))
+
+    await buffer.publish(1)
+    current = await buffer.acquire_lease()
+    future = await buffer.acquire_lease()
+    await commit(future, "0", [0.0, 0.0], [VerificationResult.verified(1.0)] * 2)
+    await commit(
+        await buffer.acquire_lease(), "3", [0.0, 0.0], [VerificationResult.error("crash")] * 2, loss_masks=[[0], [0]]
+    )
+    await commit(current, "2", [0.0, 0.9], [VerificationResult.verified(0.5)] * 2)
+    initial = await buffer.admit(timeout=1)
+    if resume:
+        snapshot = buffer.snapshot()
+        buffer = RolloutBuffer(config)
+        await buffer.restore(snapshot)
+    await buffer.publish(2)
+    await commit(
+        await buffer.acquire_lease(),
+        "1",
+        [0.0, 0.9],
+        [VerificationResult.error("timeout"), VerificationResult.verified(0.5)],
+    )
+    admission = await buffer.admit(timeout=1)
+    assert admission.selection.judged == [
+        JudgedGroup("0", (0.0, 0.0), (1.0, 1.0)),
+        JudgedGroup("1", (0.0, 0.9), (None, 0.5)),
+    ]
+    assert admission.selection.metrics["async/dynamic_sampling/candidate_count"] == 2
+    assert admission.selection.metrics["curriculum/math/rejected/fully_masked"] == 1
+    events = []
+    monkeypatch.setattr(rollout_context, "record_event", lambda name, fields: events.append((name, fields)))
+    for result in (initial, admission):
+        for outcome in result.dispositions:
+            rollout_context.record_sampling_result(outcome, result.batch_id)
+    receipts = {fields["lease_id"]: fields for name, fields in events if name == "sampling_group_result"}
+    assert len(receipts) == 4
+    assert receipts[future.lease_id]["dispatch_step"] == receipts[future.lease_id]["admission_batch"] == 1
+    assert receipts[future.lease_id]["feedback_batch"] == 2
+    assert receipts[future.lease_id]["verified_one"] == 2
+    assert receipts[current.lease_id]["feedback_batch"] == 1
+    assert receipts[current.lease_id]["verified_min"] == receipts[current.lease_id]["verified_max"] == 0.5
+    rejected = next(row for row in receipts.values() if row["disposition"] == "fully_masked")
+    assert rejected["feedback_batch"] is None and rejected["verified_missing"] == 2
+    assert rejected["generated_tokens"] == 5 and rejected["abandoned_retry_tokens"] == 3
+    assert rejected["unobserved_generation_calls"] == 1 and rejected["unobserved_generation_token_limit"] == 8
+    assert all(row["sample_count"] == 2 for row in receipts.values())
+    assert sum(row["generated_tokens"] for row in receipts.values()) == 11
+    assert sum(work.paid_tokens for window in (initial, admission) for _, work in window.generated) == 11
+    rollout_context.record_sampling_training(
+        rollout_context.RolloutBatchMetadata(admission.batch_id, tuple(admission.admitted), {}), Counter({"1": 0})
+    )
+    trained = [fields for name, fields in events if name == "sampling_group_trained"]
+    assert trained == [{"group_uid": "1", "training_step": 2, "nonzero_advantage_tokens": 0}]
+    assert [
+        receipt["disposition"]
+        for receipt in receipts.values()
+        if receipt["group_uid"] == trained[0]["group_uid"] and receipt["feedback_batch"] == trained[0]["training_step"]
+    ] == ["consumed"]
 
 
 def test_grader_report_keeps_baseline_and_final_success_by_task_and_subset(tmp_path):

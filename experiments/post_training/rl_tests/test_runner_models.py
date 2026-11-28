@@ -20,7 +20,7 @@ from marin.execution.lazy import ArtifactStep, apply, artifact_identity, materia
 from marin.rl.skyrl import IrisSkyRLExecution, skyrl_execution
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from rigging.filesystem.storage_path import StoragePath
-from skyrlrecipe import RecipePatch
+from skyrlrecipe import RecipePatch, sections
 from skyrlrecipe.documents import set_path
 
 from experiments.post_training import rl, rl_compose, rl_gate
@@ -67,6 +67,32 @@ def test_retention_composes_periodic_saves_and_evaluation(selection, tmp_path, c
     assert (checkpoint["type"], evaluation["type"]) == ("checkpoint", "evaluation")
     assert checkpoint["save_steps"] == (cadence or preset.updates + 1)
     assert not config["run"]["export_hf"]
+
+
+def test_budgeted_training_can_resume_and_export_a_terminal_checkpoint(selection, tmp_path):
+    base = SNOWBALL.by_name["train-long"]
+    sync = RecipePatch(trainer=sections.Trainer(rollout_buffer=sections.RolloutBuffer(max_staleness_steps=0)))
+    preset = replace(
+        base,
+        recipe=replace(base.recipe, config=base.recipe.config.merge(sync)),
+        checkpoints="latest",
+        checkpoint_every=None,
+        export="latest",
+    )
+    spec = rl_compose.run_spec(
+        preset,
+        name="budgeted-terminal-export",
+        settings=("trainer.rollout_token_budget=1000",),
+    )
+    path = tmp_path / "launch.yaml"
+    path.write_text(materialized_config(rl_compose.run_step(preset, spec), str(tmp_path)).launch_config_yaml)
+    (config,) = rl_gate.compose_configs([str(path)], validate_driver=True)
+    trainer = config["skyrl"]["trainer"]
+    assert trainer["resume_mode"] == "latest"
+    assert trainer["rollout_token_budget"] == 1000
+    assert config["run"]["export_hf"]
+    checkpoint, _, export = trainer["callbacks"]
+    assert checkpoint["save_steps"] > trainer["max_steps"] and export["save_on_train_end"]
 
 
 @pytest.mark.parametrize(

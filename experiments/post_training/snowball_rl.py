@@ -70,7 +70,7 @@ _DSPARK = sections.SpeculatorModel(
     source_identity="d22f4f21ce5cc0968dfd8e2c0d06aaf4adacbbf2",
 )
 
-_DEFAULT_MODEL = ArtifactHfModel(
+DATAKIT_SFT_2026_09_21 = ArtifactHfModel(
     ArtifactStep.adopt(
         f"models/snowball-datakit-sft-{MODEL_REVISION}", "2026.09.21", MODEL_URI, kind=LevanterCheckpoint
     ),
@@ -252,7 +252,7 @@ _SPEED_GUARDS = (
 _snowball = partial(
     Preset,
     tasks=_DEFAULT_TASKS,
-    model=_DEFAULT_MODEL,
+    model=DATAKIT_SFT_2026_09_21,
     speculative_decoding_model=_DSPARK,
     seed=SEED,
     sample_namespace="datasets/snowball-rl",

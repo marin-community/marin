@@ -28,7 +28,18 @@ from skyrl_train.task_errors import TIMED_OUT_DIAGNOSTIC
 from skyrl_train.dataset.tasks import TASKCOMPENDIUM_ENVIRONMENT
 from skyrl_train.distillation import INVALID_TOPK_INDEX
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
-from skyrl_train.metric_names import GENERATE_OUTCOME_METRIC_PREFIX, TASK_ROLLOUT_METRIC_PREFIX, TASK_TIMING_KEYS
+from skyrl_train.metric_names import (
+    ABANDONED_RETRY_TOKENS,
+    GENERATE_OUTCOME_METRIC_PREFIX,
+    SERVED_LENGTH_STOPS,
+    SERVED_TOKENS,
+    SERVED_TURNS,
+    UNPROJECTED_LENGTH_STOPS,
+    TASK_ROLLOUT_METRIC_PREFIX,
+    TASK_TIMING_KEYS,
+    UNOBSERVED_CALLS,
+    UNOBSERVED_TOKEN_LIMIT,
+)
 from skyrl_train.trajectory_runners.trajectory_processing import (
     apply_overlong_filtering,
     get_batch_failure_metrics,
@@ -550,6 +561,19 @@ def _attach_reasoning_violations(
 def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout], request: TaskRequestBatch) -> None:
     """Count task evidence and preserve environment-specific metrics."""
     metrics = batch.get("rollout_metrics") or {}
+    usage = [rollout.generation_usage for rollout in rollouts if rollout.generation_usage is not None]
+    if usage:
+        if len(usage) != len(rollouts):
+            raise ValueError("A task group must report engine usage for every repetition")
+        metrics[SERVED_TURNS] = sum(item.turns for item in usage)
+        metrics[SERVED_LENGTH_STOPS] = sum(item.length_stops for item in usage)
+        # Only the last conversation of the selected attempt can reach retention.
+        projected_stops = sum(step.turn.stop_reason == "length" for r in rollouts for step in r.steps)
+        metrics[UNPROJECTED_LENGTH_STOPS] = metrics[SERVED_LENGTH_STOPS] - projected_stops
+        metrics[SERVED_TOKENS] = sum(item.tokens for item in usage)
+        metrics[ABANDONED_RETRY_TOKENS] = sum(item.abandoned_retry_tokens for item in usage)
+        metrics[UNOBSERVED_CALLS] = sum(item.unobserved_calls for item in usage)
+        metrics[UNOBSERVED_TOKEN_LIMIT] = sum(item.unobserved_token_limit for item in usage)
     outcomes = Counter(rollout.grade.status for rollout in rollouts)
     metrics.update(
         {f"{GENERATE_OUTCOME_METRIC_PREFIX}{outcome.value}": float(outcomes[outcome]) for outcome in Outcome}

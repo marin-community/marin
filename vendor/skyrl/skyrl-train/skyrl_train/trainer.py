@@ -23,14 +23,14 @@ from ray.util.placement_group import PlacementGroup, placement_group
 from skyrl_train.utils.progress import tqdm
 from transformers import AutoTokenizer
 from skyrl_train.config.utils import model_expert_count
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 
 import numpy as np
 from skyrl_train.dataset import PromptDataset
 from skyrl_train.utils.tracking import Tracking
 from skyrl_train.training_batch import TrainingInputBatch, TrainingOutputBatch
 from skyrl_train.rollouts.buffer import RolloutGroup
-from skyrl_train.rollouts.context import TrainingContext, TrainingContextState
+from skyrl_train.rollouts.context import RolloutBatchMetadata, TrainingContext, TrainingContextState
 from skyrl_train.trajectory_selection import trajectory_selector_from_config
 from skyrl_train.trajectory_runners.base import (
     TrajectoryBatch,
@@ -167,6 +167,8 @@ from skyrl_train.batch_metrics import (
     install_correction,
     advantage_metrics,
     forward_metrics,
+    NONZERO_ADVANTAGE_TOKENS,
+    nonzero_advantage_tokens_by_group,
     reward_metrics,
     rollout_metrics,
     rollout_staleness_metrics,
@@ -191,6 +193,8 @@ class CheckpointSnapshot:
 
 
 _MODEL_INITIALIZATION_TIMEOUT = 60 * 60
+_ROLLOUT_GROSS_TOTAL_CHECKPOINT_KEY = "rollout_gross_response_tokens_total"
+_ROLLOUT_LAST_UPDATE_CHECKPOINT_KEY = "rollout_gross_response_tokens_last_update"
 
 
 def _active_online_eagle_results(results: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
@@ -362,6 +366,8 @@ class RayPPOTrainer:
         self._distillation_tickets: dict[str, AsyncRoutedTeacherScoreTicket] = {}
         self._domain_balancer: DomainGradientBalancer | None = None
         self.distillation_scored_tokens_total = 0
+        self.rollout_gross_response_tokens_total = 0
+        self.rollout_gross_response_tokens_last_update = 0
 
         self.reward_kl_controller: Optional[Union[FixedKLController, AdaptiveKLController]] = None
         configure_ray_worker_logging()
@@ -664,7 +670,7 @@ class RayPPOTrainer:
         """Run train-end callbacks, evaluation, and saves at the last completed optimizer step."""
         await self._drain_checkpoint_upload()
         self.global_step = completed_step
-        final_state = self._create_trainer_state(epoch=epoch)
+        final_state = replace(self._create_trainer_state(epoch=epoch), is_last_step=True)
         self._control.reset()
         self._control = await self.callback_handler.call_event_async(
             "on_train_end", final_state, self._control, trainer=self
@@ -1492,7 +1498,11 @@ class RayPPOTrainer:
         )
 
         async with self._training_window(step_wall):
-            status = await self._run_training(training_input, step_wall=step_wall)
+            status = await self._run_training(
+                training_input,
+                step_wall=step_wall,
+                sampling_batch=metadata if metadata.sampling_receipts_enabled else None,
+            )
         summary = BatchSummary(
             consumed_work(training_input),
             training_input.metadata["consumed_stop_metrics"],
@@ -1557,7 +1567,12 @@ class RayPPOTrainer:
                     outputs = await asyncio.to_thread(
                         collect_actor_results,
                         policy.actor_infos,
-                        policy.async_run_ray_method("pass_through", "train_loaded", plan.global_step),
+                        policy.async_run_ray_method(
+                            "pass_through",
+                            "train_loaded",
+                            plan.global_step,
+                            sampling_receipts_enabled=metadata.sampling_receipts_enabled,
+                        ),
                         operation="policy training",
                     )
                 status = outputs[0].metadata["train_status"]
@@ -1567,6 +1582,14 @@ class RayPPOTrainer:
             await context.wait(
                 asyncio.gather(*policy.async_run_ray_method("pass_through", "unload_batch", plan.global_step))
             )
+        if metadata.sampling_receipts_enabled:
+            counts: Counter[str] | None = None
+            if status["policy_update_steps"] > 0:
+                counts = Counter()
+                for actor, output in zip(policy.actor_infos, outputs, strict=True):
+                    if actor.rank.is_collection_dp_rank():
+                        counts.update(output.metadata[NONZERO_ADVANTAGE_TOKENS])
+            self.all_metrics.update(context.finish_sampling_step(metadata, counts))
         summary = batch_summary(plan)
         self._current_step_rewards = (
             [float(value) for group in plan.facts for value in group.scalar_values]
@@ -1690,7 +1713,13 @@ class RayPPOTrainer:
         self._log_metrics_stdout(startup_eval, step=self.global_step, kind="startup")
         self.tracker.log(startup_eval, step=self.global_step, commit=False)
 
-    async def _run_training(self, training_input: TrainingInputBatch, *, step_wall: StepWallTime | None = None):
+    async def _run_training(
+        self,
+        training_input: TrainingInputBatch,
+        *,
+        step_wall: StepWallTime | None = None,
+        sampling_batch: RolloutBatchMetadata | None = None,
+    ):
         if (
             "ftpo_chosen_mask" in training_input
             and not training_input["loss_mask"].any()
@@ -1699,6 +1728,8 @@ class RayPPOTrainer:
             self.all_timings["train_critic_and_policy"] = 0.0
             self.all_metrics["policy/policy_update_steps"] = 0.0
             self.all_metrics["ftpo/empty_batch"] = 1.0
+            if sampling_batch is not None:
+                self.all_metrics.update(self.context.finish_sampling_step(sampling_batch, None))
             return {"policy_update_steps": 0.0}
         # The drain after the last weight sync can go stale while the rollout buffer fills, so align the
         # policy actor loops immediately before every forward.
@@ -1720,6 +1751,9 @@ class RayPPOTrainer:
         # Batch replay runs this prefix outside an optimizer step, without a step wall clock.
         if step_wall is not None:
             step_wall.start("advantages")
+        if sampling_batch is not None:
+            real_rows = training_input.batch_size - training_input.metadata["pad_size"]
+            sampling_uids = training_input.metadata["uids"][:real_rows]
         with Timer("compute_advantages_and_returns", self.all_timings):
             training_input = self.compute_advantages(training_input)
             training_input = self.finalize_advantages_for_training(training_input)
@@ -1734,6 +1768,13 @@ class RayPPOTrainer:
             step_wall.start("policy_training")
         with Timer("train_critic_and_policy", self.all_timings), critical_phase("train_step", self.global_step):
             status = await asyncio.to_thread(self.train_policy, training_input)
+        if sampling_batch is not None:
+            counts = (
+                nonzero_advantage_tokens_by_group(training_input, sampling_uids)
+                if status["policy_update_steps"] > 0
+                else None
+            )
+            self.all_metrics.update(self.context.finish_sampling_step(sampling_batch, counts))
         self._policy_version_step = self.global_step
 
         ftpo = ftpo_config(self.cfg.trainer.algorithm)
@@ -2838,6 +2879,10 @@ class RayPPOTrainer:
             "ftpo_stopped": self._ftpo_stopped,
             "domain_gradient_balance_state": self._domain_balancer.state_dict() if self._domain_balancer else None,
         }
+        if self.cfg.trainer.get("rollout_token_budget") is not None:
+            trainer_state[_ROLLOUT_GROSS_TOTAL_CHECKPOINT_KEY] = self.rollout_gross_response_tokens_total
+            if self.cfg.trainer.get("rollout_token_eval_milestones"):
+                trainer_state[_ROLLOUT_LAST_UPDATE_CHECKPOINT_KEY] = self.rollout_gross_response_tokens_last_update
         trainer_state_path = os.path.join(global_step_folder, TRAINER_STATE_FILENAME)
         trainer_state_buffer = stdlib_io.BytesIO()
         torch.save(trainer_state, trainer_state_buffer)
@@ -2968,6 +3013,34 @@ class RayPPOTrainer:
             trainer_state = torch.load(f, map_location="cpu", weights_only=False)
         saved_global_step = trainer_state.get("global_step", global_step)
         saved_config = trainer_state["config"]
+        reset_step = not recovering_own_checkpoint and self.cfg.trainer.get("reset_global_step_on_resume", False)
+        budget = self.cfg.trainer.get("rollout_token_budget")
+        if budget is not None:
+            total = 0 if reset_step else trainer_state.get(_ROLLOUT_GROSS_TOTAL_CHECKPOINT_KEY)
+            if total is None and global_step == saved_global_step == 0:
+                total = 0
+            elif not reset_step and (
+                type(total) is not int
+                or total < 0
+                or saved_global_step != global_step
+                or saved_config["trainer"].get("rollout_token_budget") != budget
+            ):
+                raise ValueError(
+                    "A rollout token budget can only continue from a checkpoint with the same budget "
+                    "and a valid saved gross rollout token total for its step"
+                )
+            self.rollout_gross_response_tokens_total = total
+            milestones = tuple(self.cfg.trainer.get("rollout_token_eval_milestones", ()))
+            saved_milestones = tuple(saved_config["trainer"].get("rollout_token_eval_milestones", ()))
+            if global_step > 0 and not reset_step and milestones != saved_milestones:
+                raise ValueError("A rollout token budget checkpoint requires the same evaluation milestones")
+            if milestones:
+                tokens = 0 if reset_step or global_step == 0 else trainer_state.get(
+                    _ROLLOUT_LAST_UPDATE_CHECKPOINT_KEY
+                )
+                if type(tokens) is not int or not 0 <= tokens <= total:
+                    raise ValueError("A rollout token milestone checkpoint requires the saved last update's gross tokens")
+                self.rollout_gross_response_tokens_last_update = tokens
         saved_attempt = saved_config.get("runtime", {}).get("attempt_id")
         if saved_attempt is not None:
             self._resume_checkpoint = CheckpointReference(
@@ -3023,7 +3096,7 @@ class RayPPOTrainer:
         logger.info(f"Successfully loaded complete checkpoint state from global_step_{global_step}")
         if recovering_own_checkpoint:
             self._last_saved_step = global_step
-        if not recovering_own_checkpoint and self.cfg.trainer.get("reset_global_step_on_resume", False):
+        if reset_step:
             logger.info("Resetting the trainer step to 0 at the explicit stage boundary")
             global_step = 0
         return global_step, str(checkpoint_path)

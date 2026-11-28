@@ -36,6 +36,11 @@ from marin.execution.lazy import ArtifactStep, run
 from marin.rl import skyrl as skyrl_api
 from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun, run_skyrl_cpu
 from marin.rl.skyrl_records import RecordedLaunch, read_stored_skyrl_attempts
+from rolloutengine.models import (
+    CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC,
+    GROSS_ROLLOUT_TOKENS_METRIC,
+    UNOBSERVED_ROLLOUT_TOKEN_LIMIT_METRIC,
+)
 from scipy.stats import t
 from skyrlrecipe.documents import set_path
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, model_metadata_relative_path
@@ -47,6 +52,7 @@ from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_index
 from experiments.post_training import rl_measurements as measurements
+from experiments.post_training import rl_publication as publication
 from experiments.post_training import rl_scoring as scoring
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_command import EXIT_CODES
@@ -59,6 +65,7 @@ from experiments.post_training.rl_measurements import (
 )
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
+    append_metrics,
     cohort_from_fixtures,
     controls,
     edit_receipt,
@@ -288,6 +295,47 @@ def test_mismatch_uses_selected_tokens_over_the_measured_window(recorded_runs, p
         values = measurements.read_measurements(str(root), preset).values
         assert values["speed/update_seconds"] == 9
         assert (KL not in values) if expected is None else values[KL] == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(("step_limits", "expected_upper"), [((None, None), None), ((40, 0), 340), ((40, None), None)])
+def test_budget_stop_uses_the_actual_final_evaluation(recorded_runs, preset_table, step_limits, expected_upper):
+    preset = replace(snowball_model.SNOWBALL.by_name["learning-medium"], updates=2, measured=range(1, 3))
+    table = preset_table(preset)
+    root = recorded_runs(preset.name, "users/test/early-budget-stop")
+    append_metrics(
+        root,
+        {
+            step: {
+                "attempt_id": "recorded-attempt",
+                GROSS_ROLLOUT_TOKENS_METRIC: gross,
+                CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC: total,
+                **({UNOBSERVED_ROLLOUT_TOKEN_LIMIT_METRIC: limit} if limit is not None else {}),
+            }
+            for (step, gross, total), limit in zip(((1, 100, 100), (2, 200, 300)), step_limits, strict=True)
+        },
+    )
+    with edit_receipt(root) as receipt:
+        trainer = receipt["config"]["skyrl"]["trainer"]
+        trainer.update(max_steps=12, rollout_token_budget=250)
+    data = measurements.read_measurements(str(root), preset.with_updates(12))
+    facts = {fact.name: fact for fact in data.invariants}
+    assert facts["gross_rollout_budget_reached"].holds and facts["planned_updates"].value == 2
+    assert data.values["rollout/completed_update_observed_response_tokens"] == 300
+    assert data.values.get("rollout/completed_update_response_tokens_upper_bound") == expected_upper
+    assert any(metric.metric.startswith("eval_lite@2/") for metric in data.evaluations)
+    attempt = read_stored_skyrl_attempts(str(root))[1]["recorded-attempt"]
+    row = publication.build_record(str(root), preset, table=table, attempt=attempt)
+    assert row.status == "succeeded" and row.failed_facts == []
+    assert (row.planned_updates, row.optimizer_steps, row.measured_updates) == (12, 2, [1, 2])
+    assert {
+        (score.profile, score.step)
+        for comparison in row.evaluations
+        if (score := comparison.evaluation_score) is not None and score.final
+    } == {("eval_lite", 2)}
+    metrics = read_skyrl_metrics(str(root), attempt_id="recorded-attempt")
+    invalid = measurements.measured_training(preset.with_updates(12), metrics, 100)
+    assert not next(fact for fact in invalid.invariants if fact.name == "gross_rollout_budget_reached").holds
+    assert invalid.spend is None
 
 
 def test_training_invariants_from_recorded_values(recorded_runs, preset_table):

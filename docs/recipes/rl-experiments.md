@@ -191,6 +191,74 @@ presets use 40. East is `cw-us-east-02a`. The 40-H100 layout has 32 policy GPUs 
 These training presets use staleness 2 and TIS. Speed-long has no evaluation,
 checkpoints or export; learner and engine token rates are descriptive telemetry.
 
+## Qwen sampler development loop
+
+Use Qwen3-0.6B to check sampler behavior on two H100s. Its ShellSim grader scores arithmetic,
+string transformations and list operations with guest networking disabled. The learning comparisons
+use the same 4,608 training prompts, model, tokenizer and prepared-task cache.
+
+Plan the ranked sampler and its uniform control from the same checkout with CoreWeave storage credentials:
+
+```bash
+export MARIN_PREFIX=s3://marin-us-east-02a/marin
+for arm in within-source-pass within-source-pass-random; do
+  uv run python -m experiments.post_training.qwen_sampler \
+    --preset "east02-pair-source-pass-smoke-${arm}" --version dev --priority interactive --plan
+done
+```
+
+Replace `--plan` with `--run --wait` for an individual run. Each smoke runs four synchronous
+updates, 16 prompts per update and four completions per prompt, with thinking enabled and
+a 4,096-token response cap. The two arms use the same source schedule. They rank or uniformly
+sample among the least-visited eligible prompts in each source. Check dispatches, verifier
+results, optimizer joins and coverage on the 36-task panel at initialization and completion.
+
+For a learning comparison, `east02-pair-source-pass-confirm-<arm>-seed<seed>` adds source
+Thompson (`thompson`) and ranking with prompt reuse (`within-source`) to the two smoke policies.
+The presets use seeds 83 and 97, a separate 288-task panel and a common 5,242,880-token training
+budget. Compare each arm's change from initialization at its actual stopping update. Reconcile
+all dispatched training tokens, including rejected groups, and report actual spend and H100-hours.
+The protocol, earlier pilot and replay commands, per-seed results and costs are recorded in the
+[adaptive sampler study](https://github.com/marin-community/marin/pull/12313).
+
+Set `trainer.rollout_token_eval_milestones` to evaluate the primary panel at the first
+completed update to reach each listed token count. List the milestones in increasing order
+below `trainer.rollout_token_budget`. The terminal evaluation uses the stopping update,
+including when that update also crosses an earlier milestone.
+
+For training-loop timing, use the 1,024-prompt subset covering five-letter reversal and
+odd-position extraction followed by reversal. The timing presets run 12 synchronous updates
+with four completions per prompt, a 4,096-token cap and evaluation disabled. Compare updates
+4–8 and 8–12 to measure warm training. Use `full` in place of `string-ei` for the nine-cell
+reference, and `103` in place of `101` for the second paired seed.
+
+```bash
+uv run python -m experiments.post_training.qwen_timing \
+  --preset east02-timing-string-ei-seed101 --version dev --priority interactive --plan
+```
+
+## Four-source Snowball sampler experiment
+
+Use `smoke-fixed-sync-chunked` to calibrate training cost on the Datakit SFT initializer and
+the pinned four-source selection. It includes 256 tasks each from arithmetic, scheduling,
+instruction-following calendar and structured JSON. The selection excludes the full EvalLite panel.
+
+```bash
+export MARIN_PREFIX=s3://marin-us-east-02a/marin
+uv run python -m experiments.post_training.snowball_sampler \
+  --preset smoke-fixed-sync-chunked --version dev --priority interactive --plan
+```
+
+The fixed run uses 40 H100s, four synchronous updates, 128 groups of four completions per
+update and up to 32 active rollout groups. The learner projects 1,024 tokens at a time to
+retain the 8,192-token response cap. Replace `--plan` with `--run --wait` to execute. Check both
+100-task EvalLite evaluations, the step-4 native checkpoint and its HF export. Reconcile the
+sum of `rollout/gross_response_tokens` with all closed training leases before fixing a common
+budget for sampler comparisons. Keep the initializer, draft, vLLM wheel, task selection and
+concurrency identical across arms. The [calibration receipt](https://github.com/marin-community/marin/pull/12313#issuecomment-7179173363)
+records the verified export and the separate conversion cost.
+The [Mochi baseline issue](https://github.com/marin-community/marin/issues/12201) gives the transfer context.
+
 ## Dashboard publication
 
 Publish a stored attempt after an app release, without starting native work:
@@ -276,6 +344,11 @@ one-rack vLLM memory fraction of 0.775 gave
 about 119,400 KV tokens per inference GPU in the five-update trial. Use `--set generator.speculative_decoding=null`
 to run plain decoding. Also set `--set generator.gpu_memory_utilization=0.75` to
 reproduce the previous one-rack serving budget. Three-rack presets use plain decoding.
+
+For a matched Mochi sampler comparison, pin the recorded initializer and tokenizer in every arm
+using `--init` or the experiment preset. Use the same vLLM wheel in all arms and take its pin from the
+study's source bundle. To repeat a historical run, take the decoding, memory fraction, engine
+geometry, and context budget from its resolved launch.
 
 Set `TASK_SELECTION` to a published `NAME@VERSION`. Custom selections must use the default development panel (`recipe.heldout`)
 and record the complete frozen EvalLite in their recipe's `exclusions`. The builder checks those recorded inputs.

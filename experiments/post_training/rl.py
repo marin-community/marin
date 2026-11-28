@@ -157,7 +157,8 @@ def _run_rl(
         if get_path(recipe.override_document(inputs.settings), "trainer.project_name") is not MISSING:
             index = index.model_copy(update={"wandb_project": launch["skyrl"]["trainer"]["project_name"]})
         launch["run"]["index"] = index.model_dump(mode="json")
-        config = replace(config, launch_config_yaml=yaml.safe_dump(launch, sort_keys=False))
+        # OmegaConf would read a bare fingerprint like 1243e785 as scientific notation.
+        config = replace(config, launch_config_yaml=yaml.safe_dump(launch, sort_keys=False, default_style='"'))
     return run_skyrl(config, forward_env=forward_env)
 
 

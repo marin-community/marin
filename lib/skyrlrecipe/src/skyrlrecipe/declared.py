@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import AfterValidator, Field, NonNegativeInt, PlainSerializer, PositiveInt
@@ -14,6 +15,20 @@ from .model import FrozenMap, NumberMap, Section, SectionMap, field, thaw, unset
 from .sampling import EvalSamplingParams
 
 DAYTONA_EVAL_BACKEND = "daytona-eval"
+
+
+class PromptAcquisition(StrEnum):
+    """Prompt-selection policies shared by authored recipes and SkyRL."""
+
+    SOURCE = "prompt-thompson-source"
+    CONTEXTUAL = "prompt-thompson-contextual"
+    COST_AWARE = "prompt-thompson-cost-aware"
+    WITHIN_SOURCE_COST_AWARE = "prompt-thompson-within-source-cost-aware"
+    WITHIN_SOURCE_PASS_COST_AWARE = "prompt-thompson-within-source-pass-cost-aware"
+
+    @property
+    def within_source(self) -> bool:
+        return self in (self.WITHIN_SOURCE_COST_AWARE, self.WITHIN_SOURCE_PASS_COST_AWARE)
 
 
 class TeacherModel(Section):

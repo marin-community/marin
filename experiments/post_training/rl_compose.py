@@ -18,7 +18,6 @@ import pyarrow.parquet as pq
 import yaml
 from finestore.rl.strata import MembershipState, SelectionTaskRow, read_selection_manifest
 from finestore.schema import arrow_schema
-from iris.rpc import job_pb2
 from marin.evaluation.eval_env import DAYTONA_EVAL_API_KEY_ENV
 from marin.execution.artifact import (
     RECORD_FILENAME,
@@ -618,7 +617,7 @@ def run_spec(
                         eval_n_samples_per_prompt=evaluation.answers, eval_sampling_params=sampling
                     ),
                 )
-            ).merge(workload.evaluation_patch(answer_count))
+            ).merge(workload.evaluation_patch(answer_count, config))
         else:
             evaluation_data.append((evaluation.name, sources))
             profiles[evaluation.name] = EvaluationProfile(
@@ -716,7 +715,7 @@ def run_step(
             job_timeout_seconds=layout.job_timeout_seconds,
             wandb_entity=wandb_entity or preset.wandb_entity,
             required_env_vars=tuple(dict.fromkeys((*required_env, *forward_env))),
-            container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+            container_profile=layout.container_profile,
             role_topology=layout.role_topology,
         ),
         export_hf=preset.export != "none",

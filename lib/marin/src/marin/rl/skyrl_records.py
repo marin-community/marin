@@ -85,6 +85,9 @@ class RecordedLaunch(BaseModel):
     model_local_path: str = Field(validation_alias=AliasPath("inputs", "model", "local_path"))
     seed: int = Field(validation_alias=AliasPath("skyrl", "trainer", "seed"))
     max_steps: int | None = Field(validation_alias=AliasPath("skyrl", "trainer", "max_steps"))
+    rollout_token_budget: int | None = Field(
+        default=None, gt=0, validation_alias=AliasPath("skyrl", "trainer", "rollout_token_budget")
+    )
     max_prompt_length: int = Field(validation_alias=AliasPath("skyrl", "trainer", "max_prompt_length"))
     project_name: str = Field(validation_alias=AliasPath("skyrl", "trainer", "project_name"))
     logger: list[str] = Field(validation_alias=AliasPath("skyrl", "trainer", "logger"))

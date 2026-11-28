@@ -171,6 +171,11 @@ staged local weights and S3 streaming. An actor startup failure recreates the
 whole engine gang with fresh rendezvous ports, within the existing
 `generator.engine_init_timeout_seconds` deadline.
 
+Standalone evaluation presets limit admission to the primary answer count and
+the configured `trajectory_runner.max_concurrent_tasks` ceiling. For vLLM they
+also cap admissions at engine count × data parallel size × `max_num_seqs`, so
+requests can wait in the evaluation queue before their model deadlines start.
+
 DP rendezvous ports are bound and held on the engine's target node, excluding
 that node's `/proc/sys/net/ipv4/ip_local_port_range`, kernel-reserved service
 ports, and Iris's default named-port range. Kernel reservations also cover
@@ -316,11 +321,83 @@ prompt for each group slot in the window and one spare after dataset preparation
 
 Set `trainer.rollout_buffer.groups_per_family` for fixed numbers of prompt groups per task family in
 each training batch. Each Parquet training row supplies its `family`. The counts must sum to
-`trainer.train_batch_size`. Use `batch_policy: full_batch` and leave `data.sampling.kind` unset.
-Apply the prompt minimum to each family using its group count per batch. A rejected group releases
-a slot in its own family.
-Each family draws prompts from its own seeded passes. Checkpoints retain the position in each
-family’s order. Omit the family counts to use the configured prompt order, including curriculum sampling.
+`trainer.train_batch_size`. Use `batch_policy: full_batch`.
+Each family needs one distinct usable prompt per open group slot in that family and one spare.
+A rejected group releases a slot in its own family.
+Leave `data.sampling.kind` unset for seeded passes within each family. The
+`prompt-thompson-source`, `prompt-thompson-contextual`, `prompt-thompson-cost-aware`, and
+`prompt-thompson-within-source-cost-aware` orders rank eligible prompts within the leased family
+and learn from completed optimizer steps. The within-source variant allocates each family's draw
+window using the reference row weights in that family, capped by available rows per source.
+Checkpoints retain each family's draw position.
+Omit the family counts to use other prompt orders, including curriculum sampling.
+
+`prompt-thompson-within-source-pass-cost-aware` draws from the least-visited eligible
+prompts in the scheduled source. A visit counts when the loader offers the prompt, so
+stale or discarded work consumes a visit. A quarantined or live prompt catches up when
+it becomes eligible again. Each source window keeps its selected prompts distinct.
+Set `data.sampling.epsilon=1` for uniform draws within the same pass and source window.
+This order uses a flat catalog and checkpoints visit counts, the pending source window,
+its Thompson draw, and the loader's quarantine.
+
+The Qwen3-0.6B sampler experiment provides `smoke-{source-only,contextual,cost-aware}`
+and `pilot-{source-only,contextual,cost-aware}` presets in `experiments.post_training.qwen_sampler`.
+The `-seed29` pilot variants provide a second paired seed. All three adaptive arms share
+a discounted regularized logistic Thompson draw, distinct prompt windows, and 20%
+exploration from the reference mixture. The source-only arm uses source indicators.
+The contextual arms add public prompt length, text shape, and hashed word sequences
+centered within each training source. The cost-aware arm also fits generated token
+counts and applies a bounded inverse-cost weight.
+
+A useful dispatch has a fully verified group with normalized score spread of at least
+0.05 and contributes nonzero advantage tokens to an optimizer update. Feedback comes
+after the optimizer, with generated tokens charged for discarded, unverified, and
+untrained groups. Checkpoints retain the acquisition window, model, and random state.
+SkyRL checks the prepared held-out prompts for overlap before training and collects
+sampler feedback from training rollouts only. Use `data.sampling.decay` to discount older
+observations. The bin curriculum's `reversion_mass` must be zero for prompt Thompson
+and adaptive source orders.
+
+Set `data.sampling.kind=adaptive-source` to favor sources whose answers receive different
+verifier scores within a prompt group. `source_column` selects the prepared row label
+(`data_source` by default, `family` for labeled task sets, or `teacher_route` for stamped
+Parquet). `domain_weights` sets the reference shares. An empty map uses the filtered row
+counts. At least two answers per prompt are required.
+
+When selection fills a batch and before its optimizer update, the sampler discounts the
+counts from previous batches by `decay`. It adds one observation per fully verified
+group judged for the batch, including groups discarded by dynamic sampling. It weights each
+source's reference share by its estimated mixed-group rate under a Beta prior
+(`prior_alpha`, `prior_beta`), then reserves `epsilon` of the total mass for the reference
+mix. Set `epsilon=1` for a fixed-share control with the same draw and checkpoint behavior.
+For the Thompson comparison, set `kind=adaptive-source-thompson`. It uses the same
+verified groups and draws one rate per source from its Beta posterior at initialization
+and after each feedback batch. It multiplies each draw by its reference share, normalizes
+the results, floors each source at
+`epsilon / number_of_sources`, and renormalizes. All subsequent draw windows use these
+weights until the next feedback batch. Checkpoints preserve the current weights and the
+posterior random-number state.
+
+Source draws are stochastic, and rows are unique within a draw window. In-flight prompts,
+source sizes and admission can change the realized mix. The `curriculum/<source>/` metrics
+use these denominators:
+
+- `proposed_rows` counts sampler draws since the last feedback update, including rows
+  skipped because their UID is live or quarantined. `assigned_groups` counts one
+  dispatch for each group sent to a worker, including a group found by scanning eligible
+  rows or sent again for regeneration.
+- `rejected/<reason>` counts completed groups rejected before feedback, attributed to the
+  batch that inspected them. Reasons include fully masked, too few eligible answers, stale
+  and duplicate UIDs. Absent rejection keys count as zero.
+- `groups` counts groups judged for the batch, including dynamic-filter discards.
+  `graded_groups` counts those with complete verifier scores. `informative_groups` counts
+  fully graded groups with at least two different scores. `weight` is the next target share.
+
+With asynchronous prefetch, assignments and judgments in one update can refer to different
+groups. With `trainer.dump_grader_report=true`, the training section of
+`grader_report.json` reports per-subset verifier and rollout failures. Join its
+`training_tasks` counts to the selection manifest by task ID to compute per-source
+verified coverage across completed answers, including groups rejected by admission.
 
 ## Artifact and runtime boundaries
 
@@ -411,7 +488,14 @@ baseline and selection policy are recorded in `best_checkpoint.json` and the
 baseline is restored on resume. Keep metric definitions and the selection policy
 unchanged on resume.
 
+The Qwen and Snowball sampler presets use one-day retention for temporary native
+checkpoints. Set `SkyRLRetentionPolicy(checkpoint_ttl_days=...)` to request a
+separate checkpoint lifetime. Without that setting, checkpoints and attempt logs
+use `temporary_storage_ttl_days`. Checkpoints stored in the run output follow
+that output's retention policy.
 The temporary checkpoint root is derived from the RL artifact name and version.
+To resume from a previously launched run, use its recorded checkpoint root via
+`--resume NAME@VERSION`.
 After runtime changes, use a fresh RL artifact version. Reusing the old
 version with `resume_mode=latest` can load private Torch or distributed state serialized by the old
 runtime. Reuse a version across runtime changes only after establishing checkpoint compatibility or

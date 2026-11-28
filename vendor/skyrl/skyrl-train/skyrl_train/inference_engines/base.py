@@ -10,6 +10,7 @@ MessageType = Dict[str, str]
 ConversationType = List[MessageType]
 OnlineEagleResult = Dict[str, Any] | List[Dict[str, Any]]
 SESSION_ID_HEADER = "x-skyrl-session-id"
+ABORT_FINISH_REASON = "abort"
 
 
 _GROUPED_REQUEST_PREFIX = "skyrl-group-"

@@ -42,6 +42,18 @@ class TrainingStep:
     messages: tuple[dict[str, Any], ...]
 
 
+@dataclass
+class ModelGenerationUsage:
+    """Usage across all model requests for one repetition, including discarded attempts."""
+
+    tokens: int = 0
+    turns: int = 0
+    length_stops: int = 0
+    abandoned_retry_tokens: int = 0
+    unobserved_calls: int = 0
+    unobserved_token_limit: int = 0
+
+
 @dataclass(frozen=True)
 class TrainingRollout:
     """One trainable conversation and its task verdict, retaining every engine conversation."""
@@ -59,6 +71,7 @@ class TrainingRollout:
     outputs: dict[str, bytes] = field(default_factory=dict)
     failure: ErrorIdentity | None = None
     conversations: tuple[ConversationRecord, ...] = ()
+    generation_usage: ModelGenerationUsage | None = None
 
 
 def training_rollout(result: GradedRollout, spec: TaskRolloutSpec) -> TrainingRollout:

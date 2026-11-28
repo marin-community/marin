@@ -43,6 +43,7 @@ from skyrl_train.config.callbacks import has_explicit_callbacks, hf_export_desti
 from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
 from skyrl_train.json_serialization import to_jsonable
 from skyrl_train.io import io
+from rolloutengine.models import CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC, GROSS_ROLLOUT_TOKENS_METRIC
 from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, POLICY_CHECKPOINT_SUBDIRECTORY
 from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.inference_engines.vllm.stats import VLLM_NUM_ENGINES_METRIC, IntervalReadMode
@@ -194,6 +195,62 @@ class DistillationTokenBudgetCallback(TrainerCallback):
                 self.token_budget,
             )
             control.should_training_stop = True
+        return control
+
+
+class RolloutTokenBudgetCallback(TrainerCallback):
+    """Schedule evaluations and stop synchronous training by gross rollout spend."""
+
+    error_behavior = CallbackErrorBehavior.RAISE
+
+    def __init__(self, budget: int, eval_milestones: tuple[int, ...] = ()):
+        self.budget = budget
+        self.eval_milestones = eval_milestones
+
+    def _crossed_milestone(self, previous: int, total: int) -> bool:
+        return any(previous < milestone <= total for milestone in self.eval_milestones)
+
+    def on_train_begin(self, state: TrainerState, control: TrainerControl, *, trainer, **kwargs) -> TrainerControl:
+        if state.global_step > 0:
+            control.should_evaluate = False
+        total = trainer.rollout_gross_response_tokens_total
+        if total >= self.budget:
+            control.should_training_stop = True
+        elif state.global_step > 0 and self.eval_milestones:
+            # The checkpoint can be saved before this update's evaluation.
+            previous = total - trainer.rollout_gross_response_tokens_last_update
+            control.should_evaluate = self._crossed_milestone(previous, total)
+        return control
+
+    def on_step_end(self, state: TrainerState, control: TrainerControl, *, trainer, **kwargs) -> TrainerControl:
+        gross = state.metrics[GROSS_ROLLOUT_TOKENS_METRIC]
+        tokens = int(gross)
+        if tokens < 0 or tokens != gross:
+            raise ValueError(f"{GROSS_ROLLOUT_TOKENS_METRIC} must be a non-negative integer, got {gross!r}")
+        trainer.rollout_gross_response_tokens_total += tokens
+        trainer.rollout_gross_response_tokens_last_update = tokens
+        total = trainer.rollout_gross_response_tokens_total
+        trainer.all_metrics[CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC] = total
+        if total >= self.budget:
+            logger.info(
+                "Reached rollout token budget at update {}: {} >= {}", state.global_step, total, self.budget
+            )
+            control.should_training_stop = True
+            # Publish the stopping update's metrics before the terminal evaluation can fail.
+            control.should_evaluate = False
+        elif self._crossed_milestone(total - tokens, total):
+            control.should_evaluate = True
+        return control
+
+    def on_train_end(self, state: TrainerState, control: TrainerControl, *, trainer, **kwargs) -> TrainerControl:
+        total = trainer.rollout_gross_response_tokens_total
+        if total < self.budget:
+            raise ValueError(
+                f"Training ended at update {state.global_step} with {total} gross rollout tokens "
+                f"before reaching the configured budget of {self.budget}"
+            )
+        # A retry can restore a checkpoint written before the stopping update's evaluation.
+        control.should_evaluate = True
         return control
 
 
@@ -981,7 +1038,10 @@ class InferenceStatsCallback(TrainerCallback):
                 logger.warning(f"InferenceStatsCallback: {type(sink).__name__} failed", exc_info=True)
 
 
-def _add_inference_stats_callback(cfg: DictConfig, callbacks: List[TrainerCallback]) -> None:
+def _add_runtime_callbacks(cfg: DictConfig, callbacks: List[TrainerCallback]) -> None:
+    budget = cfg.trainer.get("rollout_token_budget")
+    if budget is not None:
+        callbacks.append(RolloutTokenBudgetCallback(budget, tuple(cfg.trainer.get("rollout_token_eval_milestones", ()))))
     interval = getattr(cfg.generator, "inference_stats_interval", 1)
     if (
         cfg.generator.backend == "vllm"
@@ -1048,7 +1108,7 @@ def create_default_callbacks(
             callbacks.append(LoggingCallback())
         if cfg.trainer.get("mismatch_probe", {}).get("enabled", False):
             callbacks.append(MismatchProbeCallback(cfg))
-        _add_inference_stats_callback(cfg, callbacks)
+        _add_runtime_callbacks(cfg, callbacks)
         return callbacks
 
     # Fall back to legacy interval-based configuration
@@ -1099,7 +1159,7 @@ def create_default_callbacks(
             )
         )
 
-    _add_inference_stats_callback(cfg, callbacks)
+    _add_runtime_callbacks(cfg, callbacks)
 
     token_budget = _configured_distillation_token_budget(cfg)
     if token_budget is not None:

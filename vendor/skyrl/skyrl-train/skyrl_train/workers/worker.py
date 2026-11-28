@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 import logging
 import os
-import socket
+from datetime import timedelta
 from typing import Dict, Optional, Type, List, Any, Callable
 from skyrl_train.utils.progress import configure_progress, tqdm
 from marinskyrl.runtime_options import R3Transport
@@ -70,7 +70,6 @@ from skyrl_train.models.grug_moe import GrugMoeForCausalLM
 from skyrl_train.batch_invariant import enable_trainer_batch_invariance
 from skyrl_train.utils.utils import (
     configure_ray_worker_logging,
-    get_tcp_url,
     resolve_actor_cuda_env,
     resolve_pinned_local_rank,
 )
@@ -78,7 +77,14 @@ from omegaconf import DictConfig
 from pathlib import Path
 import time
 from skyrl_train.batch_assembly import BatchPlan, assemble_rank_slice, forward_input, install_plan_advantages
-from skyrl_train.batch_metrics import advantage_metrics, forward_metrics, install_correction, token_staleness_metrics
+from skyrl_train.batch_metrics import (
+    advantage_metrics,
+    forward_metrics,
+    install_correction,
+    NONZERO_ADVANTAGE_TOKENS,
+    nonzero_advantage_tokens_by_group,
+    token_staleness_metrics,
+)
 from skyrl_train.rollouts.payloads import RolloutReader
 from skyrl_train.utils.advantage_estimators import apply_loop_advantages, drop_advantage_inputs
 from skyrl_train.metric_reduction import WorldReduction
@@ -124,7 +130,7 @@ class DistributedTorchRayActor:
         self._rank = rank
         self._local_rank = local_rank
         self._master_addr = self._get_current_node_ip() if rank == 0 else None
-        self._master_port = self._get_free_port() if rank == 0 else None
+        self._master_store: torch.distributed.TCPStore | None = None
         os.environ["WORLD_SIZE"] = str(self._world_size)
         os.environ["RANK"] = str(self._rank)
         # Device pinning. `LOCAL_RANK` is consumed by every strategy's
@@ -199,15 +205,19 @@ class DistributedTorchRayActor:
     def get_node_local_rank(self):
         return self._local_rank
 
-    def init_worker_process_group(self, master_addr: str, master_port: int):
-        # Device-pinned NCCL PG init via the shared helper — pins set_device(LOCAL_RANK) and
-        # passes device_id so ProcessGroupNCCL never guesses the device (fixes the cw-rno2a
-        # unmasked-CVD collective deadlock; see init_worker_process_group_with_device).
+    def _init_default_process_group(self, master_addr: str, master_port: int, *, backend: str = "nccl") -> None:
         init_worker_process_group_with_device(
             master_addr=master_addr,
             master_port=master_port,
             timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds),
+            rank=self._rank,
+            world_size=self._world_size,
+            master_store=self._master_store,
+            backend=backend,
         )
+
+    def init_worker_process_group(self, master_addr: str, master_port: int):
+        self._init_default_process_group(master_addr, master_port)
 
         # setup device mesh
         # Tensor and pipeline parallelism are configured by the Megatron worker.
@@ -263,14 +273,19 @@ class DistributedTorchRayActor:
     def get_ray_node_id(self):
         return ray.get_runtime_context().get_node_id()
 
-    @staticmethod
-    def _get_free_port():
-        with socket.socket() as sock:
-            sock.bind(("", 0))
-            return sock.getsockname()[1]
-
-    def get_master_addr_port(self):
-        return self._master_addr, self._master_port
+    def get_master_addr_port(self) -> tuple[str, int]:
+        if self._master_addr is None:
+            raise RuntimeError("Only worker rank zero hosts the rendezvous store")
+        if self._master_store is None:
+            # Keep the kernel-selected port bound from publication through group teardown.
+            self._master_store = torch.distributed.TCPStore(
+                self._master_addr,
+                0,
+                is_master=True,
+                timeout=timedelta(seconds=self.cfg.trainer.distributed.worker_collective_timeout_seconds),
+                wait_for_workers=False,
+            )
+        return self._master_addr, self._master_store.port
 
 
 def log_r3_resident_set(rank: int, data: TrainingInputBatch) -> None:
@@ -379,22 +394,12 @@ class Worker(DistributedTorchRayActor):
         assert inference_engine_client is not None
 
         if torch.distributed.get_rank() == 0:
-            # Debug: understand where master_addr comes from
-            import socket as sock_module
-
-            hostname = sock_module.gethostname()
-            global_node = ray._private.worker._global_node
-            global_node_ip = global_node.node_ip_address if global_node else "None"
-
-            master_addr = ray._private.services.get_node_ip_address()
-
-            logging.info(f"[weight-sync] hostname={hostname}")
-            logging.info(f"[weight-sync] _global_node.node_ip_address={global_node_ip}")
-            logging.info(f"[weight-sync] get_node_ip_address()={master_addr}")
-
-            with socket.socket() as sock:
-                sock.bind(("", 0))
-                master_port = sock.getsockname()[1]
+            master_addr = self._master_addr
+            assert master_addr is not None
+            store = torch.distributed.TCPStore(
+                master_addr, 0, is_master=True, timeout=torch.distributed.default_pg_timeout, wait_for_workers=False
+            )
+            master_port = store.port
             logging.info(f"[weight-sync] Using master_addr={master_addr}, master_port={master_port}")
 
             num_inference_engines, tensor_parallel_size, pipeline_parallel_size, data_parallel_size = (
@@ -411,8 +416,7 @@ class Worker(DistributedTorchRayActor):
             group_name = "skyrl"
             self._model_update_group_name = group_name
 
-            tasks = []
-            tasks.append(
+            _, self._model_update_group = await asyncio.gather(
                 inference_engine_client.init_weight_update_communicator(
                     master_addr=master_addr,
                     master_port=master_port,
@@ -421,30 +425,18 @@ class Worker(DistributedTorchRayActor):
                     group_name=group_name,
                     backend=backend,
                     override_existing=override_existing,
-                )
-            )
-
-            tasks.append(
+                ),
                 asyncio.to_thread(
                     init_custom_process_group,
                     backend=backend,
-                    init_method=get_tcp_url(master_addr, master_port),
+                    store=torch.distributed.PrefixStore(group_name, store),
                     world_size=world_size,
                     rank=0,
                     group_name=group_name,
                     pg_options=self._weight_sync_pg_options,
-                )
+                ),
             )
-            results = await asyncio.gather(*tasks)
-            self._model_update_group = results[-1]
-
-            # # Register signal handlers for termination only on rank 0
-            # NOTE (sumanthrh): This doesn't work yet, and is thus commented out.
-            # The better way is to just have this specified in __del__, but there is
-            # no guarattee that __del__ will be called in general. Ray also doesn't
-            # explictly call __del__ when the actor shuts down.
-            # It's commented out so that we can fix this in the future.
-            # atexit.register(self._handle_termination)
+            self._model_update_store = store
 
         torch.distributed.barrier()
 
@@ -916,10 +908,16 @@ class PolicyWorkerBase(Worker):
         output.metadata = {"batch_metrics": metrics}
         return output
 
-    def train_loaded(self, batch_id: int) -> TrainingOutputBatch:
+    def train_loaded(self, batch_id: int, *, sampling_receipts_enabled: bool) -> TrainingOutputBatch:
         plan, batch = self._loaded_batch
         assert plan.global_step == batch_id
-        return self.ppo_train(batch)
+        output = self.ppo_train(batch)
+        if sampling_receipts_enabled and self.mesh_rank.is_collection_dp_rank():
+            rows = plan.rank_rows(self.mesh_rank.dp, self.mesh_rank.dp_size)
+            output.metadata[NONZERO_ADVANTAGE_TOKENS] = nonzero_advantage_tokens_by_group(
+                batch, plan.uids[rows.start : rows.stop]
+            )
+        return output
 
     def unload_batch(self, batch_id: int) -> None:
         if self._loaded_batch is not None and self._loaded_batch[0].global_step == batch_id:

@@ -18,6 +18,7 @@
 import dataclasses
 from enum import Enum
 from functools import partial
+from hashlib import sha256
 from pathlib import Path
 from datetime import datetime, timezone
 from types import TracebackType
@@ -48,8 +49,20 @@ from finestore.rl.run_records import (
 from finestore.store import DataStore
 
 _WANDB_STEP_METRIC = "trainer/global_step"
+_WANDB_GROUP_NAME_LIMIT = 128
 # Bound SDK uploads too: timing out a Ray get alone leaves the primary finish unbounded.
 _WANDB_LOGGER_SHUTDOWN_TIMEOUT = 30
+
+
+def _wandb_group_name(run_id: str) -> str:
+    encoded = run_id.encode("utf-8")
+    # Budget UTF-8 bytes so multibyte labels also fit the service limit.
+    if len(encoded) <= _WANDB_GROUP_NAME_LIMIT:
+        return run_id
+    suffix = "-" + sha256(encoded).hexdigest()[:24]
+    # The byte slice may leave a partial character at the end.
+    prefix = encoded[: _WANDB_GROUP_NAME_LIMIT - len(suffix)].decode("utf-8", errors="ignore")
+    return prefix + suffix
 
 
 @ray.remote
@@ -138,7 +151,7 @@ class Tracking:
             index = RunIndexIdentity.model_validate(raw_index) if raw_index is not None else None
             project = index.wandb_project if index is not None else project_name
             wandb_name = index.run_id if index is not None else experiment_name
-            wandb_group = index.run_id if index is not None else tracking_config["run_id"]
+            wandb_group = _wandb_group_name(index.run_id if index is not None else tracking_config["run_id"])
             if index is not None:
                 tracking_config["run_index"] = index.model_dump(mode="json")
             current_node_ip = "head"

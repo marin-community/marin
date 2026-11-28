@@ -11,11 +11,16 @@ data:
   shuffle: true
   preference_pair_format: text # text completions or tokenized conversations with assistant masks
   sampling:
-    kind: null # null = seeded passes (data.shuffle); domain-weighted|naive|thompson|learnability|grade-uniform|grade-adaptive|grade-prior
-    domain_weights: {} # exact teacher-route mixture in every train_batch_size prompts drawn when kind=domain-weighted
-    decay: 0.95 # per-step multiplicative decay of bin sufficient stats
-    epsilon: 0.05 # per-bin probability floor (thompson/learnability/grade-prior)
-    reversion_mass: 0.0 # per-step pseudo-evidence pulling every bin's belief toward the weight-curve peak
+    kind: null # null uses seeded passes with data.shuffle
+    domain_weights: {} # domain-weighted requires route shares. Adaptive source and prompt orders use row counts when empty.
+    source_column: data_source # adaptive source label on each prepared training row
+    decay: 0.95 # per-step multiplicative decay of observations
+    # adaptive-source and unconstrained prompt-thompson use reference shares for this fraction of their draws.
+    # Within-source cost-aware policies explore within the scheduled source.
+    # The pass variant explores among that source's least-visited eligible prompts.
+    # adaptive-source-thompson, thompson, learnability and grade-prior floor each bin at epsilon / bin count before renormalization.
+    epsilon: 0.05
+    reversion_mass: 0.0 # bin curriculum pseudo-evidence per step toward the weight-curve peak
     instance_decay: 0.7 # per-visit decay of per-row evidence (rows are visited too rarely for per-step decay)
     prior_alpha: 1.0 # Beta prior for thompson (informative rate) and learnability (pass rate)
     prior_beta: 1.0
@@ -277,6 +282,12 @@ trainer:
   # Optional OPD stage boundary. Stops after the first optimizer batch whose
   # cumulative teacher-scored tokens reach the budget.
   distillation_token_budget: null
+  # A synchronous run stops and evaluates the primary panel after the first completed
+  # training step to reach this many observed training response tokens across all groups.
+  rollout_token_budget: null
+  # Evaluate the primary panel on the first completed training step to cross each
+  # cumulative training response token milestone below the terminal budget.
+  rollout_token_eval_milestones: []
   reset_distillation_token_count_on_resume: false
   reset_global_step_on_resume: false
   ckpt_path: "${oc.env:HOME}/ckpts/"

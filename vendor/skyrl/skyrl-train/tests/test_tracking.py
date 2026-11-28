@@ -4,11 +4,11 @@ import os
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 import wandb
-from finestore.rl.run_records import RunIndexIdentity
-from finestore.rl.run_records import read_attempt
+from finestore.rl.run_records import RunIndexIdentity, read_attempt
 from loguru import logger
 from omegaconf import OmegaConf
 
@@ -18,7 +18,49 @@ os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
 import ray
 from skyrl_train.entrypoints import main_base
 from skyrl_train.entrypoints.main_base import BasePPOExp
-from skyrl_train.utils.tracking import Tracking
+from skyrl_train.utils import tracking
+from skyrl_train.utils.tracking import Tracking, _wandb_group_name
+
+
+@pytest.mark.parametrize("run_id", ["experiment", "x" * 128, "🐍" * 32])
+def test_wandb_group_preserves_names_within_limit(run_id):
+    assert _wandb_group_name(run_id) == run_id
+
+
+@pytest.mark.parametrize("prefix", ["x" * 128, "🐍" * 33, "x" * 102 + "界" * 12])
+def test_wandb_group_bounds_long_names_and_distinguishes_suffixes(prefix):
+    first = _wandb_group_name(f"{prefix}-seed83")
+    second = _wandb_group_name(f"{prefix}-seed97")
+
+    assert len(first.encode("utf-8")) <= 128
+    assert len(second.encode("utf-8")) <= 128
+    assert first != second
+    assert _wandb_group_name(f"{prefix}-seed83") == first
+
+
+def test_wandb_group_shared_by_primary_and_workers(monkeypatch, tmp_path):
+    canonical_run_id = "users/team/checkpoints/sampler/" + "run-with-configured-policy-" * 5
+    primary = Mock(return_value=Mock(id="shared-run"))
+    worker = Mock()
+    monkeypatch.setenv("WANDB_API_KEY", "test-key")
+    monkeypatch.setattr(wandb, "init", primary)
+    monkeypatch.setattr(tracking, "WandbNodeLogger", worker)
+    monkeypatch.setattr(ray, "is_initialized", lambda: True)
+    monkeypatch.setattr(ray.util, "get_node_ip_address", lambda: "head")
+    monkeypatch.setattr(
+        ray, "nodes", lambda: [{"Alive": True, "NodeManagerAddress": "worker", "NodeID": ray.NodeID.from_random().hex()}]
+    )
+    trainer = {"export_path": str(tmp_path), "epochs": 4}
+    config = OmegaConf.create({"trainer": trainer, "runtime": {"run_id": canonical_run_id}})
+
+    Tracking("project", "experiment", backends=("wandb",), config=config)
+
+    primary_call = primary.call_args.kwargs
+    worker_call = worker.options.return_value.remote.call_args.kwargs
+    assert primary_call["group"] == worker_call["group_name"] == _wandb_group_name(canonical_run_id)
+    assert primary_call["config"] == worker_call["config"]
+    assert primary_call["config"]["run_id"] == config.runtime.run_id == canonical_run_id
+    assert primary_call["config"]["trainer"] == trainer
 
 
 @dataclass
@@ -85,7 +127,7 @@ def test_close_preserves_workload_result_and_reports_upload_timeout(
     sink = logger.add(lambda message: warnings.append(message.record), level="WARNING")
     training_error = RuntimeError("training failed")
     index = RunIndexIdentity(
-        run_id="mochi-train-medium-user-1234abcd",
+        run_id="mochi-train-medium-" + "long-preset-variant-" * 6 + "user-1234abcd",
         model="mochi",
         preset="train-medium",
         preset_version="ver",
@@ -127,7 +169,9 @@ def test_close_preserves_workload_result_and_reports_upload_timeout(
     assert uploads["primary"].rows == [{"loss": 0.5, "trainer/global_step": 7}]
     for arguments in wandb_arguments.values():
         assert (arguments["project"], arguments["id"]) == ("marin-rl", "native-attempt")
-        assert arguments["name"] == arguments["group"] == "mochi-train-medium-user-1234abcd"
+        assert arguments["name"] == index.run_id
+        assert arguments["group"] == _wandb_group_name(index.run_id)
+        assert len(arguments["group"].encode("utf-8")) <= 128
     assert wandb_arguments["primary"]["tags"] == [
         "model:mochi",
         "preset:train-medium",

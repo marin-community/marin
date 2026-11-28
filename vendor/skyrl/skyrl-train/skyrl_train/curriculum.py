@@ -27,22 +27,13 @@ from typing import Any, Callable, Dict, List
 import numpy as np
 from omegaconf import DictConfig
 
+from skyrl_train.config.sampling import SamplingKind
 from skyrl_train.dataset import PromptDataset
-from skyrl_train.rollouts.loader import JudgedGroup
+from skyrl_train.rollouts.prompt_order import JudgedGroup, PromptOrder
 
 EXTRA_INFO_KEY = "extra_info"
 DATA_SOURCE_KEY = "data_source"
 GRADE_KEY = "grade"
-
-
-class SamplingKind(StrEnum):
-    DOMAIN_WEIGHTED = "domain-weighted"
-    NAIVE = "naive"
-    THOMPSON = "thompson"
-    LEARNABILITY = "learnability"
-    GRADE_UNIFORM = "grade-uniform"
-    GRADE_ADAPTIVE = "grade-adaptive"
-    GRADE_PRIOR = "grade-prior"
 
 
 class WeightingKind(StrEnum):
@@ -363,8 +354,13 @@ class ThompsonInformative(WeightPolicy):
         self.epsilon = epsilon
 
     def weights(self, stats: BinStats, rng: np.random.Generator) -> np.ndarray:
-        draws = rng.beta(self.prior_alpha + stats.informative, self.prior_beta + (stats.total - stats.informative))
-        return floored_normalized(draws, self.epsilon)
+        return self.weights_from_counts(stats.informative, stats.total, rng)
+
+    def weights_from_counts(
+        self, informative: np.ndarray, total: np.ndarray, rng: np.random.Generator, reference: np.ndarray | None = None
+    ) -> np.ndarray:
+        draws = rng.beta(self.prior_alpha + informative, self.prior_beta + (total - informative))
+        return floored_normalized(draws if reference is None else reference * draws, self.epsilon)
 
 
 class Directional(WeightPolicy):
@@ -471,7 +467,7 @@ def build_policy(config: CurriculumConfig, bins: DatasetBins) -> WeightPolicy:
     raise ValueError(f"Unknown sampling kind: {config.kind}")
 
 
-class CurriculumOrder:
+class CurriculumOrder(PromptOrder):
     """Draw dataset rows with replacement from per-bin curriculum weights, learning from each step's groups.
 
     Draws are uniform within a bin and deterministic given the seed and draw history. Rows are distinct within

@@ -7,6 +7,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from marinskyrl.distillation import compile_distillation_plan_from_config
 from marinskyrl.runtime_options import WeightSyncTransport
+from skyrlrecipe.declared import PromptAcquisition
 
 GROUPS_PER_FAMILY_KEY = "trainer.rollout_buffer.groups_per_family"
 FAMILY_COLUMN = "family"
@@ -42,8 +43,11 @@ def validate_groups_per_family(cfg: DictConfig) -> dict[str, int]:
                 f"{GROUPS_PER_FAMILY_KEY} sums to {sum(groups_per_family.values())}, "
                 f"expected train_batch_size={batch_size}"
             )
-        if cfg.data.sampling.kind is not None:
-            raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires data.sampling.kind to be null")
+        kind = cfg.data.sampling.kind
+        if kind == PromptAcquisition.WITHIN_SOURCE_PASS_COST_AWARE:
+            raise ValueError(f"{GROUPS_PER_FAMILY_KEY} cannot partition a per-source prompt pass")
+        if kind is not None and kind not in PromptAcquisition:
+            raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires data.sampling.kind to be null or a prompt-Thompson kind")
     return dict(groups_per_family)
 
 
@@ -78,7 +82,7 @@ def validate_rollout_launch(
     cfg: DictConfig,
     operation: EntrypointOperation = EntrypointOperation.TRAIN,
 ) -> None:
-    """Validate exact-token transport and training-only distillation requirements."""
+    """Validate rollout transport and training-only configuration before starting workers."""
     if cfg.generator.backend != "vllm":
         raise ValueError("Task rollouts require generator.backend=vllm for exact structured-chat transport")
     if (
@@ -89,3 +93,20 @@ def validate_rollout_launch(
         raise ValueError("colocated expert_block requires a training entrypoint")
     if operation is EntrypointOperation.GENERATE and compile_distillation_plan_from_config(cfg) is not None:
         raise ValueError("teacher-scored distillation is training-only and cannot be configured for generation")
+    budget = cfg.trainer.get("rollout_token_budget")
+    milestones = tuple(cfg.trainer.get("rollout_token_eval_milestones", ()))
+    if milestones and (
+        type(budget) is not int
+        or any(type(value) is not int for value in milestones)
+        or not all(left < right for left, right in zip((0, *milestones), (*milestones, budget), strict=True))
+    ):
+        raise ValueError("trainer.rollout_token_eval_milestones must increase strictly between zero and the budget")
+    if budget is not None:
+        if type(budget) is not int or budget <= 0:
+            raise ValueError("trainer.rollout_token_budget must be a positive integer")
+        if operation is not EntrypointOperation.TRAIN:
+            raise ValueError("trainer.rollout_token_budget requires a training entrypoint")
+        if cfg.trainer.rollout_buffer.max_staleness_steps != 0:
+            raise ValueError("trainer.rollout_token_budget requires synchronous generation (max_staleness_steps=0)")
+        if not cfg.data.val_data:
+            raise ValueError("trainer.rollout_token_budget requires a primary evaluation panel in data.val_data")
