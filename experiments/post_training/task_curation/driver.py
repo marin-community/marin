@@ -79,7 +79,12 @@ from experiments.post_training.task_curation.license_binding import (
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CampaignMachines, CurationRecipe
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
-from experiments.post_training.task_curation.sources import PENDING_MEASUREMENT_SOURCES, all_sources, runnable_sources
+from experiments.post_training.task_curation.sources import (
+    PENDING_MEASUREMENT_SOURCES,
+    all_sources,
+    measured_pending_sources,
+    runnable_sources,
+)
 from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURRICULUM
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
@@ -117,7 +122,7 @@ def _selected_sources(sources: tuple[str, ...], mode: SourceProcessingMode) -> d
             if source.pipeline is not None and not {"deprecated", "excluded"}.intersection(source.info.tags)
         }
         pending = {source.name: source for source in PENDING_MEASUREMENT_SOURCES if source.name in sources}
-        catalog = {**registered, **pending, **catalog}
+        catalog = {**registered, **pending, **measured_pending_sources(), **catalog}
     unknown = set(sources) - catalog.keys()
     if unknown:
         raise click.UsageError(f"Unknown source: {', '.join(sorted(unknown))}")

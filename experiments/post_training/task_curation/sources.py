@@ -316,6 +316,21 @@ PENDING_MEASUREMENT_SOURCES = (
 )
 
 
+def measured_pending_sources() -> dict[str, RlDataSource]:
+    """Pending-intake sources whose verified retained release binds, keyed by invocation name.
+
+    A pending source with a registered retained receipt runs over its retained pin — the
+    same measured-receipt binding the configured sources and the declaration audit's
+    handed-on rows get — so its population and its decontamination receipt share a pin.
+    """
+    retained_ids = set(retained_release_receipts())
+    handed_on = [source for source in PENDING_MEASUREMENT_SOURCES if source.info.id in retained_ids]
+    if not handed_on:
+        return {}
+    bound = bind_measured_receipts(handed_on)
+    return {original.name: bound_source for original, bound_source in zip(handed_on, bound, strict=True)}
+
+
 def configured_sources() -> list[RlDataSource]:
     """Return source populations registered for Atlas evidence binding."""
     sources = [
