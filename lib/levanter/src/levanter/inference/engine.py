@@ -24,6 +24,7 @@ from haliax.partitioning import ResourceMapping
 from jax.sharding import NamedSharding, PartitionSpec
 
 import levanter.tracker
+from levanter.grug.attention.fixed_schedule import FixedScheduleSpec
 from levanter.inference.jit_scheduler import (
     DecodeState,
     SeqDecodingParams,
@@ -930,6 +931,20 @@ class InferenceEngine:
 
         assert config.max_pages is not None
 
+        if isinstance(model, SnowballLMHeadModel) and model.config.replay_precision == "zero_kl":
+            schedule = FixedScheduleSpec()
+            if (config.max_seqs, config.max_seq_len, config.page_size, config.max_pages) != (
+                schedule.max_num_seqs,
+                schedule.max_kv_len,
+                schedule.page_size,
+                schedule.num_physical_pages,
+            ):
+                raise ValueError(
+                    f"Zero-KL replay requires {schedule.max_num_seqs} {schedule.max_kv_len}-token slots "
+                    f"and {schedule.num_physical_pages} {schedule.page_size}-token pages"
+                )
+            if config.logprob_mode != LogprobMode.POLICY:
+                raise ValueError("Zero-KL replay requires raw policy log probabilities")
         table = PageTable.init(config.max_pages, config.max_seqs, config.page_size, max_pages_per_seq)
         cache = hax.named_jit(model.initial_cache, axis_resources=axis_resources)(
             table.spec(), dtype=config.compute_dtype
