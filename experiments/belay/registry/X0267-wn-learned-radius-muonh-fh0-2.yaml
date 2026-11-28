@@ -80,6 +80,13 @@ trials:
   commit: 6b368f06ae
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+  loss:
+  - 2.2609
+  delta:
+  - -0.0097
+  steps: 20023
+  baseline: s7n-d1280L16 2.2706 (same commit, seed 0)
+  step_time_change: 0%
 potential:
   score: 7
   rationale: −0.0192 at equal steps on competitive-d512; d768/d1024/d1280 rungs still running (d768 overdue, preempted 9x);
