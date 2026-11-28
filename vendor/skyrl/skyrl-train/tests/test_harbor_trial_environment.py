@@ -12,10 +12,7 @@ from pathlib import Path
 import pytest
 from taskcompendium.models import TaskSpec
 
-from skyrl_train.rollouts.agent_runtime import (
-    harbor_trial_engine_requirements,
-    package_environment_requirements,
-)
+from skyrl_train.rollouts.agent_runtime import harbor_trial_engine_requirements
 
 FIXTURE = Path(__file__).parent / "fixtures" / "swe_rebench_c55add0e_task.json"
 
@@ -27,12 +24,13 @@ def real_task() -> TaskSpec:
 def test_real_row_declares_the_package_environment_and_is_accepted():
     task = real_task()
     engine = harbor_trial_engine_requirements(task)
-    declared = package_environment_requirements(task)
     # The TaskSpec declaration is identical to the package's [environment] mapping.
-    assert engine == declared
+    assert engine == task.environment_requirements.model_copy(
+        update={"setup_commands": (), "working_directory": None}
+    )
     # The pinned actor image is the one the re-seal declared in both places.
     assert engine.docker_image.startswith("ghcr.io/marin-community/rl-data-swe-rebench-v2-1-actor@sha256:")
-    assert engine.command_semantics == declared.command_semantics
+    assert engine.command_semantics == task.environment_requirements.command_semantics
     # Setup commands and the working directory keep their own override paths: stripped
     # from the engine view, still present on the TaskSpec.
     assert engine.setup_commands == () and engine.working_directory is None
