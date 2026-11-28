@@ -445,7 +445,7 @@ def run_step(step: StepSpec) -> None:
     # 2. Acquire distributed lock with heartbeat (blocks until lock obtained or step done)
     try:
         with step_lock(output_path, step_label, force_rerun=mutable) as status_file:
-            # 3. Run the function
+            # 3. Run the function; each write below first confirms this worker still holds the lease.
             try:
                 t0 = time.monotonic()
                 if step.resources is not None:
@@ -457,13 +457,16 @@ def run_step(step: StepSpec) -> None:
                     # A lazy step writes its own full record; a plain step's return is saved
                     # with its identity + lineage (name, deps, config) so the output is traceable.
                     if not step.writes_record:
+                        status_file.refresh_lock()
                         write_step_record(_step_record_identity(step), output_path=output_path, result=result)
                 elapsed = timedelta(seconds=time.monotonic() - t0)
 
                 # 4. Mark success
+                status_file.refresh_lock()
                 status_file.write_status(STATUS_SUCCESS)
                 logger.info(f"Step {step_label} succeeded in {elapsed}")
             except Exception:
+                status_file.refresh_lock()
                 status_file.write_status(STATUS_FAILED)
                 raise
     except StepAlreadyDone:
