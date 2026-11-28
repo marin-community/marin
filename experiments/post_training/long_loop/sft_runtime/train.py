@@ -60,7 +60,7 @@ from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
 from levanter.trainer import TrainerConfig
 from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
-from levanter.utils.jax_utils import parameter_count
+from levanter.utils.jax_utils import barrier_sync_named, parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 from levanter.utils.mesh import MeshConfig
 from levanter.utils.thread_utils import blocking_wait
@@ -94,7 +94,7 @@ from experiments.post_training.long_loop.sft_runtime.validation_checkpoint impor
     BestValidationCheckpoint,
     best_validation_callback,
 )
-from experiments.post_training.long_loop.timing import durable_event_log
+from experiments.post_training.long_loop.timing import EventLog, durable_event_log
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -1331,6 +1331,11 @@ def _make_train_step(
     return train_step
 
 
+def _wait_after_first_step_host_rebind(timing: EventLog, config: HostRebindConfig, step: int) -> None:
+    with timing.span("post_rebind_barrier", step=step):
+        barrier_sync_named("after_first_step_host_rebind", timeout=config.post_rebind_barrier_timeout_seconds)
+
+
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     if config.model.moe_implementation == RAGGED_MOE_IMPLEMENTATION:
@@ -1752,16 +1757,23 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     with timing.span("first_step_host_rebind", step=current_step):
                         if jax.process_index() == 0:
                             logger.info("C_PHASE first_step_host_rebind start step=%d", current_step)
+                        rebind_start = time.perf_counter()
                         state = rebind_first_state(
                             state,
                             batch,
                             cgroup_path=Path(config.first_step_host_rebind.cgroup_path),
                             observe=lambda phase, sample: logger.info("Host rebind %s: %s", phase, sample),
                         )
+                        logger.info(
+                            "Host rebind complete process=%d rebind_seconds=%.3f",
+                            jax.process_index(),
+                            time.perf_counter() - rebind_start,
+                        )
                         if jax.process_index() == 0:
                             logger.info("C_PHASE first_step_host_rebind end step=%d", current_step)
                     # Match the v7a2 diagnostic's AOT reference lifetime.
                     del compiled_first_step
+                    _wait_after_first_step_host_rebind(timing, config.first_step_host_rebind, current_step)
                 with timing.span("train_step", step=current_step):
                     if config.carried_restore_step is not None and jax.process_index() == 0:
                         logger.info("C_PHASE train_step start step=%d", current_step + 1)

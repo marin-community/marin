@@ -26,6 +26,7 @@ class HostRebindConfig:
     """Optional first-step host rebind and memory observation location."""
 
     cgroup_path: str = "/sys/fs/cgroup"
+    post_rebind_barrier_timeout_seconds: float = 1800.0
 
 
 def state_snapshot(state):
