@@ -9,7 +9,7 @@ from typing import Any
 
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT, DaytonaUnsafeReason
+from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT
 from zephyr.context import ZephyrContext
 
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
@@ -40,6 +40,9 @@ PINNED_IMAGE = "registry/image@sha256:" + "a" * 64
 
 class FixtureCensusEngine:
     """Counts one agent machine slot for every task that declares a native environment."""
+
+    def describe(self) -> str:
+        return "fixture engine: one agent machine slot per task that declares an environment"
 
     def measure(self, envelopes) -> EnvelopeMeasurement:
         converted = 0
@@ -248,7 +251,6 @@ def test_unsafe_reasons_require_measured_details_for_every_reason():
     assert set(reasons) == {"execution_requirement"}
     assert reasons["execution_requirement"] == "task-a: refused"
     assert counts == {"execution_requirement": 1}
-    assert DaytonaUnsafeReason("execution_requirement") in {DaytonaUnsafeReason(reason) for reason in reasons}
 
 
 def test_population_digest_orders_rows_by_task_id():

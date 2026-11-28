@@ -23,6 +23,8 @@ from taskcompendium.models import (
 )
 
 VERIFIER_DOCUMENT_PATHS = ("task.toml", "verifier.toml", "taskcompendium-verifier.toml")
+NATIVE_CONFIG_DOCUMENT = "task.toml"
+"""The verifier document whose declared environment names a native task's grading boundary."""
 
 
 class GradingEnvironmentMode(StrEnum):
@@ -72,15 +74,14 @@ def _grader_machine(grader: Grader) -> GraderMachine | None:
 def assess_grading_environment(task: TaskSpec) -> GradingEnvironmentAssessment:
     """Derive the required state boundary from the task, independently of catalog declarations.
 
-    A SHARED result establishes the container boundary: grading reads agent-mutable
-    workspace state, so the grader needs the task's own machine (or a delivery
-    contract, which later stage ports bring to this schema).
+    A SHARED result establishes the container boundary: the grader reads
+    agent-mutable workspace state, so grading runs where the agent ran.
     """
     documents = _verifier_documents(task)
-    native = isinstance(task.grader, NoGrader) and "task.toml" in documents
+    native = isinstance(task.grader, NoGrader) and NATIVE_CONFIG_DOCUMENT in documents
     declared = GradingEnvironmentMode.SEPARATE
     if native:
-        verifier = documents["task.toml"].get("verifier", {})
+        verifier = documents[NATIVE_CONFIG_DOCUMENT].get("verifier", {})
         declared = GradingEnvironmentMode(
             verifier.get("environment_mode") or ("separate" if verifier.get("environment") is not None else "shared")
         )
@@ -113,7 +114,11 @@ def assess_grading_environment(task: TaskSpec) -> GradingEnvironmentAssessment:
         grader.mode
         if isinstance(grader, VerifyitGrader)
         else next(
-            (document["mode"] for name, document in documents.items() if name != "task.toml" and "mode" in document),
+            (
+                document["mode"]
+                for name, document in documents.items()
+                if name != NATIVE_CONFIG_DOCUMENT and "mode" in document
+            ),
             None,
         )
     )

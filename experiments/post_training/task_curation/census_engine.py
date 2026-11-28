@@ -18,12 +18,11 @@ import tempfile
 import tomllib
 from collections import Counter
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
-from shellbox.backends.daytona.machine import DaytonaMachineFactory
-from shellbox.backends.local.machine import check_local_environment
-from shellbox.machine import NetworkPolicy, UnsupportedMachineSpec
+from shellbox.machine import MachineFactory, NetworkPolicy, UnsupportedMachineSpec
+from taskcompendium.grading_environment import NATIVE_CONFIG_DOCUMENT
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import EnvironmentRequirements, TaskResource, grader_environment
 from taskcompendium.pipeline.census import (
@@ -37,11 +36,9 @@ from taskcompendium.runtime.resources import resource_bytes
 from experiments.post_training.task_curation.environment_fidelity import ENVIRONMENT_PREFIX
 from experiments.post_training.task_curation.lowered_envelope import MachineShape
 
-# Native identity counting runs through Harbor's isolated runtime, which not
-# every environment installs: those imports stay inside the measurement functions.
-
-PROFILE: Mapping[str, object] = {"cpus": None, "memory_mb": None, "storage_mb": None, "gpus": 0}
-"""The machine shape a lowered task without native allocations measures under."""
+# Daytona's SDK and Harbor's runtime are optional extras: this module imports
+# them only where a machine measurement needs them, so a population without
+# declared machine demands (and environments without the extras) still measures.
 
 ROLE_NETWORKS: Mapping[str, str] = {"agent": "allow", "grader": "deny"}
 ACTOR_ENVIRONMENT_SOURCES = ("docker_image", "docker_build", "packages_lock", "package_spec")
@@ -55,112 +52,164 @@ class DaytonaCensusEngine:
     """Measure declared machine envelopes through production identities, without provider calls."""
 
     def measure(self, envelopes: Iterable[TaskEnvelope]) -> EnvelopeMeasurement:
-        converted = 0
-        machine_slots = 0
-        sizes: Counter[str] = Counter()
-        execution_failures: Counter[str] = Counter()
-        mapping_failures: Counter[str] = Counter()
-        roles: dict[str, dict[str, RoleOutcome]] = {"agent": {}, "grader": {}}
-        actor_sources: Counter[str] = Counter()
-        unsafe_task_counts: Counter[str] = Counter()
-        identities: dict[str, SNAPSHOT_IDENTITY] = {}
-        local_checks: dict[str, str | None] = {}
-        factory = DaytonaMachineFactory()
+        total = EnvelopeMeasurement(roles={"agent": {}, "grader": {}})
+        context = _MeasureContext()
         for envelope in envelopes:
-            converted += 1
-            task, spec = envelope.task, envelope.spec
-            if spec is None:
-                mapping_failures[f"{envelope.task_id}: task is not a valid TaskSpec"] += 1
-                continue
-            native = "harbor" in task.get("tags", ())
-            shapes: Mapping[str, Mapping] = {}
-            if native:
-                shapes = native_shapes(native_task_toml(task))
-                native = any(row["path"] == "task.toml" for row in task["resources"]["verifier"])
-            grader_env = grader_environment(spec.grader)
-            task_sources: dict[str, object] = {}
-            has_machine = False
-            task_failures: list[str] = []
-            for role, declared in (("agent", spec.environment_requirements), ("grader", grader_env)):
-                shape = {**PROFILE, "network": ROLE_NETWORKS[role], **dict(shapes.get(f"{role}_machine") or {})}
-                needs_machine = (native and role == "agent") or (declared is not None and any(dict(declared).values()))
-                if not needs_machine:
-                    continue
-                if role == "agent":
-                    task_sources = {name: getattr(declared, name) for name in ACTOR_ENVIRONMENT_SOURCES}
-                    actor_sources.update(name for name, value in task_sources.items() if value is not None)
-                    has_machine = True
-                is_local = role == "grader" and declared.packages_lock is not None
-                outcome = roles[role].setdefault("local" if is_local else "daytona", RoleOutcome())
-                outcome.machine_slots += 1
-                if is_local:
-                    outcome_key = _local_key(declared, shape)
-                    if outcome_key not in local_checks:
-                        local_checks[outcome_key] = _check_local(declared, shape)
-                    if (refusal := local_checks[outcome_key]) is not None:
-                        outcome.failures[refusal] = outcome.failures.get(refusal, 0) + 1
-                    continue
-                runtime = {
-                    "task_machine": shape if role == "agent" else None,
-                    "verifier_machine": shape if role == "grader" else None,
-                }
-                identity_inputs = (
-                    [
-                        row
-                        for row in task["resources"]["verifier"]
-                        if row["path"] == "task.toml" or row["path"].startswith(ENVIRONMENT_PREFIX)
-                    ]
-                    if native and role == "agent"
-                    else declared.model_dump(mode="json")
-                )
-                key = canonical_sha256([identity_inputs, runtime])
-                if key not in identities:
-                    identities[key] = _measure_identity(envelope.task_id, task, declared, shape, role, native, factory)
-                name, errors = identities[key]
-                if name is not None and role == "agent":
-                    sizes[name] += 1
-                for detail in errors:
-                    outcome.failures[detail] = outcome.failures.get(detail, 0) + 1
-                    if role == "agent":
-                        task_failures.append(detail)
-            for detail in task_failures:
-                reason = actor_failure_reason(detail, task_sources)
-                unsafe_task_counts[reason] += 1
-                execution_failures[detail] += 1
-            machine_slots += has_machine
-        return EnvelopeMeasurement(
-            converted=converted,
-            machine_slots=machine_slots,
-            snapshot_sizes=dict(sizes),
-            execution_failures=dict(execution_failures),
-            mapping_failures=dict(mapping_failures),
-            roles=roles,
-            actor_sources=dict(actor_sources),
-            unsafe_task_counts=dict(unsafe_task_counts),
+            total = _merge(total, _measure_task(envelope, context))
+        return total
+
+    def describe(self) -> str:
+        return (
+            "actor on Daytona, package-lock grader on LOCAL; snapshot identity through the "
+            "production naming path (Harbor's task-config mapping for natives, the shellbox "
+            "MachineSpec for lowered specs); no provider calls"
         )
 
 
-def _measure_identity(
-    task_id: str,
-    task: Mapping,
+@dataclass
+class _MeasureContext:
+    """One measure() pass's caches and its lazily constructed backend machinery."""
+
+    local_checks: dict[str, str | None] = field(default_factory=dict)
+    identities: dict[str, SNAPSHOT_IDENTITY] = field(default_factory=dict)
+    _factory: MachineFactory | None = field(default=None, repr=False)
+
+    def factory(self) -> MachineFactory:
+        """The Daytona factory, constructed on the first machine measurement that needs it."""
+        if self._factory is None:
+            from shellbox.backends.daytona.machine import DaytonaMachineFactory  # noqa: PLC0415
+
+            self._factory = DaytonaMachineFactory()
+        return self._factory
+
+
+def _merge(total: EnvelopeMeasurement, task: EnvelopeMeasurement) -> EnvelopeMeasurement:
+    """Fold one task's measurement into the population aggregate."""
+    return EnvelopeMeasurement(
+        converted=total.converted + task.converted,
+        machine_slots=total.machine_slots + task.machine_slots,
+        snapshot_sizes=_sum(total.snapshot_sizes, task.snapshot_sizes),
+        execution_failures=_sum(total.execution_failures, task.execution_failures),
+        mapping_failures=_sum(total.mapping_failures, task.mapping_failures),
+        roles={
+            role: {
+                backend: _merge_role(total.roles.get(role, {}).get(backend, RoleOutcome()), outcome)
+                for backend, outcome in {**total.roles.get(role, {}), **task.roles.get(role, {})}.items()
+            }
+            for role in ("agent", "grader")
+        },
+        actor_sources=_sum(total.actor_sources, task.actor_sources),
+        unsafe_task_counts=_sum(total.unsafe_task_counts, task.unsafe_task_counts),
+    )
+
+
+def _sum(total: Mapping[str, int], task: Mapping[str, int]) -> dict[str, int]:
+    """Add two count mappings without assuming either is a Counter."""
+    counts = Counter(total)
+    counts.update(task)
+    return dict(counts)
+
+
+def _merge_role(total: RoleOutcome, task: RoleOutcome) -> RoleOutcome:
+    """Fold one role outcome into the aggregate."""
+    return RoleOutcome(
+        machine_slots=total.machine_slots + task.machine_slots,
+        failures={
+            **total.failures,
+            **{reason: total.failures.get(reason, 0) + count for reason, count in task.failures.items()},
+        },
+    )
+
+
+def _measure_task(envelope: TaskEnvelope, context: _MeasureContext) -> EnvelopeMeasurement:
+    """One task's declared machine envelopes, its actor sources and its refusal reasons."""
+    task, spec = envelope.task, envelope.spec
+    if spec is None:
+        return EnvelopeMeasurement(
+            converted=1,
+            roles={"agent": {}, "grader": {}},
+            mapping_failures={f"{envelope.task_id}: task is not a valid TaskSpec": 1},
+        )
+    native = "harbor" in task.get("tags", ())
+    shapes: Mapping[str, Mapping] = {}
+    if native:
+        shapes = native_shapes(native_task_toml(task))
+        native = any(row["path"] == NATIVE_CONFIG_DOCUMENT for row in task["resources"]["verifier"])
+    measurement = EnvelopeMeasurement(converted=1, roles={"agent": {}, "grader": {}})
+    grader_env = grader_environment(spec.grader)
+    task_sources: dict[str, object] = {}
+    task_failures: list[str] = []
+    machine_slots = 0
+    for role, declared in (("agent", spec.environment_requirements), ("grader", grader_env)):
+        shape = {**asdict(MachineShape()), "network": ROLE_NETWORKS[role], **dict(shapes.get(f"{role}_machine") or {})}
+        needs_machine = (native and role == "agent") or (declared is not None and any(dict(declared).values()))
+        if not needs_machine:
+            continue
+        outcome = _measure_role_machine(role, declared, shape, native, task, envelope.task_id, context, measurement)
+        if role == "agent":
+            task_sources = {name: getattr(declared, name) for name in ACTOR_ENVIRONMENT_SOURCES}
+            for name, value in task_sources.items():
+                if value is not None:
+                    measurement.actor_sources[name] = measurement.actor_sources.get(name, 0) + 1
+            machine_slots += 1
+            task_failures.extend(outcome.failures)
+    for detail in task_failures:
+        reason = actor_failure_reason(detail, task_sources)
+        measurement.unsafe_task_counts[reason] = measurement.unsafe_task_counts.get(reason, 0) + 1
+        measurement.execution_failures[detail] = measurement.execution_failures.get(detail, 0) + 1
+    return replace(measurement, machine_slots=machine_slots)
+
+
+def _measure_role_machine(
+    role: str,
     declared: EnvironmentRequirements,
     shape: Mapping,
-    role: str,
     native: bool,
-    factory: DaytonaMachineFactory,
+    task: Mapping,
+    task_id: str,
+    context: _MeasureContext,
+    measurement: EnvelopeMeasurement,
+) -> RoleOutcome:
+    """Measure one role's declared machine and record its outcome on the task measurement."""
+    is_local = role == "grader" and declared.packages_lock is not None
+    outcome = measurement.roles[role].setdefault("local" if is_local else "daytona", RoleOutcome())
+    outcome.machine_slots += 1
+    if is_local:
+        outcome_key = _local_key(declared, shape)
+        if outcome_key not in context.local_checks:
+            context.local_checks[outcome_key] = _check_local(declared, shape)
+        if (refusal := context.local_checks[outcome_key]) is not None:
+            outcome.failures[refusal] = outcome.failures.get(refusal, 0) + 1
+        return outcome
+    identity_inputs = _native_config_rows(task) if native and role == "agent" else declared.model_dump(mode="json")
+    runtime = {
+        "task_machine": shape if role == "agent" else None,
+        "verifier_machine": shape if role == "grader" else None,
+    }
+    key = canonical_sha256([identity_inputs, runtime])
+    if key not in context.identities:
+        context.identities[key] = (
+            _native_identity(task_id, task)
+            if native and role == "agent"
+            else _lowered_identity(role, declared, shape, context.factory())
+        )
+    name, errors = context.identities[key]
+    if name is not None and role == "agent":
+        measurement.snapshot_sizes[name] = measurement.snapshot_sizes.get(name, 0) + 1
+    for detail in errors:
+        outcome.failures[detail] = outcome.failures.get(detail, 0) + 1
+    return outcome
+
+
+def _lowered_identity(
+    role: str, declared: EnvironmentRequirements, shape: Mapping, factory: MachineFactory
 ) -> SNAPSHOT_IDENTITY:
-    """One declared machine's snapshot name and refusals, through the production identity."""
+    """A lowered task machine's snapshot name and refusals, through the production identity."""
     from experiments.post_training.task_curation.daytona_identity import declared_identity  # noqa: PLC0415
 
-    if native:
-        return _native_identity(task_id, task)
-    machine_shape = MachineShape(
-        cpus=shape.get("cpus"),
-        memory_mb=shape.get("memory_mb"),
-        storage_mb=shape.get("storage_mb"),
-        gpus=shape.get("gpus", 0),
+    measured = declared_identity(
+        role, declared, MachineShape.from_mapping(shape), factory, network=NetworkPolicy(shape["network"])
     )
-    measured = declared_identity(role, declared, machine_shape, factory, network=NetworkPolicy(shape["network"]))
     return measured.name, tuple(error for error in (measured.mapping_error, measured.execution_error) if error)
 
 
@@ -181,14 +230,11 @@ def _local_key(declared: EnvironmentRequirements, shape: Mapping) -> str:
 
 def _check_local(declared: EnvironmentRequirements, shape: Mapping) -> str | None:
     """The local checker's refusal for one declared package-lock grader, or ``None`` when it runs."""
+    from shellbox.backends.local.machine import check_local_environment  # noqa: PLC0415
+
     from experiments.post_training.task_curation.daytona_identity import declared_machine  # noqa: PLC0415
 
-    machine_shape = MachineShape(
-        cpus=shape.get("cpus"),
-        memory_mb=shape.get("memory_mb"),
-        storage_mb=shape.get("storage_mb"),
-        gpus=shape.get("gpus", 0),
-    )
+    machine_shape = MachineShape.from_mapping(shape)
     with tempfile.TemporaryDirectory() as tmp:
         try:
             machine = declared_machine(
@@ -209,10 +255,19 @@ def _check_local(declared: EnvironmentRequirements, shape: Mapping) -> str | Non
 
 def native_task_toml(task: Mapping) -> bytes:
     """A native Harbor task's delivered ``task.toml``."""
-    delivered = [row for row in task["resources"]["verifier"] if row["path"] == "task.toml"]
+    delivered = [row for row in task["resources"]["verifier"] if row["path"] == NATIVE_CONFIG_DOCUMENT]
     if not delivered:
         raise ValueError(f"harbor-tagged task carries no delivered task.toml: {task.get('id')}")
     return resource_bytes(TaskResource.model_validate(delivered[0]))
+
+
+def _native_config_rows(task: Mapping) -> list[Mapping]:
+    """The verifier resources the native identity names: the delivered config and its build context."""
+    return [
+        row
+        for row in task["resources"]["verifier"]
+        if row["path"] == NATIVE_CONFIG_DOCUMENT or row["path"].startswith(ENVIRONMENT_PREFIX)
+    ]
 
 
 def native_shapes(task_toml: bytes) -> dict[str, dict]:
@@ -240,9 +295,7 @@ def _native_archive(task: Mapping) -> bytes:
     """Reassemble a native task's delivered configuration and environment build context."""
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
-        for row in task["resources"]["verifier"]:
-            if row["path"] != "task.toml" and not row["path"].startswith(ENVIRONMENT_PREFIX):
-                continue
+        for row in _native_config_rows(task):
             resource = TaskResource.model_validate(row)
             content = resource_bytes(resource)
             entry = tarfile.TarInfo(resource.path)

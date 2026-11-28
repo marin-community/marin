@@ -116,7 +116,8 @@ SOURCE_PIPELINE_REVISION = "14"
 PANEL_ROWS_PER_SHARD = 16
 ROWS_PER_SHARD = 1000
 MAX_PREPARATION_SHARDS = 64
-OUTPUT_VIEWS = ("download", "normalize", "review", "verify", "final", "census")
+CENSUS_VIEW = "census"
+OUTPUT_VIEWS = ("download", "normalize", "review", "verify", "final", CENSUS_VIEW)
 SIDECAR_SHARD = "part-{shard:05d}.parquet"
 UNPROCESSED_REVIEW_TEMPLATE = "review/unprocessed-{shard:05d}.parquet"
 SCRATCH_PHASES = ("sample", "full", "quality", "audited", "filtered", "verified")
@@ -672,11 +673,11 @@ def _census(run: _SourceRun) -> CensusEvidence | None:
         return None
     if recipe.source.revision is None:
         raise ValueError(f"{recipe.name}: the census requires a pinned source revision")
-    output = run.output / "census"
+    output = run.output / CENSUS_VIEW
     # A rerun with a different population must not leave the previous census beside it.
     if output.exists():
         output.rmtree()
-    with run.telemetry.phase("census"):
+    with run.telemetry.phase(CENSUS_VIEW):
         evidence, contracts = measure_population(
             _census_rows(str(run.output / "normalize")),
             source_name=recipe.name,
@@ -878,7 +879,7 @@ def _write_manifest(
         "normalized_shard_limit": config.normalized_shards,
         "source_input": run.source_input,
         "source_file_overrides": {name: asdict(file) for name, file in (run.source_overrides or {}).items()},
-        "datasets": {name: str(output / name) for name in OUTPUT_VIEWS if name != "census" or census is not None},
+        "datasets": {name: str(output / name) for name in OUTPUT_VIEWS if name != CENSUS_VIEW or census is not None},
         "source_dataset": recipe.source.dataset,
         "source_revision": recipe.source.revision,
         "recipe_revision": recipe.version,
@@ -893,7 +894,7 @@ def _write_manifest(
         "unavailable_reviews": unavailable_reviews,
         "quality": decision.model_dump(mode="json"),
         "verification": report,
-        "census": census.manifest_section() if census is not None else None,
+        CENSUS_VIEW: census.manifest_section() if census is not None else None,
         "admission": source_admission(admissions),
         "admission_counts": admissions,
         "processed_rows": verification["input_rows"],
@@ -995,7 +996,7 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
         str(run.output / "review"),
         str(run.output / "verify"),
         str(run.output / "final"),
-        str(run.output / "census") if census is not None else None,
+        str(run.output / CENSUS_VIEW) if census is not None else None,
         manifest_path=str(run.output / "manifest.json"),
         status=status,
     )

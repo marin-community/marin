@@ -40,29 +40,27 @@ from typing import Any
 import pyarrow.parquet as pq
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
+from fray.types import ResourceConfig
 from marin.execution.lazy import run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
-from taskcompendium.pipeline.models import FilterPolicy
 from taskcompendium.pipeline.source_processing import (
-    SourcePipelineConfig,
     SourcePipelineResult,
     SourceProcessingMode,
     run_source_pipeline,
 )
-from taskcompendium.pipeline.source_quality import SourceQualityPolicy
-from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
-from taskcompendium.pipeline.stages import AuditExecution
+from taskcompendium.pipeline.source_quality import SOURCE_QUALITY_SAMPLE_SIZE
 from zephyr.context import ZephyrContext
 
 from experiments.post_training.task_curation.campaign import CampaignRuntime
-from experiments.post_training.task_curation.census_engine import DaytonaCensusEngine
 from experiments.post_training.task_curation.local import artifact_prefix
-from experiments.post_training.task_curation.pipeline import download_step, source_recipe
+from experiments.post_training.task_curation.pipeline import _pipeline_config, download_step, source_recipe
+from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.sources import all_sources
 
 logger = logging.getLogger(__name__)
 
+REPRODUCTION_JSON = "reproduction.json"
 MEASUREMENT_FIELDS = (
     "daytona_machine_slots",
     "daytona_snapshot_count",
@@ -108,17 +106,15 @@ def read_stage_population_ids(result: SourcePipelineResult) -> set[str]:
     return population
 
 
-def _run_stage(args: argparse.Namespace, source: Any, run_root: str) -> SourcePipelineResult:
-    """Run the FULL source pipeline on the staged source with the census engine."""
+def _run_stage(args: argparse.Namespace, source: RlDataSource, run_root: str) -> SourcePipelineResult:
+    """Run the FULL source pipeline on the staged source through main's production settings."""
     with ExitStack() as cleanup:
         client = LocalClient()
         cleanup.callback(client.shutdown)
         cleanup.enter_context(set_current_client(client))
         runtime = CampaignRuntime()
         with artifact_prefix(args.artifact_root):
-            with ZephyrContext(
-                client=client, max_workers=args.max_workers
-            ) as context:
+            with ZephyrContext(client=client, max_workers=args.max_workers) as context:
                 with runtime.activate(context):
                     staged = run(download_step(source.config.source, runtime), max_concurrent=1)[0]
                     source_input = staged.path
@@ -126,16 +122,17 @@ def _run_stage(args: argparse.Namespace, source: Any, run_root: str) -> SourcePi
                 # The sealed receipt measured the converter's census, before model review.
                 # Clearing the rubric keeps this run's measured population equal to that census.
                 recipe = replace(recipe, rubric=None)
-                config = SourcePipelineConfig(
-                    mode=SourceProcessingMode.FULL,
-                    quality_policy=SourceQualityPolicy(),
-                    verification_policy=SourceVerificationPolicy(20, 0, 1, 0.95),
-                    review=None,
-                    execution=AuditExecution(max_workers=args.max_workers),
-                    filter_policy=FilterPolicy(),
+                config = _pipeline_config(
+                    SourceProcessingMode.FULL,
+                    None,
+                    None,
+                    None,
+                    seed=0,
+                    quality_sample_size=SOURCE_QUALITY_SAMPLE_SIZE,
+                    verification_sample_size=20,
+                    max_workers=args.max_workers,
+                    worker_resources=ResourceConfig(cpu=2, ram="8g"),
                     normalized_shards=2,
-                    machines=None,
-                    census=DaytonaCensusEngine(),
                 )
                 output = prefix_join(run_root, "pipeline")
                 return run_source_pipeline(
@@ -149,7 +146,9 @@ def _run_stage(args: argparse.Namespace, source: Any, run_root: str) -> SourcePi
                 )
 
 
-def _compare(result: SourcePipelineResult, receipt: dict[str, Any], branch_population: set[str] | None) -> dict[str, Any]:
+def _compare(
+    result: SourcePipelineResult, receipt: dict[str, Any], branch_population: set[str] | None
+) -> dict[str, Any]:
     """Compare the stage run's census with the sealed receipt."""
     manifest = json.loads(StoragePath(result.manifest_path).read_text())
     census = manifest["census"]
@@ -170,9 +169,7 @@ def _compare(result: SourcePipelineResult, receipt: dict[str, Any], branch_popul
                 "branch_only_tasks": sorted(branch_population - stage_ids),
             }
         )
-    fields = {
-        name: {"receipt": receipt["measurement"][name], "stage": measurement[name]} for name in MEASUREMENT_FIELDS
-    }
+    fields = {name: {"receipt": receipt["measurement"][name], "stage": measurement[name]} for name in MEASUREMENT_FIELDS}
     contract_comparison = {
         name: {"receipt": receipt["integrity_contracts"][name], "stage": contracts[name]} for name in CONTRACT_FIELDS
     }
@@ -184,8 +181,10 @@ def _compare(result: SourcePipelineResult, receipt: dict[str, Any], branch_popul
         "stage": {
             "status": manifest["status"],
             "raw_population_count": manifest["raw_population_count"],
-            "measured_population": "every converted task of the checked audit (the converter census here, "
-            "because the harness clears the rubric)",
+            "measured_population": (
+                "every converted task of the checked audit (the converter census here, "
+                "because the harness clears the rubric)"
+            ),
             "admission_counts": manifest["admission_counts"],
             "rejections": census["rejections"],
         },
@@ -265,16 +264,16 @@ def main() -> None:
     result = _run_stage(args, source, run_root)
     comparison = _compare(result, receipt, branch_population)
     args.output.write_text(json.dumps(comparison, indent=2, sort_keys=True) + "\n")
-    per_run = prefix_join(run_root, "reproduction.json")
+    per_run = prefix_join(run_root, REPRODUCTION_JSON)
     with StoragePath(per_run).open("wt", auto_mkdir=True) as stream:
         stream.write(json.dumps(comparison, indent=2, sort_keys=True) + "\n")
-    with StoragePath(prefix_join(args.artifact_root, "reproduction.json")).open("wt", auto_mkdir=True) as stream:
+    with StoragePath(prefix_join(args.artifact_root, REPRODUCTION_JSON)).open("wt", auto_mkdir=True) as stream:
         stream.write(json.dumps(comparison, indent=2, sort_keys=True) + "\n")
     logger.info(
         "Reproduction result written to %s, %s and %s: reproduced=%s",
         args.output,
         per_run,
-        prefix_join(args.artifact_root, "reproduction.json"),
+        prefix_join(args.artifact_root, REPRODUCTION_JSON),
         comparison["reproduced"],
     )
 

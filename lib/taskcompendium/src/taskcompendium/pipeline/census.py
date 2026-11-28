@@ -21,7 +21,7 @@ import json
 import logging
 from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Protocol
 
 from finestore.rl.curation import (
@@ -48,7 +48,6 @@ from taskcompendium.models import TaskSpec
 logger = logging.getLogger(__name__)
 
 CENSUS_REVISION = "1"
-CONTRACT_FIELDS = ("id", "version", "dependency_state", "harness_policy")
 HARNESS_POLICY_FIELDS = (
     "harness",
     "harness_sha256",
@@ -100,6 +99,10 @@ class CensusEngine(Protocol):
 
     def measure(self, envelopes: Iterable[TaskEnvelope]) -> EnvelopeMeasurement: ...
 
+    def describe(self) -> str:
+        """The measurement rule this engine applies, for the published count basis."""
+        ...
+
 
 def actor_failure_reason(detail: str, sources: Mapping[str, object]) -> str:
     """Classify one actor refusal by the environment source that caused it."""
@@ -131,11 +134,24 @@ def unsafe_counts(measurement: EnvelopeMeasurement) -> dict[str, int]:
     return counts
 
 
+@dataclass(frozen=True)
+class ContractGroup:
+    """One integrity-contract descriptor and the cohort sharing it."""
+
+    id: str | None
+    version: int | None
+    dependency_state: str | None
+    native_family: str | None
+    harness_policy: dict[str, Any] | None
+    present: bool
+    count: int
+
+
 @dataclass
 class ContractCensus:
     """Group the population's declared integrity contracts by their published descriptor."""
 
-    groups: dict[str, dict] = field(default_factory=dict)
+    groups: dict[str, ContractGroup] = field(default_factory=dict)
     example: dict | None = None
     required_shared: int = 0
     shared_missing: int = 0
@@ -146,19 +162,29 @@ class ContractCensus:
         contract = task.get("integrity_contract")
         self.required_shared += required_shared
         self.shared_missing += required_shared and contract is None
-        descriptor = {key: (contract or {}).get(key) for key in CONTRACT_FIELDS}
-        descriptor["native_family"] = ((contract or {}).get("native") or {}).get("family")
-        if contract is not None:
-            descriptor["harness_policy"] = {name: contract[name] for name in HARNESS_POLICY_FIELDS if name in contract}
-        descriptor["present"] = contract is not None
+        harness_policy = (
+            {name: contract[name] for name in HARNESS_POLICY_FIELDS if name in contract}
+            if contract is not None
+            else None
+        )
+        descriptor = {
+            "id": (contract or {}).get("id"),
+            "version": (contract or {}).get("version"),
+            "dependency_state": (contract or {}).get("dependency_state"),
+            "native_family": ((contract or {}).get("native") or {}).get("family"),
+            "harness_policy": harness_policy,
+            "present": contract is not None,
+        }
         key = canonical_sha256(descriptor)
-        group = self.groups.setdefault(key, {**descriptor, "count": 0})
-        group["count"] += 1
+        group = self.groups.get(key)
+        self.groups[key] = (
+            ContractGroup(**descriptor, count=1) if group is None else replace(group, count=group.count + 1)
+        )
         if self.example is None and contract is not None and len(json.dumps(contract).encode()) <= 16384:
             self.example = {"task_id": task["id"], "contract": contract}
 
-    def rows(self) -> list[dict]:
-        return sorted(self.groups.values(), key=lambda group: (-group["count"], canonical_sha256(group)))
+    def rows(self) -> list[ContractGroup]:
+        return sorted(self.groups.values(), key=lambda group: (-group.count, canonical_sha256(asdict(group))))
 
 
 def population_digest(rows: Iterable[tuple[str, str]]) -> str:
@@ -177,20 +203,18 @@ def contract_summary(
     return IntegrityContractSummary(
         groups=[
             IntegrityContractGroup(
-                id=group.get("id"),
-                version=group.get("version"),
-                dependency_state=group.get("dependency_state"),
-                native_family=group.get("native_family"),
-                harness_policy_sha256=(
-                    canonical_sha256(group["harness_policy"]) if group.get("harness_policy") else None
-                ),
-                present=group["present"],
-                count=group["count"],
+                id=group.id,
+                version=group.version,
+                dependency_state=group.dependency_state,
+                native_family=group.native_family,
+                harness_policy_sha256=canonical_sha256(group.harness_policy) if group.harness_policy else None,
+                present=group.present,
+                count=group.count,
             )
             for group in rows[:64]
         ],
         distinct_groups=len(rows),
-        absent_contract_tasks=sum(group["count"] for group in rows if not group["present"]),
+        absent_contract_tasks=sum(group.count for group in rows if not group.present),
         required_shared_tasks=census.required_shared,
         shared_missing_contract_tasks=census.shared_missing,
         example=(
@@ -208,7 +232,7 @@ def contract_summary(
 def write_contract_evidence(census: ContractCensus, path: str) -> None:
     """Publish the complete contract groups beside the bounded receipt summary."""
     document = {
-        "groups": census.rows(),
+        "groups": [asdict(group) for group in census.rows()],
         "example": census.example,
         "required_shared_tasks": census.required_shared,
         "shared_missing_contract_tasks": census.shared_missing,
@@ -338,8 +362,7 @@ def measure_population(
     basis = (
         f"Complete {measurement.converted}-TaskSpec census from {dataset_id}@{dataset_revision}; "
         f"native Harbor task.toml or declared environment requirements; "
-        f"actor on Daytona, package-lock grader on LOCAL; snapshot identity through the production "
-        f"naming path; no provider calls; recipe revision {converter_revision}"
+        f"{engine.describe()}; recipe revision {converter_revision}"
     )
     return (
         CensusEvidence(
