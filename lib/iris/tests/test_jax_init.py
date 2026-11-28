@@ -33,6 +33,7 @@ from iris.jax.init import initialize_jax, resolve_coordinator_port
 INITIAL_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-0"
 RETRY_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-3"
 COORDINATOR_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-5"
+_DISABLED_AUTOTUNE_FLAG = "--xla_gpu_autotune_level=0"
 
 
 @dataclass
@@ -496,20 +497,13 @@ def test_launch_provenance_mirrors_the_autotune_cache_to_object_storage(tmp_path
     assert calls == [(jax_cache_module._XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)]
 
 
-@pytest.mark.parametrize("xla_flags", ["--xla_gpu_autotune_level=0", "--xla_gpu_autotune_level 0"])
+@pytest.mark.parametrize("xla_flags", [_DISABLED_AUTOTUNE_FLAG, "--xla_gpu_autotune_level 0"])
 def test_disabled_autotuning_fetches_without_publishing_host_leftovers(tmp_path, xla_flags) -> None:
     root = str(tmp_path / "remote")
     seed = tmp_path / "seed"
     writer = FineStoreDirectory(root, str(seed))
     (seed / "cached.textproto").write_bytes(b"tuned")
     writer.close()
-
-    mirrors: list[FineStoreDirectory] = []
-
-    def start_mirror(root: str, local: str) -> FineStoreDirectory:
-        mirror = FineStoreDirectory(root, local)
-        mirrors.append(mirror)
-        return mirror
 
     with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
         os.environ[LAUNCH_PROVENANCE_ENV] = "{}"
@@ -519,13 +513,10 @@ def test_disabled_autotuning_fetches_without_publishing_host_leftovers(tmp_path,
         (autotune_dir / "leftover.textproto").write_bytes(b"old")
         with (
             patch.object(jax_cache_module, "_file_set_cache_root", return_value=root),
-            patch.object(jax_cache_module, "FineStoreDirectory", side_effect=start_mirror),
+            patch.object(jax_cache_module, "FineStoreDirectory", side_effect=AssertionError("uploader started")),
             patch("iris.jax.compile_cache.marin_prefix", return_value="s3://marin-eu/marin/"),
         ):
             configure_jax_compilation_cache()
-        for mirror in mirrors:
-            mirror.close()
-
         assert (autotune_dir / "cached.textproto").read_bytes() == b"tuned"
 
     assert fetch_file_set(root, str(tmp_path / "reloaded")) == {"cached.textproto"}
@@ -600,7 +591,7 @@ def test_autotune_cache_stays_node_local_without_a_launch_provenance(tmp_path) -
 def test_autotune_file_set_fetch_failure_aborts_startup(tmp_path) -> None:
     with _isolated_jax_cache_config(), _gpu_task(tmp_path):
         os.environ[LAUNCH_PROVENANCE_ENV] = "{}"
-        os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
+        os.environ["XLA_FLAGS"] = _DISABLED_AUTOTUNE_FLAG
         with (
             patch.object(jax_cache_module, "_file_set_cache_root", return_value="gs://cache/tree"),
             patch.object(fileset_module, "ReadView", side_effect=OSError("unavailable")),
@@ -613,7 +604,7 @@ def test_autotune_file_set_fetch_failure_aborts_startup(tmp_path) -> None:
 def test_autotune_cache_local_directory_uses_build_tree_hash(tmp_path) -> None:
     with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
         os.environ[LAUNCH_PROVENANCE_ENV] = "{}"
-        os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
+        os.environ["XLA_FLAGS"] = _DISABLED_AUTOTUNE_FLAG
         with (
             patch.object(jax_cache_module, "launch_provenance", return_value=SimpleNamespace(tree_hash="build-a")),
             patch.object(jax_cache_module, "_file_set_cache_root", return_value=str(tmp_path / "remote")),

@@ -36,7 +36,7 @@ class _AutotuneCacheRole(enum.StrEnum):
 
 
 def _xla_flag_value(flags: str, name: str) -> str | None:
-    """Return the last XLA flag value in either supported argument form."""
+    """Return the last value, or ``None`` if absent; a bare flag has an empty value."""
     tokens = flags.split()
     value = None
     for index, token in enumerate(tokens):

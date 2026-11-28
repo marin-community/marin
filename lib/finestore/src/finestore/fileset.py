@@ -30,7 +30,7 @@ DEFAULT_FETCH_LOG_INTERVAL = 10.0
 
 
 class FileSetFetchLimitError(RuntimeError):
-    """A committed file set exceeded its file or byte budget."""
+    """A committed file set exceeded a size cap or lacks size metadata needed to enforce one."""
 
 
 class FileSetFetchDeadlineError(TimeoutError):
@@ -43,7 +43,7 @@ class FileSetPublishLimitError(RuntimeError):
 
 @dataclass(frozen=True)
 class FileSetFetchLimits:
-    """Bound a fetch by logical files, bytes, and elapsed seconds."""
+    """Cap logical files and bytes; check the time limit between file operations."""
 
     max_files: int
     max_bytes: int
@@ -143,6 +143,12 @@ def fetch_file_set(root: str, local: str, *, limits: FileSetFetchLimits | None =
                 total_bytes,
                 elapsed,
                 len(fetched) / elapsed,
+                extra={
+                    "files_processed": len(fetched),
+                    "files_written": files_written,
+                    "files_skipped": files_skipped,
+                    "bytes_processed": total_bytes,
+                },
             )
             next_log = now + (limits.log_interval if limits else DEFAULT_FETCH_LOG_INTERVAL)
     _check_deadline(deadline)
@@ -206,17 +212,12 @@ class FineStoreDirectory:
                 if self._published_files + len(pending) > self._fetch_limits.max_files:
                     raise FileSetPublishLimitError(f"file-set publish exceeds {self._fetch_limits.max_files} files")
                 pending_bytes = sum((self._local / name).stat().st_size for name in pending)
-                if self._published_bytes + pending_bytes > self._fetch_limits.max_bytes:
-                    raise FileSetPublishLimitError(f"file-set publish exceeds {self._fetch_limits.max_bytes} bytes")
+                self._check_publish_bytes(pending_bytes)
             batch = []
             batch_bytes = 0
             for relative in pending:
                 data = (self._local / relative).read_bytes()
-                if (
-                    self._fetch_limits is not None
-                    and self._published_bytes + batch_bytes + len(data) > self._fetch_limits.max_bytes
-                ):
-                    raise FileSetPublishLimitError(f"file-set publish exceeds {self._fetch_limits.max_bytes} bytes")
+                self._check_publish_bytes(batch_bytes + len(data))
                 if batch and (
                     batch_bytes + len(data) > self._max_batch_data_bytes or len(batch) >= self._max_batch_files
                 ):
@@ -278,3 +279,7 @@ class FineStoreDirectory:
         self._known.update(name for name, _data in files)
         self._published_files += len(files)
         self._published_bytes += sum(len(data) for _name, data in files)
+
+    def _check_publish_bytes(self, additional_bytes: int) -> None:
+        if self._fetch_limits is not None and self._published_bytes + additional_bytes > self._fetch_limits.max_bytes:
+            raise FileSetPublishLimitError(f"file-set publish exceeds {self._fetch_limits.max_bytes} bytes")

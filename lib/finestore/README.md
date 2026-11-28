@@ -225,11 +225,13 @@ Two adapters build cache behavior on this primitive:
   into a local directory and publishes newly created files in payload-bounded batches.
   Iris uses it for XLA's per-fusion autotune directory, replacing the ZIP mirror.
   A fetch preserves a regular local file when its bytes match the committed blob;
-  missing or different files are atomically replaced. `FileSetFetchLimits` lets callers
+  missing, different, or unreadable local files are atomically replaced.
+  `FileSetFetchLimits` lets callers
   cap the number of files, logical bytes, and elapsed fetch time. A cap or deadline
   raises a dedicated error; other fetch failures also reach the caller. A mirror
-  excludes every file present at construction from later uploads and keeps
-  subsequent uploads within the fetch limits when supplied.
+  excludes every file present at construction from later uploads and bounds
+  its own subsequent uploads with the fetch limits when supplied. Concurrent
+  mirrors can still grow the shared remote set beyond those limits.
 
 Both adapters are caches: callers choose whether a failure is a miss or a startup error. Cache
 cleanup does not acknowledge persistence or return a commit token. Use

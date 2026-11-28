@@ -482,8 +482,10 @@ before choosing its level-0 fallback. The local directory and remote root
 are keyed by the launch tree hash; the remote root uses 30-day temporary storage.
 The fetch allows at most 500,000 files and 2 GiB of logical data, checks a
 5-minute deadline between file operations, and logs progress after a completed
-file when at least 10 seconds have elapsed. The uploader keeps the remote set
-within the same file and byte limits.
+file when at least 10 seconds have elapsed. Each uploader stops before its own
+tracked remote set exceeds the same file and byte limits. Concurrent jobs with
+the same tree hash can still grow the shared remote set beyond those limits;
+the next fetch then fails at startup.
 A fetch limit or storage failure aborts startup before distributed initialization.
 An individual blocked filesystem operation may outlast the deadline. JAX's own
 compilation cache stays on object storage under the Marin prefix: JAX writes it only from
