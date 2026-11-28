@@ -1,0 +1,69 @@
+{
+ "input": {
+  "carry_forward": null,
+  "converter_revision": "6956e2d91c31d70435512d423eed2d01807dd563",
+  "converter_version": "2026.11.17.1",
+  "dataset_id": "open-athena/atlas-oracle-1e0af0ebe59e0eb380bf-repaired-20261127-v4",
+  "dataset_revision": "269ce8ab72c2002fa24c19ef70110651f157da10",
+  "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.17.1/rst-repaired-admission-v4/rst-actor/.artifact.json",
+  "measured_tasks": 621,
+  "task_specs_sha256": "68d2601b6ab0cad15549d27fa289b25ed54f70ee72f2b2a26a55ac48848fa304"
+ },
+ "integrity_contracts": {
+  "absent_contract_tasks": 0,
+  "dataset_id": "open-athena/atlas-oracle-1e0af0ebe59e0eb380bf-repaired-20261127-v4",
+  "dataset_revision": "269ce8ab72c2002fa24c19ef70110651f157da10",
+  "distinct_groups": 1,
+  "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.17.1/rst-repaired-admission-v4/rst-actor/integrity-contracts.json",
+  "example": {
+   "contract_json": "{\"agent_user\": null, \"dependency_state\": \"agent_mutable\", \"id\": \"root-delivery\", \"known_open_gaps\": [\"Agent-installed pytest plugins and imports in the shared image environment\", \"Candidate-produced test-output injection\"], \"undeclared_deadline\": false, \"verifier_files\": [{\"mode\": 493, \"name\": \"test.sh\", \"sha256\": \"bcf640342e9062f871ab4d3d1fcb9192e0e9e4f631964a9f501154f9afd4611c\"}, {\"mode\": 420, \"name\": \"test.sh.uvx_bak\", \"sha256\": \"51438e5afdc4ded84fe51cb2e91f840687b9a89992c5e508478e6ba171c7a44c\"}, {\"mode\": 420, \"name\": \"test_state.py\", \"sha256\": \"173e9bb91c70e1c68ab388b3becdd0c90865ca5b59aaa60b1467f7f91ff17dfa\"}], \"version\": 1}",
+   "task_id": "rst-validated-004948799384dd00837e6f3ce83a674917f10652c465abff3bf8004e50e6ae64"
+  },
+  "groups": [
+   {
+    "count": 621,
+    "dependency_state": "agent_mutable",
+    "harness_policy_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "id": "root-delivery",
+    "native_family": null,
+    "present": true,
+    "version": 1
+   }
+  ],
+  "required_shared_tasks": 621,
+  "shared_missing_contract_tasks": 0,
+  "task_specs_sha256": "68d2601b6ab0cad15549d27fa289b25ed54f70ee72f2b2a26a55ac48848fa304"
+ },
+ "measurement": {
+  "dataset_id": "open-athena/atlas-oracle-1e0af0ebe59e0eb380bf-repaired-20261127-v4",
+  "dataset_revision": "269ce8ab72c2002fa24c19ef70110651f157da10",
+  "daytona_count_basis": "Complete 621-TaskSpec census from open-athena/atlas-oracle-1e0af0ebe59e0eb380bf-repaired-20261127-v4@269ce8ab72c2002fa24c19ef70110651f157da10; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.17.1/rst-repaired-admission-v4/rst-population",
+  "daytona_execution_failures": 0,
+  "daytona_machine_slots": 621,
+  "daytona_roles": {
+   "agent": {
+    "daytona": {
+     "failures": {},
+     "machine_slots": 621
+    }
+   },
+   "grader": {
+    "daytona": {
+     "failures": {},
+     "machine_slots": 621
+    }
+   }
+  },
+  "daytona_snapshot_count": 501,
+  "daytona_unsafe_counts": {
+   "too_many_snapshots": 621
+  },
+  "daytona_unsafe_details": {
+   "too_many_snapshots": "501 actor snapshot identities exceed the 10-snapshot budget"
+  },
+  "daytona_unsafe_reasons": [
+   "too_many_snapshots"
+  ]
+ },
+ "source_id": "RST:laion/rts-1k-rootless-apptainer"
+}
