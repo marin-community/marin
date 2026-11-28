@@ -1,10 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build the per-group comparison table from measurement summary files.
+"""Build the final RL-vs-SFT per-update comparison from the measurement summaries.
 
-Reads ``summary-*.json`` outputs under the results prefix and renders the report
-table: per pair x group movement, per-update values, and the RL/SFT ratio.
+Reads every ``summary-*.json`` under the results prefix, keeps the as-stored
+group aggregates, and renders the report: per pair x group movement, the
+per-update values, and the RL/SFT ratio against the clean FP32 SFT pair.
 
 Usage (anywhere with read access to the results prefix):
   python experiments/active/mochi-update-magnitude/report.py \
@@ -28,6 +29,15 @@ GROUP_ORDER = [
     "embed_output",
     "attention_conv_gate",
 ]
+GROUP_LABELS = {
+    "attention": "attention projections",
+    "expert_banks": "expert MLP banks",
+    "shared_dense_mlp": "shared/dense MLP",
+    "router": "router",
+    "norm_scales": "norm scales",
+    "embed_output": "embeddings + output",
+    "attention_conv_gate": "attention conv/gate",
+}
 
 
 def load_summaries(results_prefix: str) -> list[dict]:
@@ -49,48 +59,63 @@ def main() -> None:
     args = parser.parse_args()
 
     summaries = load_summaries(args.results)
-    rows = [row for doc in summaries for row in doc.get("summary", []) if row.get("lands") == "as-stored"]
-    by_stage: dict[str, list[dict]] = {}
-    for row in rows:
-        by_stage.setdefault(row["stage"], []).append(row)
+    rows = [r for doc in summaries for r in doc.get("summary", []) if r.get("lands") == "as-stored"]
+    # Latest stamp wins when a pair was measured more than once.
+    latest: dict[tuple, dict] = {}
+    for doc in summaries:
+        stamp = posixpath.basename(doc.get("_source", "")).replace("summary-", "").replace(".json", "")
+        for row in doc.get("summary", []):
+            if row.get("lands") != "as-stored":
+                continue
+            key = (row["pair"], row["group"])
+            prior = latest.get(key)
+            if prior is None or stamp >= prior[0]:
+                latest[key] = (stamp, row)
+    rows = [row for _, row in latest.values()]
 
-    print("# RL vs SFT per-update weight movement (as-stored, group-level)\n")
+    def group_index(group: str) -> int:
+        return GROUP_ORDER.index(group) if group in GROUP_ORDER else 99
+
+    print("# Mochi per-update weight movement: RL vs SFT (as-stored lands)\n")
     for stage in ("rl", "sft"):
-        stage_rows = by_stage.get(stage, [])
+        stage_rows = sorted((r for r in rows if r["stage"] == stage), key=lambda r: (r["pair"], group_index(r["group"])))
         if not stage_rows:
             continue
-        print(f"## {stage}\n")
-        print("| pair | updates | group | rel_norm | per update | median elem rel | bf16 changed |")
+        print(f"## {stage} pairs\n")
+        print("| pair | updates | group | rel_norm (stage) | per update | median |Δ|/|W| | bf16 changed |")
         print("|---|---|---|---|---|---|---|")
-        for row in sorted(
-            stage_rows, key=lambda r: (r["pair"], GROUP_ORDER.index(r["group"]) if r["group"] in GROUP_ORDER else 99)
-        ):
+        for row in stage_rows:
             print(
-                f"| {row['pair']} | {row['updates']} | {row['group']} "
+                f"| {row['pair']} | {row['updates']} | {GROUP_LABELS.get(row['group'], row['group'])} "
                 f"| {row['group_rel_norm']:.3e} | {row['group_rel_norm_per_update']:.3e} "
-                f"| {row.get('group_median_rel_elem')} | {row.get('group_frac_bf16_changed')} |"
+                f"| {row.get('group_median_rel_elem'):.3e} | {row.get('group_frac_bf16_changed'):.3f} |"
             )
         print()
 
-    # RL/SFT ratio per group, pairing each RL pair against the clean FP32 SFT pair.
-    sft_rows = {(r["group"], r["updates"]): r for r in by_stage.get("sft", [])}
-    rl_rows = by_stage.get("rl", [])
-    if rl_rows and sft_rows:
-        print("## RL/SFT per-update ratio (vs sft-exp3-0to2100)\n")
-        print("| rl pair | group | rl per update | sft per update | ratio |")
-        print("|---|---|---|---|---|")
-        sft_by_group = {group: row for (group, updates), row in sft_rows.items() if updates == 2100}
-        for row in sorted(
-            rl_rows, key=lambda r: (r["pair"], GROUP_ORDER.index(r["group"]) if r["group"] in GROUP_ORDER else 99)
-        ):
-            sft = sft_by_group.get(row["group"])
-            if sft and row.get("group_rel_norm_per_update") and sft.get("group_rel_norm_per_update"):
-                ratio = row["group_rel_norm_per_update"] / sft["group_rel_norm_per_update"]
+    sft_by_group = {
+        group: row
+        for (pair, group), (_, row) in ((k, v) for k, v in ((key, val) for key, val in latest.items()))
+        if pair == "sft-exp3-0to2100"
+    }
+    rl_pairs = sorted({pair for (pair, _) in latest if pair.startswith("rl-")})
+    if rl_pairs and sft_by_group:
+        print("## RL/SFT per-update ratio (per group, vs the clean FP32 SFT pair)\n")
+        print("| rl pair | updates | group | rl per update | sft per update | ratio |")
+        print("|---|---|---|---|---|---|")
+        for pair in rl_pairs:
+            for group in GROUP_ORDER:
+                rl = latest.get((pair, group))
+                sft = sft_by_group.get(group)
+                if not rl or not sft:
+                    continue
+                rl_pu, sft_pu = rl["group_rel_norm_per_update"], sft["group_rel_norm_per_update"]
+                if not rl_pu or not sft_pu:
+                    continue
                 print(
-                    f"| {row['pair']} | {row['group']} | {row['group_rel_norm_per_update']:.3e} "
-                    f"| {sft['group_rel_norm_per_update']:.3e} | {ratio:.2f} |"
+                    f"| {pair} | {rl['updates']} | {GROUP_LABELS.get(group, group)} "
+                    f"| {rl_pu:.3e} | {sft_pu:.3e} | {rl_pu / sft_pu:.2f} |"
                 )
-        print()
+            print()
 
 
 if __name__ == "__main__":
