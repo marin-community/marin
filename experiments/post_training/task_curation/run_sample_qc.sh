@@ -28,10 +28,16 @@ cd "$WORKDIR"
 TARBALL="https://github.com/marin-community/marin/archive/$REVISION.tar.gz"
 curl -fsSL --retry 5 --retry-delay 5 -o "marin-$REVISION.tar.gz" "$TARBALL"
 tar -tzf "marin-$REVISION.tar.gz" > /dev/null
-tar -xzf "marin-$REVISION.tar.gz" -C "$WORKDIR"
 # GitHub names the archive root after the FULL commit sha even when the ref is
-# short, so derive the extracted root instead of assuming the ref string.
-root=$(tar -tzf "marin-$REVISION.tar.gz" | head -1 | cut -d/ -f1)
+# short, and a truncating `tar -t | head` pipe dies under pipefail - extract
+# into a clean directory and take its single top-level entry instead.
+extract_dir="$WORKDIR/extract"
+rm -rf "$extract_dir"
+mkdir -p "$extract_dir"
+tar -xzf "marin-$REVISION.tar.gz" -C "$extract_dir"
+set -- "$extract_dir"/*
+[ $# -eq 1 ] && [ -d "$1" ] || { echo "sample qc: the archive did not extract to a single root directory" >&2; exit 1; }
+root=$1
 test -f "$root/experiments/post_training/task_curation/sample_qc.py" \
   || { echo "sample qc: the extracted tree is missing the campaign module" >&2; exit 1; }
 cd "$root"
