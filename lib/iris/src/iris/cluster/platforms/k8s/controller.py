@@ -831,7 +831,8 @@ class K8sControllerProvider:
             self.preflight_controller(config)
             self.verify_prerequisites(config)
             assert_no_inlined_secrets(config)
-            if self.uses_s3_storage(config):
+            storage_health = config.kubernetes_provider.node_health and config.kubernetes_provider.node_health.storage
+            if self.uses_s3_storage(config) or storage_health is not None:
                 _resolve_s3_credentials()
         except Exception as e:
             raise ControllerRestartNotStarted(f"Controller restart failed before Kubernetes changes: {e}") from e

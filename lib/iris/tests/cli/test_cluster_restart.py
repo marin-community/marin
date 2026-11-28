@@ -86,6 +86,8 @@ def test_controller_restart_failure_preserves_or_requests_rollback(
     )
 
     assert result.exit_code == 1
+    if rollback_probe_fails:
+        assert isinstance(result.exception, SystemExit)
     record = read_rollout_record(remote_state_dir)
     if rollback_probe_fails:
         assert record is not None

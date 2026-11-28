@@ -1538,7 +1538,10 @@ def _auto_rollback(
         )
         return
     click.echo(f"Auto-rolling back to previous image {previous_image}...")
-    _rollback_controller(bundle, config, remote_state_dir, previous_image, pre_deploy_checkpoint, pending_record)
+    try:
+        _rollback_controller(bundle, config, remote_state_dir, previous_image, pre_deploy_checkpoint, pending_record)
+    except ControllerRestartNotStarted as e:
+        raise SystemExit(1) from e
 
 
 def _request_rollback(remote_state_dir: str | None, rollback_image: str, rollback_checkpoint: str | None) -> None:
