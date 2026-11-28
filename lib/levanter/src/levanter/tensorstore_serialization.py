@@ -988,6 +988,7 @@ class _Wave:
         self.bound = bound
         self.pending = 0
         self.bytes = 0
+        self.close_requested = False
         self.error: BaseException | None = None
         self.stores: dict[str, ts.Future] = {}
         self.writes: list[ts.WriteFutures] = []
@@ -1097,6 +1098,7 @@ class _ManifestWaves:
         with self._lock:
             wave = self._wave
             if wave is not None:
+                wave.close_requested = True
                 self._close_if_ready(wave)
 
     def _write_finished(self, wave: _Wave, error: BaseException | None) -> None:
@@ -1120,9 +1122,9 @@ class _ManifestWaves:
     def _close_if_ready(self, wave: _Wave) -> None:
         if wave.pending != 0 or wave is not self._wave:
             return
-        # A writer the loop has not scheduled yet must still be able to join this wave.
-        # Close early only when a later writer is already blocked on the budget.
-        if self._finished != self._expected and not self._gate.has_waiters:
+        # Waiters waking from a previous commit may still fit in this wave.
+        # Only close early if this wave has already blocked a new reservation.
+        if self._finished != self._expected and not wave.close_requested:
             return
         self._wave = None
         held = wave.bytes
