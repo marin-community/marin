@@ -45,6 +45,12 @@ from taskforge.sandbox.images import BUILD_LIMITS, docker_build_from_directory
 @click.option("--timeout", type=click.IntRange(min=1), required=True, help="Execution deadline in seconds")
 @click.option("--scheduling-timeout", type=click.IntRange(min=1), required=True, help="Scheduling deadline in seconds")
 @click.option("--no-wait", is_flag=True, help="Submit the build job and print its id and destination without waiting")
+@click.option(
+    "--memory-gb",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Raise the build job's memory above the default 4 GiB (an OOMKilled build is under-sized, not a class defect)",
+)
 def main(
     context: Path,
     repository: str,
