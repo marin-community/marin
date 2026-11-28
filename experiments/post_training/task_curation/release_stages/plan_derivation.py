@@ -61,7 +61,12 @@ from experiments.post_training.task_curation.lexical_artifacts import ActorCensu
 from experiments.post_training.task_curation.release_stages import census as census_stage
 from experiments.post_training.task_curation.release_stages import declarations as declarations_stage
 from experiments.post_training.task_curation.release_stages.admission_check import prior_available_sources
-from experiments.post_training.task_curation.release_stages.graph import PLAN_KIND, ReleasePlan, write_plan
+from experiments.post_training.task_curation.release_stages.graph import (
+    DIFFICULTY_SNAPSHOTS,
+    PLAN_KIND,
+    ReleasePlan,
+    write_plan,
+)
 from experiments.post_training.task_curation.release_stages.history_staging import Query
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 from experiments.post_training.task_curation.release_stages.qc_browse import changed_review_sources
@@ -693,6 +698,12 @@ def derive_release_plan(
     grader_drift_reference = (drift_reference_fn or _measure_grader_drift_reference)(
         repo_root, config.freeze_source_revision, declared
     )
+    # The registry's difficulty seal binds at derive time (the same rule load_plan
+    # applies on resume): a sealed plan and its registered difficulty seal stay
+    # coherent, so the derivation seals the binding instead of leaving the field
+    # for the load-time adoption to diverge from the sealed bytes.
+    bound = json.loads(DIFFICULTY_SNAPSHOTS.read_text()).get(config.release_id)
+    difficulty_snapshot = ArtifactRef.model_validate(bound) if bound is not None else None
 
     plan_identity = {
         "release_id": config.release_id,
@@ -772,6 +783,7 @@ def derive_release_plan(
         main_source_sync=config.main_source_sync,
         strict_audit_local=config.strict_audit_local,
         grader_drift_reference=grader_drift_reference,
+        difficulty_snapshot=difficulty_snapshot,
         validation_grading_environments={},
         validation_integrity_contracts={
             source_id: record

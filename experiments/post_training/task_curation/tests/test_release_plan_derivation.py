@@ -1398,3 +1398,42 @@ def test_qc_browse_plan_slice_uses_the_measured_exclusions(monkeypatch):
     assert set(captured["inputs"].exclusions) == {"Marin:fixture"}
     assert captured["inputs"].expected_panels == plan.expected_panels
     assert proof["mode"] == "dry-run"
+
+
+def test_derivation_binds_the_registered_difficulty_seal(tmp_path, frozen_layer, deployment, monkeypatch):
+    """The registry's difficulty seal binds at derive time: the sealed plan carries the
+    binding instead of leaving it for load_plan's resume-time adoption to diverge from
+    the sealed bytes (the v45 plan-node refusal)."""
+    registry = {"testrelease": {"uri": "gs://bucket/difficulty/release-seals/testrelease/seal.json", "sha256": "d" * 64}}
+    registry_path = tmp_path / "difficulty_snapshots.json"
+    registry_path.write_text(json.dumps(registry))
+    monkeypatch.setattr(plan_derivation, "DIFFICULTY_SNAPSHOTS", registry_path)
+
+    layer = _source_layer(tmp_path, (RETAINED_ID, TARGET_ID))
+    prior = _prior_pins(tmp_path, _declaration_dump(layer))
+    config = _config(prior)
+
+    monkeypatch.setattr(plan_derivation, "derived_contract_receipts", _contract_receipts_factory({TARGET_ID: 2}))
+    derived = derive_release_plan(
+        config,
+        repo_root=REPO_ROOT,
+        query=_applet_query(PRIOR_LOAD_ID, PRIOR_CURRICULUM_LOAD_ID, [RETAINED_ID], [RETAINED_ID]),
+        sources_fn=lambda: layer,
+        prior_catalog_reader=lambda root, q: read_prior_catalog_state(
+            root,
+            q,
+            catalog_factory=_catalog_factory((RETAINED_ID,)),
+            receipt_keys_fn=lambda: {},
+        ),
+        drift_reference_fn=lambda root, revision, declared: GraderDriftReference(
+            main=MainRecipeReference(revision="e" * 40, merge_base=revision),
+            sources={
+                source_id: SealedRecipeReference(source_id=source_id, converter_revision=revision)
+                for source_id in declared
+            },
+        ),
+    )
+
+    plan = ReleasePlan.model_validate(derived.plan_document)
+    assert plan.difficulty_snapshot is not None
+    assert plan.difficulty_snapshot.sha256 == "d" * 64
