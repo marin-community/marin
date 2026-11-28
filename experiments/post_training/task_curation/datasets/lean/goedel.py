@@ -78,46 +78,58 @@ def _is_valid_row(row: dict[str, Any]) -> bool:
     return True
 
 
-def convert_goedel(row: RawRow, context) -> TaskSpec | type:
-    """Convert one Goedel-Lean row into a Lean proof TaskSpec."""
+def convert_goedel(row: RawRow, context) -> TaskSpec | ImportRejection:
+    """Convert one Goedel-Lean row into a Lean proof TaskSpec.
+
+    Parses the first user message's ``lean4`` block into prefix + formal_statement,
+    sets the target to ``sorry`` (no verified golden proof), and calls
+    ``proof_task`` with the multi-turn context as the informal description.
+    """
     data = row.data
     subset = data.get("subset", "")
     messages = data.get("messages", [])
     if subset not in ("lean4_revision", "lean4_completion"):
         return _reject("unsupported_subset", f"Unknown subset: {subset}")
 
-    last_assistant = _extract_last_assistant(messages)
-    lean_code = _extract_lean_block(last_assistant)
-    if not lean_code:
-        return _reject("missing_lean_block", "No ```lean4 fenced block in the last assistant message")
+    first_user = next((m.get("content", "") for m in messages if m.get("role") == "user"), None)
+    if not first_user:
+        return _reject("missing_user_message", "No user message in the transcript")
 
-    # The prompt is the full multi-turn context: the user's request, any prior
-    # assistant attempts, and the compiler-error feedback.
-    prompt_parts = []
-    for message in messages:
-        role = message.get("role", "")
-        content = message.get("content", "")
-        prompt_parts.append(f"### {role}:\n{content}")
-    prompt = "\n\n".join(prompt_parts)
+    # The user's Lean code block: the statement with `sorry`
+    marker = "```lean4\n"
+    code_start = first_user.find(marker)
+    if code_start < 0:
+        return _reject("missing_lean_block", "No ```lean4 fenced block in the user message")
+    code_end = first_user.find("```", code_start + len(marker))
+    if code_end < 0:
+        return _reject("unterminated_lean_block", "The ```lean4 block is not closed")
+    lean_code = first_user[code_start + len(marker) : code_end].strip()
 
-    # The task's public statement is the user's first message (the problem request).
-    first_user = next((m.get("content", "") for m in messages if m.get("role") == "user"), prompt)
+    # Split into prefix (imports/set_option/open) and formal_statement (theorem onwards)
+    lines = lean_code.split("\n")
+    statement_start = next(
+        (i for i, line in enumerate(lines) if line.strip().startswith("theorem") or line.strip().startswith("/--")),
+        None,
+    )
+    if statement_start is None:
+        return _reject("no_theorem", "No theorem declaration found in the Lean code")
+    prefix = "\n".join(lines[:statement_start]).strip()
+    formal_statement = "\n".join(lines[statement_start:]).strip()
 
-    # The answer reference is the model's last proof attempt (diagnostics only,
-    # never used as an oracle). The grader runs its own Lean kernel check.
-    evidence = {"subset": subset, "source": "goedel-lean-rl-v2"}
+    # No verified golden proof: the target is `sorry`
+    target = "sorry"
 
-    contract = statement_contract(lean_code, "", lean_code)
+    contract = statement_contract(prefix, formal_statement, target)
     if isinstance(contract, type):
         return contract
 
-    return proof_task(
-        row,
-        context,
-        contract,
-        first_user,
-        {**evidence, "proof": lean_code},
-    )
+    # The informal description is the user's message without the code block
+    informal = (first_user[:code_start] + first_user[code_end:]).strip()
+    if not informal:
+        informal = "Prove the theorem in Lean 4."
+
+    evidence = {"subset": subset, "source": "goedel-lean-rl-v2"}
+    return proof_task(row, context, contract, informal, evidence)
 
 
 def _reject(kind: str, reason: str):
