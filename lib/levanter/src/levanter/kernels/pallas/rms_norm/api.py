@@ -6,32 +6,22 @@
 from __future__ import annotations
 
 from functools import partial
-import math
 from types import MappingProxyType
 from typing import Literal, TypeAlias
 
 import jax
-import jax.numpy as jnp
 from jaxtyping import Array, Float
 from jax.sharding import NamedSharding
 
 from levanter.kernels.pallas.autotune_utils import sharding_of
 
 from .pallas_tpu import batch_invariant_rms_norm_pallas_tpu
-from .reference import MAX_FLATTENED_ROWS, SUPPORTED_HIDDEN_DIMS, batch_invariant_rms_norm_reference
+from .reference import _reference, _validate_inputs
 
 Implementation: TypeAlias = Literal["reference", "pallas_tpu"]
 
 
-def _reference_impl(x: jax.Array, weight: jax.Array, *, eps: float) -> jax.Array:
-    return batch_invariant_rms_norm_reference(x, weight, eps=eps)
-
-
-def _pallas_tpu_impl(x: jax.Array, weight: jax.Array, *, eps: float) -> jax.Array:
-    return batch_invariant_rms_norm_pallas_tpu(x, weight, eps=eps)
-
-
-IMPLEMENTATIONS = MappingProxyType({"reference": _reference_impl, "pallas_tpu": _pallas_tpu_impl})
+IMPLEMENTATIONS = MappingProxyType({"reference": _reference, "pallas_tpu": batch_invariant_rms_norm_pallas_tpu})
 
 
 def _reshard_to_nonempty_named_mesh(value: jax.Array, target_sharding) -> jax.Array:
@@ -40,32 +30,16 @@ def _reshard_to_nonempty_named_mesh(value: jax.Array, target_sharding) -> jax.Ar
     return value
 
 
-def _validate_public_inputs(x: jax.Array, weight: jax.Array, eps: float) -> None:
-    if x.ndim < 1:
-        raise ValueError(f"x must have at least one dimension, got shape {x.shape}.")
-    if weight.ndim != 1 or weight.shape[0] != x.shape[-1]:
-        raise ValueError(f"weight must have shape ({x.shape[-1]},), got {weight.shape}.")
-    if x.dtype not in (jnp.float32, jnp.bfloat16) or weight.dtype not in (jnp.float32, jnp.bfloat16):
-        raise TypeError(f"batch-invariant rms_norm supports float32/bfloat16, got x={x.dtype}, weight={weight.dtype}.")
-    if not math.isfinite(eps) or eps <= 0:
-        raise ValueError(f"eps must be a positive finite scalar, got {eps}.")
-
-
 def _forward(x: jax.Array, weight: jax.Array, *, eps: float, implementation: Implementation) -> jax.Array:
-    _validate_public_inputs(x, weight, eps)
-    if implementation not in IMPLEMENTATIONS:
+    _validate_inputs(x, weight, eps)
+    apply = IMPLEMENTATIONS.get(implementation)
+    if apply is None:
         raise ValueError(f"Unsupported RMSNorm implementation: {implementation!r}.")
-    hidden = x.shape[-1]
-    if hidden not in SUPPORTED_HIDDEN_DIMS:
-        raise ValueError(
-            f"batch-invariant rms_norm supports hidden dimensions {sorted(SUPPORTED_HIDDEN_DIMS)}, got {hidden}."
-        )
-    rows = math.prod(x.shape[:-1]) if x.ndim > 1 else 1
-    if not 1 <= rows <= MAX_FLATTENED_ROWS:
-        raise ValueError(f"batch-invariant rms_norm supports 1..{MAX_FLATTENED_ROWS} flattened rows, got {rows}.")
-    flat_x = x.reshape((-1, hidden))
-    out = IMPLEMENTATIONS[implementation](flat_x, weight, eps=eps)
-    return out.reshape(x.shape)
+    if implementation == "reference":
+        return apply(x, weight, eps=eps)
+
+    flat_x = x.reshape((-1, x.shape[-1]))
+    return apply(flat_x, weight, eps=eps).reshape(x.shape)
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(2, 3))
@@ -77,8 +51,8 @@ def batch_invariant_rms_norm(
 ) -> jax.Array:
     """Opt-in weighted RMSNorm with row arithmetic independent of surrounding batch.
 
-    The TPU implementation is local to each visible chip and supports only a
-    replicated weight. Activations must be row-sharded on a multi-device mesh.
+    Accepts positive hidden widths divisible by 128. On a multi-device TPU
+    mesh, shard activations by row and replicate the weight.
     """
     return _forward(x, weight, eps=eps, implementation=implementation)
 
@@ -95,7 +69,7 @@ def _batch_invariant_rms_norm_bwd(eps, implementation, residual, dy):
     dy_aligned = _reshard_to_nonempty_named_mesh(dy, x_sharding)
 
     def reference(value, scale):
-        output = batch_invariant_rms_norm_reference(value, scale, eps=eps)
+        output = _reference(value, scale, eps=eps)
         return _reshard_to_nonempty_named_mesh(output, x_sharding)
 
     _, pullback = jax.vjp(reference, x, weight)

@@ -7,10 +7,7 @@ import numpy as np
 import pytest
 
 from levanter.kernels.pallas.rms_norm import batch_invariant_rms_norm, batch_invariant_rms_norm_reference
-from levanter.kernels.pallas.rms_norm.pallas_tpu import (
-    PallasRmsNormUnsupportedError,
-    batch_invariant_rms_norm_pallas_tpu,
-)
+from levanter.kernels.pallas.rms_norm.pallas_tpu import PallasRmsNormUnsupportedError
 
 
 def _independent_reference(x, weight, eps):
@@ -20,16 +17,64 @@ def _independent_reference(x, weight, eps):
     ).astype(x.dtype)
 
 
-@pytest.mark.parametrize("hidden", [128, 256, 2560])
+def _bits(value):
+    host = np.asarray(value)
+    return host.view(np.uint16 if host.dtype.itemsize == 2 else np.uint32)
+
+
+@pytest.mark.parametrize("implementation", ["reference", pytest.param("pallas_tpu", marks=pytest.mark.tpu)])
+@pytest.mark.parametrize("hidden", [128, 2560, 4096])
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
-def test_batch_invariant_rms_norm_reference_is_bitwise_row_invariant(hidden, dtype):
+def test_batch_invariant_rms_norm_is_bitwise_row_invariant(implementation, hidden, dtype):
     key_x, key_w = jax.random.split(jax.random.key(hidden))
-    x = jax.random.normal(key_x, (512, hidden), dtype=dtype)
+    x = jax.random.normal(key_x, (1025, hidden), dtype=dtype)
     weight = jax.random.normal(key_w, (hidden,), dtype=dtype)
-    full = np.asarray(batch_invariant_rms_norm(x, weight, 1e-5, implementation="reference"))
-    for rows in (1, 8, 31, 32, 127, 128, 129):
-        output = np.asarray(batch_invariant_rms_norm(x[:rows], weight, 1e-5, implementation="reference"))
-        np.testing.assert_array_equal(output, full[:rows])
+    if implementation == "pallas_tpu":
+        if jax.default_backend() != "tpu":
+            pytest.skip("requires a TPU backend")
+        mesh = jax.sharding.Mesh(np.asarray(jax.devices()[:1]), ("data",))
+        x = jax.device_put(x, jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("data", None)))
+        weight = jax.device_put(weight, jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec()))
+
+    def apply(x, weight):
+        return batch_invariant_rms_norm(x, weight, 1e-5, implementation=implementation)
+
+    compiled = jax.jit(apply)
+    full = compiled(x, weight)
+    if dtype == jnp.float32:
+        np.testing.assert_allclose(
+            np.asarray(full), np.asarray(_independent_reference(x, weight, 1e-5)), rtol=1e-5, atol=1e-5
+        )
+    for start, rows in ((0, 1), (128, 127), (384, 129), (511, 513)):
+        output = compiled(x[start : start + rows], weight)
+        np.testing.assert_array_equal(_bits(output), _bits(full[start : start + rows]))
+
+
+@pytest.mark.tpu
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+def test_pallas_rms_norm_preserves_row_bits_across_device_counts(dtype):
+    if jax.default_backend() != "tpu" or jax.local_device_count() < 4:
+        pytest.skip("requires four local TPU devices")
+    devices = np.asarray(jax.local_devices()[:4])
+    hidden, rows_per_device = 2560, 641
+    rng = np.random.default_rng(18)
+    values = rng.standard_normal((4 * rows_per_device, hidden), dtype=np.float32)
+    rows = np.arange(4) * rows_per_device + np.array([0, 127, 512, 640])
+    values[rows] = values[0]
+    scales = rng.uniform(0.5, 1.5, hidden).astype(np.float32)
+
+    @jax.jit
+    def apply(x, weight):
+        return batch_invariant_rms_norm(x, weight, 1e-5, implementation="pallas_tpu")
+
+    def run(mesh, batch):
+        x = jax.device_put(batch, jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("data", None)))
+        weight = jax.device_put(scales, jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec()))
+        return _bits(apply(x.astype(dtype), weight.astype(dtype)))
+
+    alone = run(jax.sharding.Mesh(devices[:1], ("data",)), values[:1])
+    sharded = run(jax.sharding.Mesh(devices, ("data",)), values)
+    np.testing.assert_array_equal(sharded[rows], np.broadcast_to(alone, (4, hidden)))
 
 
 @pytest.mark.parametrize("shape", [(4, 128, 128), (32, 1, 256), (4, 128, 2560)])
@@ -79,16 +124,6 @@ def test_batch_invariant_rms_norm_public_pallas_backend_is_explicitly_tpu_only()
         pytest.skip("CPU-only contract check is not applicable on TPU.")
     with pytest.raises(NotImplementedError, match="requires a TPU backend"):
         batch_invariant_rms_norm(x, weight, 1e-5, implementation="pallas_tpu")
-
-
-@pytest.mark.parametrize("rows", [0, 513])
-def test_batch_invariant_rms_norm_has_one_shared_flattened_row_domain(rows):
-    x = jnp.ones((rows, 128), dtype=jnp.float32)
-    weight = jnp.ones((128,), dtype=jnp.float32)
-    with pytest.raises(ValueError, match="flattened rows"):
-        batch_invariant_rms_norm(x, weight, 1e-5, implementation="reference")
-    with pytest.raises(PallasRmsNormUnsupportedError, match="flattened rows"):
-        batch_invariant_rms_norm_pallas_tpu(x, weight, eps=1e-5)
 
 
 @pytest.mark.tpu

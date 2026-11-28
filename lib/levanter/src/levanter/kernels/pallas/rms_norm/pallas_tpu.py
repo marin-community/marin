@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""TPU Pallas implementation of the bounded row-local RMSNorm prototype."""
+"""TPU Pallas implementation of row-local RMSNorm."""
 
 from __future__ import annotations
 
@@ -18,11 +18,11 @@ from jaxtyping import Array, Float
 from levanter.kernels.pallas.autotune_utils import sharding_of
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 
-from .reference import MAX_FLATTENED_ROWS, SUPPORTED_HIDDEN_DIMS, _sum_hidden_tiles
+from .reference import _sum_hidden_tiles
 
 
 class PallasRmsNormUnsupportedError(NotImplementedError):
-    """Raised when the bounded TPU implementation cannot honor its contract."""
+    """Raised when the TPU implementation cannot honor its contract."""
 
 
 # Mosaic TPU block mappings require the penultimate row dimension to equal the
@@ -32,21 +32,9 @@ class PallasRmsNormUnsupportedError(NotImplementedError):
 _ROW_BLOCK_SIZE = 128
 
 
-def _validate_tpu_inputs(x: jax.Array, weight: jax.Array) -> None:
+def _validate_tpu_inputs(x: jax.Array) -> None:
     if x.ndim != 2:
         raise PallasRmsNormUnsupportedError(f"pallas_tpu expects rank-2 local rows, got {x.shape}.")
-    if x.shape[-1] not in SUPPORTED_HIDDEN_DIMS:
-        raise PallasRmsNormUnsupportedError(
-            f"pallas_tpu supports hidden dimensions {sorted(SUPPORTED_HIDDEN_DIMS)}, got {x.shape[-1]}."
-        )
-    if weight.shape != (x.shape[-1],):
-        raise PallasRmsNormUnsupportedError(f"weight must have shape {(x.shape[-1],)}, got {weight.shape}.")
-    if x.dtype not in (jnp.float32, jnp.bfloat16) or weight.dtype not in (jnp.float32, jnp.bfloat16):
-        raise PallasRmsNormUnsupportedError(f"unsupported dtypes x={x.dtype}, weight={weight.dtype}.")
-    if not 1 <= x.shape[0] <= MAX_FLATTENED_ROWS:
-        raise PallasRmsNormUnsupportedError(
-            f"pallas_tpu supports 1..{MAX_FLATTENED_ROWS} flattened rows, got {x.shape[0]}."
-        )
     if jax.default_backend() != "tpu":
         raise PallasRmsNormUnsupportedError("rms_norm pallas_tpu requires a TPU backend.")
 
@@ -168,5 +156,5 @@ def _sharded_local_pallas(x: Float[Array, "M D"], weight: Float[Array, "D"], *, 
 
 def batch_invariant_rms_norm_pallas_tpu(x: Float[Array, "M D"], weight: Float[Array, "D"], *, eps: float) -> jax.Array:
     """Apply the row-local TPU kernel; callers normalize leading axes first."""
-    _validate_tpu_inputs(x, weight)
+    _validate_tpu_inputs(x)
     return _sharded_local_pallas(x, weight, eps=eps)
