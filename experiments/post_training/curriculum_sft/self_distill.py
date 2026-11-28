@@ -212,18 +212,30 @@ def grade_samples(
     return records, chat_rows
 
 
-def _sample(endpoint: OpenAIEndpoint, problem: dict[str, Any], config: SelfDistillConfig) -> list[tuple[str, str]]:
+def sample_completions(
+    endpoint: OpenAIEndpoint,
+    prompt: str,
+    *,
+    n: int,
+    temperature: float,
+    top_p: float,
+    max_tokens: int,
+    seed: int,
+    enable_thinking: bool,
+) -> list[tuple[str, str]]:
+    """Sample ``n`` completions of one user message; return each (finish_reason, raw output)."""
     headers = {"Authorization": f"Bearer {endpoint.api_key}"} if endpoint.api_key else {}
     body = {
         "model": endpoint.model,
-        "messages": [{"role": "user", "content": problem["problem"]}],
-        "n": config.samples_per_problem,
-        "temperature": config.temperature,
-        "max_tokens": config.max_completion_tokens,
-        "seed": config.seed,
+        "messages": [{"role": "user", "content": prompt}],
+        "n": n,
+        "temperature": temperature,
+        "top_p": top_p,
+        "max_tokens": max_tokens,
+        "seed": seed,
         # Snowball's think delimiters are special tokens; keep them so the reasoning can be split out.
         "skip_special_tokens": False,
-        "chat_template_kwargs": {"enable_thinking": True},
+        "chat_template_kwargs": {"enable_thinking": enable_thinking},
     }
     response = requests.post(endpoint.url("chat/completions"), json=body, headers=headers, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
@@ -245,7 +257,22 @@ def _serve_and_sample(config: SelfDistillConfig) -> None:
     with remote_inference(inference) as session:
         endpoint = session.model.endpoint
         with ThreadPoolExecutor(CONCURRENT_REQUESTS) as pool:
-            outputs = list(pool.map(lambda item: _sample(endpoint, item[1], config), flat))
+            outputs = list(
+                pool.map(
+                    lambda item: sample_completions(
+                        endpoint,
+                        item[1]["problem"],
+                        n=config.samples_per_problem,
+                        temperature=config.temperature,
+                        # 1.0 is vLLM's default, which the request used before it sent top_p.
+                        top_p=1.0,
+                        max_tokens=config.max_completion_tokens,
+                        seed=config.seed,
+                        enable_thinking=True,
+                    ),
+                    flat,
+                )
+            )
 
     # math-verify arms its timeout with SIGALRM, which only works on the main thread.
     assert config.model.tokenizer is not None and config.model.tokenizer_revision is not None
