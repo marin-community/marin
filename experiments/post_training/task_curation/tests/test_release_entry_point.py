@@ -335,6 +335,9 @@ def _release_config(tmp_path: Path, release_id: str = "testrelease") -> Path:
         },
         "production_version": 41,
         "preview_base_version": 30,
+        # the prior snapshot id the re-cut detection compares the catalog's served
+        # snapshot against (the fixture plan's prior snapshot id)
+        "prior_snapshot_id": "assembly-prior-v1",
     }
     path = tmp_path / "release-config.json"
     path.write_text(json.dumps(config))
@@ -525,3 +528,25 @@ def test_landing_log_flag_points_the_guard_default(plan_document, tmp_path):
     assert exit_code == 0
     assert entry_point.guard.landing_log_path() == log
     del os.environ["ATLAS_PUSH_LOG"]
+
+
+def test_plan_argument_preserves_storage_uris():
+    """The sealed derived plan travels by storage URI, and --plan must carry it to
+    load_plan verbatim: pathlib collapses an embedded s3:// to s3:/ (a mid-path
+    double slash), which made the first URI-carried submission open the sealed plan
+    as a local file and refuse."""
+    args = entry_point.build_parser().parse_args(
+        [
+            "--version",
+            "atlas-2026.11.27",
+            "--plan",
+            "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/atlas-2026.11.27-2026.11.27.0505/release-plan.json",
+            "run",
+        ]
+    )
+    assert args.plan == (
+        "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/atlas-2026.11.27-2026.11.27.0505/release-plan.json"
+    )
+    assert isinstance(args.plan, str)
+    # the collapse this regression guards against
+    assert str(Path("s3://bucket/plan.json")) == "s3:/bucket/plan.json"

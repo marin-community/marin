@@ -617,13 +617,16 @@ def _extract_selection(argv: list[str]) -> list[str]:
     return translated
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="atlas-release",
         description=__doc__.splitlines()[0] if __doc__ else "atlas-release",
     )
+    # --plan stays a plain string: the sealed derived plan travels by storage URI, and
+    # pathlib collapses an embedded s3:// to s3:/ before load_plan can route it to the
+    # storage layer (the first URI-carried submission refused on exactly that).
     parser.add_argument("--version", help="The release id the plan must bind")
-    parser.add_argument("--plan", type=Path, help="The release plan document (JSON)")
+    parser.add_argument("--plan", help="The release plan document (JSON), a repo path or a storage URI")
     parser.add_argument(
         "--source-revision",
         help=(
@@ -673,6 +676,11 @@ def main(argv: list[str] | None = None) -> int:
 
     submit_parser = modes.add_parser("submit", help="Submit the release's root job to an in-region cluster")
     submit_parser.add_argument("--cluster", required=True, help="The cluster to submit to (e.g. cw-us-east-02a)")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
 
     tokens = _extract_selection(list(sys.argv[1:] if argv is None else argv))
     args = parser.parse_args(tokens)
