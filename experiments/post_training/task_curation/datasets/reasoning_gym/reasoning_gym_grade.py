@@ -7,7 +7,7 @@
 it. The script regenerates the entry with the grader packages' ``reasoning_gym`` and the seeds and JSON
 encoding of ``generate.py`` (shipped beside it), exits nonzero when the regenerated entry or the
 generator configuration differs from the recorded one, and otherwise scores the text after the reply's
-last ``Answer:`` marker, or the whole reply, with the task's own scorer. The scorer sees the
+last ``Answer:`` marker, or the whole reply, with the pinned scorer and targeted repairs. The scorer sees the
 generator's Python values, not their JSON forms.
 """
 

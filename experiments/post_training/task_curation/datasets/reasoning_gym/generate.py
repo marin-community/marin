@@ -43,6 +43,7 @@ import numpy as np
 with contextlib.redirect_stdout(sys.stderr):
     import reasoning_gym
     from reasoning_gym.factory import DATASETS
+    from verifyit.modes.reasoning_gym_scorers import score_reasoning_gym_reply
 
 ROWS_PER_TASK = 1000
 GENERATION_SEED = 42
@@ -74,10 +75,13 @@ def task_seed(name: str) -> int:
     return GENERATION_SEED + sorted(DATASETS).index(name)
 
 
-def negative_control(scorer: Scorer, entry: dict[str, Any]) -> dict[str, Any]:
+def negative_control(name: str, scorer: Scorer, entry: dict[str, Any]) -> dict[str, Any]:
     """Record the scorer's reward for a fixed wrong answer, or the error it raised."""
     try:
-        return {"candidate": NEGATIVE_CANDIDATE, "reward": float(scorer(NEGATIVE_CANDIDATE, entry))}
+        return {
+            "candidate": NEGATIVE_CANDIDATE,
+            "reward": float(score_reasoning_gym_reply(name, NEGATIVE_CANDIDATE, entry, scorer)),
+        }
     except Exception as error:
         return {
             "candidate": NEGATIVE_CANDIDATE,
@@ -142,7 +146,10 @@ def generated_rows(
         scorer = scorers[position]
         answer = positive_candidate(name, entry)
         # Scorers may compare tuple-valued metadata, so score the entry before its JSON round trip.
-        positive = {"candidate": answer, "reward": float(scorer(answer, entry)) if answer is not None else None}
+        positive = {
+            "candidate": answer,
+            "reward": float(score_reasoning_gym_reply(name, answer, entry, scorer)) if answer is not None else None,
+        }
         yield (
             index * len(names) + position,
             {
@@ -158,8 +165,8 @@ def generated_rows(
                 "recorded_pinned_generator_controls": {
                     "generator_version": generator_version,
                     "positive": positive,
-                    "negative": negative_control(scorer, entry),
-                    "execution": "Pinned reasoning-gym scorer",
+                    "negative": negative_control(name, scorer, entry),
+                    "execution": "Pinned reasoning-gym scorer with Marin repairs",
                 },
             },
         )
