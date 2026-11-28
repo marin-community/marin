@@ -393,3 +393,7 @@ def main() -> None:
     args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     LOGGER.info("scan counts: %s | unrepairable by reason: %s", report["counts"], report["unrepairable_by_reason"])
     print(json.dumps({"counts": report["counts"], "unrepairable_by_reason": report["unrepairable_by_reason"]}))
+
+
+if __name__ == "__main__":
+    main()
