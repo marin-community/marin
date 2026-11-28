@@ -138,6 +138,16 @@ def test_package_lock_graders_demand_a_local_host_without_snapshots():
     }
 
 
+def test_machine_free_tasks_do_not_double_count_declared_backends():
+    """A backend absent from a later task merges an empty outcome, not the accumulated total."""
+    declared = lowered_task("declared-fixture", PINNED_ACTOR)
+    machine_free = envelope(task_document("empty-fixture", environment={}))
+    measurement = DaytonaCensusEngine().measure([declared, machine_free])
+    assert measurement.converted == 2
+    assert measurement.machine_slots == 1
+    assert measurement.roles["agent"]["daytona"].machine_slots == 1
+
+
 def test_tasks_without_declared_environments_provision_nothing():
     empty = envelope(task_document("empty-fixture", environment={}))
     declared = lowered_task("declared-fixture", PINNED_ACTOR)

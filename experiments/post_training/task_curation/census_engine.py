@@ -93,8 +93,11 @@ def _merge(total: EnvelopeMeasurement, task: EnvelopeMeasurement) -> EnvelopeMea
         mapping_failures=_sum(total.mapping_failures, task.mapping_failures),
         roles={
             role: {
-                backend: _merge_role(total.roles.get(role, {}).get(backend, RoleOutcome()), outcome)
-                for backend, outcome in {**total.roles.get(role, {}), **task.roles.get(role, {})}.items()
+                backend: _merge_role(
+                    total.roles.get(role, {}).get(backend, RoleOutcome()),
+                    task.roles.get(role, {}).get(backend, RoleOutcome()),
+                )
+                for backend in {**total.roles.get(role, {}), **task.roles.get(role, {})}
             }
             for role in ("agent", "grader")
         },

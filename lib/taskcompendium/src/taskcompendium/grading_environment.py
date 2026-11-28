@@ -12,6 +12,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, computed_field
 
 from taskcompendium.models import (
+    AgentMachine,
     AnswerType,
     ArtifactKind,
     Grader,
@@ -89,6 +90,9 @@ def assess_grading_environment(task: TaskSpec) -> GradingEnvironmentAssessment:
         return GradingEnvironmentAssessment(
             required=GradingEnvironmentMode.SEPARATE, declared=None, reason="No executable grader is declared"
         )
+    elif isinstance(task.grader, ScriptGrader | VerifyitGrader) and isinstance(task.grader.placement, AgentMachine):
+        # A grader placed in the agent's machine declares shared grading, whatever its kind.
+        declared = GradingEnvironmentMode.SHARED
 
     grader = task.grader
     machine = _grader_machine(grader)

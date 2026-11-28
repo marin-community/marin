@@ -17,6 +17,7 @@ from taskcompendium.grading_environment import (
     grading_environment_census,
 )
 from taskcompendium.models import (
+    AgentMachine,
     AnswerType,
     CommandSemantics,
     ConversationInput,
@@ -135,6 +136,14 @@ def test_script_grader_collecting_inputs_grades_in_its_own_environment():
     assert (
         assessment.reason == "The script grader consumes declared collected inputs in its separate verifier environment"
     )
+
+
+def test_agent_machine_grader_declares_shared_grading():
+    grader = ScriptGrader(argv=["python", "grade.py"], placement=AgentMachine())
+    assessment = assess_grading_environment(_task(grader, capabilities=("git_repository",)))
+    assert assessment.required is GradingEnvironmentMode.SHARED
+    assert assessment.declared is GradingEnvironmentMode.SHARED
+    assert assessment.status is GradingEnvironmentStatus.MATCHED
 
 
 def test_repository_state_grading_requires_the_agent_machine():
