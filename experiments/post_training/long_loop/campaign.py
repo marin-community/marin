@@ -126,7 +126,9 @@ def place_per_task_images(recipe: dict, mix: CampaignMix) -> None:
     }
 
 
-def campaign_round(mix: CampaignMix, version: str, *, max_steps: int) -> AdoptedRlRound:
+def campaign_round(
+    mix: CampaignMix, version: str, *, max_steps: int, coordinator_memory: str | None = None
+) -> AdoptedRlRound:
     """Apply only the campaign's mix, step stop, identities and storage policy to .131."""
     if max_steps != 50:
         raise ValueError("The controlled campaign requires --max-steps 50")
@@ -171,7 +173,7 @@ def campaign_round(mix: CampaignMix, version: str, *, max_steps: int) -> Adopted
         **reference.rl.role_plan,
         "policy_num_nodes": trainer_gpus // reference.rl.role_plan["policy_num_gpus_per_node"],
     }
-    return dataclasses.replace(
+    spec = dataclasses.replace(
         reference,
         name=f"rl-data-campaign/{mix.id}",
         slug=f"mochi-campaign-{mix.id}",
@@ -193,6 +195,25 @@ def campaign_round(mix: CampaignMix, version: str, *, max_steps: int) -> Adopted
             },
             pools={"uri": prefix_join(reference.storage.output_prefix, f"rl-data-campaign/{mix.id}/pools/{version}")},
         ),
+    )
+    return apply_coordinator_memory(spec, coordinator_memory)
+
+
+def apply_coordinator_memory(spec: AdoptedRlRound, memory: str | None) -> AdoptedRlRound:
+    """Raise only the training coordinator container's memory request.
+
+    Sizing evidence (coordinator ruling 2026-11-28): the .712 driver task peaked at
+    721,078 MiB against its 704 GiB request and was OOMKilled; the GB200 node has 960 GB,
+    so the request is not at the node maximum. Applied to the training round only — the pool
+    lowering reference keeps the reference execution, so qualified pool fingerprints and their
+    adoption certificates are unaffected.
+    """
+    if memory is None:
+        return spec
+    if memory == spec.rl.execution.get("memory"):
+        return spec
+    return dataclasses.replace(
+        spec, rl=dataclasses.replace(spec.rl, execution={**spec.rl.execution, "memory": memory})
     )
 
 
@@ -359,6 +380,12 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound, *, pool_version: str 
 @click.option(
     "--pool-version", default=None, help="Reuse this mix's immutable prepared-pool version for a fresh RL attempt."
 )
+@click.option(
+    "--coordinator-memory",
+    default=None,
+    help="Raise only the training coordinator container's memory request (e.g. 810GiB) after a "
+    "measured OOM; pool lowering keeps the reference request so pool adoption is unaffected.",
+)
 @partial(rl_build_options, before_submit=purge_before_campaign_submission)
 def main(
     mix_id: str,
@@ -368,13 +395,14 @@ def main(
     daytona_target: str | None,
     daytona_api_url: str,
     snapshot_demand: str,
+    coordinator_memory: str | None,
     pool_version: str | None,
 ) -> ArtifactStep:
     """Build the campaign graph; --run is reserved for the coordinator's rated queue."""
     configure_coreweave_s3()
     mix = load_mix(mix_id)
     version = resolve_version(f"rl-data-campaign/{mix.id}", None)
-    spec = campaign_round(mix, version, max_steps=max_steps)
+    spec = campaign_round(mix, version, max_steps=max_steps, coordinator_memory=coordinator_memory)
     os.environ.update(MARIN_PREFIX=spec.storage.output_prefix, MARIN_TEMP_PREFIX=spec.storage.temporary_prefix)
     graph = campaign_graph(mix, spec, pool_version=pool_version)
     terminal, plan = graph.terminal, graph.plan

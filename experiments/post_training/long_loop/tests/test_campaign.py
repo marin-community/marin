@@ -497,3 +497,78 @@ def test_per_task_image_mix_places_actor_and_grader_on_local():
     # Tasks that declare required_backend = "daytona" (the routed x86-only Lego-X contexts)
     # resolve their machines from this backend template; it is inert for every other task.
     assert task_spec["task_machine_by_backend"]["daytona"] == DAYTONA_REQUIRED_MACHINE
+
+
+def test_coordinator_memory_raise_leaves_pool_adoption_untouched(tmp_path, monkeypatch):
+    """The OOM-sized coordinator memory raise applies to the training round only.
+
+    Sizing evidence (coordinator ruling 2026-11-28): the .712 driver peaked at 721,078 MiB
+    against its 704 GiB request and was OOMKilled; the GB200 node has 960 GB, so the request
+    is not at the node maximum. The pool lowering round is built from the module REFERENCE
+    (the .131 execution), so qualified pool fingerprints and their adoption certificates are
+    unaffected by the raise.
+    """
+    mix = load_mix("v2-mix-032")
+    plain = campaign_round(mix, "2026.11.26.501", max_steps=50)
+    raised = campaign_round(mix, "2026.11.26.501", max_steps=50, coordinator_memory="810GiB")
+    assert raised.rl.execution["memory"] == "810GiB"
+    assert plain.rl.execution["memory"] != "810GiB"
+    # Only the training round changes; nothing else moves (no other config drift).
+    plain_dict = dataclasses.asdict(plain)
+    raised_dict = dataclasses.asdict(raised)
+    raised_dict["rl"]["execution"].pop("memory")
+    plain_dict["rl"]["execution"].pop("memory")
+    assert raised_dict == plain_dict
+
+    fixture = tmp_path / "fixture"
+    (fixture / "model").mkdir(parents=True)
+    config = json.dumps(
+        {"grugmoe_artifact_schema_version": 1, "num_hidden_layers": 48, "num_attention_heads": 32, "num_experts": 128}
+    ).encode()
+    export = b'{"step":2100}'
+    (fixture / "model" / "config.json").write_bytes(config)
+    (fixture / "model" / "export-manifest.json").write_bytes(export)
+    pools = fixture / "pools"
+    pools.mkdir()
+    rows = {label: [{"task_spec": json.dumps({"id": f"{label}-{index}"})} for index in range(60)] for label in mix.sources}
+    curriculum = partition_mix(mix, rows, plain.version).curriculum
+    definition = dataclasses.asdict(curriculum)
+    definition.pop("fingerprint")
+    (pools / "manifest.json").write_text(json.dumps({
+        "curriculum": curriculum.identity,
+        "curriculum_definition": definition,
+        "validation": validation_payload(curriculum.validation),
+        "composition": {label: 60 for label in mix.sources},
+        "routes": {label: pin["route"] for label, pin in mix.sources.items()},
+        "files": {f"{label}/train.parquet": "c" * 64 for label in mix.sources},
+    }))
+
+    def authored_round(spec, path):
+        local = dataclasses.replace(
+            spec,
+            adopted_model=dataclasses.replace(
+                spec.adopted_model,
+                uri=str(fixture / "model"),
+                config_sha256=hashlib.sha256(config).hexdigest(),
+                export_manifest_sha256=hashlib.sha256(export).hexdigest(),
+            ),
+            rl=dataclasses.replace(spec.rl, pools={"uri": str(pools)}),
+        )
+        path.write_text(yaml.safe_dump(json.loads(json.dumps(dataclasses.asdict(local)))))
+        return load_round(path)
+
+    plain_path = fixture / "campaign-plain.yaml"
+    raised_path = fixture / "campaign-raised.yaml"
+    plain_round = authored_round(plain, plain_path)
+    raised_round = authored_round(raised, raised_path)
+    # The module REFERENCE stays on the plain (.131-memory) fixture for BOTH graphs: the pool
+    # lowering round is built from it, exactly as production builds it from mochi131.yaml.
+    monkeypatch.setattr(campaign, "REFERENCE", plain_path)
+    graph = campaign.campaign_graph(mix, raised_round, pool_version=plain.version)
+    reference_graph = campaign.campaign_graph(mix, plain_round, pool_version=plain.version)
+    pool = next(dep for dep in graph.training.deps if dep.name.endswith("/pools"))
+    reference_pool = next(dep for dep in reference_graph.training.deps if dep.name.endswith("/pools"))
+    assert pool.fingerprint() == reference_pool.fingerprint()
+    assert pool.path(plain.storage.output_prefix) == reference_pool.path(plain.storage.output_prefix)
+    assert graph.plan["round"]["rl"]["execution"]["memory"] == "810GiB"
+    assert reference_graph.plan["round"]["rl"]["execution"]["memory"] != "810GiB"
