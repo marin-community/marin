@@ -94,7 +94,7 @@ from experiments.post_training.long_loop.sft_runtime.validation_checkpoint impor
     BestValidationCheckpoint,
     best_validation_callback,
 )
-from experiments.post_training.long_loop.timing import durable_event_log
+from experiments.post_training.long_loop.timing import EventLog, durable_event_log
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -1331,6 +1331,11 @@ def _make_train_step(
     return train_step
 
 
+def _wait_after_first_step_host_rebind(timing: EventLog, config: HostRebindConfig, step: int) -> None:
+    with timing.span("post_rebind_barrier", step=step):
+        barrier_sync_named("after_first_step_host_rebind", timeout=config.post_rebind_barrier_timeout_seconds)
+
+
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     if config.model.moe_implementation == RAGGED_MOE_IMPLEMENTATION:
@@ -1768,10 +1773,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             logger.info("C_PHASE first_step_host_rebind end step=%d", current_step)
                     # Match the v7a2 diagnostic's AOT reference lifetime.
                     del compiled_first_step
-                    barrier_sync_named(
-                        "after_first_step_host_rebind",
-                        timeout=config.first_step_host_rebind.post_rebind_barrier_timeout_seconds,
-                    )
+                    _wait_after_first_step_host_rebind(timing, config.first_step_host_rebind, current_step)
                 with timing.span("train_step", step=current_step):
                     if config.carried_restore_step is not None and jax.process_index() == 0:
                         logger.info("C_PHASE train_step start step=%d", current_step + 1)

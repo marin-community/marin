@@ -1,11 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from experiments.post_training.long_loop.sft_runtime import state_rebind
+from experiments.post_training.long_loop.sft_runtime import state_rebind, train
+from experiments.post_training.long_loop.timing import EventLog
 
 
 def test_rebind_preserves_signature_and_deletes_original_state(tmp_path, monkeypatch):
@@ -65,3 +68,24 @@ def test_rebind_logs_unavailable_cgroup_without_preventing_restore(tmp_path):
     )
     np.testing.assert_array_equal(result["w"], np.ones((2, 3)))
     assert all(sample["cgroup_current_bytes"] == 999 for _, sample in observations)
+
+
+def test_post_rebind_barrier_records_wait_and_uses_configured_timeout(tmp_path, monkeypatch):
+    timing = EventLog(tmp_path / "events.jsonl", "run", "sft", "attempt")
+    calls = []
+
+    def barrier(barrier_id, *, timeout):
+        events = [json.loads(line) for line in timing.path.read_text().splitlines()]
+        assert [(event["kind"], event["event"]) for event in events] == [("post_rebind_barrier", "start")]
+        calls.append((barrier_id, timeout))
+
+    monkeypatch.setattr(train, "barrier_sync_named", barrier)
+    config = state_rebind.HostRebindConfig(post_rebind_barrier_timeout_seconds=42.0)
+    train._wait_after_first_step_host_rebind(timing, config, step=5)
+
+    assert calls == [("after_first_step_host_rebind", 42.0)]
+    events = [json.loads(line) for line in timing.path.read_text().splitlines()]
+    assert [(event["kind"], event["event"], event["step"]) for event in events] == [
+        ("post_rebind_barrier", "start", 5),
+        ("post_rebind_barrier", "end", 5),
+    ]

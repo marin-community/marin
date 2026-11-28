@@ -74,16 +74,12 @@ def test_pinned_checkpoint_roundtrip_then_stock_update(tmp_path, monkeypatch):
         )(jax.random.key(1))
         # A single-device replicated layout avoids size-one explicit-axis ambiguity on CPU.
         state = jax.tree.map(
-            lambda x: (
-                jax.device_put(
-                    x,
-                    jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec()).with_memory_kind(
-                        x.sharding.memory_kind
-                    ),
-                )
-                if isinstance(x, jax.Array)
-                else x
-            ),
+            lambda x: jax.device_put(
+                x,
+                jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec()).with_memory_kind(x.sharding.memory_kind),
+            )
+            if isinstance(x, jax.Array)
+            else x,
             state,
         )
         assert all(
