@@ -9,6 +9,9 @@ description = "Marina: one Cloud Run service hosting many small Marin web apps b
 requires-python = ">=3.12"
 dependencies = [
     "marin-rigging",
+    # The source catalog's duplicate-identity machinery (task_neighbors and the
+    # source-fingerprint scans import dupekit transitively).
+    "marin-dupekit",
     "fastapi>=0.115",
     "fastmcp-slim[server]>=4.1.2",
     "httpx2>=2.5",
