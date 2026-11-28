@@ -3,11 +3,9 @@
 
 """Ray endpoints allocated by Iris for each task on a shared host."""
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from enum import StrEnum
 
-from rigging.port_lease import configured_tcp_port, lease_tcp_ports
+from rigging.port_lease import allocate_tcp_ports, configured_tcp_port
 
 
 class RayPort(StrEnum):
@@ -22,14 +20,11 @@ class RayPort(StrEnum):
     OBJECT_MANAGER = "ray_object_manager"
 
 
-@contextmanager
-def resolve_ray_ports() -> Iterator[dict[RayPort, int]]:
-    """Yield the task's Ray endpoint ports and hold leases for unassigned endpoints."""
+def resolve_ray_ports() -> dict[RayPort, int]:
+    """Return the task's Ray endpoint ports and claim unassigned ports until exit."""
     ports = {port: configured_tcp_port(port) for port in RayPort}
     pending = [port for port, value in ports.items() if not value]
-    if not pending:
-        yield ports
-        return
-    with lease_tcp_ports(len(pending), excluded=set(ports.values())) as values:
+    if pending:
+        values = allocate_tcp_ports(len(pending), excluded=set(ports.values()))
         ports.update(zip(pending, values, strict=True))
-        yield ports
+    return ports

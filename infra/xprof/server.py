@@ -18,7 +18,7 @@ from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.port_lease import lease_tcp_port
+from rigging.port_lease import allocate_tcp_port
 
 from infra.xprof.config import BACKEND_HOST, ENDPOINT_NAME, PORT_NAME, PROXY_TIMEOUT_SECONDS, PUBLIC_PATH
 from infra.xprof.gateway import ProfileCache, ProfileStageManager, XprofGateway
@@ -48,32 +48,30 @@ def _wait_for_backend(process: subprocess.Popen, port: int) -> None:
 
 
 @contextmanager
-def _serve_backend(binary: Path, cache_dir: Path) -> Iterator[int]:
-    """Yield the xprof-rs port after the backend is ready."""
-    with lease_tcp_port() as backend_port:
-        backend = subprocess.Popen(
-            [
-                str(binary),
-                "--logdir",
-                str(cache_dir),
-                "--host",
-                BACKEND_HOST,
-                "--port",
-                str(backend_port),
-                "--hide_capture_profile_button",
-                "--enable_tab_name_label",
-            ]
-        )
+def _serve_backend(binary: Path, cache_dir: Path, port: int) -> Iterator[None]:
+    backend = subprocess.Popen(
+        [
+            str(binary),
+            "--logdir",
+            str(cache_dir),
+            "--host",
+            BACKEND_HOST,
+            "--port",
+            str(port),
+            "--hide_capture_profile_button",
+            "--enable_tab_name_label",
+        ]
+    )
+    try:
+        _wait_for_backend(backend, port)
+        yield
+    finally:
+        backend.terminate()
         try:
-            _wait_for_backend(backend, backend_port)
-            yield backend_port
-        finally:
-            backend.terminate()
-            try:
-                backend.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                backend.kill()
-                backend.wait()
+            backend.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            backend.kill()
+            backend.wait()
 
 
 def main() -> None:
@@ -92,7 +90,9 @@ def main() -> None:
         shutil.copyfileobj(source, target)
     binary.chmod(0o755)
 
-    with _serve_backend(binary, cache_dir) as backend_port, lease_tcp_port(name=PORT_NAME) as port:
+    port = allocate_tcp_port(name=PORT_NAME)
+    backend_port = allocate_tcp_port(excluded={port})
+    with _serve_backend(binary, cache_dir, backend_port):
         app = XprofGateway(RustProxy(backend_port), ProfileStageManager(cache), PUBLIC_PATH)
         try:
             address = f"http://{job_info.advertise_host}:{port}"

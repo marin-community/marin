@@ -212,7 +212,7 @@ def test_initialize_jax_maps_supervised_global_rank_zero(
     monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "16")
     monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "0")
     monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "0")
-    monkeypatch.setenv("PORT_JAX", "12345")
+    monkeypatch.setenv("IRIS_PORT_JAX", "12345")
 
     initialize_jax(port=9999)
 

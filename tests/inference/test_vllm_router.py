@@ -36,7 +36,7 @@ from marin.inference.vllm_router import vllm_router
 from marin.inference.vllm_server import VllmEnvironment
 from marin.testing.inference.fake_vllm_server import FakeVllmLauncher
 from rigging.filesystem.storage_path import StoragePath
-from rigging.port_lease import lease_tcp_port
+from rigging.port_lease import allocate_tcp_port
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
@@ -127,8 +127,7 @@ def _assert_native_rank_affinity(url, rank_count):
 
 @pytest.fixture
 def router_port():
-    with lease_tcp_port() as port:
-        yield port
+    return allocate_tcp_port()
 
 
 def test_router_later_turns_reach_the_same_dp_rank(router_worker, router_port):
@@ -190,14 +189,14 @@ def test_router_client_disconnect_cancels_the_worker_stream(router_worker):
 
 
 def test_router_never_publishes_an_endpoint_with_an_unavailable_worker(router_port):
-    with lease_tcp_port() as worker_port:
-        missing = f"http://127.0.0.1:{worker_port}"
-        port = router_port
-        with pytest.raises((RuntimeError, TimeoutError)):
-            with vllm_router(VllmRouterConfig(), missing, data_parallel_size=1, port=port, startup_timeout_seconds=2):
-                pytest.fail("published an endpoint with an unavailable worker")
-        with pytest.raises(requests.ConnectionError):
-            requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
+    worker_port = allocate_tcp_port()
+    missing = f"http://127.0.0.1:{worker_port}"
+    port = router_port
+    with pytest.raises((RuntimeError, TimeoutError)):
+        with vllm_router(VllmRouterConfig(), missing, data_parallel_size=1, port=port, startup_timeout_seconds=2):
+            pytest.fail("published an endpoint with an unavailable worker")
+    with pytest.raises(requests.ConnectionError):
+        requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
 
 
 @pytest.mark.parametrize(

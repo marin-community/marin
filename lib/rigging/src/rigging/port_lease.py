@@ -14,12 +14,13 @@ from pathlib import Path
 from random import Random
 
 DYNAMIC_TCP_PORTS = range(20_000, 24_000)
-PORT_ENV_PREFIX = "PORT_"
+PORT_ENV_PREFIX = "IRIS_PORT_"
 _MAX_TCP_PORT = 65_535
+_PROCESS_LEASES = ExitStack()
 
 
 def port_env_var(name: str) -> str:
-    """Convert a port name such as `dashboard` to `PORT_DASHBOARD`."""
+    """Convert a port name such as `dashboard` to `IRIS_PORT_DASHBOARD`."""
     return f"{PORT_ENV_PREFIX}{name.upper()}"
 
 
@@ -112,7 +113,7 @@ def lease_tcp_ports(
 def lease_tcp_port(port: int = 0, *, name: str | None = None, excluded: Collection[int] = ()) -> Iterator[int]:
     """Use a named allocation, an explicit port, or a dynamic TCP lease.
 
-    A nonzero ``PORT_<NAME>`` takes precedence over ``port``. Assigned and
+    A nonzero ``IRIS_PORT_<NAME>`` takes precedence over ``port``. Assigned and
     explicitly specified ports are used as-is. Zero requests a lease.
     """
     if name is not None:
@@ -122,6 +123,16 @@ def lease_tcp_port(port: int = 0, *, name: str | None = None, excluded: Collecti
         return
     with lease_tcp_ports(excluded=excluded) as ports:
         yield ports[0]
+
+
+def allocate_tcp_port(port: int = 0, *, name: str | None = None, excluded: Collection[int] = ()) -> int:
+    """Resolve a port like `lease_tcp_port` and hold any claim until process exit."""
+    return _PROCESS_LEASES.enter_context(lease_tcp_port(port, name=name, excluded=excluded))
+
+
+def allocate_tcp_ports(count: int, *, excluded: Collection[int] = ()) -> list[int]:
+    """Allocate dynamic ports and hold their claims until process exit."""
+    return _PROCESS_LEASES.enter_context(lease_tcp_ports(count, excluded=excluded))
 
 
 @contextmanager

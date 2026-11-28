@@ -6,13 +6,18 @@ import socket
 from multiprocessing.connection import Connection
 
 import pytest
-from rigging.port_lease import lease_tcp_port, lease_tcp_port_block, lease_tcp_ports
+from rigging.port_lease import allocate_tcp_port, lease_tcp_port, lease_tcp_port_block, lease_tcp_ports
 
 
 def _hold_lease(candidates: list[int], pipe: Connection) -> None:
     with lease_tcp_ports(candidates=candidates) as ports:
         pipe.send(ports[0])
         pipe.recv()
+
+
+def _hold_process_port(pipe: Connection) -> None:
+    pipe.send(allocate_tcp_port())
+    pipe.recv()
 
 
 def _unused_ports() -> tuple[int, int]:
@@ -76,13 +81,38 @@ def test_lease_skips_occupied_tcp_port(family, host):
 
 def test_named_port_honors_an_existing_claim(monkeypatch):
     with lease_tcp_ports() as (allocated,):
-        monkeypatch.setenv("PORT_WEB", str(allocated))
+        monkeypatch.setenv("IRIS_PORT_WEB", str(allocated))
         with lease_tcp_port(8080, name="web") as port:
             assert port == allocated
 
-        monkeypatch.setenv("PORT_WEB", "0")
+        monkeypatch.setenv("IRIS_PORT_WEB", "0")
         with lease_tcp_port(name="web") as port:
             assert port != allocated
+
+
+def test_allocated_port_stays_claimed_until_process_exit():
+    context = multiprocessing.get_context("spawn")
+    receiver, sender = context.Pipe()
+    child = context.Process(target=_hold_process_port, args=(sender,))
+    child.start()
+    sender.close()
+    try:
+        assert receiver.poll(10)
+        port = receiver.recv()
+        with pytest.raises(RuntimeError):
+            with lease_tcp_ports(candidates=[port]):
+                pytest.fail("leased a port still held by another process")
+
+        receiver.send(None)
+        child.join(10)
+        assert child.exitcode == 0
+        with lease_tcp_ports(candidates=[port]) as reclaimed:
+            assert reclaimed == [port]
+    finally:
+        if child.is_alive():
+            child.kill()
+        child.join(10)
+        receiver.close()
 
 
 def test_contiguous_block_claims_every_port():

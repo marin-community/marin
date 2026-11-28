@@ -150,7 +150,7 @@ IRIS_USER=marin uv run iris --config "$IRIS_CONFIG" job run --no-wait --enable-e
   --job-name "$launch_job_name" \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
   -e WANDB_PROJECT "$WANDB_PROJECT" \
-  -e PORT_JAX 32614 \
+  -e IRIS_PORT_JAX 32614 \
   -- python -m experiments.grug.moe_hero_ep.launch_scaling_ladder \
     --run-id "$RUN_ID" \
     --initialize-from-checkpoint "$HANDOFF_CHECKPOINT" \

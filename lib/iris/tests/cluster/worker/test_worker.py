@@ -743,6 +743,7 @@ def test_kill_nonexistent_task(mock_worker):
 
 
 def test_port_env_vars_set(mock_worker, mock_runtime):
+    """Test that IRIS_PORT_* environment variables are set for requested ports."""
     request = create_run_task_request(ports=["web", "api", "metrics"])
     task_id = mock_worker.submit_task(request)
 
@@ -753,14 +754,14 @@ def test_port_env_vars_set(mock_worker, mock_runtime):
     call_args = mock_runtime.create_container.call_args
     config = call_args[0][0]
 
-    assert "PORT_WEB" in config.env
-    assert "PORT_API" in config.env
-    assert "PORT_METRICS" in config.env
+    assert "IRIS_PORT_WEB" in config.env
+    assert "IRIS_PORT_API" in config.env
+    assert "IRIS_PORT_METRICS" in config.env
 
     ports = {
-        int(config.env["PORT_WEB"]),
-        int(config.env["PORT_API"]),
-        int(config.env["PORT_METRICS"]),
+        int(config.env["IRIS_PORT_WEB"]),
+        int(config.env["IRIS_PORT_API"]),
+        int(config.env["IRIS_PORT_METRICS"]),
     }
     assert len(ports) == 3
 

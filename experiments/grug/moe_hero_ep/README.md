@@ -532,14 +532,14 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
   --cpu 2 --memory 8GB --disk 32GB \
   --job-name "${run_id}-coord" \
   -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
-  -e PORT_JAX 32575 \
+  -e IRIS_PORT_JAX 32575 \
   -- python -m experiments.grug.moe_hero_ep.launch_diagnostics \
     --run-id "$run_id" --num-steps 200 --version dev --run
 ```
 
 W&B uses the `WANDB_PROJECT` environment variable, or project `marin_moe` when it is unset, with
 group `moe-hero-ep` and the supplied run ID. The run output includes the durable W&B metrics
-artifact. Use a distinct `PORT_JAX` for each gang when pinning coordinator
+artifact. Use a distinct `IRIS_PORT_JAX` for each gang when pinning coordinator
 ports. Rank 0 leases a port automatically when no port is assigned.
 
 Submit a rack-local XProf trace through the Marin Iris controller:
@@ -551,7 +551,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
   --cpu 2 --memory 8GB --disk 32GB \
   --job-name "${run_id}-coord" \
   -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
-  -e PORT_JAX 32576 \
+  -e IRIS_PORT_JAX 32576 \
   -- python -m experiments.grug.moe_hero_ep.launch_diagnostics \
     --run-id "$run_id" --num-steps 8 --schedule-steps 390251 \
     --profile-start-step 5 --profile-steps 2 --training-data synthetic \
@@ -654,7 +654,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
   --cpu 2 --memory 8GB --disk 32GB \
   --job-name "${run_id}-coord" \
   -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
-  -e PORT_JAX 32576 \
+  -e IRIS_PORT_JAX 32576 \
   -- python -m experiments.grug.moe_hero_ep.small_scale_abl_launch \
     --run-id "$run_id" --size d1024 --flavor ep --version dev --run
 ```
