@@ -463,7 +463,7 @@ async def run_pi(
         raise ValueError("Pi requires a task machine")
     agent = PiAgent(
         options,
-        MachineEnvironment(context.machine, context.run_id),
+        MachineEnvironment(context.machine, context.rollout_id),
         mcp_servers(context.task.environment_requirements.tool_providers),
     )
     relay = ModelRelay(complete, tokenize)
@@ -483,7 +483,7 @@ async def run_pi(
             if relay.upstream_failure is not None:
                 # Pi stopped because the relay could not reach the policy model, so the attempt fails with that error.
                 raise relay.upstream_failure from error
-            logger.warning("Pi failed in attempt %s; grading its work: %s", context.run_id, error)
+            logger.warning("Pi failed in attempt %s; grading its work: %s", context.rollout_id, error)
 
 
 class PiAgent:

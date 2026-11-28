@@ -34,10 +34,10 @@ class JudgeEngine:
     ctx: Context
     client: InferenceClient
 
-    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, rollout_id: str | None = None) -> GradedRollout:
         connection = spec.judge_connection
         if connection is None:
-            return await self.engine.run_task(spec, model, run_id=run_id)
+            return await self.engine.run_task(spec, model, rollout_id=rollout_id)
         loop = asyncio.get_running_loop()
         sample = 0
         pending: Future[dict] | None = None
@@ -122,7 +122,7 @@ class JudgeEngine:
             update={"judge_connection": replace(connection, transport=httpx.MockTransport(transport))}
         )
         try:
-            return await self.engine.run_task(spec, model, run_id=run_id)
+            return await self.engine.run_task(spec, model, rollout_id=rollout_id)
         except _EffectFailure as error:
             raise error.error from error.error.__cause__
         finally:

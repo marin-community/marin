@@ -52,7 +52,7 @@ class HarnessContext:
 
     ``limits`` are the attempt's limits, for example to tell the model that one turn is left. ``machine`` is
     the prepared task machine, or ``None`` when the attempt has none. A harness may report its own events,
-    such as tool calls, to ``events``, and registers the close of its resources with ``cleanup``. ``run_id``
+    such as tool calls, to ``events``, and registers the close of its resources with ``cleanup``. ``rollout_id``
     identifies the attempt.
     """
 
@@ -61,7 +61,7 @@ class HarnessContext:
     machine: Machine | None
     events: EventSink
     cleanup: HarnessCleanup
-    run_id: str
+    rollout_id: str
     begin_turn_budget: Callable[[], None]
     """Start the total turn deadline after explicit agent setup. By default the first model request starts it."""
 

@@ -67,7 +67,7 @@ async def run_two_turns(
     log: FinelogRolloutLog,
     *,
     content_fraction: float,
-    run_id: str = ROLLOUT_ID,
+    rollout_id: str = ROLLOUT_ID,
     options=None,
     observation=OBSERVATION,
     tool_call=ToolCallCompleted("call-1", "calculator", 2, False, 0.0),
@@ -93,7 +93,7 @@ async def run_two_turns(
 
     observer = FinelogObserver(log, SCOPE, content_fraction=content_fraction)
     return await RolloutEngine({}, {"agent": AgentHarness(agent)}, observer=observer).run_task(
-        rollout_spec(arithmetic_task(), harness="agent"), model, run_id=run_id
+        rollout_spec(arithmetic_task(), harness="agent"), model, rollout_id=rollout_id
     )
 
 
@@ -200,7 +200,7 @@ async def test_values_that_the_encoder_refuses_do_not_lose_the_other_rows(finelo
         await run_two_turns(
             log,
             content_fraction=1.0,
-            run_id="odd",
+            rollout_id="odd",
             observation=odd,
             tool_call=ToolCallCompleted(7, "calculator\ud800", 2, False, 0.0),
         )
@@ -240,7 +240,7 @@ async def test_an_interrupted_task_attempt_records_the_failed_operation():
     observer = FinelogObserver(FinelogRolloutLog(client), SCOPE, content_fraction=1.0)
     with pytest.raises(RolloutInterrupted):
         await RolloutEngine({}, {"agent": AgentHarness(agent)}, observer=observer).run_task(
-            rollout_spec(arithmetic_task(), harness="agent"), model, run_id=ROLLOUT_ID
+            rollout_spec(arithmetic_task(), harness="agent"), model, rollout_id=ROLLOUT_ID
         )
 
     ended = client.tables[EVENTS_NAMESPACE].rows[-1]
@@ -257,7 +257,7 @@ async def test_content_fraction_captures_whole_task_attempts():
     client = FakeClient()
     log = FinelogRolloutLog(client)
     for number in range(40):
-        await run_two_turns(log, content_fraction=0.5, run_id=f"experiment/eval/3/arithmetic_{number}")
+        await run_two_turns(log, content_fraction=0.5, rollout_id=f"experiment/eval/3/arithmetic_{number}")
     events, messages = client.tables[EVENTS_NAMESPACE].rows, client.tables[MESSAGES_NAMESPACE].rows
 
     message_rows = Counter(row.rollout_id for row in messages)

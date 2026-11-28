@@ -338,7 +338,7 @@ async def _run_task_attempt(
     engine: RolloutEngine, spec: TaskRolloutSpec, model: Model, attempt_id: str
 ) -> TrainingRollout:
     try:
-        result = training_rollout(await engine.run_task(spec, model, run_id=attempt_id), spec)
+        result = training_rollout(await engine.run_task(spec, model, rollout_id=attempt_id), spec)
     except GradedRolloutInterrupted as interruption:
         result = _failed_rollout(interruption, spec)
     task = spec.task

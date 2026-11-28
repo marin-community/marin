@@ -142,8 +142,8 @@ class ModelEngine:
     def check(self, spec: TaskRolloutSpec) -> None:
         self.engine.check(spec)
 
-    async def run_task(self, spec: TaskRolloutSpec, run_id: str | None = None) -> GradedRollout:
-        return await self.engine.run_task(spec, self.model, run_id=run_id)
+    async def run_task(self, spec: TaskRolloutSpec, rollout_id: str | None = None) -> GradedRollout:
+        return await self.engine.run_task(spec, self.model, rollout_id=rollout_id)
 
 
 def engine(model, machine_factories=None, *, harnesses=None, observer=None) -> ModelEngine:

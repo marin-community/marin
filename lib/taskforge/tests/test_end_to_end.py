@@ -219,9 +219,9 @@ async def test_validation_retry_budget_holds_without_restarting_author(proposal:
 
     class UngradedEngine(Engine):
         @override
-        async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
-            assert run_id is not None
-            return GradedRollout(Rollout(run_id, (), "stop"), GradeResult(Outcome.UNAVAILABLE, None))
+        async def run_task(self, spec: TaskRolloutSpec, model: Model, *, rollout_id: str | None = None) -> GradedRollout:
+            assert rollout_id is not None
+            return GradedRollout(Rollout(rollout_id, (), "stop"), GradeResult(Outcome.UNAVAILABLE, None))
 
     bundle = resources(Envs(), script("S"))
     bundle = replace(bundle, rollouts=replace(bundle.rollouts, engine=UngradedEngine()))
@@ -239,11 +239,11 @@ async def test_unavailable_control_grade_is_regraded_on_validation_retry(proposa
         calls: int = 0
 
         @override
-        async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+        async def run_task(self, spec: TaskRolloutSpec, model: Model, *, rollout_id: str | None = None) -> GradedRollout:
             self.calls += 1
             if self.calls == 1:
-                return GradedRollout(Rollout(run_id or "grade", (), "stop"), GradeResult(Outcome.UNAVAILABLE, None))
-            return await CandidateEngine().run_task(spec, model, run_id=run_id)
+                return GradedRollout(Rollout(rollout_id or "grade", (), "stop"), GradeResult(Outcome.UNAVAILABLE, None))
+            return await CandidateEngine().run_task(spec, model, rollout_id=rollout_id)
 
     without_grade_tool = tuple(c for c in script("S") if c.tool_calls[0].name != "grade")
     bundle = replace(resources(Envs(), without_grade_tool), grading=GradingResource(OnceUnavailable(), "grader"))
@@ -265,13 +265,13 @@ class FlakySolver(Engine):
         self.failures = failures
 
     @override
-    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
-        assert run_id is not None
-        trial, attempt = (int(part) for part in run_id.split(":")[-2:])
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, rollout_id: str | None = None) -> GradedRollout:
+        assert rollout_id is not None
+        trial, attempt = (int(part) for part in rollout_id.split(":")[-2:])
         if trial == 0 and self.failures.get(attempt, 0):
             self.failures[attempt] -= 1
             raise Restart("solver sandbox preempted")
-        return GradedRollout(Rollout(run_id, (), "stop"), GradeResult(Outcome.GRADED, float(trial % 2 == 0)))
+        return GradedRollout(Rollout(rollout_id, (), "stop"), GradeResult(Outcome.GRADED, float(trial % 2 == 0)))
 
 
 # Review 2026-11-20: a same-round validation retry inherited the earlier visit's replay attempts and held.
@@ -490,8 +490,8 @@ async def test_driver_only_resumes_held_on_request_and_reexecutes_ungraded_trial
 ) -> None:
     class Unavailable(SolverEngine):
         @override
-        async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
-            return GradedRollout(Rollout(run_id or "trial", (), "stop"), GradeResult(Outcome.UNAVAILABLE, None))
+        async def run_task(self, spec: TaskRolloutSpec, model: Model, *, rollout_id: str | None = None) -> GradedRollout:
+            return GradedRollout(Rollout(rollout_id or "trial", (), "stop"), GradeResult(Outcome.UNAVAILABLE, None))
 
     first = resources(Envs(), script("S"))
     first = replace(first, rollouts=replace(first.rollouts, engine=Unavailable(2)))

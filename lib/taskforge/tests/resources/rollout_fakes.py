@@ -14,13 +14,13 @@ from taskforge.resources.rollouts import Engine
 class FakeEngine(Engine):
     def __init__(self, results: Sequence[GradedRollout | RolloutInterrupted]) -> None:
         self.results = tuple(results)
-        self.run_ids: list[str | None] = []
+        self.rollout_ids: list[str | None] = []
         self.replies: list[str] = []
 
     @override
-    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
-        index = len(self.run_ids)
-        self.run_ids.append(run_id)
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, rollout_id: str | None = None) -> GradedRollout:
+        index = len(self.rollout_ids)
+        self.rollout_ids.append(rollout_id)
         reply = await model(ModelRequest((), {}))
         self.replies.append(str(reply.message.get("content")))
         result = self.results[index]

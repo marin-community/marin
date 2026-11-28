@@ -70,14 +70,14 @@ class SolverEngine(Engine):
         self.ready = asyncio.Event()
 
     @override
-    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
-        assert run_id is not None
-        self.started.append(run_id)
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, rollout_id: str | None = None) -> GradedRollout:
+        assert rollout_id is not None
+        self.started.append(rollout_id)
         if len(self.started) == self.count:
             self.ready.set()
         await self.ready.wait()
-        trial = int(run_id.split(":")[-2])
-        rollout = Rollout(run_id, (), "stop")
+        trial = int(rollout_id.split(":")[-2])
+        rollout = Rollout(rollout_id, (), "stop")
         if trial == self.restart:
             raise RolloutInterrupted(rollout, RolloutOperation.MODEL)
         return GradedRollout(rollout, GradeResult(Outcome.GRADED, float(trial % 2 == 0)))
@@ -88,10 +88,10 @@ class CandidateEngine(Engine):
     result: GradeResult | None = None
 
     @override
-    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, rollout_id: str | None = None) -> GradedRollout:
         turn = await model(ModelRequest((), {}))
         return GradedRollout(
-            Rollout(run_id or "grade", (), "stop"),
+            Rollout(rollout_id or "grade", (), "stop"),
             self.result or GradeResult(Outcome.GRADED, float(turn.message["content"] == "12")),
         )
 

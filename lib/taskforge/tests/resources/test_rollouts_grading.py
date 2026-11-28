@@ -98,7 +98,7 @@ async def test_rollout_interruptions_select_retry_or_restart(operation: RolloutO
     detail = (f"RuntimeError: {cause} <- RuntimeError: {cause.__cause__}")[:300]
     assert str(failure.value) == f"Rollout interrupted during {operation}: {detail}"
     assert "ImagePullBackOff" in str(failure.value)
-    assert engine.run_ids == ["arithmetic:4:2"]
+    assert engine.rollout_ids == ["arithmetic:4:2"]
 
 
 async def test_grading_runs_real_engine_without_inference() -> None:
@@ -129,7 +129,7 @@ async def test_grading_timeout_replays_candidate_on_new_attempt_once() -> None:
     grader = GradingResource(engine, "config")
     assert await grader.grade(GradeCandidate(rollout_spec(arithmetic_task()), Candidate("12"))) == success
     assert engine.replies == ["12", "12"]
-    assert len(set(engine.run_ids)) == 2
+    assert len(set(engine.rollout_ids)) == 2
 
 
 async def test_grading_repeated_timeout_returns_the_second_grade() -> None:
@@ -143,7 +143,7 @@ async def test_grading_repeated_timeout_returns_the_second_grade() -> None:
     engine = FakeEngine((GradedRollout(rollout, timeout), GradedRollout(rollout, timeout)))
     grader = GradingResource(engine, "config")
     assert await grader.grade(GradeCandidate(rollout_spec(arithmetic_task()), Candidate("12"))) == timeout
-    assert len(engine.run_ids) == 2
+    assert len(engine.rollout_ids) == 2
 
 
 @pytest.mark.parametrize("failures", [1, 3])
@@ -160,7 +160,7 @@ async def test_grading_retries_pre_command_websocket_setup_failures(failures: in
             await grade(event, resource, notify=events.append)
     else:
         assert (await grade(event, resource, notify=events.append)).reward == 1
-    assert len(engine.run_ids) == min(failures + 1, 3)
+    assert len(engine.rollout_ids) == min(failures + 1, 3)
     assert len(events) == min(failures, 2)
     assert all(isinstance(record, Retrying) for record in events)
 
@@ -188,7 +188,7 @@ async def test_early_grader_cut_is_not_cached_for_stage_replay(solver: bool) -> 
     await ctx.emit(event)
     await ctx.emit(event)
     await ctx.drain()
-    assert len(engine.run_ids) == 2
+    assert len(engine.rollout_ids) == 2
 
 
 @pytest.mark.parametrize("operation", list(RolloutOperation))

@@ -514,7 +514,7 @@ class _Recorder:
         if not self.has_response:
             self.no_response_reason = "Turn deadline expired before the first response"
 
-    def rollout(self, run_id: str, outputs: dict[str, bytes]) -> Rollout:
+    def rollout(self, rollout_id: str, outputs: dict[str, bytes]) -> Rollout:
         conversations = list(self.earlier)
         if self.conversation is not None:
             conversations.append(self.conversation.record(self._incomplete()))
@@ -523,7 +523,7 @@ class _Recorder:
         metrics = dict(steps[-1].transition.metrics) if steps else {}
         if self.mode == TraceMode.MESSAGES:
             metrics[TRACE_METRIC] = TraceMode.MESSAGES.value
-        return Rollout(run_id, tuple(conversations), self.stop_reason, metrics, outputs)
+        return Rollout(rollout_id, tuple(conversations), self.stop_reason, metrics, outputs)
 
 
 async def _run_harness(
@@ -584,7 +584,7 @@ async def harness_rollout(
     machine: Machine | None = None,
     trace: TraceMode = TraceMode.EXACT_TOKENS,
     events: EventSink = NO_EVENTS,
-    run_id: str | None = None,
+    rollout_id: str | None = None,
 ) -> Rollout:
     """Run one harness on one task with one model, without the engine: no machine startup and no grading.
 
@@ -594,15 +594,21 @@ async def harness_rollout(
     attempt that fails raises ``RolloutInterrupted`` with the rollout so far.
     """
     harness.check(task, limits)
-    run_id = uuid.uuid4().hex if run_id is None else run_id
+    rollout_id = uuid.uuid4().hex if rollout_id is None else rollout_id
     recorder = _Recorder(model, limits, trace, events, context_recovery=harness.context_recovery)
     cleanup = _Cleanup(limits.cleanup_timeout)
     async with AsyncExitStack() as released, AsyncExitStack() as stopped:
         context = HarnessContext(
-            task, limits, machine, events, _CleanupScope(stopped, released, cleanup), run_id, recorder.begin_turn_budget
+            task,
+            limits,
+            machine,
+            events,
+            _CleanupScope(stopped, released, cleanup),
+            rollout_id,
+            recorder.begin_turn_budget,
         )
         failure = await _run_harness(harness, context, recorder, attempt_deadline=None)
-    rollout = recorder.rollout(run_id, {})
+    rollout = recorder.rollout(rollout_id, {})
     if cleanup.errors:
         rollout = replace(rollout, metrics={**rollout.metrics, "cleanup_error_count": float(len(cleanup.errors))})
     if failure is None:

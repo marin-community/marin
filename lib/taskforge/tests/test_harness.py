@@ -270,7 +270,7 @@ async def test_file_path_errors_return_feedback(write: bool, failure: Exception)
 async def test_grade_reports_a_missing_draft_but_propagates_grading_infrastructure_errors() -> None:
     class Unreachable(Engine):
         @override
-        async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+        async def run_task(self, spec: TaskRolloutSpec, model: Model, *, rollout_id: str | None = None) -> GradedRollout:
             raise ConnectionError("iris controller unreachable")
 
     ctx = Context(log=EventLog())

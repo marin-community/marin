@@ -8,9 +8,8 @@ attempt, with its token IDs and log probabilities. A retry can repeat a row and 
 removes duplicates on ``(rollout_id, event_index, message_index)``. The events of a task attempt are complete
 when ``attempt_ended`` is among them with every lower ``event_index``.
 
-The caller owns the Finelog client and passes each task attempt a unique ``run_id`` in ``run_task``, which is
-the rows' ``rollout_id``. This module needs the ``marin-finelog`` package, which ``marin-rolloutengine`` does
-not depend on.
+The caller owns the Finelog client and passes each task attempt a unique ``rollout_id`` in ``run_task``, and the
+rows carry it. This module needs the ``marin-finelog`` package, which ``marin-rolloutengine`` does not depend on.
 """
 
 import hashlib
@@ -70,7 +69,7 @@ class RolloutScope:
     ``phase`` and ``step`` place the task attempt in the run, for example the training step of a
     reinforcement-learning run.
 
-    ``run_id`` is not the engine's ``run_id``, which names one task attempt and is the rows' ``rollout_id``.
+    ``run_id`` names the experiment run; the rows' ``rollout_id`` names one task attempt within it.
     """
 
     run_id: str
@@ -252,7 +251,7 @@ def _scoped_columns(event: RolloutEvent, scope: RolloutScope) -> dict[str, Any]:
         "phase": scope.phase,
         "step": scope.step,
         "task_id": event.task_id,
-        "rollout_id": event.run_id,
+        "rollout_id": event.rollout_id,
         "event_index": event.index,
     }
 
@@ -330,7 +329,7 @@ class FinelogObserver:
 
     async def on_event(self, event: RolloutEvent) -> None:
         content = _event_content(event)
-        captured = bool(content) and _captures_content(event.run_id, self._content_fraction)
+        captured = bool(content) and _captures_content(event.rollout_id, self._content_fraction)
         row = _event_row(
             event,
             self._scope,

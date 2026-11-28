@@ -2906,7 +2906,9 @@ class RecordingObserver:
 
     def payloads(self) -> list[RolloutEventPayload]:
         """The untimed payloads, after checking that every event belongs to one attempt of the arithmetic task."""
-        assert {(event.run_id, event.task_id) for event in self.events} == {(self.events[0].run_id, "arithmetic")}
+        assert {(event.rollout_id, event.task_id) for event in self.events} == {
+            (self.events[0].rollout_id, "arithmetic")
+        }
         return [
             (
                 replace(event.payload, duration=0.0)
@@ -2935,7 +2937,8 @@ async def test_observer_receives_ordered_events_for_a_multi_turn_shell_rollout()
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
     started = time.time()
     record = await engine(model, {"local": FixtureImageFactory()}, observer=observer).run_task(
-        rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()), run_id="arithmetic/3"
+        rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()),
+        rollout_id="arithmetic/3",
     )
     finished = time.time()
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
@@ -2949,7 +2952,7 @@ async def test_observer_receives_ordered_events_for_a_multi_turn_shell_rollout()
     assert [event.index for event in observer.events] == list(range(len(observer.events)))
     assert all(started <= event.emitted_at <= finished for event in observer.events)
     assert asdict(replace(observer.events[-1], emitted_at=0.0)) == {
-        "run_id": "arithmetic/3",
+        "rollout_id": "arithmetic/3",
         "task_id": "arithmetic",
         "index": len(observer.events) - 1,
         "emitted_at": 0.0,
@@ -3034,13 +3037,13 @@ async def test_dropped_events_leave_index_gaps_and_delivered_events_keep_their_e
     assert all(event.emitted_at <= opened_at[0] for event in burst)
 
 
-async def test_attempts_without_a_run_id_keep_their_events_apart():
+async def test_attempts_without_a_rollout_id_keep_their_events_apart():
     observer = RecordingObserver()
     runner = engine(ReplayModel([{"role": "assistant", "content": "12"}] * 2), observer=observer)
     results = [await runner.run_task(rollout_spec(arithmetic_task())) for _ in range(2)]
-    run_ids = [event.run_id for event in observer.events]
-    assert len(set(run_ids)) == 2
-    assert [result.rollout.run_id for result in results] == list(dict.fromkeys(run_ids))
+    rollout_ids = [event.rollout_id for event in observer.events]
+    assert len(set(rollout_ids)) == 2
+    assert [result.rollout.rollout_id for result in results] == list(dict.fromkeys(rollout_ids))
 
 
 async def test_observer_failure_leaves_the_rollout_unchanged():

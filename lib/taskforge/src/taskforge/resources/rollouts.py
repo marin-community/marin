@@ -35,7 +35,7 @@ class SolverRollout(Event[GradedRollout]):
 
 
 class Engine(Protocol):
-    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout: ...
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, rollout_id: str | None = None) -> GradedRollout: ...
 
 
 def interruption(error: RolloutInterrupted) -> Transient | Restart | EnvironmentSetupFailed:
@@ -73,7 +73,7 @@ class RolloutResource:
     async def run(self, event: SolverRollout) -> GradedRollout:
         try:
             return await self.engine.run_task(
-                event.spec, self.model, run_id=f"{event.spec.task.id}:{event.trial}:{event.attempt}"
+                event.spec, self.model, rollout_id=f"{event.spec.task.id}:{event.trial}:{event.attempt}"
             )
         except RolloutInterrupted as error:
             raise interruption(error) from error
