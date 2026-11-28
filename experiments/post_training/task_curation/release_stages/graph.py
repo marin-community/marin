@@ -73,7 +73,6 @@ from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import secret_path
 
-from experiments.post_training.task_curation.datasets.derived_contract_measurements import derived_contract_receipts
 from experiments.post_training.task_curation.derived_contract_census import DerivedContractReceipt
 from experiments.post_training.task_curation.grader_drift import GraderDriftReference
 from experiments.post_training.task_curation.release_stages import (
@@ -155,6 +154,7 @@ from experiments.post_training.task_curation.release_stages.manifest import (
     ArtifactRef,
     PriorPin,
     read_ref,
+    sealed_contract_rows,
 )
 from experiments.post_training.task_curation.release_stages.paced_query import (
     RetryControl,
@@ -396,6 +396,7 @@ def plan_ref(release_root: str, relative: str, sha256: str | None = None) -> dic
 
 # The derived package inputs (oracle inventory, source counts) seal under this stage dir.
 PACKAGE_INPUTS_STAGE_DIR = "package-inputs"
+COMPOSE_MANIFEST_VERSION_SUFFIX = "frozen-contracts-v1"
 
 
 def stage_output_root(plan: ReleasePlan, stage: str) -> str:
@@ -544,9 +545,10 @@ def _execute_census_inputs(config: dict) -> dict:
 
 
 def _execute_compose_manifest(config: dict) -> dict:
+    contracts = sealed_contract_rows(read_ref(ArtifactRef(**config["contracts"])))
     return _seal_compose_manifest(
         declarations=read_ref(ArtifactRef(**config["declarations"])),
-        contract_receipts=derived_contract_receipts(),
+        contract_receipts={row["source_id"]: DerivedContractReceipt.model_validate(row) for row in contracts},
         targets=tuple(config["targets"]),
         prior_release=config["prior_release"],
         prior_coverage=config["prior_coverage"],
@@ -862,17 +864,23 @@ def _seal_compose_manifest(
     missing = sorted(set(targets) - set(declarations))
     if missing:
         raise ValueError(f"compose targets missing from the sealed declarations: {missing[:5]}")
+    for source_id in targets:
+        receipt = contract_receipts.get(source_id)
+        binding = declarations[source_id]["actor_census_input"]
+        if (
+            receipt is None
+            or receipt.input.model_dump(mode="json") != binding
+            or receipt.scanned_task_specs_sha256 != binding["task_specs_sha256"]
+        ):
+            raise ValueError(f"composition contract does not bind the frozen declaration: {source_id}")
+    manifest_root = f"{release_root}/compose/{COMPOSE_MANIFEST_VERSION_SUFFIX}"
     target_declarations_ref = _seal_document(
-        f"{release_root}/compose/target-declarations.json",
+        f"{manifest_root}/target-declarations.json",
         {source_id: declarations[source_id] for source_id in sorted(targets)},
     )
     target_contracts_ref = _seal_document(
-        f"{release_root}/compose/target-contracts.json",
-        {
-            source_id: contract_receipts[source_id].model_dump(mode="json")
-            for source_id in sorted(targets)
-            if source_id in contract_receipts
-        },
+        f"{manifest_root}/target-contracts.json",
+        {source_id: contract_receipts[source_id].model_dump(mode="json") for source_id in sorted(targets)},
     )
     rebound = None if not rebound_source else {"source_id": rebound_source, "tasks": rebound_tasks}
     document = {
@@ -885,7 +893,7 @@ def _seal_compose_manifest(
         "target_contracts": target_contracts_ref,
         "rebound": rebound,
     }
-    ref = _seal_document(f"{release_root}/compose/composition-manifest.json", document)
+    ref = _seal_document(f"{manifest_root}/composition-manifest.json", document)
     return {"kind": "compose-manifest", "release_root": release_root, **ref, "targets": list(targets)}
 
 
@@ -940,7 +948,7 @@ def _census_inputs_step(plan: ReleasePlan, declarations: ArtifactStep) -> Artifa
 
 
 def _compose_manifest_step(
-    plan: ReleasePlan, declarations: ArtifactStep, embed: ArtifactStep
+    plan: ReleasePlan, declarations: ArtifactStep, embed: ArtifactStep, contracts: ArtifactStep
 ) -> ArtifactStep[ComposeManifestDocument]:
     config_identity = {
         "targets": list(plan.targets),
@@ -953,11 +961,12 @@ def _compose_manifest_step(
 
     def build_config(ctx: StepContext) -> dict:
         if ctx.is_fingerprint:
-            return {"node": "compose_manifest", **config_identity}
+            return {"node": "compose_manifest", "contracts": ctx.artifact_path(contracts), **config_identity}
         embed_proof = _resolved_proof(ctx, embed)
         return {
             **config_identity,
             "declarations": _resolved_receipt(ctx, declarations),
+            "contracts": _resolved_proof(ctx, contracts)["contracts"],
             "fresh_release": embed_proof["release_receipt"],
             "fresh_coverage": embed_proof["coverage_receipt"],
         }
@@ -967,12 +976,12 @@ def _compose_manifest_step(
         return ComposeManifestDocument(uri=proof["uri"], sha256=proof["sha256"], targets=tuple(proof["targets"]))
 
     step = ArtifactStep(
-        name=f"atlas-release-{plan.release_id}-compose-manifest",
+        name=f"atlas-release-{plan.release_id}-compose-manifest-{COMPOSE_MANIFEST_VERSION_SUFFIX}",
         version=plan.artifact_version,
         artifact_type=ComposeManifestDocument,
         run=run,
         build_config=build_config,
-        deps=(declarations, embed),
+        deps=(declarations, embed, contracts),
     )
     return dataclasses.replace(step, expected_fingerprint=step.fingerprint())
 
@@ -2456,9 +2465,10 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
     identity_backend = stage("identity_backend_compose", _identity_backend_compose_step(plan, backend_validation))
     admission_check = stage("admission_check", _admission_check_step(plan, declarations, identity_backend))
     census = stage("census", _census_step(plan, census_inputs))
+    contracts = stage("contract_census", _contract_census_step(plan, census))
     corpus = stage("corpus_assembly", _corpus_assembly_step(plan, census_inputs, census))
     embed = stage("embed", _embed_step(plan, corpus, census))
-    compose_manifest = stage("compose_manifest", _compose_manifest_step(plan, declarations, embed))
+    compose_manifest = stage("compose_manifest", _compose_manifest_step(plan, declarations, embed, contracts))
     compose = stage("curriculum_compose", _curriculum_compose_step(plan, compose_manifest, census))
     region_handles = tuple(
         stage(f"text_scan_region[{region}]", _text_scan_region_step(plan, compose, region))
@@ -2469,7 +2479,6 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
     qc_plan = stage("qc_browse_plan", _qc_browse_plan_step(plan, declarations))
     qc_browse = stage("qc_browse", _qc_browse_copy_step(plan, qc_plan))
     fresh_qc_index = stage("fresh_qc_index", _fresh_qc_index_step(plan, qc_browse, declarations))
-    contracts = stage("contract_census", _contract_census_step(plan, census))
     snapshot = stage(
         "snapshot_publication", _snapshot_publication_step(plan, census, identity_backend, admission_check, contracts)
     )

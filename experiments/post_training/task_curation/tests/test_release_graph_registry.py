@@ -20,6 +20,7 @@ from marin.execution.lazy import StepContext
 from marin.execution.lazy import run as run_handles
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.task_curation.derived_contract_census import DerivedContractReceipt
 from experiments.post_training.task_curation.release_stages import census as census_stage
 from experiments.post_training.task_curation.release_stages import graph as release_graph_module
 from experiments.post_training.task_curation.release_stages import release_check
@@ -40,7 +41,8 @@ from experiments.post_training.task_curation.release_stages.graph import (
     release_graph,
     typed_inputs,
 )
-from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref
+from experiments.post_training.task_curation.tests.admission_fixtures import actor_census_input
 from experiments.post_training.task_curation.tests.release_graph_fixtures import fixture_plan
 from infra.marina.apps.rl_data_catalog.server.publication_scope import PUBLICATION_DECISIONS
 
@@ -80,7 +82,7 @@ EXPECTED_NODES = (
 )
 
 # The two configuration-document nodes take dash-separated artifact names.
-DOC_NODE_DASH_NAMES = {"census_inputs": "census-inputs", "compose_manifest": "compose-manifest"}
+DOC_NODE_DASH_NAMES = {"census_inputs": "census-inputs", "compose_manifest": "compose-manifest-frozen-contracts-v1"}
 
 
 def _receipt_ref(tmp_path: Path, name: str, document: dict) -> dict:
@@ -334,6 +336,75 @@ def test_census_inputs_node_seals_one_row_per_declared_source(tmp_path):
             release_root,
             plan.source_revision,
         )
+
+
+@pytest.mark.parametrize("contract_state", ["fresh", "stale", "missing"])
+def test_compose_manifest_uses_frozen_contracts_and_preserves_legacy_output(tmp_path, contract_state):
+    plan = fixture_plan(release_root=str(tmp_path / "release"))
+    built = release_graph(plan)
+    prefix = str(tmp_path / "artifacts")
+    source_id = plan.targets[0]
+    binding = actor_census_input("fixture", "new-pin", "1", 3)
+    declaration = {"id": source_id, "actor_census_input": binding.model_dump(mode="json")}
+    declarations = _receipt_ref(tmp_path, "declarations.json", {source_id: declaration})
+    _declarations_dep(built, prefix, plan, declarations)
+    aligned = _receipt_ref(tmp_path, "alignment.json", {"aligned": True})
+    _write_dep(
+        built.stages["embed"],
+        prefix,
+        "embed",
+        plan.release_id,
+        aligned,
+        release_receipt=aligned,
+        coverage_receipt=aligned,
+    )
+    receipt = DerivedContractReceipt(
+        source_id=source_id,
+        input=binding if contract_state != "stale" else binding.model_copy(update={"dataset_revision": "old-pin"}),
+        population_path=str(tmp_path / "population"),
+        scanned_task_specs_sha256=binding.task_specs_sha256,
+        summary={
+            "task_count": 3,
+            "grader_type_counts": {"string_match": 3},
+            "agentic_count": 0,
+            "single_turn_count": 3,
+            "reply_only_count": 3,
+            "workspace_graded_count": 0,
+            "judge_rubric_counts": {},
+            "judge_reference_count": 0,
+            "judge_no_reference_count": 0,
+        },
+        evidence_url=str(tmp_path / "contract-receipt.json"),
+    )
+    contracts = _receipt_ref(
+        tmp_path,
+        "contracts.json",
+        {
+            "contracts": [] if contract_state == "missing" else [receipt.model_dump(mode="json")],
+        },
+    )
+    _write_dep(
+        built.stages["contract_census"], prefix, "contract_census", plan.release_id, contracts, contracts=contracts
+    )
+    legacy = Path(plan.release_root) / "compose/composition-manifest.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"legacy":true}\n')
+    handle = built.compose_manifest_handle
+    inputs = _materialized_inputs(handle, prefix)
+    if contract_state != "fresh":
+        with pytest.raises(ValueError, match="composition contract does not bind"):
+            handle.run(inputs)
+        assert list(legacy.parent.iterdir()) == [legacy]
+        return
+    result = handle.run(inputs)
+    manifest = read_ref(ArtifactRef(uri=result.uri, sha256=result.sha256))
+    sealed_contracts = read_ref(ArtifactRef(**manifest["target_contracts"]))
+    assert sealed_contracts[source_id]["input"] == declaration["actor_census_input"]
+    assert legacy.read_text() == '{"legacy":true}\n'
+    assert result.uri != str(legacy)
+    assert handle.path(prefix) != str(
+        Path(prefix) / f"atlas-release-{plan.release_id}-compose-manifest" / plan.artifact_version
+    )
 
 
 def test_curriculum_compose_fresh_total_comes_from_the_census_receipt(tmp_path):

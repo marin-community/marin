@@ -37,6 +37,12 @@ are never included in the workspace bundle or command arguments.
 Use `submit --job-name <name>` when the root must be registered before submission;
 otherwise submit generates a release-scoped name.
 
+Composition manifests consume the digest-bound `contract_census` output and
+refuse contracts whose actor input or TaskSpec digest differs from the frozen
+declaration. The manifest node and its files use the `frozen-contracts-v1`
+version suffix so retries preserve earlier manifests built from registry receipts.
+Completed census, embedding and catalog artifacts retain their addresses.
+
 Repository-relative pins (for example the registry index under `plans/`) resolve
 from the checkout root: run `atlas-release` from the checkout.
 
