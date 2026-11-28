@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { apiGet } from '@/composables/useApi'
-import type { ArtifactResponse, SampleRow, Trajectory } from '@/types/api'
+import type { ArtifactResponse, SampleRow } from '@/types/api'
+import type { Trajectory } from '@/types/trajectory'
 import { isSotopiaSummary, type SotopiaSummary as SotopiaSummaryData } from '@/utils/sotopia'
+import { skyrlTurnsToTrajectory } from '@/utils/skyrlTrajectory'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import SotopiaSummary from '@/components/samples/SotopiaSummary.vue'
 import TrajectoryViewer from '@/components/samples/TrajectoryViewer.vue'
@@ -16,7 +18,7 @@ const trajectory = ref<Trajectory | null>(null)
 const sotopiaSummary = ref<SotopiaSummaryData | null>(null)
 let generation = 0
 
-async function load(runId: string, uri: string | null) {
+async function load(runId: string, uri: string | null, docId: string) {
   const currentGeneration = ++generation
   trajectory.value = null
   sotopiaSummary.value = null
@@ -40,7 +42,9 @@ async function load(runId: string, uri: string | null) {
     else if (typeof parsed === 'object' && parsed !== null && 'steps' in parsed && Array.isArray(parsed.steps)) {
       trajectory.value = parsed as Trajectory
     } else {
-      throw new Error('Unsupported sample artifact format.')
+      const selectedTrajectory = skyrlTurnsToTrajectory(parsed, docId)
+      if (selectedTrajectory === null) throw new Error('Unsupported sample artifact format.')
+      trajectory.value = selectedTrajectory
     }
   } catch (e) {
     if (currentGeneration !== generation) return
@@ -51,8 +55,8 @@ async function load(runId: string, uri: string | null) {
 }
 
 watch(
-  () => [props.runId, props.sample.summary_uri ?? props.sample.trajectory_uri] as const,
-  ([runId, uri]) => load(runId, uri),
+  () => [props.runId, props.sample.summary_uri ?? props.sample.trajectory_uri, props.sample.doc_id] as const,
+  ([runId, uri, docId]) => load(runId, uri, docId),
   { immediate: true },
 )
 </script>

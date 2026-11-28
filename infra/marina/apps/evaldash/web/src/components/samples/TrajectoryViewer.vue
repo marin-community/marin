@@ -5,7 +5,7 @@
  * component is presentational.
  */
 import { computed } from 'vue'
-import type { Trajectory } from '@/types/api'
+import type { Trajectory } from '@/types/trajectory'
 import TrajectoryStepCard from '@/components/samples/TrajectoryStepCard.vue'
 
 const props = defineProps<{ trajectory: Trajectory }>()

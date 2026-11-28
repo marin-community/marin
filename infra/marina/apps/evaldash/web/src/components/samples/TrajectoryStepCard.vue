@@ -5,7 +5,7 @@
  * observation output, and the step's token metrics.
  */
 import { computed, ref } from 'vue'
-import type { TrajectoryObservationResult, TrajectoryStep } from '@/types/api'
+import type { TrajectoryObservationResult, TrajectoryStep } from '@/types/trajectory'
 import FencedText from '@/components/samples/FencedText.vue'
 
 const props = defineProps<{ step: TrajectoryStep }>()
@@ -22,6 +22,7 @@ const shownMessage = computed(() =>
 
 const observationResults = computed(() => props.step.observation?.results ?? [])
 const metricEntries = computed(() => Object.entries(props.step.metrics ?? {}))
+const annotationEntries = computed(() => Object.entries(props.step.annotations ?? {}))
 
 // Terminal panes pad their output with runs of blank lines to a fixed height; collapse those runs
 // and drop trailing whitespace so an observation shows its content instead of a screen of blank lines.
@@ -48,6 +49,11 @@ function prettyArguments(args: Record<string, unknown>): string {
     <div class="flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wider text-text-muted">
       <span class="font-semibold">Step {{ step.step_id }}</span>
       <span class="rounded bg-surface-sunken px-1 py-0.5 font-medium">{{ step.source }}</span>
+      <span
+        v-for="[name, value] in annotationEntries"
+        :key="name"
+        class="rounded bg-surface-sunken px-1 py-0.5 font-medium normal-case"
+      >{{ name }}: {{ value }}</span>
       <span v-if="step.model_name" class="font-mono normal-case text-text-secondary">{{ step.model_name }}</span>
       <span
         v-for="[name, value] in metricEntries"
