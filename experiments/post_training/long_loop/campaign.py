@@ -24,6 +24,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import require_secret
 from rigging.timing import Duration
 from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL
+from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 from experiments.evaluation.micro210 import ServingProfileName, micro210_artifact_step, registered_serving_profile
 from experiments.post_training.long_loop.campaign_data import CampaignMix, load_mix, prepare_pools
@@ -331,6 +332,9 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound, *, pool_version: str 
         name=f"{spec.name}/micro210",
         version=spec.version,
         serving_profile=profile,
+        # RL exports carry the native completion manifest, not the SFT-style
+        # export-manifest.json the serving profile defaults to (.532/.534/.715).
+        model_manifest_filename=MODEL_MANIFEST_FILENAME,
     )
     evaluated = preserved_evaluation(evaluation)
     # User order 2026-11-27 13:53/14:01: the Micro210 eval launches when training commits its

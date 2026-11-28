@@ -578,3 +578,7 @@ def test_coordinator_memory_raise_leaves_pool_adoption_untouched(tmp_path, monke
     assert pool.path(plain.storage.output_prefix) == reference_pool.path(plain.storage.output_prefix)
     assert graph.plan["round"]["rl"]["execution"]["memory"] == "810GiB"
     assert reference_graph.plan["round"]["rl"]["execution"]["memory"] != "810GiB"
+    # The in-graph eval binds the RL export's native completion manifest, not the
+    # SFT-style export-manifest.json the serving profile defaults to (.532/.534/.715).
+    evaluation = next(dep for dep in graph.terminal.deps if dep.name.endswith("/micro210"))
+    assert ".marinskyrl-model-manifest.json" in json.dumps(evaluation.fingerprint_payload())
