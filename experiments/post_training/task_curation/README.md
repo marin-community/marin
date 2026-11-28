@@ -1,7 +1,12 @@
 # Task data curation
 
 [Dataset declarations](datasets/README.md) feed TaskSpec conversion and the RL
-Data Atlas through [all_sources()](sources.py). See the
+Data Atlas through [all_sources()](sources.py).
+`source_declarations()` returns the authored conversion inputs before retained
+release binding; `all_sources()` selects matching retained releases. Harbor
+export resolves both authored and retained recipe names from saved manifests.
+Raw TaskTrove content comparison uses authored declarations so retained dataset
+substitution does not remove its conversion inputs. See the
 [reference](../../../docs/references/task-curation.md) for source fields, grading,
 reviewed SAMPLE/FULL campaigns and artifact outputs.
 

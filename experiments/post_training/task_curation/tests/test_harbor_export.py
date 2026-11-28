@@ -8,13 +8,16 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from click.testing import CliRunner
 from marin.execution.lazy import ArtifactStep, run
 from taskcompendium.models import NoGrader
 from upath import UPath
 
 from experiments.post_training.task_curation.datasets.tasktrove import nl2bash
 from experiments.post_training.task_curation.pipeline import CurationRecipe
+from experiments.post_training.task_curation.sources import all_sources, source_declarations
 from experiments.post_training.task_curation.tasktrove.export import harbor_export_step
+from experiments.post_training.task_curation.tasktrove.export import main as export_main
 from experiments.post_training.task_curation.tasktrove.harbor_export import VerifierPayloadIdentity
 from experiments.post_training.task_curation.tests.conversion import converted_task, tasktrove_row
 
@@ -89,3 +92,26 @@ def test_source_metadata_changes_export_fingerprint(field, tmp_path):
         normalized, source=changed, name="tests/export", version="2026.10.09", grader_image=GRADER_IMAGE
     )
     assert after.fingerprint() != before.fingerprint()
+
+
+@pytest.mark.parametrize("catalog", [source_declarations, all_sources], ids=["authored", "retained"])
+def test_export_cli_resolves_authored_and_retained_manifest_names(normalized_rows, tmp_path, catalog):
+    source = catalog()["BytedTsinghua-SIA:dapo_math"]
+    _, rows = normalized_rows
+    input_root = tmp_path / "normalized"
+    (input_root / "normalize").mkdir(parents=True)
+    (input_root / "manifest.json").write_text(json.dumps({"source": source.name}))
+    pq.write_table(pa.Table.from_pylist(rows), input_root / "normalize/part-00000.parquet")
+    output_root = tmp_path / "harbor"
+    result = CliRunner().invoke(
+        export_main,
+        ["--input-root", str(input_root), "--output-root", str(output_root), "--grader-image", GRADER_IMAGE],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0
+    manifest = json.loads((output_root / "manifest.json").read_text())
+    assert (manifest["source"], manifest["source_id"], manifest["exported_rows"]) == (
+        source.name,
+        source.info.id,
+        1,
+    )

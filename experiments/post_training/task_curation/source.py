@@ -11,6 +11,7 @@ from finestore.rl.curation import (
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
     DatasetRelease,
     IndependentQC,
+    LexicalContaminationEvidence,
     OracleValidation,
     OversightEvidence,
     OversightLevel,
@@ -120,6 +121,7 @@ class SourceReference:
     url: str
 
 
+AVAILABLE_STATUS = "Available"
 EXCLUDED_TAG = "excluded"
 """The source tag that keeps a declared source out of admission."""
 
@@ -202,6 +204,12 @@ class SourceInfo:
     a negative verdict on an untouched submission without certifying an oracle;
     ``skipped`` certifies neither. The Atlas shows this value beside the catalog.
     """
+
+    lexical_contamination: LexicalContaminationEvidence | None = None
+    """The lexical measurement that qualifies the source's current pin."""
+
+    inherited_admission: DatasetRelease | None = None
+    """The release whose admission the source inherits through its subset lineage."""
 
     oversight: OversightEvidence | None = None
     """The review this source's admission rests on, with its evidence pointers."""
@@ -332,7 +340,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             kind="Generator" if "generator" in tags else "Dataset",
             status=next(
                 (label for tag, label in (("deprecated", "Deprecated"), (EXCLUDED_TAG, "Excluded")) if tag in tags),
-                "Inventory" if pipeline is None else "Available",
+                "Inventory" if pipeline is None else AVAILABLE_STATUS,
             ),
             pipeline=invocation,
             independent_qc=info.independent_qc,
