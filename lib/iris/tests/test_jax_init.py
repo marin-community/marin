@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import os
+import pathlib
+import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -13,6 +16,8 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 import rigging.timing as timing
+from finestore.reader import ReadView
+from finestore.store import DataStore
 
 pytest.importorskip("jax")
 
@@ -468,73 +473,119 @@ def test_remote_cache_keeps_an_explicit_xla_autotune_dir(tmp_path) -> None:
         assert os.environ["XLA_FLAGS"] == "--xla_gpu_per_fusion_autotune_cache_dir=/mnt/elsewhere"
 
 
-def test_launch_provenance_mirrors_the_autotune_cache_to_object_storage(tmp_path) -> None:
-    """Task 0 hands its node-local autotune directory to the remote uploader."""
-    calls: list[tuple[str, str]] = []
+def test_multigpu_local_ranks_share_clean_pinned_snapshot(tmp_path) -> None:
+    root = str(tmp_path / "remote")
+    with DataStore.open(root) as store:
+        store.write_object("tuned.textproto", b"tuned")
+        store.flush()
+    snapshot_id = ReadView(root).token.commit_id
 
     with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
-        os.environ["MARIN_PROVENANCE"] = "{}"
-        with (
-            patch.object(jax_cache_module, "sync_file_set_cache", lambda prefix, local: calls.append((prefix, local))),
-            patch.object(jax_cache_module, "get_job_info", return_value=_make_job_info(task_index=0, num_tasks=8)),
-            patch("iris.jax.compile_cache.marin_prefix", return_value="s3://marin-eu/marin/"),
-        ):
-            configure_jax_compilation_cache()
-
-    autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune"
-    assert calls == [(jax_cache_module._XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)]
-
-
-def test_non_primary_task_fetches_without_uploading_autotune_cache(tmp_path) -> None:
-    """Each task warms its node-local cache, while only task 0 uploads changes."""
-    fetches: list[tuple[str, str]] = []
-    uploads: list[tuple[str, str]] = []
-
-    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
-        os.environ["MARIN_PROVENANCE"] = "{}"
-        with (
-            patch.object(
-                jax_cache_module, "fetch_file_set_cache", lambda prefix, local: fetches.append((prefix, local))
-            ),
-            patch.object(jax_cache_module, "sync_file_set_cache", lambda prefix, local: uploads.append((prefix, local))),
-            patch.object(jax_cache_module, "get_job_info", return_value=_make_job_info(task_index=3, num_tasks=8)),
-            patch("iris.jax.compile_cache.marin_prefix", return_value="s3://marin-eu/marin/"),
-        ):
-            configure_jax_compilation_cache()
-
-    autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune"
-    assert fetches == [(jax_cache_module._XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)]
-    assert uploads == []
-
-
-@pytest.mark.parametrize(
-    ("process_index", "expected_fetches"),
-    [(8, 1), (9, 0)],
-    ids=["local-leader", "other-local-rank"],
-)
-def test_multigpu_task_fetches_autotune_cache_once_per_node(tmp_path, process_index, expected_fetches) -> None:
-    fetches: list[tuple[str, str]] = []
-    uploads: list[tuple[str, str]] = []
-
-    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
-        os.environ["MARIN_PROVENANCE"] = "{}"
+        legacy = scratch_cache_dir / "xla/per-fusion-autotune/process-9"
+        legacy.mkdir(parents=True)
+        (legacy / "leftover.textproto").write_bytes(b"stale")
+        os.environ[jax_cache_module.IRIS_AUTOTUNE_SNAPSHOT_ID] = snapshot_id
+        os.environ[jax_cache_module.IRIS_AUTOTUNE_STORE_ROOT] = root
         os.environ[jax_cache_module.IRIS_MULTIGPU_PROCESS_COUNT_ENV] = "16"
-        os.environ[jax_cache_module.IRIS_MULTIGPU_PROCESS_INDEX_ENV] = str(process_index)
         with (
-            patch.object(
-                jax_cache_module, "fetch_file_set_cache", lambda prefix, local: fetches.append((prefix, local))
-            ),
-            patch.object(jax_cache_module, "sync_file_set_cache", lambda prefix, local: uploads.append((prefix, local))),
             patch.object(jax_cache_module, "get_job_info", return_value=_make_job_info(task_index=1, num_tasks=2)),
             patch("iris.jax.compile_cache.marin_prefix", return_value="s3://marin-eu/marin/"),
         ):
-            configure_jax_compilation_cache()
-            configured_xla_flags = os.environ["XLA_FLAGS"]
+            paths = []
+            for rank in range(8, 16):
+                os.environ[jax_cache_module.IRIS_MULTIGPU_PROCESS_INDEX_ENV] = str(rank)
+                os.environ.pop("XLA_FLAGS", None)
+                configure_jax_compilation_cache()
+                paths.append(os.environ["XLA_FLAGS"].split("--xla_gpu_per_fusion_autotune_cache_dir=")[1].split()[0])
+                flags = os.environ["XLA_FLAGS"].split()
+                assert flags.count("--xla_gpu_experimental_autotune_cache_mode=AUTOTUNE_CACHE_MODE_READ") == 1
+                assert flags.count("--xla_gpu_autotune_level=0") == 1
+                if rank == 8:
+                    pathlib.Path(root).rename(tmp_path / "remote-offline")
+    assert len(set(paths)) == 1
+    assert sorted(path.name for path in pathlib.Path(paths[0]).iterdir()) == ["tuned.textproto"]
+    assert not (pathlib.Path(paths[0]).stat().st_mode & 0o222)
+    assert not ((pathlib.Path(paths[0]) / "tuned.textproto").stat().st_mode & 0o222)
+    assert (legacy / "leftover.textproto").read_bytes() == b"stale"
 
-    autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune/process-{process_index}"
-    assert f"--xla_gpu_per_fusion_autotune_cache_dir={autotune_dir}" in configured_xla_flags.split()
-    assert len(fetches) == expected_fetches
-    assert uploads == []
+
+def test_multigpu_second_node_reads_same_snapshot_after_commit(tmp_path) -> None:
+    root = str(tmp_path / "remote")
+    with DataStore.open(root) as store:
+        store.write_object("original.textproto", b"original")
+        store.flush()
+        snapshot_id = ReadView(root).token.commit_id
+        with _isolated_jax_cache_config():
+            os.environ[jax_cache_module.IRIS_AUTOTUNE_SNAPSHOT_ID] = snapshot_id
+            os.environ[jax_cache_module.IRIS_AUTOTUNE_STORE_ROOT] = root
+            os.environ[jax_cache_module.IRIS_MULTIGPU_PROCESS_COUNT_ENV] = "16"
+            paths = []
+            for node in range(2):
+                scratch = tmp_path / f"node-{node}"
+                scratch.mkdir()
+                os.environ[jax_cache_module.IRIS_MULTIGPU_PROCESS_INDEX_ENV] = str(node * 8)
+                os.environ["XLA_FLAGS"] = ""
+                with patch.object(jax_cache_module, "SCRATCH_CACHE_PATH", str(scratch)):
+                    jax_cache_module._enable_shared_autotune_cache("", _make_job_info(task_index=node, num_tasks=2))
+                paths.append(next((scratch / "xla/per-fusion-autotune/jobs").glob("*/snapshot")))
+                if node == 0:
+                    store.write_object("new.textproto", b"new")
+                    store.flush()
+    assert all(sorted(path.name for path in node.iterdir()) == ["original.textproto"] for node in paths)
+
+
+def test_multigpu_peer_waits_for_local_fetch_and_fetch_failure_fails_closed(tmp_path) -> None:
+    root = str(tmp_path / "remote")
+    with DataStore.open(root) as store:
+        store.write_object("tuned.textproto", b"tuned")
+        store.flush()
+    snapshot_id = ReadView(root).token.commit_id
+    waiting = threading.Event()
+    release = threading.Event()
+    actual_sleep = timing.time.sleep
+
+    def hold_peer(interval):
+        if threading.current_thread() is not threading.main_thread():
+            waiting.set()
+            assert release.wait(5)
+        else:
+            actual_sleep(interval)
+
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path):
+        os.environ[jax_cache_module.IRIS_AUTOTUNE_SNAPSHOT_ID] = snapshot_id
+        os.environ[jax_cache_module.IRIS_AUTOTUNE_STORE_ROOT] = root
+        os.environ[jax_cache_module.IRIS_MULTIGPU_PROCESS_COUNT_ENV] = "16"
+        info = _make_job_info(task_index=1, num_tasks=2)
+        os.environ[jax_cache_module.IRIS_MULTIGPU_PROCESS_INDEX_ENV] = "9"
+        with (
+            patch.object(timing.time, "sleep", side_effect=hold_peer),
+            ThreadPoolExecutor(max_workers=1) as pool,
+        ):
+            peer = pool.submit(jax_cache_module._enable_shared_autotune_cache, "", info)
+            assert waiting.wait(5)
+            assert not peer.done()
+            os.environ[jax_cache_module.IRIS_MULTIGPU_PROCESS_INDEX_ENV] = "8"
+            jax_cache_module._enable_shared_autotune_cache("", info)
+            release.set()
+            peer.result(timeout=5)
+
+    failed_node = tmp_path / "failed-node"
+    failed_node.mkdir()
+    with _isolated_jax_cache_config():
+        os.environ[jax_cache_module.IRIS_AUTOTUNE_SNAPSHOT_ID] = snapshot_id
+        os.environ[jax_cache_module.IRIS_AUTOTUNE_STORE_ROOT] = root
+        os.environ[jax_cache_module.IRIS_MULTIGPU_PROCESS_COUNT_ENV] = "16"
+        info = _make_job_info(task_index=0, num_tasks=2)
+        with (
+            patch.object(jax_cache_module, "SCRATCH_CACHE_PATH", str(failed_node)),
+            patch.object(jax_cache_module, "fetch_file_set", side_effect=OSError("store unavailable")),
+        ):
+            os.environ[jax_cache_module.IRIS_MULTIGPU_PROCESS_INDEX_ENV] = "0"
+            with pytest.raises(OSError, match="store unavailable"):
+                jax_cache_module._enable_shared_autotune_cache("", info)
+            os.environ[jax_cache_module.IRIS_MULTIGPU_PROCESS_INDEX_ENV] = "1"
+            with pytest.raises(RuntimeError, match="store unavailable"):
+                jax_cache_module._enable_shared_autotune_cache("", info)
 
 
 def test_autotune_cache_stays_node_local_without_a_launch_provenance(tmp_path) -> None:

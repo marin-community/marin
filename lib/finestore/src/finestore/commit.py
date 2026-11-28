@@ -51,6 +51,7 @@ _MAX_COMMIT_ATTEMPTS = 100_000
 _CREATE_RETRY_BUDGET = 60.0
 _MAX_CREATE_ATTEMPTS = 1000
 _ROOT_COMMIT_ID = "root"
+EMPTY_SNAPSHOT_ID = "empty"
 
 _COMMITS = telemetry.counter("finestore_commits", unit="{commit}")
 _COMMIT_CONFLICTS = telemetry.counter("finestore_commit_conflicts", unit="{conflict}")
@@ -209,17 +210,9 @@ def read_snapshot(layout: FineStoreLayout) -> ArchiveSnapshot:
     head = HeadMetadata.model_validate_json(versioned.data)
     if head.format_version != FORMAT_VERSION:
         raise FormatVersionError(layout.root, found=head.format_version)
-    manifest = Manifest.model_validate_json(StoragePath(head.manifest_path).read_bytes())
-    if manifest.format_version != FORMAT_VERSION:
-        raise ValueError(
-            f"manifest {head.manifest_path} is FineStore format v{manifest.format_version}; expected v{FORMAT_VERSION}"
-        )
+    manifest = _validated_manifest(head.manifest_path)
     if (manifest.commit_id, manifest.sequence) != (head.commit_id, head.sequence):
         raise ValueError(f"HEAD at {layout.root} does not match manifest {head.manifest_path}")
-    unsupported = set(manifest.required_features) - SUPPORTED_MANIFEST_FEATURES
-    if unsupported:
-        names = ", ".join(sorted(unsupported))
-        raise ValueError(f"manifest {head.manifest_path} requires unsupported FineStore features: {names}")
     token = CommitToken(
         commit_id=head.commit_id,
         sequence=head.sequence,
@@ -227,6 +220,29 @@ def read_snapshot(layout: FineStoreLayout) -> ArchiveSnapshot:
         manifest_path=head.manifest_path,
     )
     return ArchiveSnapshot(manifest=manifest, token=token)
+
+
+def read_pinned_snapshot(layout: FineStoreLayout, snapshot_id: str) -> ArchiveSnapshot:
+    """Open an immutable manifest by commit ID without consulting the mutable HEAD."""
+    if snapshot_id == EMPTY_SNAPSHOT_ID:
+        return ArchiveSnapshot(manifest=_empty_manifest(), token=None)
+    if not snapshot_id or "/" in snapshot_id or ".." in snapshot_id:
+        raise ValueError(f"invalid FineStore snapshot ID: {snapshot_id!r}")
+    path = layout.manifest_path(snapshot_id)
+    manifest = _validated_manifest(path)
+    if manifest.commit_id != snapshot_id:
+        raise ValueError(f"manifest {path} does not match snapshot ID {snapshot_id!r}")
+    return ArchiveSnapshot(manifest=manifest, token=None)
+
+
+def _validated_manifest(path: str) -> Manifest:
+    manifest = Manifest.model_validate_json(StoragePath(path).read_bytes())
+    if manifest.format_version != FORMAT_VERSION:
+        raise ValueError(f"manifest {path} is FineStore format v{manifest.format_version}; expected v{FORMAT_VERSION}")
+    unsupported = set(manifest.required_features) - SUPPORTED_MANIFEST_FEATURES
+    if unsupported:
+        raise ValueError(f"manifest {path} requires unsupported FineStore features: {', '.join(sorted(unsupported))}")
+    return manifest
 
 
 def _commit_info(attribution: Attribution | None, sequence: int) -> CommitInfo | None:

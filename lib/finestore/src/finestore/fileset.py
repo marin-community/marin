@@ -13,7 +13,8 @@ import threading
 
 from rigging.filesystem.atomic import atomic_rename
 
-from finestore.layout import BlobTables
+from finestore.commit import read_pinned_snapshot
+from finestore.layout import BlobTables, FineStoreLayout
 from finestore.reader import BlobDescriptor, ReadView
 from finestore.store import DataStore
 
@@ -32,12 +33,16 @@ def _safe_relative(name: str) -> pathlib.PurePosixPath:
     return relative
 
 
-def fetch_file_set(root: str, local: str) -> set[str]:
+def fetch_file_set(root: str, local: str, *, snapshot_id: str | None = None) -> set[str]:
     """Materialize one pinned file set and return the relative paths fetched."""
     destination = pathlib.Path(local)
     destination.mkdir(parents=True, exist_ok=True)
     fetched = set()
-    view = ReadView(root)
+    view = (
+        ReadView(root, read_pinned_snapshot(FineStoreLayout(root), snapshot_id))
+        if snapshot_id is not None
+        else ReadView(root)
+    )
     for row in view.iter_rows(
         BlobTables.DESCRIPTORS,
         columns=BlobDescriptor.COLUMNS,

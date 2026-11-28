@@ -315,6 +315,29 @@ iris task exec /user/job/0 --timeout 15 -- \
   python -m rigging.telemetry.probes.nccl_client --timeout 8
 ```
 
+### Multi-process GPU autotune inputs
+
+Pass `IRIS_AUTOTUNE_STORE_ROOT` with a regional FineStore file set to use tuned
+inputs. Its path must identify the GPU variant, jaxlib version, and CUDA runtime
+version used for seeding. The submitter reads that store's HEAD once and stamps
+`IRIS_AUTOTUNE_SNAPSHOT_ID` into the job environment. An absent HEAD selects
+`empty`; if no store root is supplied, workers also use `empty`. A caller may
+set the ID explicitly to select an older immutable manifest. Do not change
+the store root or snapshot ID within a job.
+
+Each task attempt stages that manifest once per node under
+`/cache/xla/per-fusion-autotune/jobs/`, then all local GPU processes read the
+same directory with autotuning disabled and `AUTOTUNE_CACHE_MODE_READ`. The task
+fails if a pinned fetch fails or the cache mount is missing. The supervisor
+removes the directory after all local ranks exit. For one process per task,
+cleanup runs at process exit. The log line `XLA autotune snapshot_id=...`
+reports the pinned ID, file count, and path on each rank.
+
+The `empty` snapshot uses untuned kernels. Before using a tuned set in a
+production job, seed it offline for the production mesh with shard autotuning
+enabled and verify the resulting snapshot on a cold compile. The stage path
+never reads legacy `process-*` folders.
+
 ## Scheduler & Autoscaler
 
 ```bash

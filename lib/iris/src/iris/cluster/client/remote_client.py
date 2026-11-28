@@ -34,6 +34,7 @@ from iris.cluster.types import (
     adjust_tpu_replicas,
     is_job_finished,
 )
+from iris.jax.autotune_launch import pin_autotune_snapshot
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
@@ -181,6 +182,8 @@ class RemoteClusterClient:
         if environment is None:
             environment = EnvironmentSpec().to_sandbox_proto() if sandboxed else EnvironmentSpec().to_proto()
         env_config = with_slice_topology_env(environment, resources, replicas)
+        if resources.HasField("device") and resources.device.HasField("gpu"):
+            pin_autotune_snapshot(env_config)
 
         runtime_ep = build_runtime_entrypoint(entrypoint, env_config)
 

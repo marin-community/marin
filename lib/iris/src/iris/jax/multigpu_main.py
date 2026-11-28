@@ -50,6 +50,7 @@ from rigging.timing import Deadline
 
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.log_highlights import rank_log_tag
+from iris.jax.autotune_snapshot import cleanup_shared_autotune_cache
 from iris.jax.multigpu import (
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
@@ -257,6 +258,8 @@ def run(nproc: int, devices_per_proc: int, child_argv: list[str]) -> int:
     finally:
         for sig, handler in previous_handlers.items():
             signal.signal(sig, handler)
+        if job_info is not None:
+            cleanup_shared_autotune_cache(job_info)
 
 
 def main(argv: list[str] | None = None) -> int:
