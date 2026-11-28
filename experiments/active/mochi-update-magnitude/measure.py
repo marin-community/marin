@@ -787,8 +787,21 @@ def write_outputs(out_dir: str, stamp: str, rows: list[dict], summary: list[dict
 def load_mapping(mapping_dir: str, checkpoint: Checkpoint) -> dict:
     path = posixpath.join(mapping_dir, f"{checkpoint.id}-mapping.json")
     fs, _ = fsspec.url_to_fs(path)
-    with fs.open(path, "rb") as handle:
-        return json.load(handle)
+    try:
+        with fs.open(path, "rb") as handle:
+            return json.load(handle)
+    except FileNotFoundError:
+        pass
+    # Live-row checkpoints can roll between jobs: rebuild the mapping from the
+    # checkpoint's own metadata and cache it for the rest of the job.
+    from megatron_map import build_mapping
+    from readers import MegatronInventory
+
+    logger.info("building mapping on the fly for %s", checkpoint.id)
+    mapping, notes = build_mapping(MegatronInventory(checkpoint).entries())
+    logger.info("mapping for %s: %s", checkpoint.id, notes[-1])
+    _save_mapping(mapping_dir, checkpoint.id, mapping)
+    return mapping
 
 
 def _save_mapping(mapping_dir: str, checkpoint_id: str, mapping: dict) -> None:

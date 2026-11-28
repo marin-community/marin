@@ -9,7 +9,10 @@ Every URI below is read-only. Outputs go only under
 
 from __future__ import annotations
 
+import posixpath
 from dataclasses import dataclass, field
+
+import fsspec
 
 OUTPUT_PREFIX = "s3://marin-us-east-08a/marin/users/benfeuer/mochi-update-magnitude"
 
@@ -116,30 +119,6 @@ RL_129_25 = _rl_ckpt(
     25,
     ".129 run; .131 optimizer config",
 )
-RL_719_20 = _rl_ckpt(
-    "rl-719-step20",
-    f"{TMP_SKYRL}/rl-data-campaign/v2-mix-033/2026.11.27.719/checkpoints/global_step_20/policy",
-    20,
-    "campaign row v2-mix-033 (.131 config)",
-)
-RL_719_25 = _rl_ckpt(
-    "rl-719-step25",
-    f"{TMP_SKYRL}/rl-data-campaign/v2-mix-033/2026.11.27.719/checkpoints/global_step_25/policy",
-    25,
-    "campaign row v2-mix-033 (.131 config)",
-)
-RL_721_5 = _rl_ckpt(
-    "rl-721-step5",
-    f"{TMP_SKYRL}/rl-data-campaign/v2-mix-019/2026.11.27.721/checkpoints/global_step_5/policy",
-    5,
-    "campaign row v2-mix-019 (.131 config)",
-)
-RL_721_10 = _rl_ckpt(
-    "rl-721-step10",
-    f"{TMP_SKYRL}/rl-data-campaign/v2-mix-019/2026.11.27.721/checkpoints/global_step_10/policy",
-    10,
-    "campaign row v2-mix-019 (.131 config)",
-)
 RL_717_25 = _rl_ckpt(
     "rl-717-step25",
     f"{TMP_SKYRL}/rl-data-campaign/v2-mix-009/2026.11.27.717/checkpoints/global_step_25/policy",
@@ -152,6 +131,63 @@ RL_717_30 = _rl_ckpt(
     30,
     "campaign row v2-mix-009 (.131 config)",
 )
+
+# Live campaign rows roll their checkpoints (keep-2 retention); the .719 step-20
+# and .721 step-10/5 pins were pruned by that retention. Resolve whatever
+# consecutive cadence pair each live row still holds at job start instead.
+LIVE_ROWS = (
+    ("rl-719", "v2-mix-033/2026.11.27.719"),
+    ("rl-721", "v2-mix-019/2026.11.27.721"),
+)
+
+
+def live_checkpoint_root(row: str) -> str:
+    return f"{TMP_SKYRL}/rl-data-campaign/{row}/checkpoints"
+
+
+def resolve_live_pairs() -> list[Pair]:
+    """Pin the two newest retained checkpoints of each live row as a pair."""
+
+    pairs: list[Pair] = []
+    for base, row in LIVE_ROWS:
+        root = live_checkpoint_root(row)
+        try:
+            fs, _ = fsspec.url_to_fs(root)
+            steps = sorted(
+                int(entry.rsplit("global_step_", 1)[-1])
+                for entry in fs.ls(root, detail=False)
+                if "global_step_" in entry
+            )
+        except (FileNotFoundError, OSError):
+            continue
+        if len(steps) < 2:
+            continue
+        a, b = steps[-2], steps[-1]
+        for step in (a, b):
+            ckpt_id = f"{base}-step{step}"
+            CHECKPOINTS.setdefault(
+                ckpt_id,
+                _rl_ckpt(
+                    ckpt_id,
+                    posixpath.join(root, f"global_step_{step}", "policy"),
+                    step,
+                    f"live campaign row {row} (.131 config)",
+                ),
+            )
+        pairs.append(
+            Pair(
+                f"{base}-live",
+                f"{base}-step{a}",
+                f"{base}-step{b}",
+                b - a,
+                "rl",
+                CONFIG_131,
+                f"live rolling pair resolved at job start: steps {a} -> {b}",
+            )
+        )
+    return pairs
+
+
 RL_403_1 = _rl_ckpt(
     "rl-403-step1",
     f"{LOOP}/long-loop/anchor-mochi-acceptance/2026.11.20.403/checkpoints/global_step_1/policy",
@@ -189,10 +225,6 @@ CHECKPOINTS: dict[str, Checkpoint] = {
         RL_131_34,
         RL_129_24,
         RL_129_25,
-        RL_719_20,
-        RL_719_25,
-        RL_721_5,
-        RL_721_10,
         RL_717_25,
         RL_717_30,
         RL_403_1,
@@ -220,8 +252,6 @@ PAIRS: list[Pair] = [
     ),
     Pair("rl-131-33to34", RL_131_33.id, RL_131_34.id, 1, "rl", CONFIG_131, "single update, original .131 run"),
     Pair("rl-129-24to25", RL_129_24.id, RL_129_25.id, 1, "rl", CONFIG_131, "single update"),
-    Pair("rl-719-20to25", RL_719_20.id, RL_719_25.id, 5, "rl", CONFIG_131, "campaign row"),
-    Pair("rl-721-5to10", RL_721_5.id, RL_721_10.id, 5, "rl", CONFIG_131, "campaign row"),
     Pair("rl-717-25to30", RL_717_25.id, RL_717_30.id, 5, "rl", CONFIG_131, "campaign row"),
     # --- RL anchored at the hero SFT final -----------------------------------
     Pair(
@@ -423,7 +453,9 @@ class PairPlan:
 
 
 def pairs_for(stage: str | None = None, pair_ids: list[str] | None = None) -> list[Pair]:
-    selected = PAIRS
+    selected = list(PAIRS)
+    if stage in (None, "rl"):
+        selected.extend(resolve_live_pairs())
     if stage:
         selected = [p for p in selected if p.stage == stage]
     if pair_ids:

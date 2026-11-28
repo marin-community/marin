@@ -46,48 +46,58 @@ def main() -> None:
 
     configure_object_storage()
 
+    registry.resolve_live_pairs()  # pin whatever consecutive pair the live rows still hold
     selected = CHECKPOINTS
     if args.only:
         selected = {cid: CHECKPOINTS[cid] for cid in args.only}
 
     levanter_manifests = {}
     for checkpoint in selected.values():
-        started = time.monotonic()
-        if checkpoint.kind == LEVANTER:
-            reader = LevanterReader(checkpoint)
-            manifest = reader._manifest()
-            levanter_manifests[checkpoint.id] = {
-                "uri": checkpoint.uri,
-                "arrays": [
-                    {"path": a["path"], "shape": a["shape"], "dtype": a["dtype"], "chunk_shape": a["chunk_shape"]}
-                    for a in manifest["arrays"]
-                ],
-            }
-            logger.info("levanter manifest %s (%.1fs)", checkpoint.id, time.monotonic() - started)
-        elif checkpoint.kind == MEGATRON:
-            inventory = MegatronInventory(checkpoint)
-            entries = inventory.entries()
-            mapping, notes = build_mapping(entries)
-            preview_payload = {
-                "uri": checkpoint.uri,
-                "key_count": len(entries),
-                "preview": preview(entries),
-                "mapping_notes": notes,
-            }
-            name = f"{checkpoint.id}-preview.json"
-            path = write_json(args.out, name, preview_payload)
-            mapping_path = write_json(args.out, f"{checkpoint.id}-mapping.json", mapping)
-            logger.info(
-                "megatron inventory %s: %d keys -> %s, mapping %s (%.1fs)",
-                checkpoint.id,
-                len(entries),
-                path,
-                mapping_path,
-                time.monotonic() - started,
-            )
+        try:
+            _inventory_one(checkpoint, args.out, levanter_manifests)
+        except FileNotFoundError as error:
+            logger.warning("checkpoint missing (pruned or rolled): %s (%s)", checkpoint.id, error)
+        except Exception as error:
+            logger.warning("inventory failed for %s: %s", checkpoint.id, error)
     if levanter_manifests:
         path = write_json(args.out, "levanter-manifests.json", levanter_manifests)
         logger.info("wrote %s", path)
+
+
+def _inventory_one(checkpoint, args_out, levanter_manifests):
+    started = time.monotonic()
+    if checkpoint.kind == LEVANTER:
+        reader = LevanterReader(checkpoint)
+        manifest = reader._manifest()
+        levanter_manifests[checkpoint.id] = {
+            "uri": checkpoint.uri,
+            "arrays": [
+                {"path": a["path"], "shape": a["shape"], "dtype": a["dtype"], "chunk_shape": a["chunk_shape"]}
+                for a in manifest["arrays"]
+            ],
+        }
+        logger.info("levanter manifest %s (%.1fs)", checkpoint.id, time.monotonic() - started)
+    elif checkpoint.kind == MEGATRON:
+        inventory = MegatronInventory(checkpoint)
+        entries = inventory.entries()
+        mapping, notes = build_mapping(entries)
+        preview_payload = {
+            "uri": checkpoint.uri,
+            "key_count": len(entries),
+            "preview": preview(entries),
+            "mapping_notes": notes,
+        }
+        name = f"{checkpoint.id}-preview.json"
+        path = write_json(args.out, name, preview_payload)
+        mapping_path = write_json(args.out, f"{checkpoint.id}-mapping.json", mapping)
+        logger.info(
+            "megatron inventory %s: %d keys -> %s, mapping %s (%.1fs)",
+            checkpoint.id,
+            len(entries),
+            path,
+            mapping_path,
+            time.monotonic() - started,
+        )
 
 
 if __name__ == "__main__":
