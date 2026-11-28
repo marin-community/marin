@@ -243,6 +243,21 @@ class DaytonaNetworkPolicy:
         return {"network_block_all": mode == DaytonaNetworkMode.BLOCK_ALL}
 
 
+def _toolbox_rejection(error: DaytonaError) -> bool:
+    """Whether a started sandbox's toolbox refused the request itself, for example for a path that does not exist,
+    in its JSON error format."""
+    # The SDK reports a failed file transfer's HTTP response without its status code.
+    if not isinstance(error, DaytonaValidationError | DaytonaNotFoundError) or error.status_code is None:
+        return False
+    # Daytona's proxy answers 400 when it cannot resolve a started sandbox's container IP.
+    if MISSING_CONTAINER_IP_MESSAGE in str(error):
+        return False
+    content_type = next(
+        (str(value) for name, value in (error.headers or {}).items() if name.lower() == "content-type"), ""
+    )
+    return content_type.partition(";")[0].strip().lower() == "application/json"
+
+
 class DaytonaOutputUnavailable(ConnectionError):
     """A command ran, but its output could not be read back from the sandbox."""
 
@@ -477,14 +492,7 @@ class DaytonaMachine:
                 ) from error
             if self.sandbox.state != SandboxState.STARTED:
                 raise MachineTerminated(f"Daytona sandbox {self.sandbox.id} is {self.sandbox.state}: {error}") from error
-            # The toolbox rejected this request, for example for a path that does not exist. The SDK reports a
-            # failed file transfer's HTTP response without its status code. Daytona also returns 400 when the proxy
-            # cannot resolve a started sandbox's container IP, which is a lost toolbox, not a rejected request.
-            if (
-                isinstance(error, DaytonaValidationError | DaytonaNotFoundError)
-                and error.status_code is not None
-                and MISSING_CONTAINER_IP_MESSAGE not in str(error)
-            ):
+            if _toolbox_rejection(error):
                 raise
             # Any other answer, such as a failed authentication or a page from a server that a task's network
             # changes put in the toolbox's place, means the toolbox cannot serve the sandbox.

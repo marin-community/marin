@@ -1188,6 +1188,10 @@ def _bad_gateway() -> ClientResponseError:
     return ClientResponseError(request, (), status=502, message="Bad Gateway")
 
 
+def _toolbox_rejection() -> DaytonaValidationError:
+    return DaytonaValidationError("Invalid request", status_code=400, headers={"Content-Type": "application/json"})
+
+
 def _sdk_error(error: Exception) -> DaytonaError:
     """The error the Daytona SDK raises when a request fails with ``error``."""
 
@@ -1218,8 +1222,8 @@ def _sdk_error(error: Exception) -> DaytonaError:
             SandboxState.STARTED,
             ConnectionError,
         ),
-        (DaytonaValidationError("Invalid request", status_code=400), SandboxState.STARTED, DaytonaValidationError),
-        (DaytonaValidationError("Invalid request", status_code=400), "unreachable", ConnectionError),
+        (_toolbox_rejection(), SandboxState.STARTED, DaytonaValidationError),
+        (_toolbox_rejection(), "unreachable", ConnectionError),
     ],
     ids=[
         "lost-connection",
@@ -1290,6 +1294,19 @@ def _toolbox_response_error(status: HTTPStatus, content_type: str, body: str) ->
         ),
         (_toolbox_response_error(HTTPStatus.UNAUTHORIZED, "text/plain", ""), ConnectionError),
         (
+            _toolbox_response_error(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", "404 page not found"),
+            ConnectionError,
+        ),
+        (
+            _toolbox_response_error(
+                HTTPStatus.BAD_REQUEST,
+                "application/json",
+                '{"message": "bad request: failed to resolve container IP after 3 attempts: no IP address found. '
+                'Is the Sandbox started?"}',
+            ),
+            ConnectionError,
+        ),
+        (
             _toolbox_response_error(HTTPStatus.BAD_REQUEST, "application/json", '{"message": "invalid request"}'),
             DaytonaValidationError,
         ),
@@ -1298,7 +1315,7 @@ def _toolbox_response_error(status: HTTPStatus, content_type: str, body: str) ->
             DaytonaNotFoundError,
         ),
     ],
-    ids=["web-page", "unauthenticated", "invalid-request", "missing-path"],
+    ids=["web-page", "unauthenticated", "foreign-not-found", "missing-container-ip", "invalid-request", "missing-path"],
 )
 def test_daytona_started_sandbox_reports_failures_other_than_a_rejected_request_as_unreachable(provider_error, expected):
     class Toolbox:
