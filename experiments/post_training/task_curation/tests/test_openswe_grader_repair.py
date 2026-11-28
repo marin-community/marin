@@ -174,12 +174,12 @@ def test_status_capture_after_golden_excision_pins_to_zero():
     evidence)."""
     script = (
         "#!/bin/bash\ncd /testbed\n"
-        "echo \"Applying golden patch...\"\n"
+        'echo "Applying golden patch..."\n'
         f"git apply -v --allow-empty - <<'EOF_114329324912'\n{GOLDEN}EOF_114329324912\n"
         "\n"
         "patch_rc=$?\n"
         "if [ $patch_rc -ne 0 ]; then\n"
-        "  echo \"manual correction\"\n"
+        '  echo "manual correction"\n'
         "fi\n"
         f"git apply -v --allow-empty - <<'EOF_114329324912'\n{TEST_PATCH}EOF_114329324912\n"
         'pytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n'
@@ -217,11 +217,7 @@ def test_script_that_does_not_parse_fails_closed():
     never grade, so it cannot be repaired into one that does (gate v5's
     Coqtail/mqttasgi/production-stack evidence)."""
     script = (
-        "#!/bin/bash\ncd /testbed\n"
-        "if [ -f x ]; then\n"
-        "    }\n"
-        "fi\n"
-        'pytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n'
+        "#!/bin/bash\ncd /testbed\n" "if [ -f x ]; then\n" "    }\n" "fi\n" 'pytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n'
     )
     classification = grader_repair.classify_grader(grader_row(eval_script=script))
     assert classification.verdict == "unrepairable"

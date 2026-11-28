@@ -36,7 +36,8 @@ _HEREDOC_START = re.compile(r"<<-?\s*(['\"]?)(?P<delimiter>[A-Za-z_][A-Za-z_0-9]
 _APPLY_LINE = re.compile(r"^\s*(sudo\s+)?git apply\b")
 _ASSIGNMENT_LINE = re.compile(r"^\s*(?:local\s+)?(?P<name>[A-Za-z_][A-Za-z_0-9]*)=.*<<")
 _FULL_TREE_RESET = re.compile(
-    r"^(?P<indent>\s*)(sudo\s+)?(?P<command>git (checkout -- \.|checkout HEAD -- \.|checkout -f \.|reset\s+[^#\n]*--hard\S*))(?P<suffix>[^\n]*)$",
+    r"^(?P<indent>\s*)(sudo\s+)?(?P<command>git (checkout -- \.|checkout HEAD -- \.|"
+    r"checkout -f \.|reset\s+[^#\n]*--hard\S*))(?P<suffix>[^\n]*)$",
     re.MULTILINE,
 )
 # The exit-code capture line a golden application's status handler reads right
@@ -195,8 +196,7 @@ def classify_grader(row: OpenSweRow) -> GraderClassification:
         classification.verdict = "unrepairable"
         classification.reason = "eval_script_syntax_error"
         classification.detail = (
-            "the eval_script does not parse under bash: "
-            + parse.stderr.decode(errors="replace").strip()[-400:]
+            "the eval_script does not parse under bash: " + parse.stderr.decode(errors="replace").strip()[-400:]
         )
         return classification
     # The verifier's ambiguity rule scores a run 0 when more than one
