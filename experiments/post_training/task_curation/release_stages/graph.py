@@ -270,6 +270,7 @@ class ReleasePlan(BaseModel):
     migrations: tuple[str, ...] = ()
     rebound_source: str = ""
     rebound_tasks: int = 0
+    recut: bool = False
     removed_sources: tuple[str, ...] = ()
     main_source_sync: main_source_sync_stage.MainSourceSyncPlan | None = None
     strict_audit_local: bool = False
@@ -519,9 +520,18 @@ def _stage_receipt(stage: str, proof: dict, receipt_key: str) -> StageReceipt:
 
 
 def _execute_census_inputs(config: dict) -> dict:
+    declarations = read_ref(ArtifactRef(**config["declarations"]))
+    populations = config["populations"]
+    if config.get("recut"):
+        # A status-only re-cut's census is incremental: the new admissions' rows
+        # only. The retained population's census receipt is the prior
+        # publication's own, so the retained populations are never re-read.
+        targets = set(config["targets"])
+        declarations = {source_id: row for source_id, row in declarations.items() if source_id in targets}
+        populations = {source_id: path for source_id, path in populations.items() if source_id in targets}
     return _seal_census_inputs(
-        declarations=read_ref(ArtifactRef(**config["declarations"])),
-        populations=config["populations"],
+        declarations=declarations,
+        populations=populations,
         release_root=config["release_root"],
         source_revision=config["source_revision"],
     )
@@ -888,6 +898,8 @@ def _census_inputs_step(plan: ReleasePlan, declarations: ArtifactStep) -> Artifa
         "populations": plan.populations,
         "release_root": plan.release_root,
         "source_revision": plan.source_revision,
+        "recut": plan.recut,
+        "targets": list(plan.targets),
     }
 
     def build_config(ctx: StepContext) -> dict:
@@ -1396,7 +1408,9 @@ def _census_step(plan: ReleasePlan, census_inputs: ArtifactStep) -> ArtifactStep
             "inputs": {"uri": inputs_doc.uri, "sha256": inputs_doc.sha256},
             "output_root": stage_output_root(plan, "census"),
             "region_prefix": plan.region_prefix,
-            "expected_sources": plan.expected_source_count,
+            # A re-cut's census is incremental (the new admissions only); the
+            # census-inputs document's own row count is the expected source count.
+            "expected_sources": inputs_doc.source_count,
             # The per-source fan-out rides the job's measured core count.
             "workers": census_sizing(plan.expected_population_tasks).cpu,
             "slice_output_root": plan.slice_output_root or None,

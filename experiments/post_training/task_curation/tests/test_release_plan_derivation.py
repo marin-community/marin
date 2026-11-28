@@ -36,6 +36,7 @@ from experiments.post_training.task_curation.grader_drift import (
 )
 from experiments.post_training.task_curation.lexical_artifacts import ActorCensus, SourceTextPopulation
 from experiments.post_training.task_curation.release_stages import declarations as declarations_stage
+from experiments.post_training.task_curation.release_stages import graph as graph_module
 from experiments.post_training.task_curation.release_stages import plan_derivation
 from experiments.post_training.task_curation.release_stages import (
     snapshot_publication as snapshot_publication_stage,
@@ -816,3 +817,185 @@ def test_snapshot_publication_witness_runs_the_real_check_path(tmp_path, frozen_
     )
     with pytest.raises(ValueError, match="non-target declaration drift"):
         _snapshot_publication_witness(plan, SliceSelection(source=RETAINED_ID))
+
+
+def test_recut_census_is_incremental(tmp_path, frozen_layer, deployment, monkeypatch):
+    """A status-only re-cut's census is incremental: the census-inputs document covers
+    the new admissions only, so the retained populations are never re-read (the
+    retained population's census receipt is the prior publication's own)."""
+    layer = _source_layer(tmp_path, (RETAINED_ID, TARGET_ID))
+    prior = _prior_pins(tmp_path, _declaration_dump(layer))
+    config = _config(prior, prior_snapshot_id="assembly-config-prior-snapshot-v1")
+
+    served_declarations = _declaration_dump(layer)
+    survey = {
+        "catalog_root": "s3://example/catalog",
+        "snapshot_id": "assembly-served-prior-v1",
+        "generated_at": "2026-11-23T00:00:00Z",
+        "git_revision": "c" * 40,
+        "schema_sha256": "0" * 64,
+        "runtime_defaults": {
+            "agent": {
+                "network": "deny",
+                "cpus": 1,
+                "memory_mb": 512,
+                "storage_mb": 1024,
+                "gpus": 0,
+                "user": None,
+                "startup_timeout": 60.0,
+                "cleanup_timeout": 30.0,
+            },
+            "grader": {
+                "network": "deny",
+                "cpus": 1,
+                "memory_mb": 512,
+                "storage_mb": 1024,
+                "gpus": 0,
+                "user": None,
+                "startup_timeout": 60.0,
+                "cleanup_timeout": 30.0,
+            },
+        },
+        "matrix": [
+            {"backend": backend, "requirement": requirement, "support": "supported", "evidence": [], "note": ""}
+            for backend in sorted({b.value for b in Backend} | {"iris"})
+            for requirement in [r.value for r in Requirement]
+        ],
+        "deployment_limits": {},
+        "deployment_classes": {},
+        "sources": [],
+    }
+    identity_survey = {
+        "catalog_root": "s3://example/catalog",
+        "snapshot_id": "assembly-served-prior-v1",
+        "generated_at": "2026-11-23T00:00:00Z",
+        "fingerprints": {},
+        "reviews": [],
+        "groups": [],
+        "judge": None,
+    }
+    seen_census_inputs = {}
+
+    def query(sql: str, parameters: dict) -> dict:
+        if "FROM atlas_current" in sql:
+            return {"rows": [{"load_id": PRIOR_LOAD_ID}]}
+        if "FROM curriculum_current" in sql:
+            return {"rows": [{"load_id": PRIOR_CURRICULUM_LOAD_ID}]}
+        if "FROM atlas_review_current" in sql:
+            return {"rows": []}
+        if "FROM atlas_sources" in sql:
+            if "declaration->>'status'" in sql:
+                return {"rows": [{"source_id": RETAINED_ID}]}
+            if "source_fingerprint IS NOT NULL" in sql:
+                return {"rows": []}
+            if "duplicate_group IS NOT NULL" in sql:
+                return {"rows": []}
+            return {"rows": [{"source_id": source_id} for source_id in sorted(served_declarations)]}
+        if "FROM atlas_backend_surveys" in sql:
+            return {
+                "rows": [
+                    {
+                        "survey": {key: value for key, value in survey.items() if key not in ("sources", "matrix")},
+                        "survey_id": "served-survey",
+                    }
+                ]
+            }
+        if "FROM atlas_backend_sources" in sql:
+            return {"rows": []}
+        if "FROM atlas_backend_cells" in sql:
+            return {"rows": [{"cell": cell} for cell in survey["matrix"]]}
+        if "FROM atlas_identity_surveys" in sql:
+            return {"rows": [{"metadata": identity_survey, "survey_id": "served-identity"}]}
+        if "FROM atlas_backend_sources" in sql:
+            return {"rows": []}
+        if "FROM atlas_backend_cells" in sql:
+            return {"rows": []}
+        if "FROM atlas_duplicate_reviews" in sql:
+            return {"rows": []}
+        raise AssertionError(f"unexpected derivation query: {sql}")
+
+    monkeypatch.setattr(plan_derivation, "derived_contract_receipts", _contract_receipts_factory({TARGET_ID: 2}))
+
+    # Capture the census-inputs document the graph's census-inputs step seals: run the
+    # step's executor directly against the sealed declarations document.
+    declarations_document = {"declarations": served_declarations}
+    declarations_path = tmp_path / "declarations-sealed.json"
+    declarations_path.write_text(json.dumps(declarations_document, sort_keys=True))
+    sealed_declarations = {
+        "uri": str(declarations_path),
+        "sha256": hashlib.sha256(declarations_path.read_bytes()).hexdigest(),
+    }
+
+    def fake_seal_census_inputs(declarations, populations, *, release_root, source_revision):
+        seen_census_inputs["declarations"] = dict(declarations)
+        seen_census_inputs["populations"] = dict(populations)
+        document = {
+            "kind": "atlas-population-census-inputs",
+            "source_revision": source_revision,
+            "rows": [
+                {
+                    "source_id": source_id,
+                    "declaration": declarations[source_id],
+                    "population_path": populations[source_id],
+                }
+                for source_id in sorted(declarations)
+            ],
+        }
+        raw = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
+        path = Path(release_root) / "census-inputs.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+        return {
+            "uri": str(path),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "source_count": len(document["rows"]),
+        }
+
+    monkeypatch.setattr(graph_module, "_seal_census_inputs", fake_seal_census_inputs)
+
+    derived = derive_release_plan(
+        config,
+        repo_root=REPO_ROOT,
+        query=query,
+        sources_fn=lambda: layer,
+        prior_catalog_reader=lambda root, q: read_prior_catalog_state(
+            root,
+            q,
+            catalog_factory=_catalog_factory((RETAINED_ID,), declarations=served_declarations),
+            receipt_keys_fn=lambda: {},
+        ),
+        drift_reference_fn=lambda root, revision, declared: GraderDriftReference(
+            main=MainRecipeReference(revision="e" * 40, merge_base=revision),
+            sources={
+                source_id: SealedRecipeReference(source_id=source_id, converter_revision=revision)
+                for source_id in declared
+            },
+        ),
+    )
+
+    plan = ReleasePlan.model_validate(derived.plan_document)
+    assert plan.recut is True
+    assert plan.targets == (TARGET_ID,)
+
+    # The graph's census-inputs step seals the incremental document: the new
+    # admissions' rows only.
+    lowered = release_graph(plan)
+    assert lowered.stages["census_inputs"] is not None
+
+    def read_ref_stub(ref):
+        document = json.loads(Path(ref.uri).read_text())
+        assert hashlib.sha256(Path(ref.uri).read_bytes()).hexdigest() == ref.sha256
+        return document["declarations"]
+
+    config_document = {
+        "populations": plan.populations,
+        "release_root": str(tmp_path / "release"),
+        "source_revision": plan.source_revision,
+        "recut": plan.recut,
+        "targets": list(plan.targets),
+        "declarations": sealed_declarations,
+    }
+    monkeypatch.setattr(graph_module, "read_ref", read_ref_stub)
+    graph_module._execute_census_inputs(config_document)
+    assert sorted(seen_census_inputs["declarations"]) == [TARGET_ID]
+    assert sorted(seen_census_inputs["populations"]) == [TARGET_ID]

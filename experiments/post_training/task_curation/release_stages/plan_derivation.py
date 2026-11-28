@@ -720,6 +720,7 @@ def derive_release_plan(
         migrations=tuple(config.migrations),
         rebound_source=config.rebound_source,
         rebound_tasks=config.rebound_tasks,
+        recut=recut,
         removed_sources=tuple(sorted(removed_ids)),
         main_source_sync=config.main_source_sync,
         strict_audit_local=config.strict_audit_local,
