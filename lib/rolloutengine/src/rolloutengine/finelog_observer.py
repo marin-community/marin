@@ -63,12 +63,17 @@ class ContentKind(StrEnum):
 
 @dataclass(frozen=True)
 class RolloutScope:
-    """The run that a task attempt belongs to. Every row of the task attempt carries these fields.
+    """Where a task attempt sits in its run. Every row of the task attempt carries these fields.
 
     ``run_id`` and ``run_attempt_id`` are the ``run_id`` and ``attempt_id`` of ``marin.rollout_runs``: the
     experiment run and one execution of it. That table has the producer, the model and the job of a run.
-    ``phase`` and ``step`` place the task attempt in the run, for example the training step of a
-    reinforcement-learning run.
+    ``phase`` is the part of the run, such as training or evaluation, and ``policy_step`` is the step of the
+    weights that the task attempt sampled from.
+
+    ``group_id`` names the rollout group: the repetitions of one task that the loop dispatched together.
+    ``repetition_index`` numbers the task attempt's repetition in that group, and ``retry_index`` counts the
+    earlier attempts of the same repetition, from 0. The attempt whose result the loop kept has the highest
+    ``retry_index`` of its ``(group_id, repetition_index)``.
 
     ``run_id`` is not the engine's ``run_id``, which names one task attempt and is the rows' ``rollout_id``.
     """
@@ -76,7 +81,10 @@ class RolloutScope:
     run_id: str
     run_attempt_id: str
     phase: str | None = None
-    step: int | None = None
+    policy_step: int | None = None
+    group_id: str | None = None
+    repetition_index: int | None = None
+    retry_index: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,7 +97,10 @@ class _ScopedRow:
     run_id: str
     run_attempt_id: str
     phase: str | None
-    step: int | None
+    policy_step: int | None
+    group_id: str | None
+    repetition_index: int | None
+    retry_index: int | None
     task_id: str
     rollout_id: str
     event_index: int
@@ -250,7 +261,10 @@ def _scoped_columns(event: RolloutEvent, scope: RolloutScope) -> dict[str, Any]:
         "run_id": scope.run_id,
         "run_attempt_id": scope.run_attempt_id,
         "phase": scope.phase,
-        "step": scope.step,
+        "policy_step": scope.policy_step,
+        "group_id": scope.group_id,
+        "repetition_index": scope.repetition_index,
+        "retry_index": scope.retry_index,
         "task_id": event.task_id,
         "rollout_id": event.run_id,
         "event_index": event.index,

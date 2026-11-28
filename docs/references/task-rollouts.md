@@ -633,7 +633,14 @@ No end event is emitted when a token-contract error or cancellation propagates.
 
 ```python
 log = FinelogRolloutLog(client)
-scope = RolloutScope(run_id=run_id, run_attempt_id=run_attempt_id, phase="train", step=step)
+scope = RolloutScope(
+    run_id=run_id,
+    run_attempt_id=run_attempt_id,
+    phase="train",
+    policy_step=policy_step,
+    group_id=group_id,
+    repetition_index=repetition_index,
+)
 engine = RolloutEngine(machine_factories, harnesses, observer=FinelogObserver(log, scope, content_fraction=1.0))
 await engine.run_task(spec, model, run_id=unique_rollout_id)
 await asyncio.to_thread(log.flush, 60)
@@ -645,8 +652,11 @@ await asyncio.to_thread(log.flush, 60)
 | `rolloutengine.messages` | Message | The message as JSON in `content`, and one `options` row for each conversation |
 
 Every row has the scope: `run_id` and `run_attempt_id` are the `run_id` and `attempt_id` of
-`marin.rollout_runs`, which has the producer, the model, and the job of a run. `phase` and `step` place the task
-attempt in the run. `rollout_id` is the engine's `run_id`, so give each task attempt a unique one.
+`marin.rollout_runs`, which has the producer, the model, and the job of a run. `phase` is the part of the run,
+such as training or evaluation, and `policy_step` is the step of the weights that the task attempt sampled from.
+`group_id` names the rollout group, the repetitions of one task that the loop dispatched together;
+`repetition_index` numbers the attempt's repetition in that group, and `retry_index` counts the earlier attempts
+of the same repetition, from 0. `rollout_id` is the engine's `run_id`, so give each task attempt a unique one.
 
 In the events table, payloads share the columns `duration`, `stop_reason`, `done`, and `error`, so the meaning
 of those follows `event_type`. Other columns name their payload: `tool_call_id` and `tool_name` are the `call_id`
