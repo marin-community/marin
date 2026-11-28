@@ -127,6 +127,9 @@ class NamespaceInfo:
     max_seq: int
     segment_count: int
     storage_policy: StoragePolicy
+    # Segments at each compaction level, index 0 being L0. Empty from a server
+    # that predates the field.
+    segment_count_by_level: tuple[int, ...] = ()
 
 
 def _format_exc_summary(exc: BaseException) -> str:
@@ -751,6 +754,7 @@ class LogClient:
                 max_seq=info.max_seq,
                 segment_count=info.segment_count,
                 storage_policy=StoragePolicy.from_proto(info.storage_policy),
+                segment_count_by_level=tuple(info.segment_count_by_level),
             )
             for info in response.namespaces
         ]

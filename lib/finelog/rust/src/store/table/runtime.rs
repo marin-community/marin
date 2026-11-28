@@ -42,7 +42,7 @@ use crate::store::table::segment_view::{visible_segments, SegmentSnapshot, Segme
 use crate::store::table::spec_migration::MigrationBlock;
 use crate::store::table_spec::TablePolicy;
 use crate::store::table_state::TableSnapshot;
-use crate::store::types::{segment_to_row, NamespaceStats, SegmentRow};
+use crate::store::types::{count_by_level, segment_to_row, NamespaceStats, SegmentRow};
 
 use super::{AckDurability, MaintenanceClass};
 
@@ -575,6 +575,7 @@ impl TableRuntime {
             min_seq,
             max_seq,
             segment_count: segments.count as i32,
+            segment_count_by_level: count_by_level(segments.count_by_level),
         }
     }
 

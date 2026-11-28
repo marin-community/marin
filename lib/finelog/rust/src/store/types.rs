@@ -101,13 +101,43 @@ pub fn segment_to_row(namespace: &str, segment: &LocalSegment) -> SegmentRow {
 }
 
 /// Aggregate counters for one namespace's persisted segments.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NamespaceStats {
     pub row_count: i64,
     pub byte_size: i64,
     pub min_seq: i64,
     pub max_seq: i64,
     pub segment_count: i32,
+    /// Segments at each compaction level; index 0 is L0. Sums to `segment_count`,
+    /// except that a segment with a negative or implausibly high level is left out.
+    pub segment_count_by_level: Vec<i32>,
+}
+
+/// Highest level `count_by_level` reports, far above any real policy's
+/// terminal level. It bounds the list a malformed row can ask for.
+const MAX_COUNTED_LEVEL: usize = 31;
+
+/// Sum `(level, segments)` pairs into counts indexed by level.
+///
+/// Nothing writes a negative level or one above [`MAX_COUNTED_LEVEL`], but
+/// the catalog schema does not forbid either. Such a segment is left out, so
+/// the result sums to less than the table's segment count instead of failing
+/// the stats read or sizing the list by a malformed level.
+pub fn count_by_level(level_counts: impl IntoIterator<Item = (i32, i32)>) -> Vec<i32> {
+    let mut counts = Vec::new();
+    for (level, segments) in level_counts {
+        let Ok(index) = usize::try_from(level) else {
+            continue;
+        };
+        if index > MAX_COUNTED_LEVEL {
+            continue;
+        }
+        if counts.len() <= index {
+            counts.resize(index + 1, 0);
+        }
+        counts[index] += segments;
+    }
+    counts
 }
 
 /// Aggregate in-RAM accounting across live namespaces for the diagnostics line:
@@ -174,6 +204,16 @@ pub fn parse_seg_filename(name: &str) -> Option<(i32, i64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn count_by_level_fills_gaps_and_leaves_out_malformed_levels() {
+        assert_eq!(
+            count_by_level([(2, 1), (0, 3), (-1, 5), (32, 7), (i32::MAX, 9)]),
+            vec![3, 0, 1]
+        );
+        assert_eq!(count_by_level([(31, 2)]).len(), 32);
+        assert!(count_by_level([]).is_empty());
+    }
 
     #[test]
     fn location_round_trip() {

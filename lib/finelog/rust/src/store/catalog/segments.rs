@@ -13,7 +13,7 @@ use rusqlite::{Connection, OptionalExtension};
 use super::*;
 use crate::errors::StatsError;
 use crate::store::policy::StoragePolicy;
-use crate::store::types::{NamespaceStats, SegmentRow};
+use crate::store::types::{count_by_level, NamespaceStats, SegmentRow};
 
 /// Decode one row from the ordered segment query projection.
 pub(super) fn row_to_segment(row: &rusqlite::Row) -> rusqlite::Result<SegmentRow> {
@@ -346,6 +346,18 @@ impl Catalog {
     /// Single-namespace aggregate over the segments table.
     pub fn aggregate_namespace_stats(&self, name: &str) -> Result<NamespaceStats, StatsError> {
         let inner = self.inner.lock().unwrap();
+        let level_counts = inner
+            .conn
+            .prepare("SELECT level, COUNT(*) FROM segments WHERE namespace = ?1 GROUP BY level")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([name], |row| {
+                        Ok((row.get::<_, i32>(0)?, row.get::<_, i32>(1)?))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(sqlite_err)?;
+        let segment_count_by_level = count_by_level(level_counts);
         let stats = inner
             .conn
             .query_row(
@@ -371,6 +383,7 @@ impl Catalog {
                         min_seq: row.get(2)?,
                         max_seq: row.get(3)?,
                         segment_count: row.get(4)?,
+                        segment_count_by_level: segment_count_by_level.clone(),
                     })
                 },
             )

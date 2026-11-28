@@ -739,7 +739,8 @@ and `index_artifacts`. While compaction still has runs left, the cycle skips the
 A growing `segment_count` in `finelog namespaces <name>`, with `maintenance cycle
 waited for a slot` reporting waits of many minutes, means compaction is falling
 behind flushes. Reads then open every L0 because an L0
-spans the whole key range.
+spans the whole key range. `segment_count_by_level` in the same output lists the
+count at each compaction level, L0 first, so the first number is the backlog.
 
 `slow batch stage breakdown` reports `read_ms`, `chunk_encode_ms`, and `push_ms`
 for one turn, with its source cursor range, row count, chunk count, and encoded

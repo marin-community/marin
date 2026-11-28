@@ -856,6 +856,7 @@ mod tests {
                 min_seq: 1,
                 max_seq: 5,
                 segment_count: 2,
+                segment_count_by_level: vec![2],
             }
         );
         assert!(stats.byte_size > 0);

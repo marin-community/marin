@@ -875,6 +875,7 @@ def test_client_lists_namespaces_with_schema_and_storage_stats(tracked_clients):
                 max_seq=13,
                 segment_count=4,
                 storage_policy=stats_pb2.StoragePolicy(max_bytes=1024),
+                segment_count_by_level=[3, 0, 1],
             )
         ]
 
@@ -897,6 +898,7 @@ def test_client_lists_namespaces_with_schema_and_storage_stats(tracked_clients):
                 max_seq=13,
                 segment_count=4,
                 storage_policy=StoragePolicy(max_bytes=1024),
+                segment_count_by_level=(3, 0, 1),
             )
         ]
     finally:

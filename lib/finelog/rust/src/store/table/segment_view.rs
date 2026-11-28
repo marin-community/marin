@@ -54,6 +54,8 @@ pub struct SegmentSnapshot {
 /// Aggregate accounting over the live segments, read under one lock.
 pub struct SegmentTotals {
     pub count: usize,
+    /// Segments at each compaction level, keyed by level.
+    pub count_by_level: BTreeMap<i32, i32>,
     pub rows: i64,
     pub bytes: i64,
     /// Bounds over segments that actually hold rows.
@@ -179,6 +181,12 @@ impl SegmentView {
         let segments = self.segments.lock().unwrap();
         SegmentTotals {
             count: segments.len(),
+            count_by_level: segments
+                .iter()
+                .fold(BTreeMap::new(), |mut counts, segment| {
+                    *counts.entry(segment.level).or_default() += 1;
+                    counts
+                }),
             rows: segments.iter().map(|segment| segment.row_count).sum(),
             bytes: segments.iter().map(|segment| segment.size_bytes).sum(),
             min_seq: segments
