@@ -8,12 +8,12 @@ still hold the same task contract in more than one source. This step runs
 ``taskcompendium.pipeline.cross_source.deduplicate_across_sources`` over the
 training sources in the order the driver passes (the campaign's catalog
 order) and records one drop manifest per source plus the campaign evidence.
-The artifact's identity covers the source set, so a rerun with the same
-sources resolves to the same artifact and a different set gets its own.
 
-The recorded drops are the curation-side evidence for the TaskStore; the
-selection step remains the enforcement point when it samples and may keep a
-different (contract-identical) copy.
+The artifact's identity covers the source set and their artifact versions, so
+a rerun with rebuilt sources resolves to a new artifact. The recorded drops
+are curation-side evidence for a future TaskStore consumer; the selection
+step still deduplicates when it samples and may keep a different
+(contract-identical) copy.
 """
 
 import hashlib
@@ -55,16 +55,23 @@ def cross_source_dedup_step(
 ) -> ArtifactStep[RlDataArtifact] | None:
     """The campaign's cross-source dedup artifact, or ``None`` with fewer than two sources.
 
-    ``order`` lists the training source IDs in the campaign's catalog order;
-    the earliest source in that order keeps each duplicated contract.
+    ``order`` lists the training source IDs in the campaign's catalog order and
+    must cover exactly the curated sources; the earliest source in that order
+    keeps each duplicated contract.
     """
     if len(curated) < 2:
         return None
-    missing = set(curated) - set(order)
-    if missing:
-        raise ValueError(f"Dedup order must cover every training source: {', '.join(sorted(missing))}")
+    if set(order) != set(curated):
+        missing = sorted(set(curated) - set(order))
+        unknown = sorted(set(order) - set(curated))
+        raise ValueError(f"Dedup order must cover exactly the training sources: missing={missing} unknown={unknown}")
     deps = list(curated.values())
-    digest = hashlib.sha256(",".join(order).encode()).hexdigest()[:20]
+    # The digest carries each dep's name@version so a rebuilt source set (new
+    # curation attempt, changed recipe) gets a new artifact; dep versions alone
+    # would leave the name stable while check_drift only warns on drift.
+    digest = hashlib.sha256(
+        ",".join(f"{source_id}={curated[source_id].name}@{curated[source_id].version}" for source_id in order).encode()
+    ).hexdigest()[:20]
 
     def build_config(ctx: StepContext) -> CrossSourceRequest:
         finals = {source_id: str(StoragePath(ctx.artifact_path(step)) / "final") for source_id, step in curated.items()}

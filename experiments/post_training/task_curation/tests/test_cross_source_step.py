@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from fray.types import ResourceConfig
 from marin.execution.lazy import ArtifactStep
 from taskcompendium.convert.answers import numeric_answer_task
@@ -95,3 +96,47 @@ def test_run_records_the_later_source_duplicates_and_the_campaign_evidence(tmp_p
         }
     ]
     assert (Path(request.output_path) / "manifest.json").exists()
+
+
+def test_step_identity_tracks_source_artifact_versions():
+    alpha = _fake_step("alpha")
+    beta = _fake_step("beta")
+    rebuilt_alpha = ArtifactStep(
+        name="source/alpha",
+        version="2026.11.28.1",
+        artifact_type=pa.Table,
+        deps=[],
+        run=lambda: None,
+        build_config=lambda ctx: None,
+    )
+    first = cross_source_dedup_step(
+        {"alpha": alpha, "beta": beta},
+        order=("alpha", "beta"),
+        max_workers=1,
+        worker_resources=RESOURCES,
+    )
+    second = cross_source_dedup_step(
+        {"alpha": rebuilt_alpha, "beta": beta},
+        order=("alpha", "beta"),
+        max_workers=1,
+        worker_resources=RESOURCES,
+    )
+    assert first is not None and second is not None
+    assert first.name != second.name
+
+
+def test_step_rejects_an_order_that_is_not_exactly_the_source_set():
+    with pytest.raises(ValueError, match="exactly the training sources"):
+        cross_source_dedup_step(
+            {"alpha": _fake_step("alpha"), "beta": _fake_step("beta")},
+            order=("alpha",),
+            max_workers=1,
+            worker_resources=RESOURCES,
+        )
+    with pytest.raises(ValueError, match="exactly the training sources"):
+        cross_source_dedup_step(
+            {"alpha": _fake_step("alpha"), "beta": _fake_step("beta")},
+            order=("alpha", "phantom"),
+            max_workers=1,
+            worker_resources=RESOURCES,
+        )
