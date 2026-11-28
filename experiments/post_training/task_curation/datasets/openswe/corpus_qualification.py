@@ -44,9 +44,7 @@ from experiments.post_training.task_curation.datasets.openswe.sources import Ope
 LOGGER = logging.getLogger(__name__)
 
 
-def condensed_context(
-    row: OpenSweRow, condensed_bases: dict[str, str], scratch: Path
-) -> tuple[Path, str, Path]:
+def condensed_context(row: OpenSweRow, condensed_bases: dict[str, str], scratch: Path) -> tuple[Path, str, Path]:
     """The condensed arm's build context, workdir and staged files.
 
     The gate's ``arm_contexts`` builds both arms; the corpus qualification runs
@@ -292,9 +290,7 @@ def main() -> None:
     # The gate's own sample rows keep their records (qualified and excluded
     # alike); the corpus run covers the rest of the population, so the merged
     # report carries one evidence record per row without re-running the sample.
-    population, counts = qualification_population(
-        rows, frozenset(evidence.excluded) | evidence.qualified
-    )
+    population, counts = qualification_population(rows, frozenset(evidence.excluded) | evidence.qualified)
     if args.limit is not None:
         population = population[: args.limit]
     shard = shard_population(population, args.shard_index, args.shard_count)
