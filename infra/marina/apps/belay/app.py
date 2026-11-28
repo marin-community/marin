@@ -46,8 +46,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "github_posting": False,
     "node_cap": 8,
     "storage_limit_bytes": 1_000_000_000_000,
-    # Who may use the admin view: Marina identities, seeded with the marin-devs team's GitHub accounts; an entry
-    # without an identity cannot sign in until a maintainer maps it.
+    # Who may use the admin view: every Marina identity in these domains, plus the listed approvers. The list maps an
+    # identity to the GitHub login its decisions are credited to (an approver it does not name is credited by
+    # identity), and admits an identity outside the domains.
+    "approver_domains": ["openathena.ai"],
     "approvers": [
         {"github": "ClassicLarry", "github_id": 42926649, "identity": "larry.dial@openathena.ai"},
         {"github": "dlwh", "github_id": 9633, "identity": None},
@@ -292,6 +294,8 @@ class SettingsUpdate(BaseModel):
     node_cap: int | None = Field(default=None, ge=1)
     """Soft cap on nodes held by Belay runs; launches read it from the app."""
     approvers: list[Approver] | None = None
+    approver_domains: list[str] | None = None
+    """Identity domains whose every member is an approver (``openathena.ai``)."""
 
 
 class MaintainerNote(BaseModel):
@@ -425,15 +429,18 @@ def _signed_in_user() -> str | None:
     return None
 
 
-def _approver_identities(settings: dict[str, Any]) -> set[str]:
-    return {a["identity"] for a in settings["approvers"] if a.get("identity")}
+def is_approver(settings: dict[str, Any], user: str) -> bool:
+    """Whether the Marina identity ``user`` may approve: it is in an approver domain, or a listed approver."""
+    _, at, domain = user.rpartition("@")
+    listed = {a["identity"] for a in settings["approvers"] if a.get("identity")}
+    return (bool(at) and domain in settings["approver_domains"]) or user in listed
 
 
 def agent_caller_ok(settings: dict[str, Any], user: str | None, token: str | None) -> bool:
     """Whether a caller may use the agent endpoints: a session identity, an approver, or the service token."""
     if _token_ok(settings, token):
         return True
-    return user is not None and user in set(settings["session_identities"]) | _approver_identities(settings)
+    return user is not None and (user in settings["session_identities"] or is_approver(settings, user))
 
 
 def _sha256(secret: str) -> str:
@@ -1146,7 +1153,7 @@ def create_api(services: Services) -> RegisteredApi:
         user = _signed_in_user()
         if user is None:
             raise HTTPException(401, "Sign in to Marina to use the Belay admin view.")
-        if user not in _approver_identities(settings):
+        if not is_approver(settings, user):
             raise HTTPException(403, f"{user} is not a Belay approver. Ask a maintainer to add you in settings.")
         identity = get_verified_identity()
         if settings["admin_role_required"] and (identity is None or identity.role != "admin"):
