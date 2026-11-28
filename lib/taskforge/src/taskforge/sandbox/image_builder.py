@@ -304,6 +304,7 @@ def submit_job(
     secrets: dict[str, str],
     target_cluster: str,
     policy: ImageJobPolicy,
+    memory_bytes: int | None = None,
 ) -> Job:
     """Submit an image job with explicit values and the storage credentials it needs.
 
@@ -325,7 +326,7 @@ def submit_job(
             secrets={**storage, **secrets},
             secret_behavior=SecretBehavior.ISOLATE,
         ),
-        resources=ResourceSpec(cpu=2, memory=4 * 1024**3, disk=20 * 1024**3),
+        resources=ResourceSpec(cpu=2, memory=memory_bytes or 4 * 1024**3, disk=20 * 1024**3),
         task_image=image,
         container_profile=job_pb2.CONTAINER_PROFILE_DEFAULT,
         constraints=[Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=target_cluster)],
@@ -371,12 +372,16 @@ class IrisImageBuilder:
         # A publish waits through both declared deadlines; keep the event loop free.
         return (await asyncio.to_thread(self.publish_with_timings, build, repository)).image
 
-    def submit_build_with_timings(self, build: DockerBuild, repository: str) -> BuildSubmitted:
+    def submit_build_with_timings(
+        self, build: DockerBuild, repository: str, *, memory_bytes: int | None = None
+    ) -> BuildSubmitted:
         """Submit the build job without waiting, for submitters that track completion elsewhere.
 
         The job's environment and context are exactly the publish path's; nothing waits and
         nothing is cancelled, so a submit that returned leaves the build running. The push job
         and the digest pinning continue from the finished build's output archive.
+        ``memory_bytes`` raises the build job's memory above the default 4 GiB for heavy
+        dependency installs (an OOMKilled build is under-sized, not a class defect).
         """
         check_build_limits(build, BUILD_LIMITS)
         if not REPOSITORY.fullmatch(repository):
@@ -408,6 +413,7 @@ class IrisImageBuilder:
                     secrets={},
                     target_cluster=self.target_cluster,
                     policy=self.policy,
+                    memory_bytes=memory_bytes,
                 )
             finally:
                 client.shutdown()

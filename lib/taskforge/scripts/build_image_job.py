@@ -54,6 +54,7 @@ def main(
     timeout: int,
     scheduling_timeout: int,
     no_wait: bool,
+    memory_gb: int | None,
 ) -> None:
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("httpx").setLevel(logging.WARNING)  # blob redirects carry presigned object-store URLs
@@ -66,7 +67,8 @@ def main(
     )
     builder = IrisImageBuilder(cluster=cluster, target_cluster=target_cluster, credential=credential, policy=policy)
     if no_wait:
-        submitted = asyncio.run(builder.submit_build(build, repository))
+        memory_bytes = memory_gb * 1024**3 if memory_gb else None
+        submitted = asyncio.run(builder.submit_build(build, repository, memory_bytes=memory_bytes))
         print(
             json.dumps(
                 {

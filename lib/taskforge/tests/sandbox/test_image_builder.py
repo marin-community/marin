@@ -63,6 +63,7 @@ class RecordingCluster:
         self.env_vars: dict[str, dict[str, str]] = {}
         self.secrets: dict[str, dict[str, str]] = {}
         self.policies: dict[str, dict[str, object]] = {}
+        self.resources: dict[str, job_pb2.ResourceSpecProto] = {}
 
     def submit_job(
         self,
@@ -77,6 +78,7 @@ class RecordingCluster:
         self.env_vars[job_id.name] = dict(environment.env_vars)
         self.secrets[job_id.name] = task_secret_values(environment)
         self.policies[job_id.name] = {key: kwargs[key] for key in ("priority_band", "timeout", "scheduling_timeout")}
+        self.resources[job_id.name] = resources
         return job_id
 
     def shutdown(self, *args: object, **kwargs: object) -> None:
@@ -172,6 +174,20 @@ def test_a_no_wait_submit_records_the_build_job_and_drives_no_push(tmp_path, mon
     # The no-wait submit drives no push job and records no cancel: the build runs untouched.
     assert not any("push" in name for name in cluster.env_vars)
     assert len(entered) == 1 and entered[0].cluster_name == "marin"
+    # The default build job carries the builder's 4 GiB; the memory override raises it.
+    build_name = sorted(cluster.env_vars)[0]
+    assert cluster.resources[build_name].memory_bytes == 4 * 1024**3
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr("taskforge.sandbox.image_builder.connect_controller", fake_connect)
+        patcher.setattr(
+            "taskforge.sandbox.image_builder.IrisClient",
+            SimpleNamespace(remote=lambda *a, **k: IrisClient(cast(ClusterClient, cluster))),
+        )
+        submitted = builder.submit_build_with_timings(build, "example/repo", memory_bytes=8 * 1024**3)
+    raised_name = next(name for name in cluster.env_vars if name != build_name)
+    assert cluster.resources[raised_name].memory_bytes == 8 * 1024**3
+    assert submitted.destination == "registry.example/example/repo:" + submitted.tag
 
 
 @pytest.mark.parametrize(
