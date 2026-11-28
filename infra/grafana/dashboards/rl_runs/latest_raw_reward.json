@@ -1,0 +1,58 @@
+{
+  "type": "stat",
+  "title": "Latest raw reward",
+  "description": "Latest raw training reward in the selected executions. Compare its trend and evaluation scores before judging learning. The latest observation wins regardless of reward magnitude; requires trainer.training_metrics.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "none",
+      "noValue": "No matching execution observations in this window.",
+      "color": {
+        "mode": "thresholds"
+      },
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "text",
+            "value": null
+          }
+        ]
+      }
+    },
+    "overrides": []
+  },
+  "options": {
+    "reduceOptions": {
+      "calcs": [
+        "lastNotNull"
+      ],
+      "fields": "",
+      "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value"
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "targetRef": "rl_execution",
+      "url": "/v1/rl/execution",
+      "view": "status",
+      "format": "table",
+      "columns": [
+        {
+          "selector": "raw_reward",
+          "text": "Latest raw reward",
+          "type": "number"
+        }
+      ]
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

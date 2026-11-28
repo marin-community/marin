@@ -1,0 +1,84 @@
+{
+  "panels": [
+    {
+      "id": 150,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "panelRef": "current_step"
+    },
+    {
+      "id": 151,
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "panelRef": "steps_hour"
+    },
+    {
+      "id": 152,
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "panelRef": "latest_raw_reward"
+    },
+    {
+      "id": 153,
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "panelRef": "generated_tokens_s"
+    },
+    {
+      "id": 154,
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 6,
+        "h": 4
+      },
+      "panelRef": "since_last_step"
+    },
+    {
+      "id": 155,
+      "gridPos": {
+        "x": 6,
+        "y": 4,
+        "w": 6,
+        "h": 4
+      },
+      "panelRef": "since_last_record"
+    },
+    {
+      "id": 156,
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 6,
+        "h": 4
+      },
+      "panelRef": "services_reporting_run_wide"
+    },
+    {
+      "id": 157,
+      "gridPos": {
+        "x": 18,
+        "y": 4,
+        "w": 6,
+        "h": 4
+      },
+      "panelRef": "staleness_p95"
+    }
+  ]
+}

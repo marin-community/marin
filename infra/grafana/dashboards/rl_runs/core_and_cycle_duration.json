@@ -1,0 +1,51 @@
+{
+  "type": "timeseries",
+  "title": "Core and cycle duration",
+  "description": "Core training-loop wall and full cycle wall, including time outside the core. A growing cycle/core gap points to evaluation, checkpoint or callback work. The core includes buffer wait, training and weight sync; requires trainer.training_metrics.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "s",
+      "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 5,
+        "showPoints": "auto",
+        "spanNulls": false,
+        "stacking": {
+          "mode": "none",
+          "group": "A"
+        }
+      },
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/execution",
+      "targetRef": "rl_execution",
+      "view": "core_cycle"
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

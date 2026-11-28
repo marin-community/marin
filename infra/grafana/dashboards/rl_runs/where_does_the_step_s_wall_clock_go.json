@@ -1,0 +1,97 @@
+{
+  "panels": [
+    {
+      "type": "row",
+      "title": "Where does the step’s wall clock go?",
+      "collapsed": false,
+      "panels": [],
+      "id": 202,
+      "gridPos": {
+        "x": 0,
+        "y": 34,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 102,
+      "gridPos": {
+        "x": 0,
+        "y": 35,
+        "w": 6,
+        "h": 8
+      },
+      "panelRef": "rollout_wait_vs_train_step_critical_path"
+    },
+    {
+      "id": 108,
+      "gridPos": {
+        "x": 6,
+        "y": 35,
+        "w": 6,
+        "h": 8
+      },
+      "panelRef": "gpu_utilization_on_this_run_s_nodes"
+    },
+    {
+      "id": 121,
+      "gridPos": {
+        "x": 12,
+        "y": 35,
+        "w": 6,
+        "h": 8
+      },
+      "panelRef": "step_composition_exclusive_seconds_per_span"
+    },
+    {
+      "id": 6,
+      "gridPos": {
+        "x": 18,
+        "y": 35,
+        "w": 6,
+        "h": 8
+      },
+      "panelRef": "driver_step_preparation_and_policy_walls"
+    },
+    {
+      "id": 14,
+      "gridPos": {
+        "x": 0,
+        "y": 43,
+        "w": 6,
+        "h": 8
+      },
+      "panelRef": "weight_sync_and_policy_offload_walls"
+    },
+    {
+      "id": 53,
+      "gridPos": {
+        "x": 6,
+        "y": 43,
+        "w": 6,
+        "h": 8
+      },
+      "panelRef": "weight_sync_stages"
+    },
+    {
+      "id": 34,
+      "gridPos": {
+        "x": 12,
+        "y": 43,
+        "w": 6,
+        "h": 8
+      },
+      "panelRef": "core_and_cycle_duration"
+    },
+    {
+      "id": 36,
+      "gridPos": {
+        "x": 18,
+        "y": 43,
+        "w": 6,
+        "h": 8
+      },
+      "panelRef": "core_wall_fractions"
+    }
+  ]
+}

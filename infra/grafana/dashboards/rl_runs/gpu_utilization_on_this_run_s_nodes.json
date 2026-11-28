@@ -1,0 +1,52 @@
+{
+  "type": "timeseries",
+  "title": "GPU utilization on this run's nodes",
+  "description": "Mean busy percentage across the GPUs on nodes attributed to this run. Long steps with low busy percentage suggest devices are waiting; compare with driver wall and generation waits. Attribution assigns an entire node bucket to the run with the most observations; requires node-agent reporting. Run-wide: this panel ignores the Job and Execution pickers. GPU detail is available for ranges of 7h or less; longer ranges show a zoom message.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 8,
+        "showPoints": "never",
+        "spanNulls": false,
+        "axisLabel": "GPU busy"
+      },
+      "min": 0,
+      "unit": "percent",
+      "max": 100,
+      "noValue": "No GPU data. Over 7h: zoom to 7h or less. Otherwise no node join: trainer rows carry no node_name, or the node agent is not reporting this cluster. This is never “GPUs idle”.",
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "table",
+      "placement": "bottom",
+      "calcs": [
+        "lastNotNull"
+      ]
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/gpu",
+      "targetRef": "rl_run",
+      "view": "gpu_utilization"
+    }
+  ],
+  "interval": "1m",
+  "maxDataPoints": 360
+}

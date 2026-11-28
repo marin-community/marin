@@ -1,0 +1,48 @@
+{
+  "type": "timeseries",
+  "title": "Rollout wait vs train step (critical path)",
+  "description": "Mean rollout-wait and optimizer-step wall time, separated by outcome. Rollout wait above training wall suggests generation is limiting progress. Each inclusive wall includes its nested work; failed spans cover time through the failure. Run-wide: this panel ignores the Job and Execution pickers.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 8,
+        "showPoints": "never",
+        "spanNulls": false,
+        "axisLabel": "mean seconds per optimizer step"
+      },
+      "min": 0,
+      "unit": "s",
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/overview",
+      "targetRef": "rl_run",
+      "view": "critical_path"
+    }
+  ],
+  "interval": "1m",
+  "maxDataPoints": 360
+}

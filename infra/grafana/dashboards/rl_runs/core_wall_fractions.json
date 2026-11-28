@@ -1,0 +1,51 @@
+{
+  "type": "timeseries",
+  "title": "Core wall fractions",
+  "description": "Buffer-wait, training and weight-sync shares of the async core wall. A large wait share suggests generation starvation; rising sync share identifies weight-distribution cost. These core-normalized fractions differ from the full-step exclusive seconds above; requires trainer.training_metrics.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "percentunit",
+      "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 5,
+        "showPoints": "auto",
+        "spanNulls": false,
+        "stacking": {
+          "mode": "none",
+          "group": "A"
+        }
+      },
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/execution",
+      "targetRef": "rl_execution",
+      "view": "core_fractions"
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

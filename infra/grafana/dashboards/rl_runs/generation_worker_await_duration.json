@@ -1,0 +1,52 @@
+{
+  "type": "timeseries",
+  "title": "Generation worker await duration",
+  "description": "Mean and maximum generation-worker waits for prompts, admission slots, queues, model calls and environments. Rising model waits suggest serving pressure; slot waits with a full buffer can be expected backpressure. The mean divides wait seconds by await counts; requires trainer.rollout_spans.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "s",
+      "noValue": "No rollout-span observations. Check trainer.rollout_spans and the selected Job/Execution.",
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 5,
+        "showPoints": "auto",
+        "spanNulls": false,
+        "stacking": {
+          "mode": "none",
+          "group": "A"
+        }
+      },
+      "min": 0,
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/execution",
+      "targetRef": "rl_execution",
+      "view": "worker_waits"
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

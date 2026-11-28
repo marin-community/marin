@@ -1,0 +1,432 @@
+{
+  "type": "row",
+  "title": "What staleness is training using? (async; sync shows 0 only)",
+  "collapsed": true,
+  "panels": [
+    {
+      "id": 51,
+      "type": "timeseries",
+      "title": "Staleness of trained groups: groups per step",
+      "description": "Admitted group counts by optimizer step and policy staleness. Growth in older buckets means more training work uses older weights; compare with reward and mismatch. Rejected groups are excluded and sync runs show zero only; telemetry export enables these observations.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 94,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 0,
+            "fillOpacity": 70,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "staleness_groups"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 52,
+      "type": "timeseries",
+      "title": "Staleness of trained groups: tokens per step",
+      "description": "Consumed response tokens by optimizer step and policy staleness. Larger older buckets mean more of the batch’s tokens come from older policies. Token counts differ from group counts when response lengths differ; sync runs show zero only. Requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 94,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 0,
+            "fillOpacity": 70,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "staleness_tokens"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 54,
+      "type": "timeseries",
+      "title": "Trainer/vLLM logprob mismatch ρ (staleness 0)",
+      "description": "Trainer/vLLM probability mismatch on staleness-zero loss tokens. Large log-ratio tails or low ESS reveal a mismatch even without policy aging. Missing rollout logprobs leave gaps; sync runs have only the zero-staleness comparison. Requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 94,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "mismatch_staleness0"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 55,
+      "type": "timeseries",
+      "title": "Trainer/vLLM logprob mismatch by staleness bucket",
+      "description": "Mean absolute trainer/vLLM log-ratio across staleness buckets. A larger error in older buckets suggests aging policy data contributes to mismatch. Compare with the zero-staleness baseline; async-only buckets are absent for sync runs. Requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 102,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "mismatch_by_staleness"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "description": "Share of consumed loss tokens represented by complete uniform-staleness diagnostics. Higher coverage makes comparisons by staleness more representative; low coverage limits the conclusions. No observed tokens gives null, and sync runs have staleness zero only; requires trainer.training_metrics.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 1,
+          "max": 1,
+          "min": 0,
+          "noValue": "No valid token denominator",
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 102,
+        "w": 8,
+        "h": 8
+      },
+      "id": 48,
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/uniform_staleness_token_fraction/",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "uniform_staleness_token_fraction",
+              "text": "uniform_staleness_token_fraction",
+              "type": "number"
+            },
+            {
+              "selector": "observed_loss_tokens",
+              "text": "observed_loss_tokens",
+              "type": "number"
+            },
+            {
+              "selector": "represented_loss_tokens",
+              "text": "represented_loss_tokens",
+              "type": "number"
+            },
+            {
+              "selector": "mixed_staleness_loss_tokens",
+              "text": "mixed_staleness_loss_tokens",
+              "type": "number"
+            },
+            {
+              "selector": "uniform_updates",
+              "text": "uniform_updates",
+              "type": "number"
+            },
+            {
+              "selector": "excluded_updates",
+              "text": "excluded_updates",
+              "type": "number"
+            }
+          ],
+          "format": "table",
+          "refId": "A",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "uniform_staleness_coverage"
+        }
+      ],
+      "title": "Uniform-staleness diagnostic token coverage",
+      "type": "stat",
+      "maxDataPoints": 360,
+      "interval": "30s"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "description": "Response length, token-weighted log-ratio error, minimum ESS and mean reward for uniform-staleness batches. Compare rows at different staleness to see whether older data is less useful. Mixed-staleness or incomplete batches are excluded; sync runs can contribute staleness zero only. Requires trainer.training_metrics.",
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No matching diagnostics.",
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Token-weighted MSLR"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 6
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Minimum batch ESS fraction"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 6
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 102,
+        "w": 8,
+        "h": 8
+      },
+      "id": 47,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "status",
+              "text": "Coverage status",
+              "type": "string"
+            },
+            {
+              "selector": "execution",
+              "text": "Execution",
+              "type": "string"
+            },
+            {
+              "selector": "staleness",
+              "text": "Exact group age",
+              "type": "number"
+            },
+            {
+              "selector": "updates",
+              "text": "Updates",
+              "type": "number"
+            },
+            {
+              "selector": "mean_response_tokens",
+              "text": "Response tokens / sequence",
+              "type": "number"
+            },
+            {
+              "selector": "token_weighted_mslr",
+              "text": "Token-weighted MSLR",
+              "type": "number"
+            },
+            {
+              "selector": "minimum_ess_fraction",
+              "text": "Minimum batch ESS fraction",
+              "type": "number"
+            },
+            {
+              "selector": "mean_update_raw_reward",
+              "text": "Mean update raw reward",
+              "type": "number"
+            }
+          ],
+          "format": "table",
+          "refId": "A",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "uniform_staleness"
+        }
+      ],
+      "title": "Uniform-staleness batch diagnostics",
+      "type": "table",
+      "maxDataPoints": 360,
+      "interval": "30s"
+    }
+  ]
+}

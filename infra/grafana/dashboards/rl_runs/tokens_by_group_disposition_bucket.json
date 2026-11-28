@@ -1,0 +1,52 @@
+{
+  "type": "timeseries",
+  "title": "Tokens by group disposition / bucket",
+  "description": "Response tokens attached to each terminal group disposition per display bucket. Consumed tokens are useful work; rejected or stale tokens show the cost of discarded work. Compare with group counts to distinguish larger responses from more groups; requires trainer.rollout_spans.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "short",
+      "noValue": "No rollout-span observations. Check trainer.rollout_spans and the selected Job/Execution.",
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 5,
+        "showPoints": "auto",
+        "spanNulls": false,
+        "stacking": {
+          "mode": "none",
+          "group": "A"
+        }
+      },
+      "min": 0,
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/execution",
+      "targetRef": "rl_execution",
+      "view": "group_tokens"
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

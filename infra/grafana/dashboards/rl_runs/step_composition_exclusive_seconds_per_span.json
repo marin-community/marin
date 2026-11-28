@@ -1,0 +1,52 @@
+{
+  "type": "timeseries",
+  "title": "Step composition: exclusive seconds per span",
+  "description": "Mean exclusive wall seconds per full driver step and span, separated by execution. Growing components identify where a step spends more wall time; signed negative residuals reveal overlapping observations. Each execution has separate unstacked series. Requires inclusive-wall step spans from telemetry export.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 10,
+        "showPoints": "never",
+        "spanNulls": false,
+        "axisLabel": "mean seconds per step",
+        "stacking": {
+          "mode": "none",
+          "group": "A"
+        }
+      },
+      "unit": "s",
+      "noValue": "No inclusive-wall driver rows under root='step'. This build publishes no step timings.",
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "targetRef": "rl_execution",
+      "url": "/v1/rl/execution",
+      "view": "step_composition",
+      "format": "timeseries"
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

@@ -1,0 +1,164 @@
+{
+  "type": "barchart",
+  "title": "Inference sampled throughput by learner phase",
+  "description": "Sampled vLLM token throughput during each learner phase, separated by execution, collector, engine, model and counter. Compare generation during training and weight sync to locate interference. Sample coverage on a separate percentage axis shows the fraction of each phase represented by valid counter intervals. Resets and boundary-crossing intervals are excluded; phase attribution requires trainer.rollout_spans.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "tps",
+      "noValue": "No rollout-span observations. Check trainer.rollout_spans and the selected Job/Execution.",
+      "custom": {
+        "fillOpacity": 80,
+        "axisPlacement": "auto"
+      }
+    },
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byRegexp",
+          "options": "/^coverage_fraction/"
+        },
+        "properties": [
+          {
+            "id": "unit",
+            "value": "percentunit"
+          },
+          {
+            "id": "custom.axisPlacement",
+            "value": "right"
+          },
+          {
+            "id": "custom.axisLabel",
+            "value": "sample coverage"
+          },
+          {
+            "id": "min",
+            "value": 0
+          },
+          {
+            "id": "max",
+            "value": 1
+          }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "orientation": "horizontal",
+    "xField": "phase",
+    "showValue": "auto",
+    "stacking": "none",
+    "legend": {
+      "showLegend": true,
+      "placement": "bottom"
+    },
+    "tooltip": {
+      "mode": "multi"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "table",
+      "url": "/v1/rl/execution",
+      "columns": [
+        {
+          "selector": "execution",
+          "text": "execution",
+          "type": "string"
+        },
+        {
+          "selector": "collector",
+          "text": "collector",
+          "type": "string"
+        },
+        {
+          "selector": "phase",
+          "text": "phase",
+          "type": "string"
+        },
+        {
+          "selector": "engine",
+          "text": "engine",
+          "type": "string"
+        },
+        {
+          "selector": "model",
+          "text": "model",
+          "type": "string"
+        },
+        {
+          "selector": "counter",
+          "text": "counter",
+          "type": "string"
+        },
+        {
+          "selector": "tokens_per_sampled_second",
+          "text": "tokens_per_sampled_second",
+          "type": "number"
+        },
+        {
+          "selector": "coverage_fraction",
+          "text": "coverage_fraction",
+          "type": "number"
+        },
+        {
+          "selector": "intervals",
+          "text": "intervals",
+          "type": "number"
+        },
+        {
+          "selector": "phase_seconds",
+          "text": "phase_seconds",
+          "type": "number"
+        }
+      ],
+      "targetRef": "rl_execution",
+      "view": "inference_service"
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360,
+  "transformations": [
+    {
+      "id": "filterFieldsByName",
+      "options": {
+        "include": {
+          "names": [
+            "phase",
+            "execution",
+            "collector",
+            "engine",
+            "model",
+            "counter",
+            "tokens_per_sampled_second",
+            "coverage_fraction"
+          ]
+        }
+      }
+    },
+    {
+      "id": "partitionByValues",
+      "options": {
+        "fields": [
+          "execution",
+          "collector",
+          "engine",
+          "model",
+          "counter"
+        ],
+        "keepFields": false
+      }
+    },
+    {
+      "id": "joinByField",
+      "options": {
+        "byField": "phase",
+        "mode": "outerTabular"
+      }
+    }
+  ]
+}

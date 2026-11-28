@@ -1,0 +1,52 @@
+{
+  "type": "timeseries",
+  "title": "Driver step, preparation and policy walls",
+  "description": "Mean driver step and nested preparation/training walls. Compare changes in the outer step with its child spans to locate a growing wait. Each parent wall includes its children, waits and asynchronous device launches; telemetry export enables these spans.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "s",
+      "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 5,
+        "showPoints": "auto",
+        "spanNulls": false,
+        "stacking": {
+          "mode": "none",
+          "group": "A"
+        }
+      },
+      "min": 0,
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/execution",
+      "targetRef": "rl_execution",
+      "view": "driver_walls"
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

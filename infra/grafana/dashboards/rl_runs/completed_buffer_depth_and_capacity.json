@@ -1,0 +1,52 @@
+{
+  "type": "timeseries",
+  "title": "Completed buffer depth and capacity",
+  "description": "Completed rollout groups waiting for training, against configured buffer capacity. Repeatedly empty buffers point to a generation shortfall; sustained full buffers point to slower consumption. Sampled zeros can miss short bursts; telemetry export enables these gauges.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "short",
+      "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 5,
+        "showPoints": "auto",
+        "spanNulls": false,
+        "stacking": {
+          "mode": "none",
+          "group": "A"
+        }
+      },
+      "min": 0,
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/execution",
+      "targetRef": "rl_execution",
+      "view": "buffer"
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

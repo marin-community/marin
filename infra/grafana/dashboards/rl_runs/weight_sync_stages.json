@@ -1,0 +1,111 @@
+{
+  "type": "state-timeline",
+  "title": "Weight-sync stages",
+  "description": "Training and weight-sync intervals with completion markers for synchronized weights. Longer or irregular sync intervals identify distribution delays between useful updates. Intervals require trainer.rollout_spans and completion markers require trainer.training_metrics.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "lineWidth": 0,
+        "fillOpacity": 70
+      },
+      "color": {
+        "mode": "palette-classic"
+      },
+      "mappings": [
+        {
+          "type": "value",
+          "options": {
+            "training": {
+              "text": "training",
+              "color": "#5794F2",
+              "index": 0
+            },
+            "weight sync": {
+              "text": "weight sync",
+              "color": "#B877D9",
+              "index": 1
+            },
+            "weights synced": {
+              "text": "weights synced",
+              "color": "#FADE2A",
+              "index": 2
+            }
+          }
+        }
+      ]
+    },
+    "overrides": []
+  },
+  "options": {
+    "mergeValues": false,
+    "showValue": "auto",
+    "rowHeight": 0.9,
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom"
+    },
+    "tooltip": {
+      "mode": "single"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "table",
+      "url": "/v1/rl/execution",
+      "columns": [
+        {
+          "selector": "start",
+          "text": "start",
+          "type": "timestamp_epoch"
+        },
+        {
+          "selector": "finish",
+          "text": "finish",
+          "type": "timestamp_epoch"
+        },
+        {
+          "selector": "execution",
+          "text": "execution",
+          "type": "string"
+        },
+        {
+          "selector": "state",
+          "text": "state",
+          "type": "string"
+        }
+      ],
+      "targetRef": "rl_execution",
+      "view": "weight_sync_stages"
+    }
+  ],
+  "interval": "30s",
+  "transformations": [
+    {
+      "id": "organize",
+      "options": {
+        "indexByName": {
+          "start": 0,
+          "finish": 1,
+          "execution": 2,
+          "state": 3
+        }
+      }
+    },
+    {
+      "id": "partitionByValues",
+      "options": {
+        "fields": [
+          "execution"
+        ],
+        "keepFields": false
+      }
+    }
+  ],
+  "maxDataPoints": 360
+}
