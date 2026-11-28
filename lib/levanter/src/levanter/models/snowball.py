@@ -21,6 +21,8 @@ guards against drift.
 
 import dataclasses
 from dataclasses import dataclass
+from functools import partial
+import math
 from typing import Any, Literal, NamedTuple, Optional, Type, cast
 
 import equinox as eqx
@@ -49,6 +51,11 @@ from levanter.grug.attention import (
     apply_rotary_embedding,
     attention,
     ragged_paged_attention,
+)
+from levanter.grug.attention.fixed_schedule import (
+    FixedScheduleSpec,
+    fixed_schedule_attention,
+    materialize_contiguous_kv,
 )
 from levanter.grug.grug_moe import MoEExpertMlpPspecs, MoeImplementation, MoEExpertMlp
 from levanter.grug.sharding import (
@@ -225,6 +232,10 @@ class SnowballConfig(HFCompatConfig):
     qk_mult: float = _DEFAULT_QK_MULT
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     attention_implementation: Optional[GrugAttentionImplementation] = None
+    shared_attention_implementation: Literal["native", "fixed_schedule"] = dataclasses.field(
+        default="native", metadata={"fingerprint_omit_value": "native"}
+    )
+    """Use the bounded shared TPUv4 schedule for both paged attention and learner forward."""
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
     moe_implementation: Optional[MoeImplementation] = None
@@ -492,6 +503,9 @@ class SnowballAttention(eqx.Module):
         disable_rope: bool = False,
     ) -> Float[Array, "B S D"]:
         q, k, v = self._project_qkv(x, disable_rope=disable_rope)
+        if self.cfg.shared_attention_implementation == "fixed_schedule":
+            attn_out = _fixed_shared_attention(q, k, v, mask, cfg=self.cfg)
+            return self._project_output(x, attn_out, v)
         context = _context_axis()
         local_v = v
         if context is not None:
@@ -569,6 +583,9 @@ class SnowballAttention(eqx.Module):
         cache_k = reshard(k[:, 0], P(None, "model", None))
         cache_v = reshard(v[:, 0], P(None, "model", None))
         cache = cache.update(batch_info, hax.named(cache_k, kv_axes), hax.named(cache_v, kv_axes))
+        if cfg.shared_attention_implementation == "fixed_schedule":
+            out = _fixed_shared_attention_decode(q, cache, batch_info, pos_ids, use_long=mode == "long", cfg=cfg)
+            return self._project_output(x, out, v), cache
         q = q.reshape(x.shape[0], cfg.num_kv_heads, cfg.num_heads // cfg.num_kv_heads, head_dim)
         q = reshard(q, P(None, "model", None, None))
         out = ragged_paged_attention(
@@ -582,6 +599,244 @@ class SnowballAttention(eqx.Module):
             sliding_window=cfg.sliding_window if mode == "short" else None,
         ).reshape(x.shape[0], 1, cfg.num_heads, head_dim)
         return self._project_output(x, out, v), cache
+
+
+def _fixed_shared_attention(
+    q: jax.Array, k: jax.Array, v: jax.Array, mask: AttentionMask, *, cfg: SnowballConfig
+) -> jax.Array:
+    """Run the bounded four-slot fixed forward with a reference reverse mode."""
+    if not mask.is_causal or mask.segment_ids is not None:
+        raise ValueError("Snowball fixed shared attention requires an unsegmented causal mask")
+    return _fixed_shared_attention_with_vjp(q, k, v, mask, cfg)
+
+
+def _fixed_shared_attention_forward(
+    q: jax.Array, k: jax.Array, v: jax.Array, mask: AttentionMask, *, cfg: SnowballConfig
+) -> jax.Array:
+    """Run the bounded four-slot fixed forward for a causal layer schedule."""
+    _validate_fixed_shared_attention_config(cfg)
+    if q.shape != (4, 256, cfg.num_heads, cfg.inferred_head_dim):
+        raise ValueError("Snowball fixed shared attention requires q shape [4, 256, Q, 128]")
+    expected_kv_shape = (4, 256, cfg.num_kv_heads, cfg.inferred_head_dim)
+    if k.shape != expected_kv_shape or v.shape != expected_kv_shape:
+        raise ValueError("Snowball fixed shared attention requires K/V shape [4, 256, KV, 128]")
+    spec = FixedScheduleSpec(
+        num_q_heads=cfg.num_heads,
+        num_kv_heads=cfg.num_kv_heads,
+        head_dim=cfg.inferred_head_dim,
+        sliding_window=None if mask.sliding_window is None else min(mask.sliding_window, 256),
+    )
+    page_indices = jnp.arange(spec.num_physical_pages, dtype=jnp.int32).reshape(spec.max_num_seqs, spec.pages_per_seq)
+    pages = materialize_contiguous_kv(k, v, page_indices, spec=spec)
+    positions = jnp.broadcast_to(jnp.arange(spec.max_kv_len, dtype=jnp.int32), (spec.max_num_seqs, spec.max_kv_len))
+    valid = jnp.ones((spec.max_num_seqs, spec.max_kv_len), dtype=jnp.bool_)
+    return fixed_schedule_attention(
+        q.astype(jnp.float32),
+        pages,
+        jnp.full((spec.max_num_seqs,), spec.max_kv_len, dtype=jnp.int32),
+        page_indices,
+        jnp.full((spec.max_num_seqs,), spec.max_kv_len, dtype=jnp.int32),
+        positions,
+        valid,
+        spec=spec,
+    )
+
+
+def _fixed_shared_attention_reference(
+    q: jax.Array, k: jax.Array, v: jax.Array, sliding_window: int | None
+) -> jax.Array:
+    """Evaluate the cast-aware contiguous grouped-query attention used by the VJP."""
+    if not get_abstract_mesh().empty:
+        # Training can annotate the singleton expert axis on sequence. Q and K
+        # form independent sequence dimensions, so contract with batch-only sharding.
+        q, k, v = (reshard(value, P("data", None, None, None)) for value in (q, k, v))
+    scale = jnp.asarray(1.0 / math.sqrt(q.shape[-1]), dtype=jnp.float32)
+    q_compute = q.astype(jnp.float32)
+    k_compute = k.astype(jnp.bfloat16)
+    v_compute = v.astype(jnp.bfloat16)
+    # Keep the BF16 head-reduction adjoint while making dot operands explicitly FP32.
+    k_aligned = align_kv_heads(k_compute, num_q_heads=q.shape[2]).astype(jnp.float32)
+    v_aligned = align_kv_heads(v_compute, num_q_heads=q.shape[2]).astype(jnp.float32)
+    scores = jnp.einsum(
+        "bqhd,bkhd->bhqk",
+        q_compute * scale,
+        k_aligned,
+        precision=jax.lax.Precision.HIGHEST,
+        preferred_element_type=jnp.float32,
+    )
+    positions = jnp.arange(q.shape[1])
+    allowed = positions[None, None, None, :] <= positions[None, None, :, None]
+    if sliding_window is not None:
+        allowed &= positions[None, None, None, :] > positions[None, None, :, None] - sliding_window
+    scores = jnp.where(allowed, scores, -1e9)
+    weights = jax.nn.softmax(scores, axis=-1)
+    return jnp.einsum(
+        "bhqk,bkhd->bqhd",
+        weights,
+        v_aligned,
+        precision=jax.lax.Precision.HIGHEST,
+        preferred_element_type=jnp.float32,
+    )
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(3, 4))
+def _fixed_shared_attention_with_vjp(
+    q: jax.Array, k: jax.Array, v: jax.Array, mask: AttentionMask, cfg: SnowballConfig
+) -> jax.Array:
+    return _fixed_shared_attention_forward(q, k, v, mask, cfg=cfg)
+
+
+def _fixed_shared_attention_with_vjp_fwd(
+    q: jax.Array, k: jax.Array, v: jax.Array, mask: AttentionMask, cfg: SnowballConfig
+) -> tuple[jax.Array, tuple[jax.Array, jax.Array, jax.Array]]:
+    return _fixed_shared_attention_forward(q, k, v, mask, cfg=cfg), (q, k, v)
+
+
+def _fixed_shared_attention_with_vjp_bwd(
+    mask: AttentionMask,
+    cfg: SnowballConfig,
+    residuals: tuple[jax.Array, jax.Array, jax.Array],
+    cotangent: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    del cfg
+    q, k, v = residuals
+    _, pullback = jax.vjp(
+        lambda q_, k_, v_: _fixed_shared_attention_reference(q_, k_, v_, mask.sliding_window), q, k, v
+    )
+    cotangent = cotangent.astype(jnp.float32)
+    if not get_abstract_mesh().empty:
+        cotangent = reshard(cotangent, P("data", None, None, None))
+    dq, dk, dv = pullback(cotangent)
+    return dq.astype(q.dtype), dk.astype(k.dtype), dv.astype(v.dtype)
+
+
+_fixed_shared_attention_with_vjp.defvjp(_fixed_shared_attention_with_vjp_fwd, _fixed_shared_attention_with_vjp_bwd)
+
+
+def _fixed_shared_attention_decode(
+    q: jax.Array,
+    cache: KvPageCache,
+    batch_info: PageBatchInfo,
+    pos_ids: jax.Array,
+    *,
+    use_long: bool,
+    cfg: SnowballConfig,
+) -> jax.Array:
+    """Run fixed shared attention over the bounded cached four-slot layout."""
+    _validate_fixed_shared_attention_config(cfg)
+    spec = FixedScheduleSpec(
+        num_q_heads=cfg.num_heads,
+        num_kv_heads=cfg.num_kv_heads,
+        head_dim=cfg.inferred_head_dim,
+        sliding_window=None if use_long else min(cfg.sliding_window, 256),
+    )
+    if batch_info.page_indices.array.shape != (4, 2) or batch_info.slot_ids.array.shape != (4,):
+        raise ValueError("Snowball fixed shared decode requires four slots and two pages per slot")
+    if batch_info.page_size != spec.page_size:
+        raise ValueError("Snowball fixed shared decode requires page_size=128")
+    metadata = (batch_info.page_indices, batch_info.slot_ids, batch_info.seq_lens, batch_info.cu_q_lens)
+    if any(value.array.dtype != jnp.int32 for value in metadata):
+        raise ValueError("Snowball fixed shared decode requires int32 page and sequence metadata")
+    if batch_info.seq_lens.array.shape != (4,) or batch_info.cu_q_lens.array.shape != (5,):
+        raise ValueError("Snowball fixed shared decode requires four sequence lengths")
+    if pos_ids.shape != (q.shape[0],) or pos_ids.dtype != jnp.int32:
+        raise ValueError("Snowball fixed shared decode positions must be int32")
+    token_rows = jnp.arange(q.shape[0], dtype=jnp.int32)
+    starts = batch_info.cu_q_lens.array[:-1]
+    used = jnp.arange(spec.max_num_seqs, dtype=jnp.int32) < batch_info.num_seqs
+    sequences = jnp.clip(jnp.sum((token_rows[:, None] >= starts[None, :]) & used[None, :], axis=1) - 1, 0, 3)
+    safe_positions = jnp.clip(pos_ids, 0, spec.max_kv_len - 1)
+    position_valid = (pos_ids >= 0) & (pos_ids < spec.max_kv_len)
+    active = token_rows < batch_info.num_new_tokens
+    grid = jnp.zeros((4, 256, cfg.num_heads, cfg.inferred_head_dim), dtype=jnp.float32)
+    valid = jnp.zeros((4, 256), dtype=jnp.bool_)
+    q_update = q[:, 0].astype(jnp.float32)
+    q_sharding = jax.typeof(q_update).sharding if isinstance(q_update, core.Tracer) else q_update.sharding
+    if not isinstance(q_sharding, NamedSharding):
+        raise ValueError("Snowball fixed shared decode requires an Explicit query sharding")
+    q_spec = tuple(q_sharding.spec)
+    grid_sharding = NamedSharding(q_sharding.mesh, P(q_spec[0], None, q_spec[1], q_spec[2]))
+    grid = jax.sharding.reshard(grid, grid_sharding)
+    grid = jax.lax.with_sharding_constraint(grid, grid_sharding)
+    # The engine pads packed batches with INVALID rows. Drop their writes;
+    # clipping them into the grid could overwrite a real query in that slot.
+    write_positions = jnp.where(active & position_valid, pos_ids, spec.max_kv_len)
+    grid = grid.at[sequences, write_positions].set(q_update, mode="drop", out_sharding=grid_sharding)
+    valid = valid.at[sequences, write_positions].set(True, mode="drop")
+    counts = jnp.zeros((4, 256), dtype=jnp.int32).at[sequences, write_positions].add(1, mode="drop")
+    slots = batch_info.slot_ids.array
+    pages = batch_info.page_indices.array
+    needed = jnp.arange(spec.pages_per_seq)[None, :] * spec.page_size < batch_info.seq_lens.array[:, None]
+    visible_pages_valid = jnp.all(~(used[:, None] & needed) | ((pages >= 0) & (pages < spec.num_physical_pages)))
+    # Future pages may remain unallocated until a generated input reaches them.
+    # The fixed kernel still prefetches them, so provide an in-range address;
+    # its unchanged causal mask excludes these future keys from every query.
+    safe_pages = jnp.clip(pages, 0, spec.num_physical_pages - 1)
+    metadata_valid = (
+        (batch_info.num_seqs >= 0)
+        & (batch_info.num_seqs <= spec.max_num_seqs)
+        & (batch_info.cu_q_lens.array[0] == 0)
+        & (batch_info.num_new_tokens >= 0)
+        & (batch_info.num_new_tokens <= q.shape[0])
+        & jnp.all(
+            ~used
+            | (
+                (batch_info.cu_q_lens.array[1:] >= batch_info.cu_q_lens.array[:-1])
+                & (batch_info.cu_q_lens.array[1:] <= q.shape[0])
+            )
+        )
+        & jnp.all(~used | ((batch_info.seq_lens.array >= 0) & (batch_info.seq_lens.array <= 256)))
+        & jnp.all(~used | ((slots >= 0) & (slots < 4)))
+        & jnp.all((slots[:, None] != slots[None, :]) | ~used[:, None] | ~used[None, :] | jnp.eye(4, dtype=jnp.bool_))
+        & visible_pages_valid
+        & jnp.all(~active | position_valid)
+        & jnp.all(~active | (pos_ids < batch_info.seq_lens.array[jnp.clip(sequences, 0, 3)]))
+        & jnp.all(counts <= 1)
+    )
+    positions = jnp.broadcast_to(jnp.arange(256, dtype=jnp.int32), (4, 256))
+    out = fixed_schedule_attention(
+        grid,
+        cache.kv_pages.array,
+        jnp.full((4,), 256, dtype=jnp.int32),
+        safe_pages,
+        jnp.full((4,), 256, dtype=jnp.int32),
+        positions,
+        valid,
+        spec=spec,
+    )
+    out_sharding = NamedSharding(q_sharding.mesh, P(q_spec[0], q_spec[1], q_spec[2]))
+    out = out.at[sequences, safe_positions].get(out_sharding=out_sharding)[:, None, ...]
+    return jnp.where(metadata_valid, jnp.where(active[:, None, None, None], out, 0), jnp.nan)
+
+
+def _validate_fixed_shared_attention_config(cfg: SnowballConfig) -> None:
+    """Reject shapes outside the one qualified Snowball shared-forward fixture."""
+    expected = {
+        "hidden_dim": 128,
+        "intermediate_dim": 32,
+        "shared_expert_intermediate_dim": 32,
+        "num_experts": 2,
+        "num_experts_per_token": 1,
+        "num_layers": (1, 2),
+        "num_heads": 2,
+        "num_kv_heads": 1,
+        "head_dim": 128,
+        "vocab_size": 23,
+        "max_seq_len": 256,
+    }
+    actual = {name: cfg.inferred_head_dim if name == "head_dim" else getattr(cfg, name) for name in expected}
+    unsupported = {
+        name: (actual[name], value)
+        for name, value in expected.items()
+        if actual[name] not in (value if isinstance(value, tuple) else (value,))
+    }
+    if unsupported:
+        raise ValueError(f"Snowball fixed shared attention only supports the bounded fixture: {unsupported}")
+
+
+def _validate_fixed_shared_attention_public_mask(mask: AttentionMask) -> None:
+    if not mask.is_causal or mask.sliding_window is not None or mask.segment_ids is not None:
+        raise ValueError("Snowball fixed shared attention requires an unsegmented causal mask")
 
 
 def _partition_match(aligned_v: jax.Array, attn_out: jax.Array) -> jax.Array:
@@ -942,6 +1197,8 @@ class SnowballTransformer(eqx.Module):
         cfg = self.config
         if mask is None:
             mask = AttentionMask.causal()
+        if cfg.shared_attention_implementation == "fixed_schedule":
+            _validate_fixed_shared_attention_public_mask(mask)
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
