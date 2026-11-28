@@ -6,6 +6,7 @@ import copy
 import functools
 import logging as pylogging
 import os
+import re
 import sys
 import typing
 import warnings
@@ -888,6 +889,7 @@ class TrainerConfig:
 
     wandb: Optional[WandbConfig] = None
     log_dir: Path = Path("logs/")
+    """Local directory for the run's log file, profiles and artifacts."""
     id: Optional[str] = None  # run id. if None, will be set to a random string
 
     tracker: TrackerConfig | Tuple[TrackerConfig, ...] = field(default_factory=WandbConfig)
@@ -1010,6 +1012,9 @@ class TrainerConfig:
         return self.per_device_parallelism * self.data_axis_size
 
     def __post_init__(self):
+        # pathlib turns "s3://bucket" into "s3:/bucket", so match the collapsed form too.
+        if re.match(r"[A-Za-z][A-Za-z0-9+.-]+:/", os.fspath(self.log_dir)):
+            raise ValueError(f"log_dir must be a local directory, got {os.fspath(self.log_dir)!r}")
         if self.wandb is not None:
             warnings.warn(
                 "wandb is deprecated. use tracker with type wandb instead",
