@@ -234,7 +234,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     if case == "native-no-evaluation":
         assert row["evaluations"] == []
     if case in {"checkpoint-lineage", "lineage-unknown-grandparent", "lineage-unknown-allocation"}:
-        assert lineage_gpu_hours(attempt, recorded_launch(attempt)) == (80.0 if case == "checkpoint-lineage" else None)
+        assert lineage_gpu_hours(attempt, recorded_launch(attempt)) == (64.0 if case == "checkpoint-lineage" else None)
     if case == "checkpoint-lineage":
         assert row["elapsed_excluding_eval_seconds"] == 444.0
     if case == "native-composed":

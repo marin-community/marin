@@ -62,6 +62,7 @@ DEFAULT_SELECTION_VERSION = "2026.11.25.1"
 DEFAULT_EVAL_LITE_NAME = "eval-lite"
 DEFAULT_EVAL_LITE_VERSION = "2026.11.25.1"
 EVAL_REPLY_TOKENS = 8192
+_RENO_CLUSTER = "cw-rno2a"
 _DEFAULT_TASKS = f"snowball-100k@{DEFAULT_SELECTION_VERSION}"
 _DEFAULT_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
 
@@ -247,7 +248,7 @@ _RENO_TRAINING = replace(
         P40,
         name="p16-r16",
         workload=Training(replace(_P40_PLAN, policy_num_nodes=2, num_inference_engines=2)),
-        cluster="cw-rno2a",
+        cluster=_RENO_CLUSTER,
     ),
     # At 128 concurrent groups the rollout engines filled future batches before the next policy sync.
     config=_ASYNC_P40.config.merge(_CPU_OPTIMIZER_OFFLOAD).merge(
@@ -367,7 +368,7 @@ _AGENTIC_LAYOUT = replace(
     name="h100x256",
     workload=Training(_AGENTIC_PLAN),
     megatron=replace(P40.megatron, context_parallel_size=5),
-    cluster="cw-rno2a",
+    cluster=_RENO_CLUSTER,
     priority="production",
     # Each job has a 12-hour allocation and resumes from its committed checkpoint.
     job_timeout_seconds=12 * 3600,
