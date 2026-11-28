@@ -119,6 +119,28 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(rl_run_store, h
                 training_type=kind,
             )
         )
+    if home_minutes > 120:
+        # A run longer than an hour: its link must open the board over the run's last
+        # hour — the widest range where the engine panels load on large runs — rather
+        # than the whole run.
+        rows.extend(
+            _row(
+                service="marinskyrl",
+                name=name,
+                value=step,
+                moment=WINDOW_START + timedelta(minutes=minutes),
+                seq=minutes,
+                run_id="long-run",
+                job_id=JOB_ID,
+                node_name=NODES[0],
+                role="trainer",
+                training_type=kind,
+            )
+            for run, kind, minutes, step, name in [
+                ("long-run", "sync", home_minutes - 180, 0, "lifecycle"),
+                ("long-run", None, home_minutes - 0.5, 2, "policy_step"),
+            ]
+        )
     rl_run_store.executemany(f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})', rows)
     expected = [
         {
@@ -138,9 +160,25 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(rl_run_store, h
             (UNSTAMPED_RUN_ID, 0, 0, 0, 1, "sync"),
             ("mixed-run", 0, 0, 0, 2, "async"),
             ("early-stamp-run", 0, 5, 0, 6, "async"),
-            ("end-boundary-run", 0, home_minutes - 0.5, 0, home_minutes, "sync"),
+            ("end-boundary-run", 0, home_minutes - 0.5, max(0, home_minutes - 60), home_minutes, "sync"),
         ]
     ]
+    if home_minutes > 120:
+        # The clamp opens a >1h run's link over its last hour: window_from at
+        # window_to - RL_RECENT_RUN_LINK_WINDOW_MS, window_to at the run's end.
+        expected.append(
+            {
+                "section": "recent",
+                "run": "long-run",
+                "cluster": CLUSTER,
+                "step": 2,
+                "attempts": 1,
+                "window_from_ms": _WINDOW_START_MS + (home_minutes - 60) * 60000,
+                "window_to_ms": _WINDOW_START_MS + home_minutes * 60000,
+                "last seen": _WINDOW_START_MS + (home_minutes - 0.5) * 60000,
+                "type": "sync",
+            }
+        )
     actual = _request_rows(
         rl_run_store, "/v1/rl/recent", {"from": _WINDOW_START_MS, "to": home_end_ms, "view": "recent"}
     )
@@ -163,6 +201,11 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(rl_run_store, h
         "early-stamp-run": [ASYNC_RUN_ID, "early-stamp-run", "mixed-run"],
         "end-boundary-run": [RUN_ID, UNSTAMPED_RUN_ID, "end-boundary-run"],
     }
+    if home_minutes > 120:
+        # Runs clamped to the board's last hour open a picker window that only sees
+        # the runs with records in that hour.
+        linked_options["end-boundary-run"] = ["end-boundary-run", "long-run"]
+        linked_options["long-run"] = ["end-boundary-run", "long-run"]
     for row in actual:
         concrete = re.sub(r"\$\{__data.fields.([^}]+)\}", lambda match, row=row: str(row[match[1]]), template)
         url = urlparse(concrete)
@@ -205,7 +248,10 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(rl_run_store, h
                 == []
             )
     for kind, wanted in (
-        ("sync", [RUN_ID, UNSTAMPED_RUN_ID, "end-boundary-run"]),
+        (
+            "sync",
+            [RUN_ID, UNSTAMPED_RUN_ID, "end-boundary-run"] + (["long-run"] if home_minutes > 120 else []),
+        ),
         ("async", [ASYNC_RUN_ID, "early-stamp-run", "mixed-run"]),
     ):
         params = resolved_query_params(

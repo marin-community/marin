@@ -16,7 +16,7 @@ from dashboard_stitch import stitch_all
 from jobs_observability import jobs_overview_dataset
 from node_observability import node_overview_dataset
 from rl_execution_observability import rl_execution_dataset
-from rl_observability import recent_rl_runs_dataset, rl_gpu_dataset, rl_overview_dataset
+from rl_observability import RL_RECENT_RUN_LINK_WINDOW_MS, recent_rl_runs_dataset, rl_gpu_dataset, rl_overview_dataset
 from runs_observability import runs_overview_dataset
 from server import create_app
 from starlette.testclient import TestClient
@@ -612,3 +612,12 @@ def test_jobs_home_views_query_only_state_and_events() -> None:
     assert results["stuck_jobs"] == [{"section": "stuck_jobs", "stuck": 1}]
     assert results["queue_depth"][0]["value"] == 2
     assert results["warning_reasons"][0]["value"] == 2
+
+
+def test_rl_runs_default_range_matches_the_recent_run_link_window():
+    # The Recent RL runs table links into the board with from=window_from_ms, so the
+    # dashboard's default range and the recent-run clamp are two halves of one
+    # contract: both must open the board inside the range where the engine panels
+    # load on large runs.
+    dashboard = json.loads((Path(__file__).resolve().parent.parent / "dashboards" / "rl_runs.json").read_text())
+    assert dashboard["time"]["from"] == f"now-{RL_RECENT_RUN_LINK_WINDOW_MS // 3_600_000}h"

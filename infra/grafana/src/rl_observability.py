@@ -29,6 +29,8 @@ RL_MAX_GPU_ROWS = 50_000
 RL_MAX_RESULT_ROWS = 100_000
 RL_RECENT_MAX_ROWS = 20
 RL_RECENT_WINDOW_PADDING_MS = 60_000
+# rl_runs.json's `now-1h` default; the widest range the engine panels load on large runs.
+RL_RECENT_RUN_LINK_WINDOW_MS = 60 * 60 * 1000
 RL_GPU_ZOOM_MESSAGE = "Zoom to 7h or less for GPU detail."
 
 _CORE_NAMES = (
@@ -462,13 +464,15 @@ def recent_rl_runs_dataset(start_ms: int, end_ms: int) -> DashboardDataset:
         max_window_ms=RL_MAX_WINDOW_MS,
         max_window_error="recent RL run range must not exceed 7 days",
     )
+    window_to = f"LEAST({end_ms}, MAX(timestamp_ms) + {RL_RECENT_WINDOW_PADDING_MS})"
     sql = f"""
 SELECT run_id AS run,
        COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
        MAX(value) FILTER (WHERE name = 'policy_step') AS step,
        COUNT(DISTINCT execution_uid) FILTER (WHERE name = 'policy_step') AS attempts,
-       GREATEST({start_ms}, MIN(timestamp_ms) - {RL_RECENT_WINDOW_PADDING_MS}) AS window_from_ms,
-       LEAST({end_ms}, MAX(timestamp_ms) + {RL_RECENT_WINDOW_PADDING_MS}) AS window_to_ms,
+       GREATEST({start_ms}, MIN(timestamp_ms) - {RL_RECENT_WINDOW_PADDING_MS},
+                {window_to} - {RL_RECENT_RUN_LINK_WINDOW_MS}) AS window_from_ms,
+       {window_to} AS window_to_ms,
        MAX(timestamp_ms) FILTER (WHERE name = 'policy_step') AS last_seen,
        MAX(CASE WHEN json_get(resource_attributes_json, 'training_type') = 'async' THEN 1 ELSE 0 END) AS is_async
 FROM "telemetry_v1.marinskyrl"
