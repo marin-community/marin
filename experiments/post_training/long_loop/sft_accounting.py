@@ -7,6 +7,7 @@ import hashlib
 import json
 from collections import defaultdict
 from dataclasses import asdict, dataclass
+from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -19,6 +20,7 @@ from levanter.data.mixture import ConcatDataset, MixtureDataset
 from levanter.data.packing import pack_documents
 from levanter.data.text.datasets import CausalLmDataset, PackedTokenDataset, TokenSeqDataset, _resolve_pack_config
 from levanter.main.train_lm import TrainLmConfig
+from levanter.utils.datetime_utils import encode_timedelta
 from levanter.utils.thread_utils import blocking_wait
 from rigging.filesystem.storage_path import StoragePath
 
@@ -239,15 +241,103 @@ async def sampled_rows(
             }
 
 
+MP_POLICY_KEYS = {"compute_dtype": "compute", "param_dtype": "params", "output_dtype": "output"}
+
+
+def _mp_policy_string(value: dict) -> str:
+    """Convert a draccus-encoded jmp.Policy mapping to its identical canonical policy string."""
+    parts = {}
+    for field, key in MP_POLICY_KEYS.items():
+        entry = value.get(field)
+        if isinstance(entry, dict) and "__dtype__" in entry:
+            parts[key] = entry["__dtype__"]
+        elif isinstance(entry, str):
+            parts[key] = entry
+    return ",".join(f"{k}={v}" for k, v in sorted(parts.items()))
+
+
+def _decode_friendly(value):
+    """Convert draccus's expanded encodings to the shapes the native dataclass decode parses.
+
+    The launcher's request config serializes runtime objects (timedeltas, dtype policies) as
+    plain mappings; the native dataclass decode expects their canonical string forms. The
+    conversions are identity-preserving: the decoded values equal the encoded ones.
+    """
+    if isinstance(value, dict):
+        if set(value) == {"days", "seconds", "microseconds"} and all(
+            isinstance(entry, (int, float)) and not isinstance(entry, bool) for entry in value.values()
+        ):
+            return encode_timedelta(timedelta(**value))
+        return {key: _decode_friendly(entry) for key, entry in value.items()}
+    if isinstance(value, list):
+        return [_decode_friendly(entry) for entry in value]
+    return value
+
+
+CHOICE_DISCRIMINATORS = {
+    # The launcher strips draccus choice-type discriminators from the request config. The
+    # request's model and optimizer fields are the Snowball architecture's (identical to the
+    # Exp6 SFTSpec consumed config, which records model.type='snowball' and
+    # optimizer.type='grug_moe_hero_ep_muonh_v1').
+    "model": "snowball",
+    "optimizer": "grug_moe_hero_ep_muonh_v1",
+}
+
+
+def _native_train_config(document: dict) -> dict:
+    """The request config's native trainer mapping, with expanded encodings stringified.
+
+    The launcher strips the choice-type discriminators and renames the special-token control
+    (its parity test, experiments/sft/test_launcher.py, documents both mappings); the
+    request's model and optimizer fields are the Snowball architecture's, so the
+    discriminators are restored for the native decode.
+    """
+    config = _decode_friendly(json.loads(json.dumps(document["train_config"])))
+    for field, discriminator in CHOICE_DISCRIMINATORS.items():
+        section = config.get(field)
+        if isinstance(section, dict) and "type" not in section:
+            section["type"] = discriminator
+    initial_eval = config.get("initial_eval_match")
+    if isinstance(initial_eval, dict):
+        # The C4 reference-gate dataset format is a choice type too; the same-lineage SFTSpec
+        # consumed config records type 'prebuilt' for it.
+        components = (initial_eval.get("data") or {}).get("components") or {}
+        for component in components.values():
+            if isinstance(component, dict) and isinstance(component.get("format"), dict):
+                component["format"].setdefault("type", "prebuilt")
+    snowball_sft = config.get("snowball_sft")
+    if isinstance(snowball_sft, dict) and "special_token_update_multiplier" in snowball_sft:
+        # The launcher's parity test maps special_token_update_multiplier (LLOM preset) to
+        # special_token_lr_multiplier (the prototype's SnowballSftConfig field).
+        snowball_sft.setdefault("special_token_lr_multiplier", snowball_sft.pop("special_token_update_multiplier"))
+    trainer_mp = (config.get("trainer") or {}).get("mp")
+    if isinstance(trainer_mp, dict):
+        config["trainer"]["mp"] = _mp_policy_string(trainer_mp)
+    return config
+
+
+def accounting_train_config(document: dict) -> tuple[TrainLmConfig, str]:
+    """Decode the native trainer config from either consumed-config shape.
+
+    An externally stopped SFT preserves the launcher's submitted request config instead of
+    an SFTSpec consumed config; its ``train_config`` is the same native producer config the
+    trainer consumed, with mapping-form dtype policies that decode to the identical jmp
+    policy strings. Recorded as the launcher-request shape, never fabricated.
+    """
+    if document.get("format") == "SFTSpec":
+        return draccus.decode(TrainLmConfig, document["train_config"]), "SFTSpec"
+    if "train_config" in document:
+        return draccus.decode(TrainLmConfig, _native_train_config(document)), "launcher-request"
+    raise ValueError("SFT accounting requires the native SFTSpec producer")
+
+
 def write_sft_accounting(*, output: str, trained: str, settings: dict) -> None:
     """Persist population pins and an exact-loader replay bounded by the committed checkpoint."""
     trained_path = StoragePath(trained)
     selected = json.loads((trained_path / "selected.json").read_text())
     consumed = (trained_path / "consumed-config.json").read_bytes()
     document = json.loads(consumed)
-    if document["format"] != "SFTSpec":
-        raise ValueError("SFT accounting requires the native SFTSpec producer")
-    config = draccus.decode(TrainLmConfig, document["train_config"])
+    config, consumed_config_shape = accounting_train_config(document)
     modes = None
     if "source_loss_metadata" in settings:
         pin = settings["source_loss_metadata"]
@@ -310,6 +400,7 @@ def write_sft_accounting(*, output: str, trained: str, settings: dict) -> None:
         "committed_steps": steps,
         "checkpoint_metadata_sha256": hashlib.sha256(metadata).hexdigest(),
         "consumed_config_sha256": hashlib.sha256(consumed).hexdigest(),
+        "consumed_config_shape": consumed_config_shape,
         "sequence_length": length,
         "batch_size": batch,
         "step_seconds": settings["measured_step_seconds"],
