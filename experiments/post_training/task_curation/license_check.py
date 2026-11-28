@@ -86,6 +86,11 @@ def check_target(target: LicenseTarget, cache: Path | None) -> dict:
         )
     else:
         evidence_result = check_license(receipt)
+    return _target_row(target, evidence_result, receipt)
+
+
+def _target_row(target: LicenseTarget, evidence_result: LicenseCheck, receipt: LicenseReceipt | None) -> dict:
+    """One source's ruled row: the ban overrides the evidence verdict, which it keeps beside it."""
     result = evidence_result
     if ban := target_ban(target, receipt):
         result = evidence_result.model_copy(
@@ -116,22 +121,20 @@ def check_targets(targets: list[LicenseTarget], cache: Path | None, workers: int
             group = futures[future]
             first = future.result()
             for target in group:
-                # F3 is source-specific even when multiple sources share one repository.
+                # One network resolution per dataset pin; the scoped source identity
+                # is restored here because F3 is source-specific even when multiple
+                # sources share one repository.
                 receipt_data = first["receipt"]
                 if receipt_data is not None:
                     receipt = LicenseReceipt.model_validate({**receipt_data, "source_id": target.source_id})
-                    base = check_license(receipt)
-                    result = check_license(receipt, target_ban(target, receipt))
-                    row = {
-                        **result.model_dump(mode="json"),
-                        "evidence_verdict": base.model_dump(mode="json"),
-                        "receipt": receipt.model_dump(mode="json"),
-                    }
+                    row = _target_row(target, check_license(receipt), receipt)
                 else:
-                    base = {**first["evidence_verdict"], "source_id": target.source_id}
-                    row = {**base, "evidence_verdict": base, "receipt": None}
-                    if ban := target_ban(target):
-                        row.update(verdict="FAIL", rule_id="F3", quote=ban.reason, evidence_url=ban.issue_url)
+                    evidence = LicenseCheck.model_validate(first["evidence_verdict"])
+                    row = _target_row(
+                        target,
+                        evidence.model_copy(update={"source_id": target.source_id}),
+                        None,
+                    )
                 rows[target.source_id] = row
                 logger.info("%s %s %s", target.source_id, row["verdict"], row["rule_id"])
     return [rows[target.source_id] for target in targets]

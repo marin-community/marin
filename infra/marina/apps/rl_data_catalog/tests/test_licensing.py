@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 
 import pytest
 from finestore.rl.licenses import LicenseBan, LicenseReceipt, LicenseSourcePin
-from finestore.rl.registry_reference import RegistryReference
 
 from infra.marina.apps.rl_data_catalog.server import licensing
 
@@ -127,15 +126,6 @@ def test_declaration_ban_reads_the_declared_receipt(rulings):
     assert licensing.declaration_license_ban({"id": "Banned:source", "dataset_id": "example/test-dataset"}) is not None
 
 
-def test_committed_reference_pins_a_versioned_ruling_family():
-    """The committed reference names the exact registry revision the loader reads."""
-    reference = RegistryReference.model_validate_json(licensing.RULINGS_REFERENCE.read_bytes())
-    assert reference.repo == "open-athena/marin-rl-data-atlas-registry"
-    assert "license_rulings" in reference.path
-    assert reference.path.endswith("part-000.json")
-
-
-@pytest.mark.data_integration
 def test_committed_reference_resolves_the_published_rulings():
     """The pinned revision still carries the published ruling bytes (network)."""
     document = licensing.license_bans()

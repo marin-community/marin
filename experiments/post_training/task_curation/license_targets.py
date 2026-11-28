@@ -121,8 +121,6 @@ def _license_ids(text: str, kind: str) -> list[str]:
         return [f"openmdw-{match.group(2)}"]
     if re.search(r"\bcc0(?:[- ]1\.0)?\b", lowered) or "creativecommons.org/publicdomain/zero/1.0" in lowered:
         return ["CC0-1.0"]
-    if "apache license" in lowered and "version 2.0" in lowered:
-        return ["Apache-2.0"]
     if re.search(r"\bapache(?: license)?[- ,]*(?:version )?2\.0\b|apache.org/licenses/license-2.0", lowered):
         return ["Apache-2.0"]
     if "permission is hereby granted, free of charge" in lowered:

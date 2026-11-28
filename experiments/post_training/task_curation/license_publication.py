@@ -7,8 +7,10 @@ import hashlib
 import json
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Any
 from urllib.parse import quote, urlsplit
 
 import yaml
@@ -24,6 +26,7 @@ from finestore.rl.licenses import (
     require_license,
 )
 from huggingface_hub import DatasetCard, HfApi, hf_hub_download
+from huggingface_hub.errors import HfHubHTTPError
 from huggingface_hub.hf_api import RepoFile
 
 from experiments.post_training.task_curation.license_binding import (
@@ -100,7 +103,9 @@ def publish_private_dataset(prepared: PreparedPrivateDataset) -> PublishedPrivat
     api = HfApi()
     try:
         api.create_repo(repo_id=prepared.repo, repo_type="dataset", private=True, exist_ok=False)
-    except Exception as error:
+    except HfHubHTTPError as error:
+        if _response_status(error) != 409:
+            raise
         # A prior attempt of this same frozen campaign may have created the repo before
         # its gate stopped; reuse it only when its inventory is exactly this publication's.
         existing = {
@@ -226,6 +231,20 @@ def lineage_folder_identifier(record: dict) -> str:
     return match.group(1)
 
 
+def _response_status(error: HfHubHTTPError) -> int | None:
+    response = getattr(error, "response", None)
+    return getattr(response, "status_code", None)
+
+
+def _lineage_fields(record: Mapping[str, Any]) -> dict:
+    """The lineage row fields a folder row and a gate record share."""
+    return {
+        "upstream": f"{record.get('dataset_id')}@{record.get('revision')}",
+        "identifier": lineage_folder_identifier(record),
+        "receipt_sha256": hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest(),
+    }
+
+
 def prepare_license_publication(
     receipt: LicenseReceipt, output: Path, *, use: str, lineage: dict | None = None, folders: list[str] | None = None
 ) -> LicensePublication:
@@ -306,16 +325,9 @@ def prepare_license_publication(
             record = lineage.get(folder)
             if record is None:
                 raise ValueError(f"Folder lineage receipt lacks the included folder: {folder}")
-            identifier = lineage_folder_identifier(record)
-            identifiers.add(identifier.lower())
-            license_table.append(
-                {
-                    "folder": folder,
-                    "upstream": f"{record.get('dataset_id')}@{record.get('revision')}",
-                    "identifier": identifier,
-                    "receipt_sha256": hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest(),
-                }
-            )
+            row = {"folder": folder, **_lineage_fields(record)}
+            identifiers.add(row["identifier"].lower())
+            license_table.append(row)
             evidence_urls.update(record.get("decisions", [])[-1].get("evidence_urls", []))
             evidence_urls.update(
                 item["url"]
@@ -451,15 +463,12 @@ def check_publication(source_id: str, dataset_id: str, revision: str, use: str, 
                     record = candidate
                     break
         if record is not None:
-            identifier = lineage_folder_identifier(record)
             return {
                 **evidence,
                 "verdict": LicenseCheckVerdict.PASS.value,
                 "folder_lineage": {
                     "source_id": record.get("source_id"),
-                    "upstream": f"{record.get('dataset_id')}@{record.get('revision')}",
-                    "identifier": identifier,
-                    "receipt_sha256": hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest(),
+                    **_lineage_fields(record),
                 },
             }
     raise ValueError(f"Published pin failed its exact-pin license check: {json.dumps(evidence)}")

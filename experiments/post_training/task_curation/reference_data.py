@@ -16,17 +16,12 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from finestore.rl.registry_reference import RegistryReference, read_registry_bytes
 from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 from pydantic import BaseModel, ConfigDict, Field
 
-
-class DataReference(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    repo: str
-    revision: str = Field(pattern=r"^[0-9a-f]{40}$")
-    path: str
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+DataReference = RegistryReference
+"""One pinned document in a reference index; the shape is the registry reference."""
 
 
 class DataReferenceIndex(BaseModel):
@@ -46,16 +41,7 @@ def read_referenced_documents(index_path: Path) -> dict[str, bytes]:
     index = read_reference_index(index_path)
     documents: dict[str, bytes] = {}
     for reference in index.references:
-        downloaded = hf_hub_download(
-            repo_id=reference.repo,
-            repo_type="dataset",
-            revision=reference.revision,
-            filename=reference.path,
-        )
-        data = Path(downloaded).read_bytes()
-        if hashlib.sha256(data).hexdigest() != reference.sha256:
-            raise ValueError(f"Referenced dataset bytes changed: {reference.repo}@{reference.revision}:{reference.path}")
-        documents[reference.path] = data
+        documents[reference.path] = read_registry_bytes(reference)
     return documents
 
 
@@ -69,16 +55,7 @@ def read_referenced_document(index_path: Path, path: str) -> bytes:
     reference = next((item for item in index.references if item.path == path), None)
     if reference is None:
         raise ValueError(f"Reference index does not list {path}: {index_path}")
-    downloaded = hf_hub_download(
-        repo_id=reference.repo,
-        repo_type="dataset",
-        revision=reference.revision,
-        filename=reference.path,
-    )
-    data = Path(downloaded).read_bytes()
-    if hashlib.sha256(data).hexdigest() != reference.sha256:
-        raise ValueError(f"Referenced dataset bytes changed: {reference.repo}@{reference.revision}:{reference.path}")
-    return data
+    return read_registry_bytes(reference)
 
 
 def load_referenced_document(index_path: Path, path: str) -> Any:

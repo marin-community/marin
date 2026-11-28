@@ -25,8 +25,8 @@ class RegistryReference(BaseModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
-def read_registry_document(reference: RegistryReference) -> dict[str, Any]:
-    """Download the exact registry revision and verify its bytes before decoding."""
+def read_registry_bytes(reference: RegistryReference) -> bytes:
+    """Download the exact registry revision and verify its bytes."""
     downloaded = hf_hub_download(
         repo_id=reference.repo,
         repo_type="dataset",
@@ -36,7 +36,12 @@ def read_registry_document(reference: RegistryReference) -> dict[str, Any]:
     data = Path(downloaded).read_bytes()
     if hashlib.sha256(data).hexdigest() != reference.sha256:
         raise ValueError(f"Registry bytes changed: {reference.repo}@{reference.revision}:{reference.path}")
-    document = json.loads(data)
+    return data
+
+
+def read_registry_document(reference: RegistryReference) -> dict[str, Any]:
+    """Download the exact registry revision and verify its bytes before decoding."""
+    document = json.loads(read_registry_bytes(reference))
     if not isinstance(document, dict):
         raise ValueError(f"Registry document must contain an object: {reference.path}")
     return document

@@ -9,7 +9,7 @@ import hashlib
 import json
 import re
 import subprocess
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
@@ -65,7 +65,7 @@ def _github_json(path: str) -> dict:
     return json.loads(result.stdout)
 
 
-def _wrapper_target(target: LicenseTarget, metadata: dict) -> bool:
+def _is_wrapper_target(target: LicenseTarget, metadata: dict) -> bool:
     return (
         urlsplit(target.url).hostname == "huggingface.co"
         and target.dataset_id.startswith("open-athena/")
@@ -75,6 +75,62 @@ def _wrapper_target(target: LicenseTarget, metadata: dict) -> bool:
             or "license_source" in metadata
         )
     )
+
+
+@dataclass(frozen=True)
+class _ManifestDeclarations:
+    """What a wrapper's published manifest declares about its upstream."""
+
+    declarations: list[tuple[str, str, str]]
+    manifest_path: str | None
+    identity_fields: tuple[str, str]
+    declared_by: tuple[str, bytes] | None
+
+
+def _manifest_declarations(target: LicenseTarget) -> _ManifestDeclarations:
+    """The declarations recorded in a wrapper's published manifest, for cards without a license_source."""
+    declarations: list[tuple[str, str, str]] = []
+    manifest_path = None
+    manifest_identity_fields = ("source_dataset_id", "source_revision")
+    manifest_declaration: tuple[str, bytes] | None = None
+    filenames = {
+        item.rfilename for item in HfApi().dataset_info(target.dataset_id, revision=target.revision).siblings or ()
+    }
+    for filename, paths in WRAPPER_MANIFESTS.items():
+        if filename not in filenames:
+            continue
+        declaration_url = f"https://huggingface.co/datasets/{target.dataset_id}/resolve/{target.revision}/{filename}"
+        declaration_content = _fetch(declaration_url, huggingface=True)
+        document = json.loads(declaration_content)
+        manifest_declaration = (declaration_url, declaration_content)
+        for path in paths:
+            plan = document
+            for key in path.split("/"):
+                if not isinstance(plan, dict):
+                    raise ValueError(f"Wrapper manifest requires an object at {path}")
+                plan = plan.get(key, {})
+            if path == "original_release" and path in document and (not isinstance(plan, dict) or not plan):
+                raise ValueError("Repair original_release must be a nonempty object")
+            if not isinstance(plan, dict) or not plan:
+                continue
+            source_url = None
+            if path == "original_release":
+                if set(plan) != {"repo", "revision", "url"}:
+                    raise ValueError("Repair original_release must declare repo, revision, and url")
+                dataset_id, revision, source_url = plan["repo"], plan["revision"], plan["url"]
+                if not isinstance(source_url, str) or not source_url:
+                    raise ValueError("Repair original_release URL must be a nonempty string")
+                if not source_url.rstrip("/").endswith(f"/tree/{revision}"):
+                    raise ValueError("Repair original_release URL must name its exact pinned revision")
+            else:
+                dataset_id, revision = plan.get("source_dataset_id"), plan.get("source_revision")
+            if not isinstance(dataset_id, str) or not isinstance(revision, str):
+                raise ValueError(f"Wrapper manifest does not declare a source dataset and revision at {path}")
+            declarations.append((dataset_id, revision, source_url or f"https://huggingface.co/datasets/{dataset_id}"))
+            manifest_path = path
+        if declarations:
+            break
+    return _ManifestDeclarations(declarations, manifest_path, manifest_identity_fields, manifest_declaration)
 
 
 def _declared_license_source(target: LicenseTarget, content: bytes, url: str) -> LicenseSourcePin:
@@ -108,49 +164,16 @@ def _declared_license_source(target: LicenseTarget, content: bytes, url: str) ->
                 (table_dataset[0], table_revision[0], f"https://huggingface.co/datasets/{table_dataset[0]}")
             )
     declaration_url, declaration_content = url, content
-    manifest_path = None
-    manifest_identity_fields = ("source_dataset_id", "source_revision")
+    manifest = None
     if not declarations:
-        filenames = {
-            item.rfilename for item in HfApi().dataset_info(target.dataset_id, revision=target.revision).siblings or ()
-        }
-        for filename, paths in WRAPPER_MANIFESTS.items():
-            if filename not in filenames:
-                continue
-            declaration_url = f"https://huggingface.co/datasets/{target.dataset_id}/resolve/{target.revision}/{filename}"
-            declaration_content = _fetch(declaration_url, huggingface=True)
-            document = json.loads(declaration_content)
-            for path in paths:
-                plan = document
-                for key in path.split("/"):
-                    if not isinstance(plan, dict):
-                        raise ValueError(f"Wrapper manifest requires an object at {path}")
-                    plan = plan.get(key, {})
-                if path == "original_release" and path in document and (not isinstance(plan, dict) or not plan):
-                    raise ValueError("Repair original_release must be a nonempty object")
-                if not isinstance(plan, dict) or not plan:
-                    continue
-                source_url = None
-                if path == "original_release":
-                    if set(plan) != {"repo", "revision", "url"}:
-                        raise ValueError("Repair original_release must declare repo, revision, and url")
-                    dataset_id, revision, source_url = plan["repo"], plan["revision"], plan["url"]
-                    if not isinstance(source_url, str) or not source_url:
-                        raise ValueError("Repair original_release URL must be a nonempty string")
-                    if not source_url.rstrip("/").endswith(f"/tree/{revision}"):
-                        raise ValueError("Repair original_release URL must name its exact pinned revision")
-                    manifest_identity_fields = ("repo", "revision")
-                else:
-                    dataset_id, revision = plan.get("source_dataset_id"), plan.get("source_revision")
-                    manifest_identity_fields = ("source_dataset_id", "source_revision")
-                if not isinstance(dataset_id, str) or not isinstance(revision, str):
-                    raise ValueError(f"Wrapper manifest does not declare a source dataset and revision at {path}")
-                declarations.append(
-                    (dataset_id, revision, source_url or f"https://huggingface.co/datasets/{dataset_id}")
-                )
-                manifest_path = path
-            if declarations:
-                break
+        manifest = _manifest_declarations(target)
+        declarations = manifest.declarations
+        manifest_path = manifest.manifest_path
+        manifest_identity_fields = manifest.identity_fields
+        if manifest.declared_by is not None:
+            declaration_url, declaration_content = manifest.declared_by
+    else:
+        manifest_identity_fields = ("source_dataset_id", "source_revision")
     normalized = set()
     for dataset_id, revision, source_url in declarations:
         parts = urlsplit(source_url)
@@ -242,7 +265,7 @@ def resolve_license(target: LicenseTarget) -> LicenseReceipt:
             break
         card = next((item for item in primary.evidence if item.kind == "dataset_card"), None)
         content = _fetch(card.url, huggingface=True) if card else b""
-        if not _wrapper_target(current, _card_metadata(content.decode("utf-8"))):
+        if not _is_wrapper_target(current, _card_metadata(content.decode("utf-8"))):
             break
         # Explicit restrictions on our own publication still apply to its users.
         if check_license(primary).rule_id in {LicenseCheckRule.RESTRICTED, LicenseCheckRule.THIRD_PARTY}:
@@ -267,7 +290,8 @@ def resolve_license(target: LicenseTarget) -> LicenseReceipt:
 
 @cache
 def _primary_license(target: LicenseTarget) -> LicenseReceipt:
-    """Read HF card and license files, GitHub pinned license, or an explicit terms URL.
+    """Read HF card and license files, GitHub pinned licenses, explicit terms URLs, or PyPI
+    wheel metadata.
 
     Authentication, transport, and parsing failures propagate. They must never become a
     permissive or missing verdict. Callers can retain them as unresolved audit errors.

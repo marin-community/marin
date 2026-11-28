@@ -1,17 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Read and write source receipt shards."""
+"""Read source receipt shards: one per-source-family document collection.
 
-import json
+The generic reader serves every receipt family the stages key by canonical
+source identity — license receipts here, the derived-contract and census
+receipt families as their stages port.
+"""
+
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from finestore.rl.source_identity import canonical_source_id
 from pydantic import BaseModel
-
-from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
-
-RECEIPTS_PER_SHARD = 64
 
 
 def receipts_from_documents[T: BaseModel](
@@ -34,12 +35,3 @@ def read_receipt_shards[T: BaseModel](
 ) -> dict[str, T]:
     documents = {path.name: load_json(path) for path in sorted(directory.glob("part-*.json"))}
     return receipts_from_documents(documents, model, kind)
-
-
-def write_receipt_shards(
-    directory: Path, receipts: Mapping[str, Mapping[str, object]], *, records_per_shard: int = RECEIPTS_PER_SHARD
-) -> None:
-    entries = sorted(receipts.items())
-    for part, offset in enumerate(range(0, len(entries), records_per_shard)):
-        with (directory / f"part-{part:03d}.json").open("x") as output:
-            output.write(json.dumps(dict(entries[offset : offset + records_per_shard]), indent=2, sort_keys=True) + "\n")

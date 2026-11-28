@@ -3,6 +3,7 @@
 
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from finestore.rl.licenses import (
     LicenseBan,
@@ -13,6 +14,7 @@ from finestore.rl.licenses import (
     LicenseReceipt,
     LicenseSourcePin,
 )
+from huggingface_hub.errors import HfHubHTTPError
 
 from experiments.post_training.task_curation import license_publication
 from experiments.post_training.task_curation.license_resolution import license_evidence
@@ -23,6 +25,11 @@ from experiments.post_training.task_curation.tests.license_publication_fixtures 
     source_receipt,
 )
 from infra.marina.apps.rl_data_catalog.server import licensing
+
+
+def _conflict_response() -> httpx.Response:
+    """The Hub's already-created-repo refusal, as the API raises it."""
+    return httpx.Response(409, request=httpx.Request("POST", "https://huggingface.co/api/repos/create"))
 
 
 @pytest.fixture(autouse=True)
@@ -111,7 +118,7 @@ def registered_lineage(monkeypatch, receipt: LicenseReceipt) -> None:
     monkeypatch.setattr(license_publication, "read_license_receipts", lambda path: {receipt.source_id: receipt})
 
 
-def test_check_publication_passes_on_the_recorded_lineage_exception(tmp_path, monkeypatch):
+def test_check_publication_passes_on_the_recorded_lineage_exception(monkeypatch):
     receipt = lineage_receipt(REVISION, ["train"])
     registered_lineage(monkeypatch, receipt)
     evidence = license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
@@ -121,7 +128,7 @@ def test_check_publication_passes_on_the_recorded_lineage_exception(tmp_path, mo
     assert evidence["lineage_exception"]["approved"] is True
 
 
-def test_check_publication_clears_a_repackager_fail_on_the_folder_lineage(tmp_path, monkeypatch):
+def test_check_publication_clears_a_repackager_fail_on_the_folder_lineage(monkeypatch):
     """The repackager ruling: the folder lineage carries the pass at a repackager pin."""
     receipt = lineage_receipt(REVISION, ["train"])
     registered_lineage(monkeypatch, receipt)
@@ -159,38 +166,39 @@ def test_check_publication_clears_a_repackager_fail_on_the_folder_lineage(tmp_pa
     assert evidence["folder_lineage"]["upstream"] == f"{receipt.dataset_id}@{receipt.revision}"
 
 
-def test_check_publication_ignores_a_lineage_exception_at_another_pin(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("use", "stage"),
+    [
+        pytest.param(
+            "train",
+            lambda registered, monkeypatch: monkeypatch.setattr(
+                license_publication,
+                "read_license_receipts",
+                lambda path: {registered.source_id: registered},
+            ),
+            id="another-pin",
+        ),
+        pytest.param("eval", lambda registered, monkeypatch: None, id="out-of-scope"),
+        pytest.param(
+            "train",
+            lambda registered, monkeypatch: monkeypatch.setattr(
+                license_publication, "read_license_receipts", lambda path: {}
+            ),
+            id="missing-receipt",
+        ),
+    ],
+)
+def test_check_publication_ignores_a_lineage_exception(tmp_path, monkeypatch, use, stage):
+    """A lineage exception clears a FAIL only for the same pin, in use scope, with a receipt."""
     receipt = lineage_receipt(REVISION, ["train"])
     registered = lineage_receipt("e" * 40, ["train"])
     registered_lineage(monkeypatch, receipt)
-    monkeypatch.setattr(license_publication, "read_license_receipts", lambda path: {registered.source_id: registered})
+    stage(registered, monkeypatch)
     with pytest.raises(ValueError, match="Published pin failed"):
-        license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
+        license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, use)
 
 
-def test_check_publication_ignores_a_lineage_exception_out_of_scope(tmp_path, monkeypatch):
-    receipt = lineage_receipt(REVISION, ["eval"])
-    registered_lineage(monkeypatch, receipt)
-    with pytest.raises(ValueError, match="Published pin failed"):
-        license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
-
-
-def test_check_publication_ignores_a_missing_lineage_receipt(tmp_path, monkeypatch):
-    receipt = lineage_receipt(REVISION, ["train"])
-    registered_lineage(monkeypatch, receipt)
-    monkeypatch.setattr(license_publication, "read_license_receipts", lambda path: {})
-    with pytest.raises(ValueError, match="Published pin failed"):
-        license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
-
-
-def test_check_publication_ignores_an_exception_without_lineage(tmp_path, monkeypatch):
-    receipt = lineage_receipt(REVISION, ["train"], with_source=False)
-    registered_lineage(monkeypatch, receipt)
-    with pytest.raises(ValueError, match="Published pin failed"):
-        license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
-
-
-def test_check_publication_never_clears_a_restricted_pin(tmp_path, monkeypatch):
+def test_check_publication_never_clears_a_restricted_pin(monkeypatch):
     receipt = source_receipt(b"---\nlicense: cc-by-nc-4.0\n---\n").model_copy(
         update={
             "resolved_source": LicenseSourcePin(
@@ -241,7 +249,7 @@ def test_private_publication_reuses_its_own_prior_attempt_repo(tmp_path, monkeyp
     class Hub:
         def create_repo(self, **kwargs):
             assert kwargs["exist_ok"] is False
-            raise RuntimeError("409 Conflict: the repo already exists")
+            raise HfHubHTTPError("409 Conflict: the repo already exists", response=_conflict_response())
 
         def list_repo_tree(self, dataset, *, repo_type, recursive):
             assert dataset == repo and recursive is True
@@ -274,7 +282,7 @@ def test_private_publication_rejects_a_repo_with_other_content(tmp_path, monkeyp
 
     class Hub:
         def create_repo(self, **kwargs):
-            raise RuntimeError("409 Conflict")
+            raise HfHubHTTPError("409 Conflict", response=_conflict_response())
 
         def list_repo_tree(self, dataset, *, repo_type, recursive):
             return [SimpleNamespace(path="README.md"), SimpleNamespace(path="stale.parquet")]

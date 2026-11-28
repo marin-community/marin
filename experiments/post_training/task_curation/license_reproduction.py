@@ -1,19 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reproduce one sealed branch license receipt through main's resolver.
+"""Reproduce a sealed license receipt through the pipeline's resolver.
 
-The sealed receipt resolves a source's primary license evidence at an
-immutable pin and derives its classification. This script runs main's
-ported resolver on the same pinned upstream and compares the produced
-receipt with the sealed one: the resolved pin, every evidence entry's
-kind, license IDs, content hash and URL, and the derived classification
-the dataset rules rule on.
+A sealed receipt resolves a source's primary license evidence at an
+immutable pin and derives its classification. This script runs the resolver
+on the same pinned upstream and compares the produced receipt with the
+sealed one: the resolved pin, every evidence entry's kind, license IDs,
+content hash and URL, and the derived classification the dataset rules rule
+on.
 
 ```bash
 uv run python -m experiments.post_training.task_curation.license_reproduction \\
     --source-id ChilleD:svamp \\
     --receipt sealed_license_receipt.json \\
+    --artifact-root s3://marin-us-east-02a/marin/rl-data/license-reproduction \\
     --output reproduction.json --run
 ```
 """
@@ -24,7 +25,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
-from finestore.rl.licenses import check_license
+from finestore.rl.licenses import LicenseReceipt, check_license
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.license_resolution import resolve_license
@@ -33,6 +34,7 @@ from experiments.post_training.task_curation.license_targets import LicenseTarge
 logger = logging.getLogger(__name__)
 
 EVIDENCE_FIELDS = ("kind", "license_ids", "sha256", "url")
+REPRODUCTION_JSON = "reproduction.json"
 
 
 def upstream_target(receipt: dict) -> LicenseTarget:
@@ -54,14 +56,15 @@ def compare(produced: dict, sealed: dict) -> dict:
     comparison runs against the sealed receipt's own resolved source.
     """
     resolved = sealed["resolved_source"]
-    produced_evidence = [
-        {field: evidence[field] for field in EVIDENCE_FIELDS} for evidence in produced["evidence"]
-    ]
-    sealed_evidence = [
-        {field: evidence[field] for field in EVIDENCE_FIELDS} for evidence in sealed["evidence"]
-    ]
+    produced_evidence = [{field: evidence[field] for field in EVIDENCE_FIELDS} for evidence in produced["evidence"]]
+    sealed_evidence = [{field: evidence[field] for field in EVIDENCE_FIELDS} for evidence in sealed["evidence"]]
     mismatches = [
-        {"index": index, "field": field, "produced": produced_evidence[index].get(field), "sealed": sealed_evidence[index][field]}
+        {
+            "index": index,
+            "field": field,
+            "produced": produced_evidence[index].get(field),
+            "sealed": sealed_evidence[index][field],
+        }
         for index in range(min(len(produced_evidence), len(sealed_evidence)))
         for field in EVIDENCE_FIELDS
         if produced_evidence[index].get(field) != sealed_evidence[index][field]
@@ -94,9 +97,7 @@ def compare(produced: dict, sealed: dict) -> dict:
     }
 
 
-def _receipt(document: dict):
-    from finestore.rl.licenses import LicenseReceipt
-
+def _receipt(document: dict) -> LicenseReceipt:
     return LicenseReceipt.model_validate(document)
 
 
@@ -137,12 +138,17 @@ def main() -> None:
         }
     )
     args.output.write_text(json.dumps(comparison, indent=2, sort_keys=True) + "\n")
-    per_run = StoragePath(
-        f"{args.artifact_root.rstrip('/')}/runs/{args.source_id.replace(':', '-')}/{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}/reproduction.json"
+    root = StoragePath(args.artifact_root)
+    per_run = (
+        root
+        / "runs"
+        / args.source_id.replace(":", "-")
+        / datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        / REPRODUCTION_JSON
     )
     with per_run.open("wt", auto_mkdir=True) as stream:
         stream.write(json.dumps(comparison, indent=2, sort_keys=True) + "\n")
-    with StoragePath(f"{args.artifact_root.rstrip('/')}/reproduction.json").open("wt", auto_mkdir=True) as stream:
+    with (root / REPRODUCTION_JSON).open("wt", auto_mkdir=True) as stream:
         stream.write(json.dumps(comparison, indent=2, sort_keys=True) + "\n")
     logger.info(
         "Reproduction result written to %s and %s: reproduced=%s",
