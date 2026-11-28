@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
 import functools
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -167,6 +169,147 @@ def test_every_cluster_probes_a_working_docker_build_toolchain():
     for config in (coreweave_config(), gcp_config()):
         probes = {n.target for n in requirements(config, s3_env=[]) if n.kind is Need.COMMAND_RUNS}
         assert probes == {"docker info", "docker buildx version"}
+
+
+def test_preflight_checks_the_configured_image_and_cache_repositories():
+    config = gcp_config()
+    config.controller.image = "ghcr.io/controller-org/iris-controller:latest"
+    config.defaults.worker.docker_image = "ghcr.io/worker-org/iris-worker:latest"
+    config.defaults.worker.default_task_image = "ghcr.io/controller-org/iris-task:latest"
+
+    needs = requirements(config)
+
+    assert {need.target for need in needs if need.kind is Need.GHCR_PUSH} == {
+        "ghcr.io/controller-org/iris-controller",
+        "ghcr.io/controller-org/iris-task",
+        "ghcr.io/controller-org/iris-cache",
+        "ghcr.io/worker-org/iris-worker",
+        "ghcr.io/worker-org/iris-cache",
+    }
+    assert any(need.kind is Need.BUILDX_CACHE for need in needs)
+
+
+def test_preflight_rejects_default_docker_builder_without_containerd_store(monkeypatch):
+    def docker_run(command, **_kwargs):
+        if command[:3] == ["docker", "buildx", "inspect"]:
+            return subprocess.CompletedProcess(command, 0, "Name: default\nDriver: docker\n", "")
+        return subprocess.CompletedProcess(command, 0, json.dumps([["Storage Driver", "overlay2"]]), "")
+
+    monkeypatch.setattr("scripts.iris.rollout_controllers.subprocess.run", docker_run)
+    result = check_requirement(Requirement(Need.BUILDX_CACHE, "registry cache export", "why"), environ={})
+
+    assert not result.ok
+    assert "builder default" in result.detail
+    assert "docker-container" in result.detail
+
+
+def test_preflight_accepts_selected_containerd_builder_and_buildx_override(monkeypatch):
+    commands = []
+
+    def docker_run(command, **_kwargs):
+        commands.append(command)
+        if command[:3] == ["docker", "buildx", "inspect"]:
+            name = command[3] if len(command) > 3 else "default"
+            driver = "docker-container" if name == "custom" else "docker"
+            return subprocess.CompletedProcess(command, 0, f"Name: {name}\nDriver: {driver}\n", "")
+        return subprocess.CompletedProcess(command, 0, json.dumps([["driver-type", "io.containerd.snapshotter.v1"]]), "")
+
+    monkeypatch.setattr("scripts.iris.rollout_controllers.subprocess.run", docker_run)
+    need = Requirement(Need.BUILDX_CACHE, "registry cache export", "why")
+
+    assert check_requirement(need, environ={}).ok
+    assert check_requirement(need, environ={"BUILDX_BUILDER": "custom"}).ok
+    assert ["docker", "buildx", "inspect", "custom"] in commands
+
+
+def test_preflight_rejects_unidentified_builder(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.iris.rollout_controllers.subprocess.run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(command, 0, "Name: default\n", ""),
+    )
+
+    result = check_requirement(Requirement(Need.BUILDX_CACHE, "registry cache export", "why"), environ={})
+
+    assert not result.ok
+    assert "did not identify" in result.detail
+
+
+def test_preflight_verifies_ghcr_push_scope_using_docker_credentials(tmp_path, monkeypatch):
+    docker_config = tmp_path / "docker"
+    docker_config.mkdir()
+    encoded = base64.b64encode(b"operator:secret").decode()
+    (docker_config / "config.json").write_text(json.dumps({"auths": {"ghcr.io": {"auth": encoded}}}))
+    calls = []
+
+    class RegistryResponse:
+        def __init__(self, status, body=b"", location=None):
+            self.status = status
+            self.body = body
+            self.location = location
+
+        def read(self):
+            return self.body
+
+        def getheader(self, _name):
+            return self.location
+
+    responses = iter(
+        [
+            RegistryResponse(200, b'{"token":"registry-token"}'),
+            RegistryResponse(202, location="/v2/my-org/iris-cache/blobs/upload/123"),
+            RegistryResponse(204),
+        ]
+    )
+
+    class RegistryConnection:
+        def __init__(self, host, *, timeout):
+            assert host == "ghcr.io"
+            assert timeout > 0
+
+        def request(self, method, path, body=None, headers=None):
+            calls.append((method, path, body, headers))
+
+        def getresponse(self):
+            return next(responses)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("scripts.iris.rollout_controllers.http.client.HTTPSConnection", RegistryConnection)
+    need = Requirement(Need.GHCR_PUSH, "ghcr.io/my-org/iris-cache", "why")
+
+    result = check_requirement(need, environ={"DOCKER_CONFIG": str(docker_config)})
+
+    assert result.ok
+    assert "VERIFIED" in result.detail
+    assert [method for method, *_ in calls] == ["GET", "POST", "DELETE"]
+    assert calls[1][1] == "/v2/my-org/iris-cache/blobs/uploads/"
+    assert "secret" not in result.detail
+
+
+def test_preflight_reports_unverified_or_denied_ghcr_push(tmp_path, monkeypatch):
+    need = Requirement(Need.GHCR_PUSH, "ghcr.io/my-org/iris-controller", "why")
+    missing = check_requirement(need, environ={"DOCKER_CONFIG": str(tmp_path)})
+    assert not missing.ok
+    assert "UNVERIFIED" in missing.detail
+
+    docker_config = tmp_path / "docker"
+    docker_config.mkdir()
+    encoded = base64.b64encode(b"operator:read-only").decode()
+    (docker_config / "config.json").write_text(json.dumps({"auths": {"ghcr.io": {"auth": encoded}}}))
+    calls = []
+
+    def registry_request(method, path, authorization):
+        calls.append((method, path, authorization))
+        return (200, b'{"token":"read-token"}', None) if method == "GET" else (403, b"", None)
+
+    monkeypatch.setattr("scripts.iris.rollout_controllers._ghcr_request", registry_request)
+    denied = check_requirement(need, environ={"DOCKER_CONFIG": str(docker_config)})
+
+    assert not denied.ok
+    assert "DENIED" in denied.detail
+    assert "read-only" not in denied.detail
+    assert [method for method, *_ in calls] == ["GET", "POST"]
 
 
 def test_probe_fails_on_a_nonzero_exit_and_reports_the_exit_code():

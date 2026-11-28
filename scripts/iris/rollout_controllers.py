@@ -10,7 +10,10 @@ controller and never walks the cluster list. The skill continues after passed
 gates and stops when a gate is blocked.
 """
 
+import base64
+import binascii
 import functools
+import http.client
 import json
 import logging
 import os
@@ -22,10 +25,12 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from urllib.parse import urlencode, urlsplit
 
 import click
 import yaml
 from iris.cli.build import get_git_sha
+from iris.cli.cluster import KUBERNETES_WORKER_RUNTIME, _parse_ghcr_tag
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, connect_controller, rpc_client
 from iris.client.client import IrisClient
 from iris.client.workload import JobStatus
@@ -57,6 +62,9 @@ DIRTY_FILES_SHOWN = 5
 
 # Ceiling for a preflight probe command, so a hung daemon does not hang the gate.
 PROBE_TIMEOUT = 30.0
+REGISTRY_CACHE_DRIVERS = frozenset({"docker-container", "kubernetes", "remote"})
+CONTAINERD_DRIVER_TYPE = "io.containerd.snapshotter.v1"
+GHCR_HOST = "ghcr.io"
 
 # Where kubectl and the kubernetes client look when no path is pinned and KUBECONFIG is
 # unset. A cluster config may name a context without a file and still deploy.
@@ -107,6 +115,8 @@ class Need(StrEnum):
     COMMAND_RUNS = "command-runs"
     SECRET = "secret"
     KUBE_CONTEXT = "kube-context"
+    BUILDX_CACHE = "buildx-registry-cache"
+    GHCR_PUSH = "ghcr-push"
 
 
 @dataclass(frozen=True)
@@ -375,8 +385,24 @@ def requirements(config: IrisClusterConfig, *, s3_env: Sequence[str] | None = No
         # would fail after the operator already approved the cluster at its gate.
         Requirement(Need.COMMAND_RUNS, "docker info", "the deploy builds the controller image locally"),
         Requirement(Need.COMMAND_RUNS, "docker buildx version", "the image build and push runs through buildx"),
+        Requirement(Need.BUILDX_CACHE, "registry cache export", "the image build exports a registry cache"),
         Requirement(Need.COMMAND, "git", "the image tag is a hash of the working tree content"),
     ]
+    image_tags = [config.controller.image, config.defaults.worker.default_task_image]
+    if config.defaults.worker.runtime != KUBERNETES_WORKER_RUNTIME:
+        image_tags.append(config.defaults.worker.docker_image)
+    repositories = set()
+    for tag in filter(None, image_tags):
+        parsed = _parse_ghcr_tag(tag)
+        if parsed is None:
+            needs.append(Requirement(Need.GHCR_PUSH, tag, "the configured image must be published to GHCR"))
+            continue
+        org, image, _ = parsed
+        repositories.update({f"{GHCR_HOST}/{org}/{image}", f"{GHCR_HOST}/{org}/iris-cache"})
+    needs.extend(
+        Requirement(Need.GHCR_PUSH, repository, "the image build pushes this image or registry cache")
+        for repository in sorted(repositories)
+    )
     kind = config.controller.controller_kind()
     if kind == "coreweave":
         needs.append(Requirement(Need.COMMAND, "kubectl", "the controller Deployment is driven over the k8s API"))
@@ -469,6 +495,141 @@ def run_probe(requirement: Requirement, *, timeout: float = PROBE_TIMEOUT) -> Ch
     return CheckResult(requirement, False, f"exit {result.returncode}: {reason[0] if reason else 'no output'}")
 
 
+def check_buildx_cache(requirement: Requirement, *, environ: Mapping[str, str]) -> CheckResult:
+    """Check the builder selected by this shell can export the registry cache."""
+    override = environ.get("BUILDX_BUILDER", "")
+    command = ["docker", "buildx", "inspect", *([override] if override else [])]
+    try:
+        inspected = subprocess.run(command, capture_output=True, text=True, timeout=PROBE_TIMEOUT, env=environ)
+    except (OSError, subprocess.TimeoutExpired):
+        return CheckResult(requirement, False, "could not inspect the effective buildx builder")
+    if inspected.returncode:
+        return CheckResult(requirement, False, f"could not inspect buildx builder {override or '(selected)'}")
+    fields = dict(line.split(":", 1) for line in inspected.stdout.splitlines() if line.startswith(("Name:", "Driver:")))
+    builder = fields.get("Name", "").strip()
+    driver = fields.get("Driver", "").strip()
+    if not builder or not driver or (override and builder != override):
+        return CheckResult(requirement, False, "buildx inspect did not identify the effective builder and driver")
+    if driver in REGISTRY_CACHE_DRIVERS:
+        return CheckResult(requirement, True, f"builder {builder} uses {driver}; registry cache export supported")
+    if driver != "docker":
+        return CheckResult(requirement, False, f"builder {builder} uses unsupported driver {driver}")
+
+    try:
+        info = subprocess.run(
+            ["docker", "info", "--format", "{{json .DriverStatus}}"],
+            capture_output=True,
+            text=True,
+            timeout=PROBE_TIMEOUT,
+            env=environ,
+        )
+        driver_status = json.loads(info.stdout) if info.returncode == 0 else []
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        driver_status = []
+    if isinstance(driver_status, list) and ["driver-type", CONTAINERD_DRIVER_TYPE] in driver_status:
+        return CheckResult(requirement, True, f"builder {builder} uses docker with the containerd image store")
+    return CheckResult(
+        requirement,
+        False,
+        f"builder {builder} uses docker without a confirmed containerd image store; "
+        "select a docker-container builder or enable the containerd image store",
+    )
+
+
+def _docker_ghcr_credentials(environ: Mapping[str, str]) -> tuple[str, str] | None:
+    config_dir = Path(environ.get("DOCKER_CONFIG", str(Path(environ.get("HOME", "~")).expanduser() / ".docker")))
+    config_path = config_dir / "config.json"
+    if not config_path.is_file():
+        return None
+    try:
+        config = json.loads(config_path.read_text())
+        helper = config.get("credHelpers", {}).get(GHCR_HOST) or config.get("credsStore")
+        if helper:
+            result = subprocess.run(
+                [f"docker-credential-{helper}", "get"],
+                input=GHCR_HOST,
+                capture_output=True,
+                text=True,
+                timeout=PROBE_TIMEOUT,
+                env=environ,
+            )
+            if result.returncode:
+                return None
+            credential = json.loads(result.stdout)
+            username, secret = credential.get("Username"), credential.get("Secret")
+        else:
+            entry = config.get("auths", {}).get(GHCR_HOST) or config.get("auths", {}).get(f"https://{GHCR_HOST}")
+            if not entry or not entry.get("auth"):
+                return None
+            username, secret = base64.b64decode(entry["auth"], validate=True).decode().split(":", 1)
+        if username and secret and username != "<token>":
+            return username, secret
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, binascii.Error, subprocess.TimeoutExpired):
+        return None
+    return None
+
+
+def _ghcr_request(method: str, path: str, authorization: str) -> tuple[int, bytes, str | None]:
+    connection = http.client.HTTPSConnection(GHCR_HOST, timeout=PROBE_TIMEOUT)
+    try:
+        connection.request(
+            method, path, body=b"" if method == "POST" else None, headers={"Authorization": authorization}
+        )
+        response = connection.getresponse()
+        return response.status, response.read(), response.getheader("Location")
+    finally:
+        connection.close()
+
+
+def check_ghcr_push(requirement: Requirement, *, environ: Mapping[str, str]) -> CheckResult:
+    """Prove push scope by opening and aborting an empty GHCR blob upload."""
+    repository = requirement.target.removeprefix(f"{GHCR_HOST}/")
+    if repository == requirement.target or "/" not in repository:
+        return CheckResult(requirement, False, "UNVERIFIED: image reference is not a GHCR repository")
+    credentials = _docker_ghcr_credentials(environ)
+    if credentials is None:
+        return CheckResult(
+            requirement, False, "UNVERIFIED: Docker has no usable GHCR credentials; log in with write:packages"
+        )
+
+    basic = base64.b64encode(f"{credentials[0]}:{credentials[1]}".encode()).decode()
+    token_path = "/token?" + urlencode({"service": GHCR_HOST, "scope": f"repository:{repository}:pull,push"})
+    try:
+        status, body, _ = _ghcr_request("GET", token_path, f"Basic {basic}")
+        if status in (401, 403):
+            return CheckResult(requirement, False, f"DENIED: GHCR rejected Docker credentials (HTTP {status})")
+        if status != 200:
+            return CheckResult(requirement, False, f"UNVERIFIED: GHCR token request returned HTTP {status}")
+        token_response = json.loads(body)
+        if not isinstance(token_response, dict):
+            return CheckResult(requirement, False, "UNVERIFIED: GHCR returned an invalid token response")
+        token = token_response.get("token") or token_response.get("access_token")
+        if not token:
+            return CheckResult(requirement, False, "UNVERIFIED: GHCR returned no registry token")
+        status, _, location = _ghcr_request("POST", f"/v2/{repository}/blobs/uploads/", f"Bearer {token}")
+        if status in (401, 403):
+            return CheckResult(requirement, False, f"DENIED: GHCR rejected push to {requirement.target} (HTTP {status})")
+        if status != 202:
+            return CheckResult(requirement, False, f"UNVERIFIED: GHCR upload probe returned HTTP {status}")
+        upload_url = urlsplit(location or "")
+        if upload_url.scheme not in ("", "https") or upload_url.netloc not in ("", GHCR_HOST):
+            return CheckResult(requirement, False, "UNVERIFIED: GHCR returned an unexpected upload URL")
+        if not upload_url.path.startswith("/v2/"):
+            return CheckResult(requirement, False, "UNVERIFIED: GHCR returned an unexpected upload path")
+        delete_path = upload_url.path + (f"?{upload_url.query}" if upload_url.query else "")
+        try:
+            cleanup_status, _, _ = _ghcr_request("DELETE", delete_path, f"Bearer {token}")
+        except (OSError, http.client.HTTPException):
+            return CheckResult(requirement, False, "GHCR accepted push, but the empty upload could not be aborted")
+        if cleanup_status != 204:
+            return CheckResult(
+                requirement, False, f"GHCR accepted push, but upload cleanup returned HTTP {cleanup_status}"
+            )
+    except (OSError, http.client.HTTPException, ValueError, TypeError):
+        return CheckResult(requirement, False, "UNVERIFIED: GHCR push probe could not complete")
+    return CheckResult(requirement, True, f"VERIFIED: GHCR accepted push to {requirement.target}")
+
+
 def check_requirement(requirement: Requirement, *, environ: Mapping[str, str]) -> CheckResult:
     """Check one requirement. Secret values are resolved but never returned."""
     target = requirement.target
@@ -480,6 +641,10 @@ def check_requirement(requirement: Requirement, *, environ: Mapping[str, str]) -
         return CheckResult(requirement, path is not None, path or "not on PATH")
     if requirement.kind is Need.COMMAND_RUNS:
         return run_probe(requirement)
+    if requirement.kind is Need.BUILDX_CACHE:
+        return check_buildx_cache(requirement, environ=environ)
+    if requirement.kind is Need.GHCR_PUSH:
+        return check_ghcr_push(requirement, environ=environ)
     if requirement.kind is Need.KUBE_CONTEXT:
         return check_kube_context(requirement, environ=environ)
     resolved = resolve_secret_spec((target,))
