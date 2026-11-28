@@ -31,6 +31,7 @@ from marin.rollouts.evaluation import (
     ModelIdentity,
     episode_turn,
     generation_turn,
+    grader_machine,
     grading_limits,
     run_evaluation,
     run_identity,
@@ -937,6 +938,17 @@ def test_grading_deadline_covers_the_judge_budget(run_config, judge_budget, dead
     assert (extended.verifier_timeout, extended.attempt_timeout) == deadlines
 
 
+@pytest.mark.parametrize("capabilities,network", [(("network",), NetworkPolicy.ALLOW), ((), NetworkPolicy.DENY)])
+def test_grader_machines_have_the_network_their_environment_requires(capabilities, network):
+    environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_image=f"grader@sha256:{'a' * 64}",
+        capabilities=capabilities,
+    )
+    run_default = machine_runtime(backend="daytona", network=NetworkPolicy.DENY)
+    assert grader_machine(run_default, environment) == run_default.model_copy(update={"network": network})
+
+
 @dataclass
 class MixedEndpoint:
     requests: list[tuple[str, dict]] = field(default_factory=list)
@@ -1541,6 +1553,69 @@ async def test_harness_infrastructure_failures_are_retried_on_resume_instead_of_
 
     outcomes = [row["outcome"] for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
     assert outcomes == ["infra_error", "graded"]
+
+
+class RecordingFactory(ShellSimMachineFactory):
+    """ShellSim machines that record the spec each was created with."""
+
+    def __init__(self):
+        super().__init__()
+        self.created: list[MachineSpec] = []
+
+    async def create(self, spec):
+        self.created.append(spec)
+        return await super().create(spec)
+
+
+def convert_separately_graded_episode_row(row: RawRow, context: ConversionContext):
+    task = convert_episode_row(row, context)
+    grader = ScriptGrader(
+        argv=("sh", "-c", "true"),
+        reward=ExitCodeReward(),
+        placement=GraderMachine(
+            environment=EnvironmentRequirements(
+                command_semantics=CommandSemantics.SHELL_SIMULATOR, package_spec=PackageSpec()
+            )
+        ),
+    )
+    return task.model_copy(update={"grader": grader})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("run_memory", "grader_memory"), [(None, 512), (8192, 8192)], ids=["unset", "explicit"])
+async def test_a_separate_grader_gets_the_task_s_resources_where_the_run_sets_none(
+    tmp_path, run_config, run_memory, grader_memory
+):
+    corpus = publish_episodes(tmp_path, ("episode/solve",), ShellAgent(), convert=convert_separately_graded_episode_row)
+
+    async def model(request):
+        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(5, 2))
+
+    factory = RecordingFactory()
+    config = run_config.model_copy(
+        update={
+            "source_limit": None,
+            "task_machine": machine_runtime(backend="shellsim"),
+            "verifier_machine": machine_runtime(backend="shellsim", memory_mb=run_memory),
+        }
+    )
+    output = str(tmp_path / "results")
+    await run_evaluation(
+        (corpus,),
+        output,
+        config,
+        model,
+        machine_factories={"shellsim": factory},
+        harnesses={"shell": lambda _agent, _budget: ShellHarness(command_timeout=None)},
+    )
+
+    finished = [row for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert [row["outcome"] for row in finished] == ["graded"]
+    # The episode sets 512 MB; the agent's machine denies network as the task does, the grader as the run does.
+    assert [(spec.memory_mb, spec.network) for spec in factory.created] == [
+        (512, NetworkPolicy.DENY),
+        (grader_memory, config.verifier_machine.network),
+    ]
 
 
 class FullDiskFactory(ShellSimMachineFactory):

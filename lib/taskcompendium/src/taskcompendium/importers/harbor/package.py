@@ -34,6 +34,7 @@ from taskcompendium.importers.harbor.config import (
     Healthcheck,
     UnsupportedHarborFeature,
     VerifierMode,
+    parse_task_config,
     read_task_config,
 )
 from taskcompendium.importers.harbor.sources import (
@@ -206,8 +207,11 @@ def _verifier_source(config: HarborTaskConfig, directory: Path) -> ContainerSour
 
 
 def image_references(directory: Path) -> tuple[str, ...]:
-    """Every external image the package's machines need, so a recipe can resolve digests once."""
-    config = read_task_config(directory)
+    """Every external image the package's machines need, so a recipe can resolve digests once.
+
+    Lowering, not this listing, rejects what the importer cannot run.
+    """
+    config = parse_task_config(directory)
     primary = _primary_sources(config, directory)
     sources = [primary.main]
     if primary.compose is not None:
@@ -238,8 +242,8 @@ def _network_capabilities(allow_internet: bool) -> tuple[str, ...]:
 
 
 def _agent_internet(config: HarborTaskConfig, sources: _PrimarySources) -> bool:
-    """``allow_internet``, unless the Compose file takes ``main`` off the network."""
-    return config.environment.allow_internet and (sources.compose is None or not sources.compose.main_network_disabled)
+    """The agent phase's network, unless the Compose file takes ``main`` off the network."""
+    return config.agent_internet and (sources.compose is None or not sources.compose.main_network_disabled)
 
 
 def _environment_files(config: HarborTaskConfig, directory: Path, sources: _PrimarySources) -> tuple[TaskResource, ...]:
@@ -289,7 +293,7 @@ def _verifier_environment(config: HarborTaskConfig, directory: Path, pin: Pin) -
     environment = config.verifier_environment
     lowered = lower_source(source, pin)
     return EnvironmentRequirements(
-        capabilities=_network_capabilities(environment.allow_internet),
+        capabilities=_network_capabilities(config.verifier_internet),
         command_semantics=CommandSemantics.LINUX_PROCESS,
         docker_image=lowered.docker_image,
         docker_build=lowered.docker_build,

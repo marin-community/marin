@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Harbor's ``task.toml`` (schemas 1.0 to 1.2), with Harbor's defaults, and the subset the importer lowers.
+"""Harbor's ``task.toml`` (schemas 1.0 to 1.4), with Harbor's defaults, and the subset the importer lowers.
 
 Harbor ignores keys it does not model, and so does this model. Fields that change how a task
 runs are modelled so that :func:`read_task_config` can reject the ones the importer cannot lower.
@@ -15,7 +15,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 TASK_CONFIG = "task.toml"
-SUPPORTED_SCHEMAS = frozenset({"1.0", "1.0.0", "1.1", "1.2"})
+SUPPORTED_SCHEMAS = frozenset({"1.0", "1.0.0", "1.1", "1.2", "1.3", "1.4"})
 """Harbor does not interpret the version; some 1.0 packages write it as ``1.0.0``."""
 ROOT_USERS = (None, "root", 0)
 
@@ -42,6 +42,14 @@ class VerifierMode(StrEnum):
 
     SHARED = "shared"
     SEPARATE = "separate"
+
+
+class NetworkMode(StrEnum):
+    """Schema 1.3's network policy; ``allowlist`` reaches only named hosts."""
+
+    PUBLIC = "public"
+    NO_NETWORK = "no-network"
+    ALLOWLIST = "allowlist"
 
 
 class McpTransport(StrEnum):
@@ -99,7 +107,9 @@ class EnvironmentConfig(HarborModel):
     gpus: int | None = None
     gpu_types: tuple[str, ...] | None = None
     tpu: dict[str, Any] | None = None
-    allow_internet: bool = True
+    allow_internet: bool | None = None
+    """Schemas before 1.3; ``network_mode`` replaces it."""
+    network_mode: NetworkMode | None = None
     mcp_servers: tuple[McpServer, ...] = ()
     env: dict[str, str] = Field(default_factory=dict)
     skills_dir: str | None = None
@@ -111,6 +121,14 @@ class EnvironmentConfig(HarborModel):
     @classmethod
     def normalize_os(cls, value: Any) -> Any:
         return value.lower() if isinstance(value, str) else value
+
+    @property
+    def network(self) -> NetworkMode:
+        """The environment's baseline policy: ``network_mode``, else the legacy ``allow_internet``, else public."""
+        legacy = {None: None, True: NetworkMode.PUBLIC, False: NetworkMode.NO_NETWORK}[self.allow_internet]
+        if self.network_mode is not None and legacy is not None and self.network_mode != legacy:
+            raise UnsupportedHarborFeature("conflicting network_mode and allow_internet")
+        return self.network_mode or legacy or NetworkMode.PUBLIC
 
     @model_validator(mode="before")
     @classmethod
@@ -141,6 +159,8 @@ class VerifierConfig(HarborModel):
     timeout_sec: float = 600.0
     env: dict[str, str] = Field(default_factory=dict)
     user: str | int | None = None
+    network_mode: NetworkMode | None = None
+    """The grading phase's policy, overriding its environment's."""
     environment_mode: VerifierMode | None = None
     environment: EnvironmentConfig | None = None
     collect: tuple[CollectHook, ...] = ()
@@ -163,6 +183,8 @@ class AgentConfig(HarborModel):
     timeout_sec: float | None = None
     env: dict[str, str] = Field(default_factory=dict)
     user: str | int | None = None
+    network_mode: NetworkMode | None = None
+    """The agent phase's policy, overriding the environment's."""
 
 
 class ArtifactConfig(HarborModel):
@@ -201,6 +223,16 @@ class HarborTaskConfig(HarborModel):
         """The separate verifier's environment: its own, or a copy of the task's."""
         return self.verifier.environment or self.environment
 
+    @property
+    def agent_internet(self) -> bool:
+        """Whether the agent phase reaches the public network."""
+        return (self.agent.network_mode or self.environment.network) == NetworkMode.PUBLIC
+
+    @property
+    def verifier_internet(self) -> bool:
+        """Whether the grading phase reaches the public network, in the machine it grades on."""
+        return (self.verifier.network_mode or self.verifier_environment.network) == NetworkMode.PUBLIC
+
 
 def _require_environment(environment: EnvironmentConfig, section: str) -> None:
     if environment.os != TaskOS.LINUX:
@@ -221,6 +253,17 @@ def require_supported(
         raise UnsupportedHarborFeature(f"task.toml schema {config.schema_version} is not supported")
     if config.steps or config.multi_step_reward_strategy is not None:
         raise UnsupportedHarborFeature("multi-step tasks are not supported")
+    modes = (
+        config.environment.network,
+        config.agent.network_mode,
+        config.verifier.network_mode,
+        config.verifier_environment.network,
+    )
+    if NetworkMode.ALLOWLIST in modes:
+        raise UnsupportedHarborFeature("allowlisted network access is not supported")
+    # A machine's network is fixed when it starts, so tests in the agent's container run with the agent's network.
+    if config.verifier.mode == VerifierMode.SHARED and config.verifier_internet != config.agent_internet:
+        raise UnsupportedHarborFeature("tests in the agent's container that need a different network than the agent")
     _require_environment(config.environment, "environment")
     if agent_user is None and config.agent.user not in ROOT_USERS:
         raise UnsupportedHarborFeature(f"agent runs as user {config.agent.user!r}; only root is supported")
@@ -241,10 +284,15 @@ def require_supported(
             raise UnsupportedHarborFeature("verifier environments with healthchecks, MCP servers, or setup commands")
 
 
+def parse_task_config(directory: Path) -> HarborTaskConfig:
+    """Parse a package's ``task.toml`` without checking that the importer can lower it."""
+    return HarborTaskConfig.model_validate(tomllib.loads((directory / TASK_CONFIG).read_text()))
+
+
 def read_task_config(
     directory: Path, *, agent_user: str | None = None, setup_timeout: float | None = None
 ) -> HarborTaskConfig:
     """Parse a package's ``task.toml`` and reject task-level features the importer cannot lower."""
-    config = HarborTaskConfig.model_validate(tomllib.loads((directory / TASK_CONFIG).read_text()))
+    config = parse_task_config(directory)
     require_supported(config, agent_user=agent_user, setup_timeout=setup_timeout)
     return config

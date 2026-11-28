@@ -232,8 +232,8 @@ the names, never the values.
 
 Omit `--local` to submit a disposable privileged Iris CPU worker. Shellbox's
 bubblewrap backend needs permission to create namespaces; local execution needs
-a host with the same support. Grader machines deny network access unless a
-scripted judge declares that capability. Choose a cluster near the corpora,
+a host with the same support. Grader machines deny network access unless the
+grader's environment declares the `network` capability. Choose a cluster near the corpora,
 results, and inference endpoint, and use shared storage roots for remote jobs.
 Use `python -m experiments.evaluation.task_driver --help` for worker resources,
 cluster selection, and pass limits.
