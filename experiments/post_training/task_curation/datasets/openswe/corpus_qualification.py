@@ -27,13 +27,11 @@ import shutil
 from pathlib import Path
 
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.task_curation.datasets.openswe import convert
-from experiments.post_training.task_curation.datasets.openswe import grader_repair
-from experiments.post_training.task_curation.datasets.openswe import bases
+from experiments.post_training.task_curation.datasets.openswe import bases, convert, grader_repair
 from experiments.post_training.task_curation.datasets.openswe.fidelity_gate import (
     ARM_CONDENSED,
+    STAGED_FILES,
     ArmRecord,
     FidelityExclusion,
     TaskRecord,
@@ -60,8 +58,6 @@ def condensed_context(
         raise FidelityExclusion(f"converter_{excluded.reason}", excluded.detail) from excluded
     staged_dir = scratch / "staged"
     staged_dir.mkdir(parents=True, exist_ok=True)
-    from experiments.post_training.task_curation.datasets.openswe.fidelity_gate import STAGED_FILES
-
     for name in STAGED_FILES:
         (staged_dir / name.replace("/", "_")).write_bytes(files[name])
     condensed_text = files["environment/Dockerfile"].decode()
@@ -81,10 +77,15 @@ def decide_condensed(instance_id: str, base: str, arm) -> TaskRecord:
         return TaskRecord(instance_id, base, "excluded", arm.failure_reason, arm.failure_detail, {"condensed": arm})
     if arm.noop is None or arm.oracle is None:
         return TaskRecord(
-            instance_id, base, "excluded", "condensed_control_missing", "the arm ran no complete control", {"condensed": arm}
+            instance_id,
+            base,
+            "excluded",
+            "condensed_control_missing",
+            "the arm ran no complete control",
+            {"condensed": arm},
         )
     if arm.noop.reward != 0:
-        detail = f"condensed no-op scored {arm.noop.reward}; output tail: {arm.noop.output_tail[-600:]}"
+        detail = f"condensed no-op scored {arm.noop.reward}; tail: {arm.noop.output_tail[-600:]}"
         return TaskRecord(instance_id, base, "excluded", "condensed_noop_mismatch", detail, {"condensed": arm})
     if arm.oracle.reward != 1:
         detail = f"condensed oracle scored {arm.oracle.reward}; output tail: {arm.oracle.output_tail[-600:]}"
@@ -264,7 +265,9 @@ def main() -> None:
         action="store_true",
         help="Run the plumbing end to end against the stubbed sandbox factory (no Daytona account).",
     )
-    parser.add_argument("--limit", type=int, help="Qualify only the first N population rows (the stubbed end-to-end run).")
+    parser.add_argument(
+        "--limit", type=int, help="Qualify only the first N population rows (the stubbed end-to-end run)."
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
@@ -273,7 +276,9 @@ def main() -> None:
     else:
         api_key = os.environ.get("DAYTONA_API_KEY")
         if not api_key:
-            raise SystemExit("the qualification runs on Daytona: set DAYTONA_API_KEY (the eval account) before launching")
+            raise SystemExit(
+                "the qualification runs on Daytona: set DAYTONA_API_KEY (the eval account) before launching"
+            )
     configure_coreweave_s3()
     from experiments.post_training.task_curation.datasets.openswe.fidelity_gate import (  # noqa: PLC0415
         DaytonaDeclarativeMachineFactory,
