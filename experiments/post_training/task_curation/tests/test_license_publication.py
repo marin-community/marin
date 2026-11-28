@@ -23,7 +23,7 @@ from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation import license_publication, license_resolution, native_quick
 from experiments.post_training.task_curation.license_resolution import license_evidence
-from infra.marina.apps.rl_data_catalog.server import licensing
+from infra.marina.apps.rl_data_catalog.server import license_registry, licensing
 
 DATASET = "fixture/upstream"
 REVISION = "a" * 40
@@ -856,6 +856,102 @@ def test_licensed_population_refuses_a_registry_ban_at_a_revision(tmp_path, monk
     monkeypatch.setattr(license_publication, "read_license_receipts", lambda index_path: {ingest.source_id: ingest})
     with pytest.raises(ValueError, match="Recorded source ban"):
         license_publication.check_publication(ingest.source_id, "open-athena/fixture-population", "e" * 40, "train")
+
+
+KEEP_ONLY_DATASET = "open-athena/openswe-oss-keep-only-20261126a"
+KEEP_ONLY_REVISION = "20a87df9d9baddf70572d7f0d236b31e46e1384"
+OPENSWE_UPSTREAM_REVISION = "a8db93af5335df2c8baac0cd1ff367e4d475d3d7"
+
+
+def openswe_keep_only_receipt(source_id="TaskTrove:GAIR__OpenSWE__openswe_oss"):
+    """The repaired-publication receipt shape: pinned at the keep-only release with
+    upstream GAIR/OpenSWE@a8db93af as the resolved source."""
+    return source_receipt(b"---\nlicense: other\n---\n").model_copy(
+        update={
+            "source_id": source_id,
+            "dataset_id": KEEP_ONLY_DATASET,
+            "revision": KEEP_ONLY_REVISION,
+            "resolved_source": LicenseSourcePin(
+                dataset_id="GAIR/OpenSWE",
+                revision=OPENSWE_UPSTREAM_REVISION,
+                url=f"https://huggingface.co/datasets/GAIR/OpenSWE/tree/{OPENSWE_UPSTREAM_REVISION}",
+                declaration=license_evidence(
+                    "https://example.test/keep-only", b"Keep-only release pin", "wrapper_source_pin"
+                ),
+            ),
+        }
+    )
+
+
+def record_openswe_ruling(monkeypatch):
+    """Carry the ruling-48 OpenSWE ban entries from the pinned registry data into the
+    isolated unit-test registry."""
+    registry = json.loads(license_registry.LICENSE_BANS)
+    entries = [
+        item
+        for item in registry["bans"]
+        if item["source_id"] in {"TaskTrove:GAIR__OpenSWE__openswe_oss", "TaskTrove:GAIR__OpenSWE__openswe_other"}
+    ]
+    monkeypatch.setattr(licensing, "LICENSE_BANS", json.dumps({"version": registry["version"], "bans": entries}))
+    licensing.license_bans.cache_clear()
+    ban = licensing.license_bans()["TaskTrove:GAIR__OpenSWE__openswe_oss"]
+    assert ban.upstream_id == "GAIR/OpenSWE"
+    assert ban.exception is not None and ban.exception.use == "train"
+    return ban
+
+
+def test_openswe_keep_only_release_pin_publishes_for_train_use(monkeypatch):
+    """Ruling 48 (2026-11-27): OpenSWE ships only as the keep-only permissive release,
+    for training use, with upstream GAIR/OpenSWE@a8db93af as the resolved source."""
+    record_openswe_ruling(monkeypatch)
+    receipt = openswe_keep_only_receipt()
+    ban = licensing.source_license_ban(receipt.source_id, receipt.dataset_id, receipt, "train")
+    assert ban is None
+    licensing.require_unbanned(receipt.source_id, receipt.dataset_id, receipt, "train")
+
+
+def test_openswe_ban_stays_without_the_sanctioned_pin_or_use(monkeypatch):
+    """Every OpenSWE pin outside ruling 48 stays banned: a bare keep-only wrapper pin,
+    a different upstream revision, a non-train use, the sibling openswe_other source,
+    and any other source pinned into GAIR/OpenSWE."""
+    record_openswe_ruling(monkeypatch)
+
+    def refused(receipt, source_id, use):
+        with pytest.raises(ValueError, match="License banned"):
+            licensing.require_unbanned(source_id, receipt.dataset_id, receipt, use)
+
+    # A bare keep-only pin without the resolved upstream cannot claim the exception.
+    refused(
+        openswe_keep_only_receipt().model_copy(update={"resolved_source": None}),
+        "TaskTrove:GAIR__OpenSWE__openswe_oss",
+        "train",
+    )
+    # A different upstream revision stays banned.
+    stale = LicenseSourcePin(
+        dataset_id="GAIR/OpenSWE",
+        revision="dc6df1f3f949439ad1fdd27ffa034a913184405c",
+        url="https://huggingface.co/datasets/GAIR/OpenSWE/tree/dc6df1f3f949439ad1fdd27ffa034a913184405c",
+        declaration=license_evidence("https://example.test/stale", b"Stale upstream pin", "wrapper_source_pin"),
+    )
+    refused(
+        openswe_keep_only_receipt().model_copy(update={"resolved_source": stale}),
+        "TaskTrove:GAIR__OpenSWE__openswe_oss",
+        "train",
+    )
+    # A non-train use stays banned.
+    refused(openswe_keep_only_receipt(), "TaskTrove:GAIR__OpenSWE__openswe_oss", "publish")
+    # The sibling openswe_other source carries no exception.
+    refused(
+        openswe_keep_only_receipt("TaskTrove:GAIR__OpenSWE__openswe_other"),
+        "TaskTrove:GAIR__OpenSWE__openswe_other",
+        "train",
+    )
+    # The exception is source-scoped: another source pinned at GAIR/OpenSWE is
+    # banned by the upstream-dataset fallback.
+    upstream_receipt = source_receipt(b"---\nlicense: other\n---\n").model_copy(
+        update={"dataset_id": "GAIR/OpenSWE", "revision": OPENSWE_UPSTREAM_REVISION}
+    )
+    refused(upstream_receipt, "fixture:other-source", "train")
 
 
 def test_private_publication_reuse_refuses_another_declared_pin(tmp_path, monkeypatch):

@@ -248,9 +248,10 @@ def test_hardmath_exception_admits_exactly_this_source_and_scope(monkeypatch):
         registry = json.loads(license_registry.LICENSE_BANS)
         exceptions = [ban for ban in registry["bans"] if ban.get("exception")]
         # The 2026-11-26 option-(a) ruling adds the pafitis:hardmath@rhs variant row; this row
-        # stays the base identity's exception.
-        assert len(exceptions) == 2 and exceptions[0]["source_id"] == source_id
-        exception = exceptions[0]["exception"]
+        # stays the base identity's exception. Ruling 48 (2026-11-27) adds the TaskTrove
+        # OpenSWE keep-only exception, so the recorded census is three.
+        assert len(exceptions) == 3
+        exception = next(ban["exception"] for ban in exceptions if ban["source_id"] == source_id)
         assert exception["upstream_revision"] == revision
         assert exception["use"] == "train"
         assert exception["receipt_sha256"] == ("fe67508421dd34ee42d5dbb92926320697d211a173981fa98c331c043565b2ef")
@@ -310,7 +311,9 @@ def test_hardmath_rhs_variant_exception_admits_the_declared_pin_and_scopes_exact
     try:
         registry = json.loads(license_registry.LICENSE_BANS)
         exceptions = [ban for ban in registry["bans"] if ban.get("exception")]
-        assert len(exceptions) == 2
+        # Ruling 48 (2026-11-27) adds the TaskTrove OpenSWE keep-only exception, so the
+        # recorded census is three.
+        assert len(exceptions) == 3
         variant_row = next(ban for ban in exceptions if ban["source_id"] == variant_id)
         assert variant_row["upstream_id"] == upstream
         assert variant_row["exception"]["use"] == "train"
