@@ -26,3 +26,5 @@ serve:
 agent:
   agent_kwargs:
     thinking_format: chat-template
+    # The card: agent loops must pass reasoning_content back; dropping it degrades multi-step performance.
+    interleaved_thinking: true
