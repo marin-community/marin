@@ -115,10 +115,11 @@ trials:
   step_time_change: +4%
 potential:
   score: 7
-  rationale: −0.0156 d512, −0.0142 d768, −0.0104 d1280 at equal steps; d1024 still running; no equal-time or hero-mfu → 7
+  rationale: −0.0104 to −0.0156 on all 4 ladder rungs at equal steps (d1024 −0.0131); equal-time speedrun and hero-mfu not
+    run → 7
   model: claude-opus-5-5
-  date: '2026-11-27'
-  inputs_digest: 5937bc67adea
+  date: '2026-11-28'
+  inputs_digest: 0d71456c85ae
 projection:
   delta: -0.0059
   multiplier: 1.141
