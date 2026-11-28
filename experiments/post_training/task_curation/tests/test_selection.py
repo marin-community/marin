@@ -1040,7 +1040,7 @@ def test_eval_lite_publication_preserves_untouched_strata_and_joins_initializer_
         prompt = task.context.events[0].content
         assert "EXAMPLE_SENTINEL" not in prompt
         if benchmark == "mmlu":
-            target = original.context.events[0].content.rsplit("Question:\n", 1)[1]
+            target = original.context.events[-1].content.rsplit("Question:\n", 1)[1]
             assert "Question:\n" + target in prompt
         else:
             evidence = source_evidence(original)
