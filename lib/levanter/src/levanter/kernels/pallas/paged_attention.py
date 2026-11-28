@@ -79,7 +79,8 @@ def tpu_paged_attention(
     )
     metadata = (
         jnp.maximum(kv_lens, 0),
-        jnp.maximum(page_indices, 0),
+        # Expired window pages can carry an out-of-range sentinel.
+        jnp.where((page_indices >= 0) & (page_indices < kv_pages.shape[0]), page_indices, 0),
         cu_q_lens,
         jnp.maximum(num_seqs, 0).reshape(1),
     )
