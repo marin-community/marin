@@ -451,6 +451,66 @@ def test_verified_copy_s3_head_metadata_preserves_copy_and_detects_overwrite(
     assert (destination / "weights.bin").read_bytes() == b"first!!"
 
 
+def _route_versioned_source(monkeypatch, source: Path, head_version):
+    """Serve *source* as an S3-like source listed at ``version-1`` whose ``info`` reports *head_version*()."""
+    source_filesystem, source_path = verified_copy_module.filesystem_for(str(source))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    def object_info(path, version):
+        info = source_filesystem.info(path)
+        return {"name": path, "size": info["size"], "type": info["type"], "VersionId": version}
+
+    class VersionedSource:
+        def __getattr__(self, name):
+            return getattr(source_filesystem, name)
+
+        def find(self, path, *, detail):
+            return {name: object_info(name, "version-1") for name in source_filesystem.find(path)}
+
+        def info(self, path):
+            return object_info(path, head_version())
+
+    versioned_source = VersionedSource()
+
+    def route(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(source):
+            return versioned_source, source_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", route)
+    return versioned_source, source_path
+
+
+def test_verified_copy_names_the_full_source_path_when_the_source_changes_mid_copy(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"first!!")
+    _, source_path = _route_versioned_source(monkeypatch, source, lambda: "version-2")
+
+    with pytest.raises(VerifiedCopyError) as raised:
+        verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert str(raised.value) == f"source identity changed while copying {source_path}/weights.bin"
+    assert not (destination / "weights.bin").exists()
+
+
+def test_verified_copy_rechecks_the_source_past_a_cached_info(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"first!!")
+    # The cache still holds the listed version until the copy invalidates it.
+    cached = {"version": "version-1"}
+    versioned_source, _ = _route_versioned_source(monkeypatch, source, lambda: cached.get("version", "version-2"))
+    monkeypatch.setattr(versioned_source, "invalidate_cache", lambda path=None: cached.clear(), raising=False)
+
+    with pytest.raises(VerifiedCopyError, match="source identity changed while copying"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert not (destination / "weights.bin").exists()
+
+
 def test_verified_copy_identityless_source_rereads_content_on_completion(tmp_path, monkeypatch):
     source = tmp_path / "source"
     destination = tmp_path / "destination"
