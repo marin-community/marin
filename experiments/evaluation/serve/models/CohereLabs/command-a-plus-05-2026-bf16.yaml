@@ -1,6 +1,8 @@
 # Command A+ (05-2026): multimodal model, 438 GB bf16, 128k input context, served text-only on the
 # model card's 4x B200 TP4 layout, here on GB200. vLLM's Command 4 parsers require the cohere-melody
 # package. Reasoning is on by default and the template turns it off only for reasoning_effort none.
+# The model numbers its tool calls from 0 in every turn, so the cohere_command4 tool parser's IDs repeat
+# across turns; the cohere_command4_unique_ids plugin parser serves the same parser with minted IDs.
 name: command-a-plus-05-2026-bf16
 location: CohereLabs/command-a-plus-05-2026-bf16
 revision: 5fb6fde5fd12ff89356aae552e11883bc49f069b
@@ -16,11 +18,13 @@ serve:
   max_model_len: 73728
   limit_mm_per_prompt: '{"image":0,"video":0}'
   reasoning_parser: cohere_command4
-  tool_call_parser: cohere_command4
+  tool_call_parser: cohere_command4_unique_ids
   vllm_plugin_requirements:
   - cohere-melody==0.15.3
   vllm_extra_args:
   - --enable-prefix-caching
+  - --tool-parser-plugin
+  - experiments/evaluation/serve/vllm_plugins/cohere_command4_unique_ids.py
 agent:
   agent_kwargs:
     thinking_format: chat-template
