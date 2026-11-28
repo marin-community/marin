@@ -354,6 +354,7 @@ user_budgets:
       - morrisy
       - loom
       - karan
+      - chrismcconnell
     budget_limit: 75000
     max_band: PRIORITY_BAND_INTERACTIVE
   # Capped at PRIORITY_BAND_BATCH; higher-band submissions are rejected.
