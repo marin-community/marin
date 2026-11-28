@@ -188,6 +188,7 @@ def main() -> None:
                         "review_artifact": result.path,
                         "result": result.result.model_dump(mode="json"),
                         "serving_jobs": endpoint.job_ids,
+                        "reviewer_version": SAMPLE_REVIEWER_VERSION.value,
                         "qualification_status": "pending",
                     },
                     indent=2,

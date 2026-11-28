@@ -66,11 +66,13 @@ class ReviewerVersion(StrEnum):
     V2 = "v2"
     V3 = "v3"
     V4 = "v4"
+    V5 = "v5"
 
 
-SAMPLE_REVIEWER_VERSION = ReviewerVersion.V4
+SAMPLE_REVIEWER_VERSION = ReviewerVersion.V5
 """The pinned default SAMPLE reviewer profile for new campaigns (user ruling
-2026-11-19: V4 = V3 with max_tokens 16384; V3 receipts stay untouched)."""
+2026-11-28: V5 = V4 with max_tokens 32768 and retry_max_tokens 32768; V4/V3
+receipts stay untouched)."""
 
 
 LONG_REQUEST_TIMEOUT = 1200
@@ -78,6 +80,7 @@ REVIEW_REQUEST_TIMEOUTS = {
     ReviewerVersion.V2: 300,
     ReviewerVersion.V3: LONG_REQUEST_TIMEOUT,
     ReviewerVersion.V4: LONG_REQUEST_TIMEOUT,
+    ReviewerVersion.V5: LONG_REQUEST_TIMEOUT,
 }
 
 
@@ -124,9 +127,10 @@ class ReadyChatReviewer:
         return self._reviewer(current).review(tasks, rubric, originals=originals, cached=cached)
 
 
-SAMPLE_REVIEWER_VERSION = ReviewerVersion.V4
+SAMPLE_REVIEWER_VERSION = ReviewerVersion.V5
 """The pinned default SAMPLE reviewer profile for new campaigns (user ruling
-2026-11-19: V4 = V3 with max_tokens 16384; V3 receipts stay untouched)."""
+2026-11-28: V5 = V4 with max_tokens 32768 and retry_max_tokens 32768; V4/V3
+receipts stay untouched)."""
 
 QUALIFICATION_TASK = TaskSpec(
     id="sample-profile-qualification",
@@ -185,6 +189,13 @@ def _local_endpoint(model_config: Path, context_window_tokens: int) -> LocalJudg
 
 
 def local_reviewer(version: ReviewerVersion, *, payload_revision: str = REVIEW_PAYLOAD_REVISION) -> ReviewerSpec:
+    if version is ReviewerVersion.V5:
+        # User ruling 2026-11-28: V5 is V4 with max_tokens 32768 and
+        # retry_max_tokens 32768, everything else identical - the V4 canary
+        # truncates its structured response on 08a/GB200 (two lanes), and the
+        # completion needs double the budget to conclude.
+        v4 = local_reviewer(ReviewerVersion.V4, payload_revision=payload_revision)
+        return replace(v4, max_tokens=32768, retry_max_tokens=32768)
     if version is ReviewerVersion.V4:
         # User ruling 2026-11-19: V4 is V3 with max_tokens 16384, everything
         # else identical, so long-fixture reviews stop truncating. V4 is the
