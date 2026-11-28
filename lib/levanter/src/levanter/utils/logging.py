@@ -23,12 +23,16 @@ def init_logging(log_dir: Union[str, Path], run_id: str, level: int = pylogging.
     which is useful for post-hoc debugging of distributed runs.
 
     :param log_dir: Directory for writing the log file
-    :param run_id: Used as the log file basename
+    :param run_id: Prefix for ``<run_id>.log`` in single-process runs and
+        ``<run_id>.p<index>.log`` in multi-process runs.
     :param level: Default logging level
     """
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
-    path = log_dir / f"{run_id}.log"
+    if jax.process_count() > 1:
+        path = log_dir / f"{run_id}.p{jax.process_index()}.log"
+    else:
+        path = log_dir / f"{run_id}.log"
 
     # Set up iris logging (stderr handler + ring buffer).
     iris_logging.configure_logging(level)
