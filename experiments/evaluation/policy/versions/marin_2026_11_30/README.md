@@ -33,8 +33,41 @@ baseline's checkpoint declares (Muse Glimmer 30B and Granite 4.2 30B declare exa
 
 Solar Open 2 is not a baseline: vLLM supports it only through an unmerged upstream PR or Upstage's own fork.
 
-Models whose templates cannot turn reasoning off run thinking-off benchmarks at their lowest reasoning setting
-(`show`'s `think` column). Trinity Large Thinking always reasons.
+## Reasoning settings
+
+Each baseline runs thinking-on, agent and Pi evaluations at the reasoning setting its developer reports its own
+benchmarks at, which is its template default except where noted. Level names are not comparable across models
+("high" is effort 75 of 100 for DeepSeek, 128 of 512 for Beam, 0.9 for Inkling), so the policy does not pin one shared
+level.
+
+| Model | Thinking-on, agent and Pi evaluations | Thinking-off evaluations |
+| --- | --- | --- |
+| Marin Snowball v0.1 | `/think` (default) | `/nothink`, which the model often ignores |
+| Muse Glimmer 30B | reasoning strength high (default) | reasoning strength low |
+| Nemotron 3.5 Super VL | thinking (default) | thinking off |
+| Qwen 3.8 27B | thinking (default) | thinking off |
+| Gemma 4 31B-it | thinking on | thinking off |
+| Granite 4.2 30B | thinking (default) | thinking off |
+| K2 Horizon | reasoning effort high (default) | reasoning effort low |
+| Command A+ | reasoning on (default) | reasoning effort none |
+| Mistral Large 4 | reasoning effort high (default) | reasoning effort low |
+| Trinity Large Thinking | always reasons | always reasons |
+| Beam 1.0 | reasoning effort max (default) | reasoning effort minimal |
+| Inkling 2 Small | reasoning effort high (default) | reasoning effort none |
+| GLM-5.3-Flash | reasoning effort max (default) | reasoning effort low |
+| DeepSeek V4.1 Flash | reasoning effort max, set by the catalog entry; the template defaults to high | thinking off |
+
+Trinity Large Thinking samples at its card's temperature 0.6, top_p 0.95 and top_k 50, which its catalog entry sets in
+place of the checkpoint's `generation_config.json`.
+
+## Reporting
+
+A report of this policy's results states, for each model, the reasoning setting in the table above. Thinking-off rows
+of models that cannot turn reasoning off (Glimmer, K2, Mistral, Trinity, Beam, GLM, and Snowball, which often ignores
+`/nothink`) are labelled with the setting they ran at, not as non-thinking. Each score is reported with the mean
+output tokens per item, so differences in reasoning compute stay visible. Reports name each agent evaluation's
+harness, and note that chat evaluations cap replies at 65,536 tokens, below the output budgets some developers
+report with.
 
 ## Evaluations
 
