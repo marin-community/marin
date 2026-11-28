@@ -19,6 +19,10 @@ serve:
   vllm_extra_args:
   - --enable-prefix-caching
   - --enable-expert-parallel
+  # The card recommends temperature 0.45-0.6, top_p 0.95, top_k 50; the checkpoint's generation_config.json sets
+  # 0.8/0.8, which vLLM would otherwise apply to requests that leave sampling unset.
+  - --override-generation-config
+  - '{"temperature":0.6,"top_p":0.95,"top_k":50}'
 agent:
   agent_kwargs:
     thinking_format: chat-template
