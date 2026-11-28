@@ -23,7 +23,13 @@ from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, R
 
 import experiments.evaluation.benchmarks.harbor as harbor_module
 import experiments.post_training.task_curation.harbor_packages as packages_module
-from experiments.evaluation.benchmarks.agentic import BIXBENCH, FINANCEAGENT
+from experiments.evaluation.benchmarks.agentic import (
+    BIXBENCH,
+    DS_1000_MINI_200,
+    DS_1000_RUN_NOTE,
+    FINANCEAGENT,
+    sources,
+)
 from experiments.evaluation.benchmarks.harbor import (
     NODE_VERSION,
     HarborConversion,
@@ -49,6 +55,8 @@ REVISION = "a" * 40
 BIXBENCH_PACKAGE = Path(__file__).parent / "fixtures" / "harbor" / "bixbench-bix-1-q1"
 # A FinanceAgent package of DCAgent/financeagent_terminal@86f788bc, with its environment's other tools left out.
 FINANCEAGENT_PACKAGE = Path(__file__).parent / "fixtures" / "harbor" / "financeagent-0"
+# DS-1000 package 3 of penfever/harbor-datasets@cedf53d7, with its environment and tests reduced to stubs.
+DS_1000_PACKAGE = Path(__file__).parent / "fixtures" / "harbor" / "ds1000-3"
 
 
 def write_package(directory: Path, config: str) -> None:
@@ -311,6 +319,26 @@ def test_financeagent_images_install_the_openai_sdk_in_place_of_litellm():
     assert [path for path, text in files.items() if "litellm" in text.lower()] == []
     assert "openai==" in files["Dockerfile"]
     assert "OpenAI(api_key=api_key).chat.completions.create(" in files["retrieve_information.py"]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [source for source in sources() if source.info.upstream_dataset == DS_1000_MINI_200.recipe],
+    ids=lambda source: source.config.protocol_name,
+)
+def test_ds_1000_instructions_keep_the_prompt_and_end_with_how_the_solution_runs(source):
+    row = RawRow(
+        "tasks/3.tar.gz:0",
+        Source(dataset="ds-1000", revision=REVISION, row="tasks/3.tar.gz:0", importer_revision="1"),
+        {"name": "3", "archive": package_archive(DS_1000_PACKAGE)},
+    )
+
+    task = source.config.recipe.convert(row, ConversionContext({}, None))
+
+    assert isinstance(task, TaskSpec)
+    (message,) = task.context.events
+    assert message.content.startswith((DS_1000_PACKAGE / "instruction.md").read_text())
+    assert message.content.endswith(f"\n\n## How your file is run\n{DS_1000_RUN_NOTE}\n")
 
 
 @pytest.mark.parametrize("text", ["absent", "twice"])
