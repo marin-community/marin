@@ -13,6 +13,7 @@ from requests import HTTPError
 from experiments.post_training.task_curation import license_check, license_resolution
 from experiments.post_training.task_curation.license_targets import LicenseTarget, license_evidence
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license, openmdw_license_text
+from experiments.post_training.task_curation.tests.license_publication_fixtures import isolated_rulings
 from infra.marina.apps.rl_data_catalog.server import licensing
 
 PINNED_CASES = json.loads(Path(__file__).with_name("fixtures").joinpath("license_checks.json").read_text())
