@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
+
 import equinox as eqx
 import haliax as hax
 import jax
@@ -17,7 +19,7 @@ from levanter.utils.mesh import create_mesh_from_axis_specs
 
 
 class DummyModel(eqx.Module):
-    """Minimal model stub to drive GenerationService for tests.
+    """Minimal model stub to drive InferenceEngine for tests.
 
     - `initial_cache` returns an empty KvPageCache sized to the page-table spec.
     - `decode` returns constant logits that strongly prefer token `EOS`.
@@ -112,3 +114,137 @@ def test_generate_decodes_through_short_context_limit(max_rounds):
         params = SeqDecodingParams.default()
         result = engine.generate([Request([1], request_id=0, decode_params=params, n_generations=1)])
     assert result.tokens == [[3] * 9]
+
+
+def test_generate_admits_waiting_requests_with_reused_pages():
+    output_lengths = (1, 5, 2, 4, 3)
+    mesh = create_mesh_from_axis_specs(ici_axes={"model": jax.device_count()}, dcn_axes={})
+    with hax.partitioning.set_mesh(mesh):
+        engine = InferenceEngine.from_model_with_config(
+            model=DummyModel(vocab_size=10),  # type: ignore
+            tokenizer=None,
+            config=InferenceEngineConfig(
+                max_seq_len=8,
+                max_pages=4,
+                page_size=4,
+                max_rounds=2,
+                max_seqs=2,
+                max_seqs_in_prefill=1,
+                max_queued_tokens=4,
+                max_prefill_size=4,
+            ),
+        )
+        requests = [
+            Request(
+                [1, 2, 4],
+                request_id=i,
+                decode_params=replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(3 + length)),
+                n_generations=1,
+            )
+            for i, length in enumerate(output_lengths)
+        ]
+        result = engine.generate(requests)
+
+    assert result.tokens == [[3] * length for length in output_lengths]
+    assert result.total_generated == sum(output_lengths)
+
+
+def test_generate_waits_for_kv_pages_when_a_slot_is_free():
+    mesh = create_mesh_from_axis_specs(ici_axes={"model": jax.device_count()}, dcn_axes={})
+    with hax.partitioning.set_mesh(mesh):
+        engine = InferenceEngine.from_model_with_config(
+            model=DummyModel(vocab_size=10),  # type: ignore
+            tokenizer=None,
+            config=InferenceEngineConfig(
+                max_seq_len=8,
+                max_pages=3,
+                page_size=4,
+                max_rounds=1,
+                max_seqs=2,
+                max_seqs_in_prefill=2,
+                max_queued_tokens=4,
+                max_prefill_size=6,
+            ),
+        )
+        requests = [
+            Request(
+                prompt,
+                request_id=i,
+                decode_params=replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(len(prompt) + length)),
+                n_generations=1,
+            )
+            for i, (prompt, length) in enumerate([([1, 2, 4, 5, 6], 3), ([1], 1), ([1, 2, 4, 5, 6], 1)])
+        ]
+        result = engine.generate(requests)
+
+    assert result.tokens == [[3, 3, 3], [3], [3]]
+
+
+def test_generate_reserves_pages_needed_during_decode():
+    mesh = create_mesh_from_axis_specs(ici_axes={"model": jax.device_count()}, dcn_axes={})
+    with hax.partitioning.set_mesh(mesh):
+        engine = InferenceEngine.from_model_with_config(
+            model=DummyModel(vocab_size=10),  # type: ignore
+            tokenizer=None,
+            config=InferenceEngineConfig(
+                max_seq_len=8,
+                max_pages=3,
+                page_size=4,
+                max_rounds=1,
+                max_seqs=2,
+                max_seqs_in_prefill=2,
+                max_queued_tokens=4,
+                max_prefill_size=6,
+            ),
+        )
+        params = replace(SeqDecodingParams.default(), max_num_tokens=jnp.int32(8))
+        requests = [Request([1, 2, 4], request_id=i, decode_params=params, n_generations=1) for i in range(2)]
+        result = engine.generate(requests)
+
+    assert result.tokens == [[3] * 5, [3] * 5]
+
+
+class EarlyStopCloneModel(DummyModel):
+    def decode(self, input_ids, kv_cache, batch_info, pos_ids):
+        position = input_ids.resolve_axis("position")
+        # Only the prompt's final token offers a choice between continuing and stopping.
+        logits = jnp.where(
+            input_ids.array[:, None] == 2,
+            jnp.array([0.0, 0.0, -jnp.inf]),
+            jnp.array([0.0, -jnp.inf, -jnp.inf]),
+        )
+        return hax.named(logits, (position, self.Vocab)), kv_cache
+
+
+def test_generate_reuses_kv_reservation_when_one_choice_stops():
+    mesh = create_mesh_from_axis_specs(ici_axes={"model": jax.device_count()}, dcn_axes={})
+    with hax.partitioning.set_mesh(mesh):
+        engine = InferenceEngine.from_model_with_config(
+            model=EarlyStopCloneModel(vocab_size=3),  # type: ignore
+            tokenizer=None,
+            config=InferenceEngineConfig(
+                max_seq_len=8,
+                max_pages=4,
+                page_size=4,
+                max_rounds=1,
+                max_seqs=2,
+                max_seqs_in_prefill=2,
+                max_queued_tokens=4,
+                max_prefill_size=8,
+            ),
+        )
+        params = replace(SeqDecodingParams.default(), max_num_tokens=jnp.int32(8))
+        cloned_params = replace(
+            params,
+            temperature=jnp.float32(1),
+            stop_tokens=hax.named(jnp.array([[1]], dtype=jnp.int32), ("stop_seq", "position")),
+        )
+        requests = [
+            Request([0, 0, 0, 2], request_id=0, decode_params=cloned_params, n_generations=2),
+            Request([0, 0, 0, 0], request_id=1, decode_params=params, n_generations=1),
+        ]
+        rounds = []
+        result = engine.generate(requests, step_callback=rounds.append)
+
+    assert result.tokens == [[1], [0] * 4, [0] * 4]
+    assert rounds == [0, 1, 2]

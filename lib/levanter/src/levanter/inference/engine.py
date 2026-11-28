@@ -6,6 +6,7 @@ import functools
 import logging
 import os
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
@@ -40,6 +41,8 @@ from levanter.models.lm_model import LmHeadModel
 from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_size
 
 logger = logging.getLogger(__name__)
+
+_release_finished_slots = jax.jit(DecodeState.free_pages_for_finished, donate_argnums=0)
 
 
 @dataclass(frozen=True)
@@ -233,6 +236,22 @@ def _infer_max_pages_from_hbm(
     )
 
     return max_pages
+
+
+@dataclass(frozen=True)
+class _KvPageReservation:
+    """Budget the KV pages a request can need before the scheduler admits it.
+
+    The request reserves full prompt pages once while any choice is active. Each
+    live choice budgets its own partial prompt page, if any, and its continuation
+    pages through the decode limit. A finished choice gives back its private budget.
+    """
+
+    shared: int
+    per_choice: int
+
+    def total(self, choices: int) -> int:
+        return self.shared + choices * self.per_choice
 
 
 @dataclass(frozen=True)
@@ -911,13 +930,18 @@ class InferenceEngine:
         """Score a token sequence under this engine's model."""
         return score_token_sequence_logprobs(self.model, token_ids, top_k)
 
-    def _prefill_batch(self, batch: Sequence[Request]) -> _DecodeOutputs | None:
-        """Admit a batch from the head of the queue that fits in free slots/pages.
+    def _prefill_batch(
+        self, batch: Sequence[Request], page_requirements: dict[int, _KvPageReservation]
+    ) -> _DecodeOutputs | None:
+        """Prefill the leading requests that fit the token, slot, and page budgets.
 
-        Returns the decode outputs for the admitted prefill batch, or None if no work was admitted.
+        `page_requirements` maps each active or queued request ID to its shared and
+        per-choice KV reservation.
+
+        Returns the prefill decode outputs, or None when no request fits.
         """
         # Build a single PrefillWork description and run prefill exactly once
-        prefill_work = self._prefill_prompts(batch)
+        prefill_work = self._prefill_prompts(batch, page_requirements)
         if prefill_work is None:
             return None
         new_state = _run_prefill(
@@ -928,17 +952,26 @@ class InferenceEngine:
         self.gen_state, outputs = new_state
         return outputs
 
-    def _prefill_prompts(
-        self,
-        requests: Sequence[Request],
-    ) -> PrefillWork | None:
-        """Pack prompt work into a single PrefillWork structure for downstream device execution."""
+    def _kv_page_reservation(self, request: Request) -> _KvPageReservation:
+        page_size = self.config.page_size
+        shared_pages = len(request.prompt_tokens) // page_size
+        # The final sampled token is returned without being written to the KV cache.
+        max_tokens = min(int(request.decode_params.max_num_tokens), self.config.max_seq_len)
+        kv_token_count = max(len(request.prompt_tokens), max_tokens - 1)
+        pages_per_choice = (kv_token_count + page_size - 1) // page_size
+        return _KvPageReservation(shared_pages, pages_per_choice - shared_pages)
 
+    def _prefill_prompts(
+        self, requests: Sequence[Request], page_requirements: dict[int, _KvPageReservation]
+    ) -> PrefillWork | None:
         decode_state = self.gen_state.decode_state
         max_seqs_in_prefill = self.config.max_seqs_in_prefill
         max_prefill_size = self.config.max_prefill_size or self.model.Pos.size
         max_seq_len = decode_state.tokens.axis_size("position")
         max_slots = decode_state.max_seqs
+        active_choices = Counter(request_id for request_id, _ in self.local_map.values())
+        reserved_pages = sum(page_requirements[rid].total(choices) for rid, choices in active_choices.items())
+        available_pages = decode_state.page_table.num_pages - reserved_pages
 
         queue_tokens = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
         queue_slot_ids = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
@@ -978,14 +1011,10 @@ class InferenceEngine:
             if len(seq_tokens) + offset > queue_tokens.shape[0] or num_primary >= max_seqs_in_prefill:
                 break
 
-            if len(self.free_slots) < request.n_generations:
-                if max_seqs_in_prefill < request.n_generations:
-                    raise RuntimeError(
-                        f"Request {request.request_id} asked for {request.n_generations} generations, "
-                        f"but max_seqs_in_prefill={max_seqs_in_prefill} is too small to accommodate. "
-                        "Increase max_seqs_in_prefill or reduce n_generations."
-                    )
+            required_pages = page_requirements[request.request_id].total(request.n_generations)
+            if len(self.free_slots) < request.n_generations or required_pages > available_pages:
                 break
+            available_pages -= required_pages
 
             requested_slot = self.free_slots.pop()
             slot_id = int(requested_slot)
@@ -1086,26 +1115,41 @@ class InferenceEngine:
             ),
         )
 
+    def _validate_generation_requests(self, requests: Sequence[Request]) -> None:
+        if len({request.request_id for request in requests}) != len(requests):
+            raise ValueError("Request IDs must be unique within a generation batch")
+        max_prefill = self.config.max_prefill_size or self.model.Pos.size
+        if any(not 0 < len(request.prompt_tokens) <= max_prefill for request in requests):
+            raise ValueError("Prompts must be nonempty and fit within max_prefill_size")
+        if any(len(request.prompt_tokens) >= self.config.max_seq_len for request in requests):
+            raise ValueError("Prompts must leave room for generation within max_seq_len")
+        if any(request.n_generations < 1 for request in requests):
+            raise ValueError("Every request must ask for at least one generation")
+
+        page_table = self.gen_state.decode_state.page_table
+        max_needed = max(int(r.n_generations) for r in requests)
+        if max_needed > page_table.max_seqs:
+            raise ValueError(
+                f"A request asks for {max_needed} generations, exceeding max_seqs ({page_table.max_seqs})."
+            )
+
     def generate(self, requests: Sequence[Request], step_callback=None) -> GenerationResult:
         """Generate tokens for a batch of Requests.
 
         Each Request provides prompt_tokens, decode_params, and n_generations (clones).
-        Returns (outputs_per_sequence, total_generated_tokens).
+        Returns a GenerationResult with choices in request order.
 
         Args:
             requests: Sequence of generation requests
             step_callback: Optional callback function called at each decode iteration with iteration number
         """
-        if any(len(request.prompt_tokens) >= self.config.max_seq_len for request in requests):
-            raise ValueError("Prompts must leave room for generation within max_seq_len")
-
-        # validate we don't have any sequences with n_generations exceeding max_seqs
-        max_needed = max(int(r.n_generations) for r in requests)
-        if max_needed > int(self.gen_state.decode_state.page_table.max_seqs):
-            raise ValueError(
-                f"Total sequences needed ({max_needed}) exceeds max_seqs ({self.gen_state.decode_state.page_table.max_seqs})."
-                "Decompose your request into smaller batches or increase max_seqs when building the service."
-            )
+        if not requests:
+            return GenerationResult(tokens=[], logprobs=[], total_generated=0)
+        self._validate_generation_requests(requests)
+        page_requirements = {request.request_id: self._kv_page_reservation(request) for request in requests}
+        num_pages = self.gen_state.decode_state.page_table.num_pages
+        if any(page_requirements[req.request_id].total(req.n_generations) > num_pages for req in requests):
+            raise ValueError("A request and its choices must fit within the KV page table")
 
         # for now, reset the engine state between each batch - the engine cannot be called with
         # parallel batches.
@@ -1147,11 +1191,6 @@ class InferenceEngine:
                 )
 
         time_in = time.time()
-        # Initial admission from queue and extract prompt tokens
-        decode_outputs = self._prefill_batch(requests)
-        self._extract_outputs(decode_outputs)
-        initial_prefill_out = time.time()
-        logger.info(f"Initial prefill and extraction took {initial_prefill_out - time_in:.3f}s")
 
         def _all_done() -> bool:
             for rid, n_kids in expected_children.items():
@@ -1162,8 +1201,16 @@ class InferenceEngine:
                         return False
             return True
 
+        pending = list(requests)
         decode_iteration = 0
         while not _all_done():
+            if pending and self.free_slots:
+                prefill_outputs = self._prefill_batch(pending, page_requirements)
+                if prefill_outputs is not None:
+                    self._extract_outputs(prefill_outputs)
+                    pending = [request for request in pending if request.request_id not in self.sequences]
+                    continue
+
             # Call step callback if provided
             if step_callback is not None:
                 step_callback(decode_iteration)
@@ -1204,8 +1251,7 @@ class InferenceEngine:
             decode_iteration += 1
 
             if new_tokens == 0:
-                logger.warning("No progress in decoding with unfinished requests")
-                break
+                raise RuntimeError("Inference made no progress with unfinished requests")
 
         # Assemble outputs in the order of the requests for this call
         outputs_list: list[list[int]] = []
@@ -1328,7 +1374,8 @@ class InferenceEngine:
             dr.tokens_decoded += 1
             appended += 1
 
-        # Update done flags based on snapshot
+        # Finish outputs before releasing slots, so a new request can reuse them.
+        released_slots = []
         for local_slot, is_done in enumerate(fins):
             if not bool(is_done):
                 continue
@@ -1338,9 +1385,9 @@ class InferenceEngine:
             rid, cid = info
             dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
             dr.done = True
+            del self.local_map[local_slot]
+            released_slots.append(local_slot)
 
-            # Finished slots stay finished until they are released, so this runs on every drain: only
-            # detokenize the sequence when the debug log that consumes it is actually enabled.
             if logger.isEnabledFor(logging.DEBUG):
                 try:
                     full_text = self.tokenizer.decode(dr.token_list, skip_special_tokens=False)
@@ -1350,7 +1397,12 @@ class InferenceEngine:
                         f"[Request {rid}, Choice {cid}] FINAL ({dr.tokens_decoded} tokens): <decode_error: {e}>"
                     )
 
-        num_finished = int(fins.sum())
-        logger.debug(f"extract: appended={appended} (drained={n}) unmapped={unmapped} finished_count={num_finished}")
+        if released_slots:
+            decode_state = _release_finished_slots(self.gen_state.decode_state, jnp.asarray(fins))
+            self.gen_state = dataclasses.replace(self.gen_state, decode_state=decode_state)
+            self.free_slots.extend(released_slots)
+        logger.debug(
+            "extract: appended=%d (drained=%d) unmapped=%d finished=%d", appended, n, unmapped, len(released_slots)
+        )
 
         return appended
