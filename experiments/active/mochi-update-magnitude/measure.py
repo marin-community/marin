@@ -413,8 +413,12 @@ class HFSide:
         stacked = self._expected_stacked_shape(tensor)
         # Keep the per-layer slice tuple positional: for stacked tensors the
         # leading int selects the layer and the remaining slices apply to the
-        # Levanter per-layer dims in order.
+        # Levanter per-layer dims in order, padded with full slices so the
+        # reversal maps each band onto its own axis.
         per_layer_slices = req.slices[1:] if req.slices and isinstance(req.slices[0], int) else req.slices
+        if stacked is not None and len(stacked) > 1:
+            rank = len(stacked) - 1
+            per_layer_slices = tuple(per_layer_slices) + (slice(None),) * (rank - len(per_layer_slices))
         if req.layer is None and stacked is not None and len(stacked) > 1 and stacked[0] == 48:
             # Stacked tensor read whole: concatenate the per-layer HF tensors.
             per_layer = [self._read_one(tensor, layer, per_layer_slices) for layer in range(48)]
