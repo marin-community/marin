@@ -25,6 +25,7 @@ _COMPILE_FINGERPRINT_PREFIX = "iris/compile-fingerprint/v1"
 _EXECUTABLE_TEXT_PREFIX = "iris/compile-executable-hash/v1"
 _AUTOTUNE_COUNT_PREFIX = "iris/compile-autotune-count/v1"
 _EXECUTABLE_TEXT_FAILURE = "extraction_failed"
+_UNIMPLEMENTED_ERROR_PREFIX = "UNIMPLEMENTED"
 # Warn once per process even if JAX installs a new guard after distributed reset.
 _unsupported_text_warning_lock = threading.Lock()
 _unsupported_text_warned = False
@@ -93,7 +94,7 @@ def check_distributed_executable_text(
     extraction_error: Exception | None = None,
     timeout_ms: int = _COMPILE_FINGERPRINT_TIMEOUT_MS,
 ) -> None:
-    """Fail before execution if participating ranks compiled different optimized HLO."""
+    """Compare optimized HLO before execution when every rank exposes it."""
     group = "-".join(map(str, process_ids))
     prefix = f"{_EXECUTABLE_TEXT_PREFIX}/{group}/{sequence}/"
     text_sha256 = hashlib.sha256(executable_text.encode("utf-8")).hexdigest() if executable_text is not None else None
@@ -179,7 +180,7 @@ def _optimized_hlo_text(loaded: object, runtime_error_type: type[Exception]) -> 
         try:
             return get_hlo_text()
         except (NotImplementedError, runtime_error_type) as exc:
-            if not isinstance(exc, NotImplementedError) and not str(exc).startswith("UNIMPLEMENTED"):
+            if not isinstance(exc, NotImplementedError) and not str(exc).startswith(_UNIMPLEMENTED_ERROR_PREFIX):
                 raise
 
     hlo_modules = getattr(loaded, "hlo_modules", None)
@@ -187,12 +188,13 @@ def _optimized_hlo_text(loaded: object, runtime_error_type: type[Exception]) -> 
         try:
             return "\n\n".join(module.to_string() for module in hlo_modules())
         except (NotImplementedError, runtime_error_type) as exc:
-            if not isinstance(exc, NotImplementedError) and not str(exc).startswith("UNIMPLEMENTED"):
+            if not isinstance(exc, NotImplementedError) and not str(exc).startswith(_UNIMPLEMENTED_ERROR_PREFIX):
                 raise
     return None
 
 
 def _autotune_cache_file_count(autotune_dir: str) -> int | None:
+    """Count files, returning zero for a missing directory and None for scan errors."""
     if not autotune_dir:
         return 0
     try:
@@ -212,6 +214,7 @@ class _CompileGuardState:
     mutex: threading.Lock = field(default_factory=threading.Lock)
 
     def check(self, client: _Coordinator, process_ids: tuple[int, ...], process_id: int, fingerprint: str) -> int:
+        """Validate the fingerprint and return this group's compile sequence number."""
         with self.mutex:
             if client is not self.client:
                 self.client = client

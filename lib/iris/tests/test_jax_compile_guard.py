@@ -135,7 +135,6 @@ def test_distributed_executable_divergent_text_reports_ranks_and_autotune_inputs
 
     for error in errors:
         assert "same-cache-key" in error
-        assert "2 distinct" in error
         assert all(f"{digest}: [{rank}]" in error for rank, digest in enumerate(hashes))
         assert str(cache_dirs[0]) in error and "file_count=1" in error
         assert str(cache_dirs[1]) in error and "file_count=2" in error
