@@ -22,6 +22,7 @@ then adjudicates the residual classes behaviorally on its sample.
 """
 
 import hashlib
+import itertools
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -233,9 +234,7 @@ def classify_grader(row: OpenSweRow) -> GraderClassification:
         golden_paths = _diff_file_paths(golden)
         for site in unknown_sites:
             body = next(
-                block_body
-                for block_start, _, _, block_body in _heredoc_blocks(script)
-                if block_start == site.start
+                block_body for block_start, _, _, block_body in _heredoc_blocks(script) if block_start == site.start
             )
             if site.body_lines >= 4 and _diff_file_paths(body) & golden_paths:
                 classification.verdict = "unrepairable"
@@ -341,7 +340,7 @@ def repaired_script(row: OpenSweRow, classification: GraderClassification) -> st
             break
         excisions.append((cut_start, site.end))
     all_cuts = sorted([(start, end) for start, end in excisions] + [(start, end) for start, end, _ in replacements])
-    for (start, end), (next_start, next_end) in zip(all_cuts, all_cuts[1:]):
+    for (_start, end), (next_start, _next_end) in itertools.pairwise(all_cuts):
         if next_start < end:
             raise ValueError(f"overlapping repair cuts in {classification.instance_id}")
     # One descending pass: every cut's offsets are valid in the original bytes.

@@ -32,8 +32,7 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportRejection, RawRow
 
 from experiments.post_training.task_curation.datasets.native_harbor import native_task
-from experiments.post_training.task_curation.datasets.openswe import grader
-from experiments.post_training.task_curation.datasets.openswe import grader_repair
+from experiments.post_training.task_curation.datasets.openswe import grader, grader_repair
 from experiments.post_training.task_curation.datasets.openswe.dockerfile_translation import (
     DockerfileRejected,
     translate_dockerfile,
@@ -158,9 +157,11 @@ def package_files(
         raise OpenSweRowExcluded("dockerfile_rejected", str(error)) from error
     task_metadata_extra = None if grader_repair_note is None else grader_repair_note
     files = {
-        "task.toml": _task_toml(
-            row, translation.workdir, translation.base_group, translation.declared_bases, task_metadata_extra
-        ).encode(),
+        "task.toml": (
+            _task_toml(
+                row, translation.workdir, translation.base_group, translation.declared_bases, task_metadata_extra
+            ).encode()
+        ),
         "instruction.md": row.problem_statement.encode(),
         "environment/Dockerfile": translation.text.encode(),
         "tests/test.sh": grader.verifier_script(),
