@@ -25,7 +25,7 @@ uv run python scripts/iris/rollout_controllers.py smoke --cluster <name>
 (including `BUILDX_BUILDER`), registry-cache export support, GHCR push access for
 the configured image and cache repositories, SSH, Kubernetes context, and
 injected secrets. It starts and aborts an empty GHCR blob upload to verify each
-push grant. A `DENIED` or `UNVERIFIED` push result blocks the gate; `UNVERIFIED`
+push grant. Any failed push result blocks the gate. `UNVERIFIED`
 means the check could not prove write access, including when Docker has no usable
 GHCR credentials. Stop on every failure. A dirty/ahead/behind tree requires
 approval for that exact tree before this rerun; never add the flag automatically:

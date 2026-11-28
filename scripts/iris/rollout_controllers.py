@@ -29,8 +29,8 @@ from urllib.parse import urlencode, urlsplit
 
 import click
 import yaml
-from iris.cli.build import get_git_sha
-from iris.cli.cluster import KUBERNETES_WORKER_RUNTIME, _parse_ghcr_tag
+from iris.cli.build import get_git_sha, registry_cache_repository
+from iris.cli.cluster import _parse_ghcr_tag, cluster_image_builds
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, connect_controller, rpc_client
 from iris.client.client import IrisClient
 from iris.client.workload import JobStatus
@@ -139,6 +139,25 @@ class CheckResult:
     requirement: Requirement
     ok: bool
     detail: str
+
+
+@dataclass(frozen=True)
+class DockerCredential:
+    username: str
+    secret: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class RegistryResponse:
+    """GHCR response status, body, and optional upload Location header."""
+
+    status: int
+    body: bytes = field(repr=False)
+    location: str | None = field(repr=False)
+
+
+class RegistryProbeError(RuntimeError):
+    """A controlled, credential-free preflight failure message."""
 
 
 class HealthUnit(StrEnum):
@@ -388,17 +407,14 @@ def requirements(config: IrisClusterConfig, *, s3_env: Sequence[str] | None = No
         Requirement(Need.BUILDX_CACHE, "registry cache export", "the image build exports a registry cache"),
         Requirement(Need.COMMAND, "git", "the image tag is a hash of the working tree content"),
     ]
-    image_tags = [config.controller.image, config.defaults.worker.default_task_image]
-    if config.defaults.worker.runtime != KUBERNETES_WORKER_RUNTIME:
-        image_tags.append(config.defaults.worker.docker_image)
     repositories = set()
-    for tag in filter(None, image_tags):
-        parsed = _parse_ghcr_tag(tag)
+    for target in cluster_image_builds(config):
+        parsed = _parse_ghcr_tag(target.tag)
         if parsed is None:
-            needs.append(Requirement(Need.GHCR_PUSH, tag, "the configured image must be published to GHCR"))
+            needs.append(Requirement(Need.GHCR_PUSH, target.tag, "the configured image must be published to GHCR"))
             continue
         org, image, _ = parsed
-        repositories.update({f"{GHCR_HOST}/{org}/{image}", f"{GHCR_HOST}/{org}/iris-cache"})
+        repositories.update({f"{GHCR_HOST}/{org}/{image}", registry_cache_repository(org)})
     needs.extend(
         Requirement(Need.GHCR_PUSH, repository, "the image build pushes this image or registry cache")
         for repository in sorted(repositories)
@@ -523,9 +539,14 @@ def check_buildx_cache(requirement: Requirement, *, environ: Mapping[str, str]) 
             timeout=PROBE_TIMEOUT,
             env=environ,
         )
-        driver_status = json.loads(info.stdout) if info.returncode == 0 else []
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
-        driver_status = []
+    except (OSError, subprocess.TimeoutExpired):
+        return CheckResult(requirement, False, f"builder {builder}: could not read Docker image-store status")
+    if info.returncode:
+        return CheckResult(requirement, False, f"builder {builder}: docker info could not read image-store status")
+    try:
+        driver_status = json.loads(info.stdout)
+    except json.JSONDecodeError:
+        return CheckResult(requirement, False, f"builder {builder}: docker info returned invalid image-store status")
     if isinstance(driver_status, list) and ["driver-type", CONTAINERD_DRIVER_TYPE] in driver_status:
         return CheckResult(requirement, True, f"builder {builder} uses docker with the containerd image store")
     return CheckResult(
@@ -536,15 +557,24 @@ def check_buildx_cache(requirement: Requirement, *, environ: Mapping[str, str]) 
     )
 
 
-def _docker_ghcr_credentials(environ: Mapping[str, str]) -> tuple[str, str] | None:
+def _docker_ghcr_credentials(environ: Mapping[str, str]) -> DockerCredential:
     config_dir = Path(environ.get("DOCKER_CONFIG", str(Path(environ.get("HOME", "~")).expanduser() / ".docker")))
     config_path = config_dir / "config.json"
     if not config_path.is_file():
-        return None
+        raise RegistryProbeError("UNVERIFIED: Docker has no GHCR credentials; log in with write:packages")
     try:
         config = json.loads(config_path.read_text())
-        helper = config.get("credHelpers", {}).get(GHCR_HOST) or config.get("credsStore")
-        if helper:
+    except (OSError, json.JSONDecodeError):
+        raise RegistryProbeError("UNVERIFIED: Docker config could not be read") from None
+    if not isinstance(config, dict):
+        raise RegistryProbeError("UNVERIFIED: Docker config has an invalid format")
+
+    helpers = config.get("credHelpers") or {}
+    if not isinstance(helpers, dict):
+        raise RegistryProbeError("UNVERIFIED: Docker credential helpers have an invalid format")
+    helper = helpers.get(GHCR_HOST) or config.get("credsStore")
+    if helper:
+        try:
             result = subprocess.run(
                 [f"docker-credential-{helper}", "get"],
                 input=GHCR_HOST,
@@ -553,32 +583,91 @@ def _docker_ghcr_credentials(environ: Mapping[str, str]) -> tuple[str, str] | No
                 timeout=PROBE_TIMEOUT,
                 env=environ,
             )
-            if result.returncode:
-                return None
+        except FileNotFoundError:
+            raise RegistryProbeError("UNVERIFIED: Docker credential helper is unavailable") from None
+        except subprocess.TimeoutExpired:
+            raise RegistryProbeError("UNVERIFIED: Docker credential helper timed out") from None
+        if result.returncode:
+            raise RegistryProbeError("UNVERIFIED: Docker credential helper did not return GHCR credentials")
+        try:
             credential = json.loads(result.stdout)
-            username, secret = credential.get("Username"), credential.get("Secret")
-        else:
-            entry = config.get("auths", {}).get(GHCR_HOST) or config.get("auths", {}).get(f"https://{GHCR_HOST}")
-            if not entry or not entry.get("auth"):
-                return None
+        except json.JSONDecodeError:
+            raise RegistryProbeError("UNVERIFIED: Docker credential helper returned invalid data") from None
+        if not isinstance(credential, dict):
+            raise RegistryProbeError("UNVERIFIED: Docker credential helper returned invalid data")
+        username, secret = credential.get("Username"), credential.get("Secret")
+    else:
+        auths = config.get("auths") or {}
+        if not isinstance(auths, dict):
+            raise RegistryProbeError("UNVERIFIED: Docker auth entries have an invalid format")
+        entry = auths.get(GHCR_HOST) or auths.get(f"https://{GHCR_HOST}")
+        if not isinstance(entry, dict) or not entry.get("auth"):
+            raise RegistryProbeError("UNVERIFIED: Docker has no GHCR credentials; log in with write:packages")
+        try:
             username, secret = base64.b64decode(entry["auth"], validate=True).decode().split(":", 1)
-        if username and secret and username != "<token>":
-            return username, secret
-    except (OSError, ValueError, KeyError, TypeError, AttributeError, binascii.Error, subprocess.TimeoutExpired):
-        return None
-    return None
+        except (ValueError, TypeError, binascii.Error):
+            raise RegistryProbeError("UNVERIFIED: Docker GHCR auth entry is invalid") from None
+    if (
+        not isinstance(username, str)
+        or not isinstance(secret, str)
+        or not username
+        or not secret
+        or username == "<token>"
+    ):
+        raise RegistryProbeError("UNVERIFIED: Docker GHCR credentials cannot be used for a push probe")
+    return DockerCredential(username, secret)
 
 
-def _ghcr_request(method: str, path: str, authorization: str) -> tuple[int, bytes, str | None]:
+def _ghcr_request(method: str, path: str, authorization: str) -> RegistryResponse:
     connection = http.client.HTTPSConnection(GHCR_HOST, timeout=PROBE_TIMEOUT)
     try:
         connection.request(
             method, path, body=b"" if method == "POST" else None, headers={"Authorization": authorization}
         )
         response = connection.getresponse()
-        return response.status, response.read(), response.getheader("Location")
+        return RegistryResponse(response.status, response.read(), response.getheader("Location"))
     finally:
         connection.close()
+
+
+def _ghcr_push_token(repository: str, credentials: DockerCredential) -> str:
+    basic = base64.b64encode(f"{credentials.username}:{credentials.secret}".encode()).decode()
+    token_path = "/token?" + urlencode({"service": GHCR_HOST, "scope": f"repository:{repository}:pull,push"})
+    response = _ghcr_request("GET", token_path, f"Basic {basic}")
+    if response.status in (401, 403):
+        raise RegistryProbeError(f"DENIED: GHCR rejected Docker credentials (HTTP {response.status})")
+    if response.status != 200:
+        raise RegistryProbeError(f"UNVERIFIED: GHCR token request returned HTTP {response.status}")
+    try:
+        token_response = json.loads(response.body)
+    except json.JSONDecodeError:
+        raise RegistryProbeError("UNVERIFIED: GHCR returned an invalid token response") from None
+    if not isinstance(token_response, dict):
+        raise RegistryProbeError("UNVERIFIED: GHCR returned an invalid token response")
+    token = token_response.get("token") or token_response.get("access_token")
+    if not isinstance(token, str) or not token:
+        raise RegistryProbeError("UNVERIFIED: GHCR returned no registry token")
+    return token
+
+
+def _probe_ghcr_upload(repository: str, token: str) -> None:
+    response = _ghcr_request("POST", f"/v2/{repository}/blobs/uploads/", f"Bearer {token}")
+    if response.status in (401, 403):
+        raise RegistryProbeError(f"DENIED: GHCR rejected push to {GHCR_HOST}/{repository} (HTTP {response.status})")
+    if response.status != 202:
+        raise RegistryProbeError(f"UNVERIFIED: GHCR upload probe returned HTTP {response.status}")
+    upload_url = urlsplit(response.location or "")
+    if upload_url.scheme not in ("", "https") or upload_url.netloc not in ("", GHCR_HOST):
+        raise RegistryProbeError("UNVERIFIED: GHCR returned an unexpected upload URL")
+    if not upload_url.path.startswith("/v2/"):
+        raise RegistryProbeError("UNVERIFIED: GHCR returned an unexpected upload path")
+    delete_path = upload_url.path + (f"?{upload_url.query}" if upload_url.query else "")
+    try:
+        cleanup = _ghcr_request("DELETE", delete_path, f"Bearer {token}")
+    except (OSError, http.client.HTTPException):
+        raise RegistryProbeError("GHCR accepted push, but the empty upload could not be aborted") from None
+    if cleanup.status != 204:
+        raise RegistryProbeError(f"GHCR accepted push, but upload cleanup returned HTTP {cleanup.status}")
 
 
 def check_ghcr_push(requirement: Requirement, *, environ: Mapping[str, str]) -> CheckResult:
@@ -586,46 +675,13 @@ def check_ghcr_push(requirement: Requirement, *, environ: Mapping[str, str]) -> 
     repository = requirement.target.removeprefix(f"{GHCR_HOST}/")
     if repository == requirement.target or "/" not in repository:
         return CheckResult(requirement, False, "UNVERIFIED: image reference is not a GHCR repository")
-    credentials = _docker_ghcr_credentials(environ)
-    if credentials is None:
-        return CheckResult(
-            requirement, False, "UNVERIFIED: Docker has no usable GHCR credentials; log in with write:packages"
-        )
-
-    basic = base64.b64encode(f"{credentials[0]}:{credentials[1]}".encode()).decode()
-    token_path = "/token?" + urlencode({"service": GHCR_HOST, "scope": f"repository:{repository}:pull,push"})
     try:
-        status, body, _ = _ghcr_request("GET", token_path, f"Basic {basic}")
-        if status in (401, 403):
-            return CheckResult(requirement, False, f"DENIED: GHCR rejected Docker credentials (HTTP {status})")
-        if status != 200:
-            return CheckResult(requirement, False, f"UNVERIFIED: GHCR token request returned HTTP {status}")
-        token_response = json.loads(body)
-        if not isinstance(token_response, dict):
-            return CheckResult(requirement, False, "UNVERIFIED: GHCR returned an invalid token response")
-        token = token_response.get("token") or token_response.get("access_token")
-        if not token:
-            return CheckResult(requirement, False, "UNVERIFIED: GHCR returned no registry token")
-        status, _, location = _ghcr_request("POST", f"/v2/{repository}/blobs/uploads/", f"Bearer {token}")
-        if status in (401, 403):
-            return CheckResult(requirement, False, f"DENIED: GHCR rejected push to {requirement.target} (HTTP {status})")
-        if status != 202:
-            return CheckResult(requirement, False, f"UNVERIFIED: GHCR upload probe returned HTTP {status}")
-        upload_url = urlsplit(location or "")
-        if upload_url.scheme not in ("", "https") or upload_url.netloc not in ("", GHCR_HOST):
-            return CheckResult(requirement, False, "UNVERIFIED: GHCR returned an unexpected upload URL")
-        if not upload_url.path.startswith("/v2/"):
-            return CheckResult(requirement, False, "UNVERIFIED: GHCR returned an unexpected upload path")
-        delete_path = upload_url.path + (f"?{upload_url.query}" if upload_url.query else "")
-        try:
-            cleanup_status, _, _ = _ghcr_request("DELETE", delete_path, f"Bearer {token}")
-        except (OSError, http.client.HTTPException):
-            return CheckResult(requirement, False, "GHCR accepted push, but the empty upload could not be aborted")
-        if cleanup_status != 204:
-            return CheckResult(
-                requirement, False, f"GHCR accepted push, but upload cleanup returned HTTP {cleanup_status}"
-            )
-    except (OSError, http.client.HTTPException, ValueError, TypeError):
+        credentials = _docker_ghcr_credentials(environ)
+        token = _ghcr_push_token(repository, credentials)
+        _probe_ghcr_upload(repository, token)
+    except RegistryProbeError as exc:
+        return CheckResult(requirement, False, str(exc))
+    except (OSError, http.client.HTTPException):
         return CheckResult(requirement, False, "UNVERIFIED: GHCR push probe could not complete")
     return CheckResult(requirement, True, f"VERIFIED: GHCR accepted push to {requirement.target}")
 

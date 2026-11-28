@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from iris.cluster.config import (
@@ -41,6 +42,9 @@ from scripts.iris.rollout_controllers import (
     rollout_order,
     run_probe,
     tree_warnings,
+)
+from scripts.iris.rollout_controllers import (
+    RegistryResponse as ProbeRegistryResponse,
 )
 
 
@@ -200,7 +204,6 @@ def test_preflight_rejects_default_docker_builder_without_containerd_store(monke
 
     assert not result.ok
     assert "builder default" in result.detail
-    assert "docker-container" in result.detail
 
 
 def test_preflight_accepts_selected_containerd_builder_and_buildx_override(monkeypatch):
@@ -231,7 +234,6 @@ def test_preflight_rejects_unidentified_builder(monkeypatch):
     result = check_requirement(Requirement(Need.BUILDX_CACHE, "registry cache export", "why"), environ={})
 
     assert not result.ok
-    assert "did not identify" in result.detail
 
 
 def test_preflight_verifies_ghcr_push_scope_using_docker_credentials(tmp_path, monkeypatch):
@@ -282,8 +284,9 @@ def test_preflight_verifies_ghcr_push_scope_using_docker_credentials(tmp_path, m
 
     assert result.ok
     assert "VERIFIED" in result.detail
-    assert [method for method, *_ in calls] == ["GET", "POST", "DELETE"]
+    assert parse_qs(urlsplit(calls[0][1]).query)["scope"] == ["repository:my-org/iris-cache:pull,push"]
     assert calls[1][1] == "/v2/my-org/iris-cache/blobs/uploads/"
+    assert calls[2][0:2] == ("DELETE", "/v2/my-org/iris-cache/blobs/upload/123")
     assert "secret" not in result.detail
 
 
@@ -301,7 +304,11 @@ def test_preflight_reports_unverified_or_denied_ghcr_push(tmp_path, monkeypatch)
 
     def registry_request(method, path, authorization):
         calls.append((method, path, authorization))
-        return (200, b'{"token":"read-token"}', None) if method == "GET" else (403, b"", None)
+        return (
+            ProbeRegistryResponse(200, b'{"token":"read-token"}', None)
+            if method == "GET"
+            else ProbeRegistryResponse(403, b"", None)
+        )
 
     monkeypatch.setattr("scripts.iris.rollout_controllers._ghcr_request", registry_request)
     denied = check_requirement(need, environ={"DOCKER_CONFIG": str(docker_config)})

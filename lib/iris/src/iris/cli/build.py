@@ -84,6 +84,11 @@ def _ghcr_image_reference(image: str, ghcr_org: str) -> str:
     return f"ghcr.io/{ghcr_org}/{image}"
 
 
+def registry_cache_repository(ghcr_org: str) -> str:
+    """Return the GHCR repository used for Iris build caches."""
+    return f"ghcr.io/{ghcr_org}/iris-cache"
+
+
 def _cache_export_ref(cache_ref: str, platform: str) -> str:
     """Keep single-platform cache exports from replacing the multiarch cache."""
     platforms = platform.split(",")
@@ -276,7 +281,7 @@ def build_image(
         cmd.extend(["-t", t])
     cmd.extend(["-f", str(dockerfile_path)])
 
-    cache_ref = f"ghcr.io/{ghcr_org}/iris-cache:{image_type}"
+    cache_ref = f"{registry_cache_repository(ghcr_org)}:{image_type}"
     cmd.extend(["--cache-from", f"type=registry,ref={cache_ref}"])
     for target_platform in platform.split(","):
         architecture = target_platform.rsplit("/", 1)[-1]
