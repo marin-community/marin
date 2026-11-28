@@ -1287,6 +1287,41 @@ def test_launch_dry_run_prints_the_resolved_harbor_agent_context(tmp_path, monke
     assert f"max_output_tokens={_PREFLIGHT_MAX_OUTPUT_TOKENS}" in result.output
 
 
+def test_bfcl_onboarding_dry_run_uses_curated_pi(monkeypatch):
+    root = Path(__file__).resolve().parents[2]
+    monkeypatch.setenv("DAYTONA_TARGET", "us")
+    monkeypatch.setattr("experiments.evaluation.cli.get_secret", lambda _name: None)
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "launch",
+            "--model-config",
+            str(
+                root / "experiments/evaluation/serve/models/open-athena/"
+                "Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-GraphWalks.yaml"
+            ),
+            "--harbor-config",
+            str(
+                root / "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/"
+                "ablations/model_onboarding/bfcl-one.yaml"
+            ),
+            "--platform",
+            "gpu",
+            "--federated_cluster",
+            "cw-us-east-02a",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "eval=bfcl-one" in result.output
+    assert "agent=pi@" in result.output
+    assert "task_machine=daytona" in result.output
+    assert "limit=1" in result.output
+
+
 @pytest.mark.parametrize(
     ("overrides", "target_cluster", "priority"),
     [

@@ -15,6 +15,7 @@ import logging
 from pathlib import Path
 
 import click
+import yaml
 from evalrecords.records import RECORD_FILE, TaskEvidence, TaskMachineBackend, read_record
 from iris.cli.connect import open_iris_client
 from iris.rpc import job_pb2
@@ -28,7 +29,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import COREWEAVE_SECRET_NAMES, get_secret
 
-from experiments.evaluation.curated import load_evaluations
+from experiments.evaluation.curated import EVALUATIONS_KEY, load_evaluations
 from experiments.evaluation.evals import EvaluationDefinition, HarborDefinition, resolve_evaluations
 from experiments.evaluation.launch import (
     DEFAULT_EVAL_CONCURRENCY,
@@ -48,6 +49,17 @@ def _resolve_evaluations(evals_arg: str) -> tuple[EvaluationDefinition, ...]:
         return resolve_evaluations(evals_arg)
     except ValueError as error:
         raise click.BadParameter(str(error)) from error
+
+
+def _load_harbor_argument(path: Path) -> tuple[EvaluationDefinition, ...]:
+    """Resolve a Harbor policy or a curated selection retained at a Harbor path."""
+    try:
+        document = yaml.safe_load(path.read_text())
+    except yaml.YAMLError as error:
+        raise click.BadParameter(str(error), param_hint="--harbor-config") from error
+    if isinstance(document, dict) and EVALUATIONS_KEY in document:
+        return load_evaluations(path)
+    return (HarborDefinition(name=canonical_served_name(path.stem), config_path=path),)
 
 
 def _load_selected_model(
@@ -144,6 +156,12 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
         tasks = [task.name for task in eval_ref.tasks]
         harbor = eval_ref.harbor
         curated = eval_ref.curated
+        source_limit = None
+        if harbor is not None:
+            source_limit = harbor.task_limit
+        elif curated is not None:
+            source_limit = curated.settings.source_limit
+        limit_context = f"limit={source_limit}  " if source_limit is not None else ""
         agent_context = ""
         if harbor is not None:
             agent_context = f"max_input_tokens={harbor.max_input_tokens}  max_output_tokens={harbor.max_output_tokens}  "
@@ -161,6 +179,7 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
             f"serve={serving} tasks={task_count} x {batch.accelerator.label}  "
             f"region_or_cluster={batch.accelerator.target_cluster or batch.accelerator.region}  "
             f"tasks={tasks}  "
+            f"{limit_context}"
             f"{agent_context}"
             f"records={batch.records_prefix}  "
             f"results={evaluation.identity.output_dir}"
@@ -204,7 +223,7 @@ def cli() -> None:
     "--harbor-config",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     multiple=True,
-    help="Harbor JobConfig YAML or JSON. Repeatable and additive with --evals.",
+    help="Harbor JobConfig YAML or JSON, or a curated selection document. Repeatable and additive with --evals.",
 )
 @click.option(
     "--retry-unscored-harbor-trials",
@@ -337,14 +356,7 @@ def launch(
                 f"Unknown configured evaluations: {', '.join(sorted(unknown))}", param_hint="--evals"
             )
         configured = [entry for entry in configured if entry.name in names]
-    harbor_definitions = [
-        HarborDefinition(
-            name=canonical_served_name(path.stem),
-            config_path=path,
-        )
-        for path in harbor_config
-    ]
-    evals = tuple(configured) + tuple(harbor_definitions)
+    evals = tuple(configured) + tuple(entry for path in harbor_config for entry in _load_harbor_argument(path))
     if not evaluation_config and evals_arg is not None:
         evals += _resolve_evaluations(evals_arg)
     if not evals:
@@ -381,10 +393,10 @@ def launch(
         else:
             param_hint = "--evaluation-config/--harbor-config" if evaluation_config or harbor_config else "--evals"
         raise click.BadParameter(str(exc), param_hint=param_hint) from exc
-    _require_coreweave_credentials(batch)
     if dry_run:
         _print_plan(spec, batch)
         return
+    _require_coreweave_credentials(batch)
     with open_iris_client(cluster_name=EVALUATION_CONTROLLER_CLUSTER, workspace=find_project_root()) as client:
         group = launch_group(batch, client)
         click.echo(

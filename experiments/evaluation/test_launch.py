@@ -199,7 +199,7 @@ def test_judge_deadline_change_preserves_launch_identity_and_saved_results(tmp_p
 
 
 @pytest.mark.parametrize("dry_run", [True, False])
-def test_coreweave_launch_without_storage_credentials_fails_before_submission(
+def test_coreweave_launch_without_storage_credentials_checks_only_submission(
     tmp_path, submitted_batches, monkeypatch, dry_run
 ):
     monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path / "no-secrets"))
@@ -208,8 +208,12 @@ def test_coreweave_launch_without_storage_credentials_fails_before_submission(
 
     result = CliRunner().invoke(cli, command)
 
-    assert result.exit_code != 0
-    assert "CW_KEY_ID" in result.output
+    if dry_run:
+        assert result.exit_code == 0, result.output
+        assert "target_cluster=cw-rno2a" in result.output
+    else:
+        assert result.exit_code != 0
+        assert "CW_KEY_ID" in result.output
     assert submitted_batches == []
 
 
@@ -261,6 +265,8 @@ def test_launch_selects_across_documents_and_adds_harbor_configs(
     ifeval.write_text("evaluations:\n  ifeval:\n    benchmark: ifeval\n")
     math = tmp_path / "math.yaml"
     math.write_text("evaluations:\n  bounded-math:\n    benchmark: math500\n  omitted:\n    benchmark: gsm8k\n")
+    extra = tmp_path / "extra.yaml"
+    extra.write_text("evaluations:\n  extra-ifeval:\n    benchmark: ifeval\n")
     policies = []
     for name in ("first-policy", "second-policy"):
         policy = harbor_task_workspace / f"{name}.json"
@@ -288,6 +294,8 @@ def test_launch_selects_across_documents_and_adds_harbor_configs(
             str(policies[0]),
             "--harbor-config",
             str(policies[1]),
+            "--harbor-config",
+            str(extra),
         ]
     )
     result = CliRunner().invoke(cli, command)
@@ -298,6 +306,7 @@ def test_launch_selects_across_documents_and_adds_harbor_configs(
         "bounded-math",
         "first-policy",
         "second-policy",
+        "extra-ifeval",
     }
 
 

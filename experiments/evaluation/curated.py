@@ -41,6 +41,7 @@ from experiments.post_training.task_curation.source import RlDataSource
 
 # The standard flow seeds every run alike, so runs of different models draw the same samples.
 DEFAULT_RUN_SEED = 0
+EVALUATIONS_KEY = "evaluations"
 
 
 def pinned_model(model: ModelConfig) -> ModelConfig:
@@ -63,7 +64,7 @@ def pinned_model(model: ModelConfig) -> ModelConfig:
 
 def load_evaluations(path: Path) -> tuple[EvaluationSelection, ...]:
     document = yaml.safe_load(path.read_text())
-    entries = document["evaluations"]
+    entries = document[EVALUATIONS_KEY]
     return tuple(EvaluationSelection.model_validate({"label": name, **entry}) for name, entry in entries.items())
 
 
