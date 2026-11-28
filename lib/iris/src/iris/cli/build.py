@@ -12,6 +12,7 @@ from rigging.provenance import Provenance
 from iris.cluster.provenance import provenance_to_env
 from iris.version import REVISION_DATE_ENV, iris_tree_date
 
+GHCR_HOST = "ghcr.io"
 GHCR_DEFAULT_ORG = "marin-community"
 DEFAULT_CARGO_PROFILE = "fast"
 CARGO_PROFILES = (DEFAULT_CARGO_PROFILE, "release")
@@ -79,9 +80,13 @@ def _image_repository(image: str) -> str:
 def _ghcr_image_reference(image: str, ghcr_org: str) -> str:
     """Return the fully qualified GHCR reference for ``image``."""
     registry, separator, _ = image.partition("/")
-    if separator and registry == "ghcr.io":
+    if separator and registry == GHCR_HOST:
         return image
-    return f"ghcr.io/{ghcr_org}/{image}"
+    return f"{GHCR_HOST}/{ghcr_org}/{image}"
+
+
+def registry_cache_repository(ghcr_org: str) -> str:
+    return f"{GHCR_HOST}/{ghcr_org}/iris-cache"
 
 
 def _cache_export_ref(cache_ref: str, platform: str) -> str:
@@ -276,7 +281,7 @@ def build_image(
         cmd.extend(["-t", t])
     cmd.extend(["-f", str(dockerfile_path)])
 
-    cache_ref = f"ghcr.io/{ghcr_org}/iris-cache:{image_type}"
+    cache_ref = f"{registry_cache_repository(ghcr_org)}:{image_type}"
     cmd.extend(["--cache-from", f"type=registry,ref={cache_ref}"])
     for target_platform in platform.split(","):
         architecture = target_platform.rsplit("/", 1)[-1]

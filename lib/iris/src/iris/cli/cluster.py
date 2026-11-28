@@ -228,6 +228,32 @@ def _build_and_push_image(
     click.echo()
 
 
+@dataclass(frozen=True)
+class ClusterImageBuild:
+    """One image target and platform spec selected for a forward deploy."""
+
+    image_type: str
+    tag: str
+    platform: str
+
+
+def cluster_image_builds(config: IrisClusterConfig, task_platforms: str | None = None) -> tuple[ClusterImageBuild, ...]:
+    """Images a forward deploy builds from this cluster config."""
+    kubernetes = config.defaults.worker.runtime == KUBERNETES_WORKER_RUNTIME
+    controller_platforms = KUBERNETES_IMAGE_PLATFORMS if kubernetes else AMD64_IMAGE_PLATFORM
+    builds: list[ClusterImageBuild] = []
+    worker_tag = config.defaults.worker.docker_image
+    if worker_tag and not kubernetes:
+        builds.append(ClusterImageBuild("worker", worker_tag, AMD64_IMAGE_PLATFORM))
+    if config.controller.image:
+        builds.append(ClusterImageBuild("controller", config.controller.image, controller_platforms))
+    if config.defaults.worker.default_task_image:
+        builds.append(
+            ClusterImageBuild("task", config.defaults.worker.default_task_image, task_platforms or controller_platforms)
+        )
+    return tuple(builds)
+
+
 def _build_cluster_images(
     config,
     provenance: Provenance,
@@ -236,45 +262,16 @@ def _build_cluster_images(
     cargo_profile: str = DEFAULT_CARGO_PROFILE,
 ) -> dict[str, str]:
     built: dict[str, str] = {}
-    kubernetes = config.defaults.worker.runtime == KUBERNETES_WORKER_RUNTIME
-
-    worker_tag = config.defaults.worker.docker_image
-    if worker_tag and not kubernetes:
+    for target in cluster_image_builds(config, task_platforms):
         _build_and_push_image(
-            worker_tag,
-            "worker",
+            target.tag,
+            target.image_type,
             provenance,
             verbose=verbose,
-            platform=AMD64_IMAGE_PLATFORM,
+            platform=target.platform,
             cargo_profile=cargo_profile,
         )
-        built["worker"] = worker_tag
-
-    controller_tag = config.controller.image
-    if controller_tag:
-        controller_platforms = KUBERNETES_IMAGE_PLATFORMS if kubernetes else AMD64_IMAGE_PLATFORM
-        _build_and_push_image(
-            controller_tag,
-            "controller",
-            provenance,
-            verbose=verbose,
-            platform=controller_platforms,
-            cargo_profile=cargo_profile,
-        )
-        built["controller"] = controller_tag
-
-    task_tag = config.defaults.worker.default_task_image
-    if task_tag:
-        task_platforms = task_platforms or (KUBERNETES_IMAGE_PLATFORMS if kubernetes else AMD64_IMAGE_PLATFORM)
-        _build_and_push_image(
-            task_tag,
-            "task",
-            provenance,
-            verbose=verbose,
-            platform=task_platforms,
-            cargo_profile=cargo_profile,
-        )
-        built["task"] = task_tag
+        built[target.image_type] = target.tag
 
     return built
 
