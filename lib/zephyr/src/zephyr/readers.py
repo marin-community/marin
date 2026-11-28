@@ -186,8 +186,14 @@ def open_file(file_path: str, mode: str = "rb", *, block_size: int = _READ_BLOCK
         # prefetch cache); read_across_frames decodes concatenated zstd frames;
         # text modes are wrapped so line-iterating callers get str, like "rt".
         with fs.open(resolved_path, "rb", **read_kwargs) as raw_f:
-            reader = zstd.ZstdDecompressor().stream_reader(raw_f, read_across_frames=True)
-            yield reader if "b" in mode else io.TextIOWrapper(reader, encoding="utf-8")
+            with zstd.ZstdDecompressor().stream_reader(raw_f, read_across_frames=True) as reader:
+                if "b" in mode:
+                    # The decompressor has no readline; buffering makes binary JSONL line iteration possible.
+                    with io.BufferedReader(reader) as buffered:
+                        yield buffered
+                else:
+                    with io.TextIOWrapper(reader, encoding="utf-8") as text_reader:
+                        yield text_reader
         return
 
     compression = None
@@ -308,7 +314,7 @@ def _iter_jsonl(spec: InputFileSpec, _reader: Reader[dict]):
     filter_fn = spec.filter_expr.evaluate if spec.filter_expr is not None else None
     columns = spec.columns
 
-    with open_file(spec.path, "rt") as f:
+    with open_file(spec.path, "rb") as f:
         for line in f:
             line = line.strip()
             if not line:
