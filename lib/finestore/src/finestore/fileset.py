@@ -100,6 +100,11 @@ def _write_blob(
 
 def fetch_file_set(root: str, local: str, *, limits: FileSetFetchLimits | None = None) -> set[str]:
     """Materialize a pinned set and return all relative paths, including matching local files."""
+    fetched, _total_bytes = _fetch_file_set(root, local, limits=limits)
+    return fetched
+
+
+def _fetch_file_set(root: str, local: str, *, limits: FileSetFetchLimits | None = None) -> tuple[set[str], int]:
     destination = pathlib.Path(local)
     destination.mkdir(parents=True, exist_ok=True)
     fetched = set()
@@ -162,7 +167,7 @@ def fetch_file_set(root: str, local: str, *, limits: FileSetFetchLimits | None =
         total_bytes,
         time.monotonic() - started,
     )
-    return fetched
+    return fetched, total_bytes
 
 
 class FineStoreDirectory:
@@ -186,11 +191,10 @@ class FineStoreDirectory:
         self._root = root
         self._local = pathlib.Path(local)
         self._local.mkdir(parents=True, exist_ok=True)
-        fetched = fetch_file_set(self._root, local, limits=fetch_limits)
+        fetched, self._published_bytes = _fetch_file_set(self._root, local, limits=fetch_limits)
         self._known = _local_files(self._local)
         self._fetch_limits = fetch_limits
         self._published_files = len(fetched)
-        self._published_bytes = sum((self._local / name).stat().st_size for name in fetched)
         self._store = DataStore.open(self._root)
         self._flush_interval = flush_interval
         self._max_batch_data_bytes = max_batch_data_bytes

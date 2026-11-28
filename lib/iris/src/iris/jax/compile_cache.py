@@ -23,6 +23,7 @@ _COMPILATION_CACHE_SUBDIR = "compilation-cache"
 _XLA_AUTOTUNE_CACHE_SUBDIR = "xla/per-fusion-autotune"
 _XLA_AUTOTUNE_CACHE_DIR_FLAG = "--xla_gpu_per_fusion_autotune_cache_dir"
 _XLA_AUTOTUNE_LEVEL_FLAG = "--xla_gpu_autotune_level"
+_XLA_FLAGS_ENV = "XLA_FLAGS"
 # Object-store home for the per-build FineStore file set.
 _XLA_AUTOTUNE_REMOTE_PREFIX = "xla-per-fusion-autotune"
 _XLA_AUTOTUNE_CACHE_TTL_DAYS = 30
@@ -80,8 +81,8 @@ def configure_jax_compilation_cache() -> None:
     which would otherwise hand XLA's C++ filesystem layer a URL it cannot open,
     and redirects XLA's per-fusion autotune cache to node-local disk instead.
     """
-    if raw_xla_flags := os.environ.get("XLA_FLAGS"):
-        os.environ["XLA_FLAGS"] = _normalize_xla_flags(raw_xla_flags)
+    if raw_xla_flags := os.environ.get(_XLA_FLAGS_ENV):
+        os.environ[_XLA_FLAGS_ENV] = _normalize_xla_flags(raw_xla_flags)
 
     import jax  # noqa: PLC0415  # optional dep: jax (iris does not depend on jax)
 
@@ -122,7 +123,7 @@ def _enable_xla_autotune_cache() -> None:
         logger.info("XLA autotune cache disabled: %s is not mounted", SCRATCH_CACHE_PATH)
         return
 
-    xla_flags = os.environ.get("XLA_FLAGS", "")
+    xla_flags = os.environ.get(_XLA_FLAGS_ENV, "")
     if _xla_flag_value(xla_flags, _XLA_AUTOTUNE_CACHE_DIR_FLAG) is not None:
         return
 
@@ -142,7 +143,7 @@ def _enable_xla_autotune_cache() -> None:
         logger.info("XLA autotune cache disabled: cannot create %s: %s", autotune_dir, exc)
         return
 
-    os.environ["XLA_FLAGS"] = f"{xla_flags} {_XLA_AUTOTUNE_CACHE_DIR_FLAG}={autotune_dir}".strip()
+    os.environ[_XLA_FLAGS_ENV] = f"{xla_flags} {_XLA_AUTOTUNE_CACHE_DIR_FLAG}={autotune_dir}".strip()
     logger.info("XLA per-fusion autotune cache: %s", autotune_dir)
 
     # One process per task populates its node-local mount before distributed init's
