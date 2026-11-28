@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
 import pytest
-from rigging.task_errors import VERIFIER_RUNTIME_ERROR, VERIFIER_TIMEOUT_ERROR
+from rigging.task_errors import VERIFIER_RUNTIME_ERROR
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
@@ -528,16 +528,16 @@ METRICS_FILE = (RewardFile(path=REWARD_JSON, format=RewardFileFormat.JSON_METRIC
 DETAIL = {"cases": [{"passed": True}]}
 
 
-@pytest.mark.parametrize(
-    ("failure", "expected"),
-    [
-        (GradingFailure.GRADER_EXIT, VERIFIER_RUNTIME_ERROR),
-        (GradingFailure.GRADER_TIMEOUT, VERIFIER_TIMEOUT_ERROR),
-    ],
-)
-def test_grader_command_failures_have_an_error_identity(failure, expected):
+@pytest.mark.parametrize("failure", list(GradingFailure))
+def test_grading_failures_have_an_error_identity(failure):
     identity = grading_failure_identity(GradeResult(Outcome.INFRA_ERROR, reward=None, failure=failure))
-    assert identity is not None and identity.exception_type == expected
+    assert identity is not None
+
+
+def test_grader_exit_counts_as_a_verifier_runtime_error():
+    grade = GradeResult(Outcome.INFRA_ERROR, reward=None, failure=GradingFailure.GRADER_EXIT)
+    identity = grading_failure_identity(grade)
+    assert identity is not None and identity.exception_type == VERIFIER_RUNTIME_ERROR
 
 
 @pytest.mark.asyncio

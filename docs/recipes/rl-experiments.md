@@ -185,11 +185,14 @@ Set `WANDB_API_KEY` before submission. `WANDB_ENTITY` selects the team and defau
 `marin-community`. The `marin-rl` project uses the run-index ID as the run name and group, and the
 native attempt ID as the W&B ID.
 
-For the Snowball presets in the first table, short presets use eight H100s and training
-presets use 40. East is `cw-us-east-02a`. The 40-H100 layout has 32 policy GPUs and eight engine GPUs,
-128 prompts × four answers and a 24,576-token window. Natural replies allow 8,192 tokens.
-These training presets use staleness 2 and TIS. Speed-long has no evaluation,
-checkpoints or export; learner and engine token rates are descriptive telemetry.
+Snowball's short presets use eight H100s. On Reno, `speed-medium` and `speed-long` use
+the `p16-r16` layout, with 16 learner GPUs, Adam state in host memory, two eight-GPU rollout
+engines, and up to 64 concurrent rollout groups. `learning-medium` and `data-medium` use
+`p40`, with 32 learner GPUs and one eight-GPU rollout engine.
+
+Quick-loop training uses 128 prompts × four answers, a 24,576-token context window, a maximum
+staleness of two updates, and truncated importance sampling (TIS). Natural replies allow up to
+8,192 tokens. Speed-long reports learner and engine token rates as descriptive telemetry.
 
 ## Dashboard publication
 
@@ -372,9 +375,7 @@ candidate training tasks with four sampled answers each; it does not evaluate Ev
 Speed-short measures 512 training tasks with four 4,096-token answers before its separate EvalLite pass.
 Learning/data medium evaluate at update 0 and 25; train-long evaluates before training and every ten updates.
 Speed-medium measures update time over updates 2–10, speed-long over 3–20. Their mismatch guard uses the
-selected-token-weighted staleness-0 KL over the measured window. Speed training on Reno uses 16 learner
-H100s with Adam state in host memory and two 8-H100 rollout engines. The rollout buffer can run up to 64 groups
-concurrently.
+selected-token-weighted staleness-0 KL over the measured window.
 
 Evaluation identity includes stored TaskSpec content and the recorded request. Answers join the manifest
 by task ID and count as scored only after successful verification without an exception or error treatment.
@@ -472,8 +473,9 @@ The shared `experiments/post_training/rl.py` builds the CLI and executes a `Mode
 reads a stored run's metrics, scores and invariants. `rl_scoring.py` computes scores from answers,
 and `rl_gate.py` compares a candidate's measurements with indexed controls.
 
-`snowball_rl.py` is Snowball's model entry. Its `SNOWBALL` value contains the presets, the
-`p40` and `e8` layouts, immutable model and task references, and evaluation selections.
+`snowball_rl.py` is Snowball's model entry. Its `SNOWBALL` value contains the presets,
+immutable model and task references, and evaluation selections. Quick-loop presets use
+the `p16-r16`, `p40`, and `e8` layouts.
 The layouts declare GPU type, CPU, memory, disk, priority and both job deadlines; their role plans
 supply the GPU width. Presets declare seed, W&B entity, checkpoint retention and HF export
 independently of dashboard publication. Its `__main__` calls `rl.main(SNOWBALL)`.
