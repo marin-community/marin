@@ -11,6 +11,7 @@ from marinskyrl.task_machine_factories import ConfiguredTaskMachines
 from marinskyrl.task_sources import PreparedTaskCacheSource
 from omegaconf import OmegaConf
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS
+from rolloutengine.models import MachineRuntimeSpec
 from rolloutengine.validation import validate_spec
 from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
 from shellbox.backends.docker.machine import DockerMachineFactory
@@ -115,7 +116,7 @@ def test_offline_backend_admission_does_not_require_provider_credentials(monkeyp
             json.dumps({"daytona": {"api_key_env": "SHELLBOX_OFFLINE_TEST_API_KEY", "ttl_minutes": 60}})
         ),
     )
-    assert selected == runtime
+    assert selected == MachineRuntimeSpec.model_validate(runtime)
 
 
 def test_prepared_routes_follow_changed_provider_configuration(tmp_path):

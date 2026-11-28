@@ -32,6 +32,24 @@ def record_checks(row: dict[str, Any], checks: list[CheckResult]) -> dict[str, A
     return row
 
 
+def _attach_route_evidence(
+    row: dict[str, Any],
+    status: SourceVerificationStatus,
+    results: dict[str, list[CheckResult]],
+    evidence_by_task: Mapping[str, RouteEvidence] | None,
+    source_evidence: RouteEvidence | None,
+) -> dict[str, Any]:
+    """Attach the row's own verified routing evidence, or the passing sample's for an unchecked row."""
+    if not is_accepted(row):
+        return row
+    evidence = (evidence_by_task or {}).get(row["task_id"])
+    # A row the sample did not check inherits the passing sample's verdicts, so a backend
+    # whose sampled control failed cannot serve it either.
+    if evidence is None and status == SourceVerificationStatus.PASSED and row["task_id"] not in results:
+        evidence = source_evidence
+    return attach_route_evidence(row, evidence or {})
+
+
 def gate_source_row(
     row: dict[str, Any],
     *,
@@ -42,13 +60,7 @@ def gate_source_row(
 ) -> dict[str, Any]:
     if row["task_id"] in results:
         row = record_checks(row, results[row["task_id"]])
-    if is_accepted(row):
-        evidence = (evidence_by_task or {}).get(row["task_id"])
-        # A row the sample did not check inherits the passing sample's verdicts, so a backend
-        # whose sampled control failed cannot serve it either.
-        if evidence is None and status == SourceVerificationStatus.PASSED and row["task_id"] not in results:
-            evidence = source_evidence
-        row = attach_route_evidence(row, evidence or {})
+    row = _attach_route_evidence(row, status, results, evidence_by_task, source_evidence)
     if not is_accepted(row):
         return row
     if status == SourceVerificationStatus.VALIDATED:

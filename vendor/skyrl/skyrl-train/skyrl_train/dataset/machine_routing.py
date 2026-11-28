@@ -23,17 +23,12 @@ from taskcompendium.pipeline.machine_routes import excluded_backends, task_route
 from taskcompendium.pipeline.models import MachineRole
 
 
-def _excluded_backends(task: TaskSpec, role: MachineRole) -> frozenset[str]:
-    """Backends whose recorded control outcome for the role excludes selection."""
-    return excluded_backends(task_route_evidence(task), role)
-
-
 def backend_machine(
     requirements: EnvironmentRequirements,
     machines_by_backend: Mapping[str, dict],
     excluded: frozenset[str],
     factory_provider: Callable[[], Mapping[str, MachineFactory]],
-) -> dict | None:
+) -> MachineRuntimeSpec | None:
     """Select the first configured factory that admits the task, allocation and evidence."""
     if requirements.command_semantics is None or not machines_by_backend:
         return None
@@ -52,12 +47,12 @@ def backend_machine(
             try:
                 spec = stack.enter_context(machine_spec(requirements, runtime))
             except UnsupportedMachineSpec:
-                return None
-            candidates.append((MachineRoute(factory, spec), machine))
+                continue
+            candidates.append((MachineRoute(factory, spec), runtime))
         admitted = ShellboxContext(tuple(route for route, _ in candidates)).routes(normalized)
         if not admitted:
             return None
-        return next(machine for route, machine in candidates if route is admitted[0])
+        return next(runtime for route, runtime in candidates if route is admitted[0])
 
 
 def task_machine(
@@ -66,10 +61,9 @@ def task_machine(
     """Bind a task runtime that its verified evidence does not exclude."""
     if task_machine_reason(task) is None:
         return None
-    evidence = task_route_evidence(task)
-    excluded = excluded_backends(evidence, MachineRole.TASK)
+    excluded = excluded_backends(task_route_evidence(task), MachineRole.TASK)
     machine = config["task_machine_by_dataset"].get(task.source.dataset)
-    if machine is None or evidence:
+    if machine is None or task_route_evidence(task):
         templates = config.get(TASK_MACHINES_BY_BACKEND, {}) if machine is None else {machine["backend"]: machine}
         machine = backend_machine(
             task.environment_requirements,
@@ -77,7 +71,7 @@ def task_machine(
             excluded,
             factory_provider,
         )
-    return MachineRuntimeSpec.model_validate(machine) if machine is not None else None
+    return machine
 
 
 def verifier_machine(task: TaskSpec, config: Mapping[str, dict]) -> MachineRuntimeSpec | None:
@@ -87,6 +81,6 @@ def verifier_machine(task: TaskSpec, config: Mapping[str, dict]) -> MachineRunti
         return None
     machine = config["image_verifier"] if environment.docker_image is not None else config["package_verifier"]
     runtime = MachineRuntimeSpec.model_validate(machine)
-    if runtime.backend in _excluded_backends(task, MachineRole.VERIFIER):
+    if runtime.backend in excluded_backends(task_route_evidence(task), MachineRole.VERIFIER):
         return None
     return runtime

@@ -268,7 +268,7 @@ def local_factory() -> MachineFactory:
 
 @dataclass(frozen=True)
 class LocalGraderMachines:
-    """Unbuilt local grading machines with declared packages or a lock."""
+    """Unbuilt local grading machines with declared packages, a lock, or a pinned image."""
 
     def identity(self) -> dict[str, Any]:
         return {"backend": Backend.LOCAL.value, "python": DEFAULT_PYTHON_VERSION}

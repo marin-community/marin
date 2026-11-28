@@ -44,7 +44,7 @@ class TaskRequirements:
 
 
 class ExecutionRequirements(Protocol):
-    """The task contract factories inspect without importing a task schema."""
+    """The serialized task contract admission normalizes into TaskRequirements without importing a task schema."""
 
     @property
     def command_semantics(self) -> CommandSemantics | None: ...
