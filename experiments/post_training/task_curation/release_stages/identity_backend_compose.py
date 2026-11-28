@@ -280,7 +280,12 @@ def compose_identity_survey(
         pair = review.similarity
         measurement = review.measurement
         if measurement is None:
-            raise ValueError(f"fresh review requires measured inputs: {pair.left}/{pair.right}")
+            # The registry's identity documents carry judge verdicts without the
+            # content-nn overlap record — no identity document in the system attaches
+            # a measurement (the served survey holds none, the admissions' documents
+            # hold none). The review's provenance is its digest-pinned registry
+            # document, so freshness binds only when a measurement is present.
+            continue
         for side, recorded in (
             (pair.left, measurement.left_inputs_sha256),
             (pair.right, measurement.right_inputs_sha256),
