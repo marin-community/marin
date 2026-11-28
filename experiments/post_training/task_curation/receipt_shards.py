@@ -8,7 +8,7 @@ source identity — license receipts here, the derived-contract and census
 receipt families as their stages port.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 
 from finestore.rl.source_identity import canonical_source_id
@@ -30,8 +30,6 @@ def receipts_from_documents[T: BaseModel](
     return receipts
 
 
-def read_receipt_shards[T: BaseModel](
-    directory: Path, model: type[T], kind: str, *, load_json: Callable[[Path], dict]
-) -> dict[str, T]:
-    documents = {path.name: load_json(path) for path in sorted(directory.glob("part-*.json"))}
+def read_receipt_shards[T: BaseModel](directory: Path, model: type[T], kind: str) -> dict[str, T]:
+    documents = {path.name: json.loads(path.read_text()) for path in sorted(directory.glob("part-*.json"))}
     return receipts_from_documents(documents, model, kind)

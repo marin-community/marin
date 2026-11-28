@@ -33,12 +33,7 @@ def read_license_receipts(path: Path) -> dict[str, LicenseReceipt]:
     ``part-*.json`` receipt shards. All three resolve to the same validated map.
     """
     if path.is_dir():
-        receipts = read_receipt_shards(
-            path,
-            LicenseReceipt,
-            "license receipt",
-            load_json=lambda shard: json.loads(shard.read_text()),
-        )
+        receipts = read_receipt_shards(path, LicenseReceipt, "license receipt")
     else:
         document = json.loads(path.read_text())
         try:
