@@ -4,7 +4,7 @@ name: X0271 with X0259 matrix decay floor
 category: Optimizers
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: done
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7229403397
@@ -59,6 +59,23 @@ trials:
   steps: 3047
   baseline: belay-X0273-control 3.0443 (same commit, seed 0)
   step_time_change: 0%
+- id: t003
+  variant: row-AdamH embed + matrix decay floor f=0.05
+  rung: competitive-d512
+  protocol: equal_steps
+  batch: X0273
+  date: '2026-11-28'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0273
+  wandb: []
+  settings:
+    muonc_anneal_decay: '0.2'
+    muonc_anneal_adamc: '12.5'
+    adamc_adam_decay: '0.3'
+    muonc_anneal_embed_row_adamh: 'True'
+    muonc_anneal_decay_floor_frac: '0.05'
+  commit: 406a3ffea0
+  priority: batch
+  note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
 potential:
   score: 7
   rationale: −0.0212 at equal time (−0.0206 equal data); ladder and MFU not run → 7
