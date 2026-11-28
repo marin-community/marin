@@ -27,9 +27,11 @@ def test_evaluation_provisioning_can_share_training_credentials(monkeypatch):
 
     factories = task_machine_factories(sessions)
 
+    monkeypatch.setenv("DAYTONA_RL_API_KEY", "changed-after-construction")
     training, evaluation = factories[Backend.DAYTONA], factories[DAYTONA_EVAL_BACKEND]
     assert isinstance(training, DaytonaMachineFactory) and isinstance(evaluation, DaytonaMachineFactory)
     assert (training.image_build, evaluation.image_build) == (DaytonaImageBuild.SNAPSHOT, DaytonaImageBuild.DECLARATIVE)
+    assert training.client_factory().api_key == "shared-test-key"
     assert evaluation.client_factory().api_key == "shared-test-key"
 
 

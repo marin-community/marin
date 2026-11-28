@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 import taskcompendium.runtime.grading as grading_runtime
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
-from shellbox.backends.local.machine import check_local_environment
+from shellbox.backends.local.support import check_local_environment
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.http_service import HttpResponse, serve_http
 from shellbox.image import DockerfileSource
@@ -24,12 +24,12 @@ from shellbox.machine import (
     Backend,
     Command,
     DockerImage,
-    ExecutionRequirements,
     ExitReason,
     Machine,
     MachineSpec,
     PackageSpec,
     Result,
+    TaskRequirements,
     UnsupportedMachineSpec,
 )
 from taskcompendium.grader import verifyit_package
@@ -81,7 +81,7 @@ from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.external import AgentHarness, LengthStopPolicy
 from rolloutengine.harness.shell import WORKSPACE_INSTRUCTION, ShellHarness, ToolCallResult, ToolContext
 from rolloutengine.harness.step import StepHarness
-from rolloutengine.machines import MachineSetupError, _machine_spec, task_machine
+from rolloutengine.machines import MachineSetupError, machine_spec, task_machine
 from rolloutengine.models import (
     LENGTH_STOP_REASON,
     AttemptEnded,
@@ -251,7 +251,7 @@ class RecordingShellSimFactory(DockerMachineFactory):
 
     machines: list[Machine] = field(default_factory=list)
 
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         factory = ShellSimMachineFactory() if self.backend == Backend.SHELLSIM else DockerMachineFactory()
         factory.check_environment(requirements, spec)
 
@@ -945,7 +945,7 @@ BUILD_ENVIRONMENT = EnvironmentRequirements(
 
 
 def test_build_context_is_a_dockerfile_source_while_the_spec_is_open():
-    with _machine_spec(BUILD_ENVIRONMENT, machine_runtime()) as spec:
+    with machine_spec(BUILD_ENVIRONMENT, machine_runtime()) as spec:
         assert isinstance(spec.source, DockerfileSource)
         context = spec.source.context
         assert spec.source.dockerfile == context / "Dockerfile"
@@ -999,7 +999,7 @@ class NoBuildFactory(RecordingShellSimFactory):
 
     backend: Backend = Backend.LOCAL
 
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         check_local_environment(requirements, spec)
 
 

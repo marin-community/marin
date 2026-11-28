@@ -241,7 +241,7 @@ def _declared_identity(
         except ValueError as error:
             return _DeclaredIdentity(mapping_error=f"{role}: {error}", execution_error=f"{role}: {error}")
         try:
-            factory.check_environment(declared, machine)
+            factory.check_environment(declared.requirements, machine)
         except UnsupportedMachineSpec as error:
             # An execution refusal still reports the identity: snapshot counts measure
             # what the cohort would provision, whether or not Daytona would run it.

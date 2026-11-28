@@ -8,6 +8,7 @@ from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import ClassVar, Protocol, runtime_checkable
 
+from shellbox.capabilities import MachineCapability
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage
 
 DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES = 1_048_576
@@ -34,12 +35,16 @@ class CommandSemantics(StrEnum):
     SHELL_SIMULATOR = "shell_simulator"
 
 
-SHELL_SIMULATOR_CAPABILITIES = frozenset({"shell", "filesystem", "python"})
-LINUX_PROCESS_CAPABILITIES = SHELL_SIMULATOR_CAPABILITIES | {"process", "network", "git_repository"}
+@dataclass(frozen=True)
+class TaskRequirements:
+    """Capabilities required by a task, normalized from its serialized execution contract."""
+
+    capabilities: frozenset[MachineCapability]
+    docker_image: str | None = None
 
 
 class ExecutionRequirements(Protocol):
-    """The task contract factories inspect without importing a task schema."""
+    """The serialized task contract admission normalizes into TaskRequirements without importing a task schema."""
 
     @property
     def command_semantics(self) -> CommandSemantics | None: ...
@@ -191,25 +196,37 @@ class UnsupportedMachineSpec(ValueError):
     """The selected backend cannot create the requested machine."""
 
 
+def task_requirements(requirements: ExecutionRequirements) -> TaskRequirements:
+    """Translate serialized command semantics once into required capabilities."""
+    unknown = set(requirements.capabilities) - set(MachineCapability)
+    if unknown:
+        raise UnsupportedMachineSpec(f"Unsupported capabilities: {', '.join(sorted(unknown))}")
+    capabilities = {MachineCapability(value) for value in requirements.capabilities}
+    if requirements.command_semantics is CommandSemantics.LINUX_PROCESS:
+        capabilities.add(MachineCapability.PROCESS)
+    elif requirements.command_semantics is CommandSemantics.SHELL_SIMULATOR:
+        capabilities.add(MachineCapability.SHELL)
+    else:
+        raise UnsupportedMachineSpec("Machine tasks require command semantics")
+    return TaskRequirements(frozenset(capabilities), requirements.docker_image)
+
+
 def check_execution_requirements(
-    requirements: ExecutionRequirements,
+    requirements: TaskRequirements,
     spec: MachineSpec,
     *,
-    semantics: CommandSemantics,
-    capabilities: frozenset[str],
+    capabilities: frozenset[MachineCapability],
     image_reference: str | None = None,
 ) -> None:
-    """Check declared execution support and image origin, without acquiring resources.
+    """Check the task contract against the declaring backend's capabilities and image origin.
 
-    Backends check their source and allocation features separately. This does not
-    promise installed executables, available capacity or successful acquisition.
+    This does not promise installed executables, available capacity or successful
+    acquisition; backends check their source and allocation features separately.
     """
-    if requirements.command_semantics != semantics:
-        raise UnsupportedMachineSpec(f"The selected factory requires {semantics} semantics")
-    unsupported = set(requirements.capabilities) - capabilities
+    unsupported = requirements.capabilities - capabilities
     if unsupported:
         raise UnsupportedMachineSpec(f"Unsupported capabilities: {', '.join(sorted(unsupported))}")
-    if "network" in requirements.capabilities and spec.network == NetworkPolicy.DENY:
+    if MachineCapability.NETWORK in requirements.capabilities and spec.network == NetworkPolicy.DENY:
         raise UnsupportedMachineSpec("Network capability requires an allow network policy")
     if requirements.docker_image is not None and requirements.docker_image != image_reference:
         raise UnsupportedMachineSpec("Machine must use the task's required image")
@@ -307,7 +324,7 @@ class MachineFactory(Protocol):
     @property
     def backend(self) -> Backend: ...
 
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         """Reject unsupported task contracts before preparation or acquisition.
 
         Checks declared features, not available capacity or installed executables.

@@ -19,6 +19,10 @@ from typing import Any
 OCI_TAG = "image"
 
 
+class UnsupportedImage(ValueError):
+    """The verified image uses an unsupported platform."""
+
+
 @dataclass(frozen=True)
 class RegistryImage:
     """An OCI registry reference such as ghcr.io/org/image:tag."""
@@ -41,6 +45,14 @@ class PreparedImage:
     layout: Path
     manifest_digest: str
     source: RegistryImage | DockerfileSource
+
+
+DIGEST_PINNED_IMAGE = re.compile(r"[^\s]+@(sha256:[0-9a-f]{64})")
+
+
+def is_digest_pinned_image(reference: str) -> bool:
+    """Whether the registry reference names its manifest by sha256 digest."""
+    return DIGEST_PINNED_IMAGE.fullmatch(reference) is not None
 
 
 def _oci_blob(layout: Path, digest: str) -> Path:
@@ -76,6 +88,12 @@ def prepared_image_config(image: PreparedImage) -> dict[str, Any]:
         raise ValueError("Prepared image tag no longer selects its pinned manifest")
     manifest = _oci_json_blob(image.layout, image.manifest_digest)
     return _oci_json_blob(image.layout, manifest["config"]["digest"])
+
+
+def validate_image_platform(config: dict[str, Any]) -> None:
+    """Require the platform supported by local OCI execution."""
+    if config["os"] != "linux" or config["architecture"] != "amd64":
+        raise UnsupportedImage("Only Linux amd64 images are supported")
 
 
 def prepared_image_workdir(image: PreparedImage) -> str:
@@ -159,8 +177,7 @@ def _manifest_digest(layout: Path, *, expected: str | None = None) -> str:
         raise ValueError("Prepared image tag no longer selects its pinned manifest")
     manifest = _oci_json_blob(layout, digest)
     config = _oci_json_blob(layout, manifest["config"]["digest"])
-    if config["os"] != "linux" or config["architecture"] != "amd64":
-        raise ValueError("Only Linux amd64 images are supported")
+    validate_image_platform(config)
     for layer in manifest["layers"]:
         _oci_blob(layout, layer["digest"])
     return digest
@@ -184,7 +201,7 @@ def prepare_image(
         raise ValueError("RegistryImage requires a container image reference without a URL scheme")
     pinned_digest = None
     if isinstance(source, RegistryImage):
-        match = re.fullmatch(r".+@(sha256:[0-9a-f]{64})", source.reference)
+        match = DIGEST_PINNED_IMAGE.fullmatch(source.reference)
         if match is not None:
             pinned_digest = match[1]
     if pinned_digest is not None and policy is None:

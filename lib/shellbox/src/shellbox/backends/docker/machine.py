@@ -10,19 +10,18 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from shellbox.capabilities import MachineCapability
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
-    LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
-    CommandSemantics,
     DockerImage,
-    ExecutionRequirements,
     ExitReason,
     MachineSpec,
     NetworkPolicy,
     ProcessScope,
     Result,
+    TaskRequirements,
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
@@ -310,6 +309,19 @@ class DockerMachine:
             raise RuntimeError(result.stderr.decode(errors="replace"))
 
 
+DOCKER_CAPABILITIES = frozenset(
+    {
+        MachineCapability.SHELL,
+        MachineCapability.FILESYSTEM,
+        MachineCapability.PYTHON,
+        MachineCapability.PROCESS,
+        MachineCapability.NETWORK,
+        MachineCapability.GIT_REPOSITORY,
+    }
+)
+"""The Docker backend's declared capabilities; the gVisor backend shares them."""
+
+
 class DockerMachineFactory:
     """Start a Docker image as a fresh trial container."""
 
@@ -323,14 +335,13 @@ class DockerMachineFactory:
             raise UnsupportedMachineSpec("Docker requires a DockerImage, RegistryImage or DockerfileSource")
         return spec.source
 
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         source = self._check_spec(spec)
         reference = source.reference if isinstance(source, (DockerImage, RegistryImage)) else None
         check_execution_requirements(
             requirements,
             spec,
-            semantics=CommandSemantics.LINUX_PROCESS,
-            capabilities=LINUX_PROCESS_CAPABILITIES,
+            capabilities=DOCKER_CAPABILITIES,
             image_reference=reference,
         )
 

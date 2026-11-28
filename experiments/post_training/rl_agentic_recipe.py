@@ -8,8 +8,9 @@ from fractions import Fraction
 
 from rolloutengine.agents.pi.agent import PI_HARNESS
 from rolloutengine.models import MachineRuntimeSpec
-from shellbox.machine import Backend, CommandSemantics, NetworkPolicy
+from shellbox.machine import Backend, NetworkPolicy
 from skyrlrecipe import RecipePatch, sections
+from skyrlrecipe.declared import TASK_MACHINES_BY_BACKEND
 
 from experiments.post_training.rl_presets import CHECKPOINT_EVALUATION, BatchMix, Preset, Recipe
 from experiments.post_training.task_curation.swesmith_training import (
@@ -99,10 +100,10 @@ def agentic_preset(preset: Preset, *, name: str, limits: RecipePatch) -> Preset:
 TOOL_TURNS = 16
 TASK_MACHINE_STARTUP_TIMEOUT = 600
 TASK_MACHINE_CLEANUP_TIMEOUT = 60
-# Each shell-tool task runs on a machine that matches its command semantics.
-TASK_MACHINES = {
+# Shell-tool tasks try supported backends in this deployment order.
+BACKEND_MACHINES = (
     # ShellSim has no guest network.
-    CommandSemantics.SHELL_SIMULATOR: MachineRuntimeSpec(
+    MachineRuntimeSpec(
         backend=Backend.SHELLSIM,
         network=NetworkPolicy.DENY,
         cpus=None,
@@ -113,7 +114,7 @@ TASK_MACHINES = {
         startup_timeout=TASK_MACHINE_STARTUP_TIMEOUT,
         cleanup_timeout=TASK_MACHINE_CLEANUP_TIMEOUT,
     ),
-    CommandSemantics.LINUX_PROCESS: MachineRuntimeSpec(
+    MachineRuntimeSpec(
         backend=Backend.DAYTONA,
         network=NetworkPolicy.ALLOW,
         cpus=1,
@@ -124,7 +125,7 @@ TASK_MACHINES = {
         startup_timeout=TASK_MACHINE_STARTUP_TIMEOUT,
         cleanup_timeout=TASK_MACHINE_CLEANUP_TIMEOUT,
     ),
-}
+)
 _SHELL_TOOL_RECIPE = RecipePatch(
     environment=sections.Environment(
         task_sessions={
@@ -132,8 +133,8 @@ _SHELL_TOOL_RECIPE = RecipePatch(
             "daytona": {"api_key_env": _DAYTONA_RL_KEY, "ttl_minutes": 60},
             "task_spec": {
                 "session": {"max_turns": TOOL_TURNS},
-                "task_machine_by_command_semantics": {
-                    semantics.value: machine.model_dump(mode="json") for semantics, machine in TASK_MACHINES.items()
+                TASK_MACHINES_BY_BACKEND: {
+                    machine.backend: machine.model_dump(mode="json") for machine in BACKEND_MACHINES
                 },
             },
         }

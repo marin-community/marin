@@ -12,7 +12,6 @@ import asyncio
 import hashlib
 import json
 import math
-import re
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -33,6 +32,7 @@ from daytona.common.snapshot import Snapshot
 from daytona_api_client_async import SnapshotState
 from rigging.timing import ExponentialBackoff
 
+from shellbox.backends.daytona.support import validate_source
 from shellbox.backends.daytona.transient import retry_transient
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from shellbox.machine import MachineSpec, UnsupportedMachineSpec
@@ -103,24 +103,6 @@ class SnapshotPurgeReport:
     unclassified: tuple[str, ...]
     remaining: tuple[str, ...]
     referenced: tuple[str, ...]
-
-
-def validate_source(
-    source: RegistryImage | DockerfileSource,
-) -> RegistryImage | DockerfileSource:
-    """Reject Daytona build inputs the provider cannot use."""
-    if isinstance(source, RegistryImage):
-        return source
-    source = DockerfileSource(source.context.resolve(), source.dockerfile.resolve())
-    if source.dockerfile.parent != source.context:
-        raise UnsupportedMachineSpec("Daytona requires the Dockerfile at the build context root")
-    if re.search(
-        r"^\s*ADD(?:\s|$)",
-        source.dockerfile.read_text(),
-        re.IGNORECASE | re.MULTILINE,
-    ):
-        raise UnsupportedMachineSpec("Daytona Dockerfiles with ADD require a prebuilt registry image")
-    return source
 
 
 def snapshot_resources(*, cpus: int | None, memory_mb: int | None, storage_mb: int | None, gpus: int) -> Resources:

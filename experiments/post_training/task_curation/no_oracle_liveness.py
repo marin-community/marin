@@ -40,7 +40,7 @@ from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import HostImage, MachineFactory, MachineSpec, NetworkPolicy
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import EnvironmentRequirements, grader_environment
+from taskcompendium.models import DEFAULT_WORKSPACE, EnvironmentRequirements, grader_environment
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 
 from experiments.post_training.task_curation.lowered_envelope import LOWERED_TASK_SPEC_COLUMN, LoweredSpec
@@ -180,11 +180,11 @@ def _grader_placement(
         # A packaged grader runs in the local bubblewrap runtime. This branch builds its
         # MachineSpec directly instead of through daytona_identity.declared_machine
         # because that module imports the Daytona backend at module level, which this
-        # lock-based path never uses; its workdir default is the local runtime's
-        # /workspace, not the sandbox's declared-environment default.
+        # lock-based path never uses; the workdir default is curation's /app package
+        # workspace, not RL's /workspace.
         machine = MachineSpec(
             source=HostImage(),
-            workdir=requirements.working_directory or "/workspace",
+            workdir=requirements.working_directory or DEFAULT_WORKSPACE,
             network=runtime.network,
             cpus=runtime.cpus,
             memory_mb=runtime.memory_mb,

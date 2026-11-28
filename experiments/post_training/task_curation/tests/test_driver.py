@@ -28,12 +28,12 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.task_curation import pipeline as processor
+from experiments.post_training.task_curation.campaign_machines import CampaignMachines
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import environment_artifact
 from experiments.post_training.task_curation.pipeline import (
-    CampaignMachines,
     CurationRecipe,
     HfSource,
     environment_requirements,
@@ -146,8 +146,8 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     monkeypatch.setattr(LocalRuntime, "ensure_built", lambda self: self.root.mkdir(parents=True))
     machines = CampaignMachines()
     requirements = environment_requirements(environment, artifact)
-    factory, spec = machines.machine(requirements, 2048)
-    spec = prepare_machine_spec(requirements, factory, spec, {})
+    route = machines.routes(requirements, 2048)[0]
+    spec = prepare_machine_spec(requirements, route.factory, route.spec, {})
     runtime = local_runtime(artifact.lock_url)
     request.addfinalizer(lambda: shutil.rmtree(runtime.root, ignore_errors=True))
     assert runtime.root.is_dir()
@@ -366,10 +366,10 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
 
 def test_shell_only_campaign_does_not_load_ports_catalog(tmp_path):
     machines = CampaignMachines(simulator_catalog=(tmp_path / "absent-catalog.json").as_uri())
-    factory, spec = machines.machine(EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR), 2048)
+    route = machines.routes(EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR), 2048)[0]
 
     async def check():
-        machine = await factory.create(spec)
+        machine = await route.factory.create(route.spec)
         try:
             result = await machine.run(Command(("sh", "-c", "echo hello > answer; cat answer")))
             assert (result.exit_code, result.stdout) == (0, b"hello\n")

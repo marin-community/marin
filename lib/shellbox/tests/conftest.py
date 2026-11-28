@@ -43,7 +43,7 @@ def pytest_addoption(parser):
 def oci_image(tmp_path: Path) -> Callable[[tuple[bytes, ...], dict[str, object]], PreparedImage]:
     sequence = count()
 
-    def build(layers: tuple[bytes, ...], process: dict[str, object]) -> PreparedImage:
+    def build(layers: tuple[bytes, ...], process: dict[str, object], *, architecture: str = "amd64") -> PreparedImage:
         layout = tmp_path / f"oci-{next(sequence)}"
         blobs = layout / "blobs/sha256"
         blobs.mkdir(parents=True)
@@ -56,7 +56,7 @@ def oci_image(tmp_path: Path) -> Callable[[tuple[bytes, ...], dict[str, object]]
         descriptors = tuple(blob(layer, "application/vnd.oci.image.layer.v1.tar") for layer in layers)
         config = {
             "os": "linux",
-            "architecture": "amd64",
+            "architecture": architecture,
             "config": process,
             "rootfs": {"type": "layers", "diff_ids": [layer["digest"] for layer in descriptors]},
         }

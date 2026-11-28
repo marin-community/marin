@@ -14,12 +14,12 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from datasets import Dataset
 from loguru import logger
+from marinskyrl.task_machine_factories import ConfiguredTaskMachines
 from marinskyrl.task_sources import PreparedTaskCacheSource
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.harness.shell import task_prompt as marin_task_prompt
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, assistant_prefix_prompt
 from rolloutengine.models import TASK_ROLLOUT_COLUMN, MachineRuntimeSpec, TaskRolloutSpec
-from rolloutengine.validation import task_machine_reason
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN
 from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
 from skyrl_gym.source_task import session_parameters, source_task
@@ -30,13 +30,13 @@ from taskcompendium.models import (
     Source,
     TaskSpec,
     TextMessage,
-    grader_environment,
-    grades_with_judge,
     task_subset,
 )
 from taskcompendium.runtime.shell import resolve_shell_tool
+from shellbox.machine import MachineFactory
 from transformers import PreTrainedTokenizerBase
 
+from skyrl_train.dataset.machine_routing import task_machine, verifier_machine
 from skyrl_train.dataset.dataset import PromptDataset, _prompt_token_count, dataset_num_proc, read_prompt_files
 from skyrl_train.dataset.prepared_tasks import (
     PREPARED_TASK_BATCH_SIZE,
@@ -211,9 +211,7 @@ def source_row_task(
         source_session["max_turns"] = int(row_turn_limit)
     session = {**source_session, **config.pop("session", {}), "task_session": session_name}
     requirements = (
-        EnvironmentRequirements()
-        if machine is None
-        else EnvironmentRequirements.model_validate(machine["requirements"])
+        EnvironmentRequirements() if machine is None else EnvironmentRequirements.model_validate(machine["requirements"])
     )
     runtime = None if machine is None else MachineRuntimeSpec.model_validate(machine["runtime"])
     task = source_task(prompt, row, config, source, environment=requirements)
@@ -226,10 +224,8 @@ def _source_task_prompt(row: dict, index: int, *, source_name: str, environment_
     return {**session_parameters(lowered.task).extras, **task_prompt(lowered)}
 
 
-def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mapping[str, dict]) -> dict:
-    """Bind runtime settings when a canonical TaskSpec enters the trainer."""
-    task = TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN])
-    config = environment_configs["task_spec"]
+def _task_session(task: TaskSpec, config: Mapping[str, dict]) -> dict:
+    """Bind the harness and turn budget for this task's conversation."""
     final_event = task.context.events[-1]
     # Only the assistant-prefix harness keeps an unfinished assistant message last.
     continues_assistant = isinstance(final_event, TextMessage) and final_event.role == "assistant"
@@ -241,23 +237,25 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
     session = {**config["session"], "task_session": harness}
     if task.source.dataset in config["max_turns_by_dataset"]:
         session["max_turns"] = config["max_turns_by_dataset"][task.source.dataset]
-    machine = config["task_machine_by_dataset"].get(task.source.dataset)
-    if machine is None:
-        # A dataset mixing shell-simulator and Linux tasks binds machines by command semantics. The binding has
-        # no default-config entry, so it appears in a native configuration only when a launch sets it.
-        by_semantics = config.get("task_machine_by_command_semantics", {})
-        machine = by_semantics.get(task.environment_requirements.command_semantics)
-    task_machine = (
-        MachineRuntimeSpec.model_validate(machine)
-        if machine is not None and task_machine_reason(task) is not None
-        else None
+    return session
+
+
+def _canonical_task_prompt(
+    row: dict,
+    _index: int,
+    *,
+    environment_configs: Mapping[str, dict],
+    factory_provider: Callable[[], Mapping[str, MachineFactory]],
+) -> dict:
+    """Bind runtime settings when a canonical TaskSpec enters the trainer."""
+    task = TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN])
+    config = environment_configs["task_spec"]
+    lowered = rollout_spec(
+        task,
+        _task_session(task, config),
+        task_machine=task_machine(task, config, factory_provider),
+        verifier_machine=verifier_machine(task, config),
     )
-    verifier = None
-    grader_build = grader_environment(task.grader)
-    if grader_build is not None and not grades_with_judge(task.grader):
-        machine = config["image_verifier"] if grader_build.docker_image is not None else config["package_verifier"]
-        verifier = MachineRuntimeSpec.model_validate(machine)
-    lowered = rollout_spec(task, session, task_machine=task_machine, verifier_machine=verifier)
     return {**_stored_prompt(lowered), FAMILY_COLUMN: row.get(FAMILY_COLUMN)}
 
 
@@ -301,8 +299,10 @@ class SourceTaskDataset(TaskDataset):
         num_workers: int = 8,
         chat_template_kwargs: dict | None = None,
         prepared_cache: PreparedTaskCacheSource | None = None,
+        factory_provider: Callable[[], Mapping[str, MachineFactory]] | None = None,
     ):
         self.environment_configs = environment_configs
+        self.factory_provider = factory_provider
         self.prepared_cache = prepared_cache
         identities: dict[str, TaskEvaluationIdentity | None] = {}
 
@@ -354,9 +354,9 @@ class SourceTaskDataset(TaskDataset):
     def _prepared_rows_with_lengths(self) -> Dataset | None:
         cache = self.prepared_cache
         task_settings = self.environment_configs.get("task_spec")
-        if cache is None or self.datasets != [cache.path] or task_settings is None:
+        if cache is None or self.datasets != [cache.path] or task_settings is None or self.factory_provider is not None:
             return None
-        key = prepared_task_cache_key(cache, self.tokenizer, task_settings, self.chat_template_kwargs)
+        key = prepared_task_cache_key(cache, self.tokenizer, self.environment_configs, self.chat_template_kwargs)
         if key is None:
             return None
         with pq.ParquetFile(cache.path) as source:
@@ -391,12 +391,17 @@ class SourceTaskDataset(TaskDataset):
     def _prepare_cached_rows(self, arrow_path: Path) -> Dataset:
         source = read_prompt_files(self.datasets, prepare_source=self._prepare_source)
         environment_configs = self.environment_configs
+        factory_provider = self.factory_provider or ConfiguredTaskMachines(
+            json.dumps(environment_configs, sort_keys=True)
+        )
         tokenizer = self.tokenizer
         prompt_key = self.prompt_key
         template_kwargs = self.chat_template_kwargs
 
         def prepare(row: dict, index: int) -> dict:
-            result = _canonical_task_prompt(row, index, environment_configs=environment_configs)
+            result = _canonical_task_prompt(
+                row, index, environment_configs=environment_configs, factory_provider=factory_provider
+            )
             result[PROMPT_LENGTH_COLUMN] = task_prompt_token_count(
                 tokenizer,
                 {**result, prompt_key: json.loads(result[prompt_key])},
@@ -413,7 +418,12 @@ class SourceTaskDataset(TaskDataset):
         if TASK_SPEC_COLUMN in dataset.column_names:
             return self._map_task_rows(
                 dataset,
-                partial(_canonical_task_prompt, environment_configs=self.environment_configs),
+                partial(
+                    _canonical_task_prompt,
+                    environment_configs=self.environment_configs,
+                    factory_provider=self.factory_provider
+                    or ConfiguredTaskMachines(json.dumps(self.environment_configs, sort_keys=True)),
+                ),
             ).with_transform(_restore_task_prompts)
         return self._map_task_rows(
             dataset,

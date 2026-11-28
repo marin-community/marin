@@ -16,7 +16,7 @@ import re
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, field, replace
-from functools import cached_property, partial
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -37,15 +37,6 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.inference.openai_batch import OpenAIBatchClient
 from marin.inference.openai_chat import OpenAIChatClient
 from rigging.filesystem.storage_path import StoragePath
-from shellbox.image import RegistryImage
-from shellbox.machine import (
-    Backend,
-    MachineFactory,
-    MachineSpec,
-    NetworkPolicy,
-    PackageSpec,
-    UnsupportedMachineSpec,
-)
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.controls import GradingMachines, controls_identity
 from taskcompendium.pipeline.fingerprints import callable_identity, recipe_code_identity
@@ -73,7 +64,7 @@ from taskcompendium.pipeline.source_quality import SOURCE_QUALITY_REVISION, Sour
 from taskcompendium.pipeline.source_verification import SOURCE_VERIFICATION_REVISION, SourceVerificationPolicy
 from taskcompendium.pipeline.sources import conversion_shards, source_files_identity, staged_files
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
-from taskcompendium.runtime.local import LOCK_FILE, LocalGraderMachines
+from taskcompendium.runtime.local import LOCK_FILE
 from verifyit.modes.grade_judge import JudgeConnection
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
@@ -102,7 +93,6 @@ CURATION_VERSION = "2026.10.12.1"
 QUICK_VERSION = "2026.10.14.1"
 URL_CHUNK_BYTES = 1024 * 1024
 URL_TIMEOUT = 60
-IMAGE_MACHINE_CPUS = 4
 INPUT_OVERRIDES_REVISION = "2"
 
 
@@ -344,68 +334,6 @@ class CurationRecipe:
     @property
     def files(self) -> tuple[str, ...]:
         return self.source.files
-
-
-@dataclass(frozen=True)
-class CampaignMachines:
-    """Bind declared software and semantics to caller-selected Shellbox factories."""
-
-    image_factory: MachineFactory | None = None
-    image_cpus: int = IMAGE_MACHINE_CPUS
-    local: LocalGraderMachines = field(default_factory=LocalGraderMachines)
-    simulator_catalog: str | None = None
-
-    @cached_property
-    def _simulator_factory(self) -> MachineFactory:
-        try:
-            import shellsim  # noqa: PLC0415
-            from shellbox.backends.shellsim.machine import ShellSimMachineFactory  # noqa: PLC0415
-        except ImportError as error:
-            raise UnsupportedMachineSpec("Simulator controls require the Shellbox shellsim extra") from error
-        return ShellSimMachineFactory(
-            context=shellsim.Context(
-                pypi_catalog=self.simulator_catalog,
-                trusted_precompiled=self.simulator_catalog in (None, shellsim.DEFAULT_PYPI_CATALOG),
-            )
-        )
-
-    def identity(self) -> dict[str, Any]:
-        factory = self.image_factory
-        return {
-            "image": (
-                {
-                    "backend": factory.backend.value,
-                    "factory": f"{type(factory).__module__}.{type(factory).__qualname__}",
-                    "cpus": self.image_cpus,
-                }
-                if factory is not None
-                else None
-            ),
-            "local": self.local.identity(),
-            "simulator": {
-                "backend": Backend.SHELLSIM.value,
-                "factory": "shellbox.backends.shellsim.machine.ShellSimMachineFactory",
-                "catalog": self.simulator_catalog,
-            },
-            "network": NetworkPolicy.DENY.value,
-        }
-
-    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        if environment.command_semantics == CommandSemantics.SHELL_SIMULATOR:
-            packages = environment.package_spec or PackageSpec()
-            return self._simulator_factory, MachineSpec(packages, network=NetworkPolicy.DENY, memory_mb=memory_mb)
-        if environment.packages_lock is not None or environment.package_spec is not None:
-            return self.local.machine(environment, memory_mb)
-        if environment.docker_image is None:
-            raise UnsupportedMachineSpec("Native campaign execution requires a pinned image or package lock")
-        if self.image_factory is None:
-            raise UnsupportedMachineSpec("Image controls require a supplied image factory or --image-backend")
-        return self.image_factory, MachineSpec(
-            RegistryImage(environment.docker_image),
-            network=NetworkPolicy.DENY,
-            memory_mb=memory_mb,
-            cpus=self.image_cpus,
-        )
 
 
 def _reviewer(

@@ -22,26 +22,24 @@ from pathlib import Path, PurePosixPath
 
 import shellsim
 
+from shellbox.backends.shellsim.support import check_environment as check_shellsim_environment
+from shellbox.backends.shellsim.support import package_source
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
-    SHELL_SIMULATOR_CAPABILITIES,
     Backend,
     Command,
-    CommandSemantics,
-    ExecutionRequirements,
     ExitReason,
     MachineOutputLimitExceeded,
     MachineResourceExhausted,
     MachineSpec,
     MachineTerminated,
-    NetworkPolicy,
     PackageSpec,
     ProcessScope,
     Result,
     ShellStatus,
     ShellUpdate,
+    TaskRequirements,
     UnsupportedMachineSpec,
-    check_execution_requirements,
 )
 
 DEFAULT_CPU_LIMIT = 10_000_000_000
@@ -335,27 +333,11 @@ class ShellSimMachineFactory:
         self.disk = disk
         self.output = output
 
-    def _check_spec(self, spec: MachineSpec) -> PackageSpec:
-        if spec.cpus is not None or spec.gpus:
-            raise UnsupportedMachineSpec("ShellSim does not provide host CPU or GPU allocations")
-        if not isinstance(spec.source, PackageSpec):
-            raise UnsupportedMachineSpec("ShellSim requires a PackageSpec source")
-        if spec.network is not NetworkPolicy.DENY:
-            raise UnsupportedMachineSpec("ShellSim has no guest network")
-        return spec.source
-
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
-        self._check_spec(spec)
-        check_execution_requirements(
-            requirements,
-            spec,
-            semantics=CommandSemantics.SHELL_SIMULATOR,
-            capabilities=SHELL_SIMULATOR_CAPABILITIES,
-            image_reference=None,
-        )
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
+        check_shellsim_environment(requirements, spec)
 
     async def create(self, spec: MachineSpec) -> ShellSimMachine:
-        source = self._check_spec(spec)
+        source = package_source(spec)
         return await asyncio.to_thread(
             ShellSimMachine,
             spec,

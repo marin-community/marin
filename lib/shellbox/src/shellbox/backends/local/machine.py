@@ -33,15 +33,13 @@ from shellbox.backends.local import launch, nix
 from shellbox.backends.local.cgroup import MachineCgroup, check_cgroup_parent, delegated_cgroup_parent
 from shellbox.backends.local.images import PreparedLocalImage, prepare_local_image
 from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
+from shellbox.backends.local.support import check_local_environment, local_source
 from shellbox.backends.local.transfers import unpack_local_archive
-from shellbox.image import PreparedImage, RegistryImage, process_image_cache
+from shellbox.image import PreparedImage, RegistryImage, UnsupportedImage, process_image_cache
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
-    LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
-    CommandSemantics,
-    ExecutionRequirements,
     ExitReason,
     HostImage,
     MachineSpec,
@@ -50,8 +48,8 @@ from shellbox.machine import (
     NetworkPolicy,
     PackageSpec,
     Result,
+    TaskRequirements,
     UnsupportedMachineSpec,
-    check_execution_requirements,
 )
 from shellbox.process_session import SubprocessSession, acquire_owned, await_cleanup, finish_owned, own_cleanup
 from shellbox.task import Task, TaskSpec, single_container_task
@@ -1124,44 +1122,6 @@ def _check_mounts(mounts: tuple[Mount, ...]) -> None:
             raise UnsupportedMachineSpec(f"The local backend's mount {mount.guest} lies inside another mount")
 
 
-def _check_spec(spec: MachineSpec) -> HostImage | PackageSpec | PreparedImage | RegistryImage:
-    if not isinstance(spec.source, (HostImage, PackageSpec, PreparedImage, RegistryImage)):
-        raise UnsupportedMachineSpec(
-            "The local backend requires HostImage, PackageSpec, or a prepared/pinned OCI image, "
-            f"not {type(spec.source).__name__}"
-        )
-    if spec.storage_mb is not None or spec.gpus:
-        raise UnsupportedMachineSpec("The local backend does not provide disk quotas or GPU allocations")
-    if spec.memory_mb is not None and spec.memory_mb <= 0:
-        raise ValueError("Local memory_mb must be positive")
-    if (
-        isinstance(spec.source, RegistryImage)
-        and re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", spec.source.reference) is None
-    ):
-        raise UnsupportedMachineSpec("Local registry images must be pinned by sha256 digest")
-    return spec.source
-
-
-def check_local_environment(
-    requirements: ExecutionRequirements, spec: MachineSpec, *, cgroup_parent: Path | None = None
-) -> None:
-    """Check local execution support without acquiring a bubblewrap sandbox."""
-    source = _check_spec(spec)
-    origin = source.source if isinstance(source, PreparedImage) else source
-    reference = origin.reference if isinstance(origin, RegistryImage) else None
-    capabilities = LINUX_PROCESS_CAPABILITIES
-    if cgroup_parent is not None:
-        check_cgroup_parent(cgroup_parent)
-        capabilities = capabilities | {"retained_command_cancellation", "process_scope"}
-    check_execution_requirements(
-        requirements,
-        spec,
-        semantics=CommandSemantics.LINUX_PROCESS,
-        capabilities=capabilities,
-        image_reference=reference,
-    )
-
-
 class LocalMachineFactory:
     """Run trusted commands on this host in bubblewrap sandboxes, any number of machines at a time.
 
@@ -1239,7 +1199,7 @@ class LocalMachineFactory:
         self.bwrap = _working_bwrap(candidates, system_directories, self._system_mounts, environment)
         logger.info("Local backend sandboxes commands with %s, system directories %s", self.bwrap, system_directories)
 
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         check_local_environment(requirements, spec, cgroup_parent=self.cgroup_parent)
 
     async def create(self, spec: MachineSpec) -> LocalMachine:
@@ -1249,7 +1209,7 @@ class LocalMachineFactory:
     async def create_task(self, spec: TaskSpec) -> Task:
         """Start named containers with private filesystems and one network."""
         for container in spec.containers:
-            _check_spec(container.machine)
+            local_source(container.machine)
         if len(spec.containers) > 1 and spec.network is not NetworkPolicy.DENY:
             raise UnsupportedMachineSpec("Local multi-container tasks require denied external networking")
         if any(re.fullmatch(r"[a-z][a-z0-9_-]{0,62}", container.name) is None for container in spec.containers):
@@ -1313,7 +1273,7 @@ class LocalMachineFactory:
     async def _create(
         self, spec: MachineSpec, peer: LocalMachine | None = None, aliases: str | None = None
     ) -> LocalMachine:
-        source = _check_spec(spec)
+        source = local_source(spec)
         if isinstance(source, (PreparedImage, RegistryImage)):
             return await self._create_image(spec, source, peer, aliases)
 
@@ -1390,12 +1350,15 @@ class LocalMachineFactory:
         machine = None
 
         async def prepare() -> PreparedLocalImage:
-            prepared = (
-                source
-                if isinstance(source, PreparedImage)
-                else await asyncio.to_thread(self.image_cache.prepare, source)
-            )
-            return await asyncio.to_thread(prepare_local_image, prepared, bundle, umoci=self.umoci)
+            try:
+                prepared = (
+                    source
+                    if isinstance(source, PreparedImage)
+                    else await asyncio.to_thread(self.image_cache.prepare, source)
+                )
+                return await asyncio.to_thread(prepare_local_image, prepared, bundle, umoci=self.umoci)
+            except UnsupportedImage as error:
+                raise UnsupportedMachineSpec(str(error)) from error
 
         preparation = asyncio.create_task(prepare())
         try:

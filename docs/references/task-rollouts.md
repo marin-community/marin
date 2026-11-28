@@ -80,10 +80,9 @@ message runs under the assistant-prefix harness. The `structure-closure` tasks o
 curation [task-selection artifact](task-curation.md#final-task-selection) end this way.
 Other tasks use `harness_by_dataset[task.source.dataset]` when configured, or
 `default_harness`, which defaults to Shellbox.
-A task that needs a machine uses `task_machine_by_dataset[task.source.dataset]`, or else
-`task_machine_by_command_semantics` for its command semantics; without either, it fails validation.
-Image graders use the configured image verifier backend; package
-graders use the configured local verifier. The task-selection artifact contains the
+Machine tasks use `task_machine_by_dataset`, or the first supported backend in `task_machines_by_backend` insertion order.
+Shellbox checks software and capabilities; `network` binds `allow`. Controls record each tried backend's outcome per machine role in `machine.verdicts`; RL excludes backends whose control failed or was rejected for that role.
+Verifiers bind one fixed template: image graders use `image_verifier` and package graders `package_verifier`, refused when the task's evidence excludes that backend's failed verifier control. The task-selection artifact contains the
 task and private grader, so changing rollout resources or deadlines does not
 rewrite the task Parquet.
 
@@ -119,7 +118,7 @@ Native environments explicitly declare `CommandSemantics.LINUX_PROCESS`.
 and uses host tools; Shellsim resolves the same declaration through its Context catalog.
 `CommandSemantics.SHELL_SIMULATOR` selects built-in shell and virtual filesystem semantics,
 which require `PackageSpec` and a ShellSim factory. Missing native dependencies do not imply simulation.
-The default workdir is the image's workdir, or `/workspace` for the built-in filesystem.
+The default workdir is the image's workdir, or `/workspace` for the built-in filesystem; curation's grading machines bind the same declaration to `/app` instead.
 An explicit `working_directory` overrides that selection.
 
 Machine setup commands run as trusted root before task operations.

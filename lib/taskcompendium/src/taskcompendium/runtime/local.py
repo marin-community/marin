@@ -18,7 +18,7 @@ import stat
 import subprocess
 import tarfile
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cache, cached_property
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -33,9 +33,12 @@ from shellbox.backends.local.python_environment import (
     PythonEnvironment,
     build_python_environment,
 )
-from shellbox.machine import Backend, HostImage, MachineFactory, MachineSpec, Mount, NetworkPolicy
+from shellbox.context import MachineRoute, declared_spec
+from shellbox.image import is_digest_pinned_image
+from shellbox.machine import Backend, MachineFactory, Mount, NetworkPolicy
 
 from taskcompendium.models import DEFAULT_WORKSPACE, EnvironmentRequirements
+from taskcompendium.runtime.requirements import require_resolved_environment
 
 # Compiled extension modules are host-platform artifacts of optimized wheels. Staging ships the
 # pure-Python sources, so the runtime identity, image, and exports stay platform-neutral.
@@ -262,14 +265,21 @@ def local_factory() -> MachineFactory:
 
 @dataclass(frozen=True)
 class LocalGraderMachines:
-    """Unbuilt local grading machines with declared packages or a lock."""
+    """Unbuilt local grading machines with declared packages, a lock, or a pinned image."""
 
     def identity(self) -> dict[str, Any]:
         return {"backend": Backend.LOCAL.value, "python": DEFAULT_PYTHON_VERSION}
 
-    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        """Return an unprepared bubblewrap spec; ``memory_mb`` is advisory."""
-        if environment.packages_lock is None and environment.package_spec is None:
-            raise ValueError("A local grader requires a package spec or packages lock")
-        spec = MachineSpec(HostImage(), network=NetworkPolicy.DENY, workdir=DEFAULT_WORKSPACE)
-        return local_factory(), spec
+    def routes(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineRoute, ...]:
+        """Return the local route for declared packages, a lock, or a pinned image.
+
+        TaskCompendium removes the local memory request before preparation;
+        an unpinned image has no local route.
+        """
+        require_resolved_environment(environment)
+        if environment.docker_image is not None and not is_digest_pinned_image(environment.docker_image):
+            return ()
+        if environment.docker_image is None and environment.packages_lock is None and environment.package_spec is None:
+            return ()
+        spec = replace(declared_spec(environment, NetworkPolicy.DENY, workspace=DEFAULT_WORKSPACE), memory_mb=memory_mb)
+        return (MachineRoute(local_factory(), spec),)

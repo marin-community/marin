@@ -49,6 +49,7 @@ from taskcompendium.pipeline.execution_telemetry import (
     execute_phase,
 )
 from taskcompendium.pipeline.inputs import SourceFileOverride
+from taskcompendium.pipeline.machine_routes import export_route_evidence
 from taskcompendium.pipeline.models import (
     Admission,
     Disposition,
@@ -56,6 +57,7 @@ from taskcompendium.pipeline.models import (
     GraderReadiness,
     SourceRecipe,
     SourceStatus,
+    SourceVerificationStatus,
 )
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.pipeline.shard_outputs import ShardOutput, write_shard_outputs
@@ -71,7 +73,6 @@ from taskcompendium.pipeline.source_verification import (
     SOURCE_VERIFICATION_REVISION,
     VERIFICATION_REPORT_FILENAME,
     SourceVerificationPolicy,
-    SourceVerificationStatus,
     VerificationCounts,
     verify_source,
 )
@@ -664,8 +665,7 @@ def _write_download_manifest(run: _SourceRun, population_count: int) -> None:
 
 
 def _export_row(row: dict[str, Any], *, verification: SourceVerificationStatus) -> dict[str, Any]:
-    """Admit one checked audit row and carry its raw identity in place of the raw payload no view publishes."""
-    admitted = _admit(row, verification=verification)
+    admitted = export_route_evidence(_admit(row, verification=verification), row)
     raw = json.loads(admitted.pop("raw_json"))
     return {**admitted, **{name: raw[name] for name, _ in IDENTITY_FIELDS[1:]}}
 

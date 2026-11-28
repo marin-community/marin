@@ -46,18 +46,16 @@ from shellbox.backends.daytona.snapshot import (
     daytona_image,
     ensure_snapshot,
     snapshot_request_for_spec,
-    validate_source,
 )
+from shellbox.backends.daytona.support import check_environment as check_daytona_environment
+from shellbox.backends.daytona.support import daytona_source
 from shellbox.backends.daytona.transient import retry_transient
 from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND, START_COMMAND
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
-    LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
     CommandOutputLost,
-    CommandSemantics,
-    ExecutionRequirements,
     ExitReason,
     MachineDiskFull,
     MachineSpec,
@@ -66,8 +64,8 @@ from shellbox.machine import (
     NetworkPolicy,
     ProcessScope,
     Result,
+    TaskRequirements,
     UnsupportedMachineSpec,
-    check_execution_requirements,
 )
 from shellbox.process_session import finish_owned, own_cleanup
 
@@ -757,33 +755,19 @@ class DaytonaMachineFactory:
         return self.client_factory
 
     def _check_spec(self, spec: MachineSpec) -> DockerfileSource | RegistryImage:
-        source: DockerfileSource | RegistryImage
-        if isinstance(spec.source, DockerfileSource):
-            # Reject a build context Daytona cannot use when the spec is checked, before any machine starts.
-            source = validate_source(spec.source)
-        elif isinstance(spec.source, RegistryImage):
-            source = spec.source
-        else:
-            raise UnsupportedMachineSpec("Daytona requires a registry image or Docker build context")
+        source = daytona_source(spec)
         if self.network_policy is not None:
             self.network_policy.parameters()
         return source
 
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
-        source = self._check_spec(spec)
-        reference = source.reference if isinstance(source, RegistryImage) else None
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         if self.network_policy is not None:
+            self.network_policy.parameters()
             network = (
                 NetworkPolicy.DENY if self.network_policy.mode == DaytonaNetworkMode.BLOCK_ALL else NetworkPolicy.ALLOW
             )
             spec = replace(spec, network=network)
-        check_execution_requirements(
-            requirements,
-            spec,
-            semantics=CommandSemantics.LINUX_PROCESS,
-            capabilities=LINUX_PROCESS_CAPABILITIES,
-            image_reference=reference,
-        )
+        check_daytona_environment(requirements, spec)
 
     async def prepare(self, spec: MachineSpec) -> str:
         """Prepare the snapshot used by create without starting a sandbox.

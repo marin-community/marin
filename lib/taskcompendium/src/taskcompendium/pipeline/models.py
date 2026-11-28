@@ -9,10 +9,10 @@ from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+from shellbox.machine import Backend
 
 from taskcompendium.models import AssistantToolCalls, EnvironmentRequirements, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles
-from taskcompendium.runtime.models import RolloutRecord
 
 RESOURCE_BUDGET_BYTES = 1_000_000
 """Default limit on one task's decoded resource bytes; larger rows are deferred at normalization."""
@@ -206,17 +206,46 @@ class Admission(StrEnum):
     UNVERIFIED = "unverified"
 
 
+class SourceVerificationStatus(StrEnum):
+    """The terminal status of one source's verification stage."""
+
+    PASSED = "passed"
+    VALIDATED = "validated"
+    SKIPPED = "skipped"
+    REJECTED = "rejected"
+    INCONCLUSIVE = "inconclusive"
+
+
+class MachineRole(StrEnum):
+    """Which machine of a task a verdict describes."""
+
+    TASK = "task"
+    VERIFIER = "verifier"
+
+
+class ValidationVerdict(BaseModel):
+    """One backend's control outcome for one machine role of a task."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    role: MachineRole
+    backend: Backend
+    status: CheckStatus
+    detail: str
+
+
 class CheckResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     check: str
     status: CheckStatus
     detail: str
+    verdicts: tuple[ValidationVerdict, ...] = ()
+    """Every backend the control tried, in order, with each role's outcome on it."""
 
 
-@dataclass(frozen=True)
-class VerificationReport:
+class VerificationReport(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
     checks: list[CheckResult]
-    rollouts: tuple[RolloutRecord, ...] = ()
+    """Each control's outcome, carrying the backend verdicts it produced."""
 
 
 @dataclass(frozen=True)

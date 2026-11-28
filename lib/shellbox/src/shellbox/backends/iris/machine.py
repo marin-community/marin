@@ -35,15 +35,13 @@ from iris.rpc.errors import DEFAULT_RETRY_MAX_ATTEMPTS, DEFAULT_RETRY_MAX_ELAPSE
 from rigging.secrets import SecretSpec, resolve_secret_spec
 from rigging.timing import Duration, ExponentialBackoff, retry_with_backoff
 
+from shellbox.backends.iris.capabilities import IRIS_CAPABILITIES
 from shellbox.image import RegistryImage
 from shellbox.machine import (
-    LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
     CommandOutcomeUnknown,
-    CommandSemantics,
     ExecSetupFailed,
-    ExecutionRequirements,
     ExitReason,
     GuestHelperFailed,
     GuestPathError,
@@ -55,6 +53,7 @@ from shellbox.machine import (
     NetworkPolicy,
     ProcessScope,
     Result,
+    TaskRequirements,
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
@@ -614,13 +613,12 @@ class IrisMachineFactory:
             raise UnsupportedMachineSpec("Iris requires a registry image reference")
         return spec.source
 
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         source = self._check_spec(spec)
         check_execution_requirements(
             requirements,
             spec,
-            semantics=CommandSemantics.LINUX_PROCESS,
-            capabilities=LINUX_PROCESS_CAPABILITIES,
+            capabilities=IRIS_CAPABILITIES,
             image_reference=source.reference,
         )
 

@@ -52,6 +52,7 @@ from experiments.post_training.task_curation.campaign import (
     campaign_plan,
     run_campaign,
 )
+from experiments.post_training.task_curation.campaign_machines import CampaignMachines
 from experiments.post_training.task_curation.catalog_snapshot import publish_catalog
 from experiments.post_training.task_curation.config import (
     InputOverrides,
@@ -65,7 +66,6 @@ from experiments.post_training.task_curation.embedding import (
     curation_embedding_pipeline,
 )
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
-from experiments.post_training.task_curation.pipeline import CampaignMachines
 from experiments.post_training.task_curation.selection import (
     SELECTION_INPUT_PREFIX,
     EvalLiteRecipe,

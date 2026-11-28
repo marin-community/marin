@@ -16,7 +16,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from pathlib import Path
@@ -71,17 +71,18 @@ from shellbox.backends.daytona.snapshot import (
 )
 from shellbox.backends.daytona.transient import retry_transient
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
+from shellbox.capabilities import MachineCapability
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
     Command,
     CommandOutputLost,
-    CommandSemantics,
     DockerImage,
     ExitReason,
     MachineDiskFull,
     MachineSpec,
     MachineTerminated,
     MachineUnavailable,
+    TaskRequirements,
     UnsupportedMachineSpec,
 )
 from yarl import URL
@@ -1689,13 +1690,6 @@ def test_daytona_reuses_snapshot_until_build_inputs_or_resources_change(tmp_path
     assert all(client.deleted and client.closed for client in clients)
 
 
-@dataclass(frozen=True)
-class LinuxRequirements:
-    command_semantics: CommandSemantics = CommandSemantics.LINUX_PROCESS
-    capabilities: tuple[str, ...] = ()
-    docker_image: str | None = None
-
-
 @pytest.mark.parametrize("image_build", list(DaytonaImageBuild))
 @pytest.mark.parametrize("instruction", ["ADD payload.tar /opt/", 'add ["payload.tar", "/opt/"]'])
 def test_daytona_rejects_add_inputs_before_building(tmp_path, instruction, image_build):
@@ -1706,7 +1700,7 @@ def test_daytona_rejects_add_inputs_before_building(tmp_path, instruction, image
     factory = DaytonaMachineFactory(lambda: client, image_build=image_build)
     spec = MachineSpec(DockerfileSource(tmp_path, dockerfile))
     with pytest.raises(UnsupportedMachineSpec, match="ADD"):
-        factory.check_environment(LinuxRequirements(), spec)
+        factory.check_environment(TaskRequirements(frozenset({MachineCapability.PROCESS})), spec)
     with pytest.raises(UnsupportedMachineSpec, match="ADD"):
         asyncio.run(factory.create(spec))
     assert not client.snapshot.snapshots

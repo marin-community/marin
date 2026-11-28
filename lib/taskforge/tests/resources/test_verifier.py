@@ -14,12 +14,12 @@ from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout
 from shellbox.machine import (
     Backend,
     Command,
-    ExecutionRequirements,
     Machine,
     MachineFactory,
     MachineSpec,
     MachineTerminated,
     Result,
+    TaskRequirements,
 )
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import GraderMachine, ResourceGroups, ScriptGrader, StdoutReward
@@ -107,7 +107,7 @@ class CountedFactory(MachineFactory):
         self.failure, self.grader_delay = failure, grader_delay
 
     @override
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         self.factory.check_environment(requirements, spec)
 
     @override

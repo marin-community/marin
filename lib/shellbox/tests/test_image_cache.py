@@ -15,7 +15,14 @@ from pathlib import Path
 import pytest
 from shellbox.backends.local.images import prepare_local_image
 from shellbox.backends.qemu.image import QemuAssets, stage_qemu_image
-from shellbox.image import DockerfileSource, ImageCache, PreparedImage, RegistryImage, prepared_image_workdir
+from shellbox.image import (
+    DockerfileSource,
+    ImageCache,
+    PreparedImage,
+    RegistryImage,
+    UnsupportedImage,
+    prepared_image_workdir,
+)
 
 
 @pytest.mark.parametrize("working_directory,expected", [("/task workspace", "/task workspace"), ("", "/")])
@@ -86,6 +93,23 @@ def test_local_image_unpack_applies_layers_and_keeps_each_member_private(tmp_pat
     assert first.workdir == "/data"
     assert first.entrypoint + first.arguments == ("/bin/service", "--foreground", "--port", "8000")
     assert first.user == "0:0"
+
+
+def test_local_image_platform_refusal_precedes_unpack(tmp_path, oci_image):
+    image = oci_image((), {}, architecture="arm64")
+    destination = tmp_path / "unpacked"
+    with pytest.raises(UnsupportedImage):
+        prepare_local_image(image, destination, umoci=tmp_path / "must-not-run")
+    assert not destination.exists()
+
+
+def test_local_unpack_tool_failure_remains_retryable(tmp_path, layered_oci_image, monkeypatch):
+    def unavailable(args, **_kwargs):
+        raise subprocess.CalledProcessError(1, args, stderr=b"No space left on device")
+
+    monkeypatch.setattr(subprocess, "run", unavailable)
+    with pytest.raises(RuntimeError):
+        prepare_local_image(layered_oci_image, tmp_path / "unpacked", umoci=Path("umoci"))
 
 
 @pytest.mark.parametrize("tampering", ["config", "tag", "manifest-path"])

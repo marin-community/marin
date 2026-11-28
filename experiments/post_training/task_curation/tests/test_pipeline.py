@@ -44,6 +44,7 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignRuntime, PipelineResult, error_chain
+from experiments.post_training.task_curation.campaign_machines import CampaignMachines
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import prepare_blend
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import semantic_empty_negative
@@ -54,7 +55,6 @@ from experiments.post_training.task_curation.images.build import (
     environment_artifact,
 )
 from experiments.post_training.task_curation.pipeline import (
-    CampaignMachines,
     CurationRecipe,
     DownloadRequest,
     HarborHubSource,
@@ -414,7 +414,7 @@ def test_reviewed_local_inputs_keep_controls_and_invalidate_changed_bytes(
                 check["check"] == "golden" and check["status"] == "pass"
                 for row in trials["results"]
                 for trial in row["trials"]
-                for check in trial["checks"]
+                for check in trial["report"]["checks"]
             )
         assert not (tmp_path / "artifacts" / "task-curation" / "download").exists()
         manifest = json.loads(StoragePath(second.result.evidence["manifest"]).read_text())

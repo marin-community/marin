@@ -13,6 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.context import MachineRoute
 from shellbox.machine import Backend, DockerImage, Machine, MachineFactory, MachineSpec, PackageSpec
 
 from taskcompendium.convert.answers import numeric_answer_task, source_defect
@@ -207,7 +208,9 @@ class ShellSimImages(DockerMachineFactory):
     backend = Backend.DOCKER
 
     async def create(self, spec: MachineSpec) -> Machine:
-        return await ShellSimMachineFactory().create(replace(spec, source=PackageSpec()))
+        # The shellsim machine has no image working directory to inherit, so an empty route
+        # workdir runs in its root, like the real Docker backend running without -w.
+        return await ShellSimMachineFactory().create(replace(spec, source=PackageSpec(), workdir=spec.workdir or "/"))
 
 
 class UnavailableImages(DockerMachineFactory):
@@ -226,6 +229,6 @@ class FixtureGradingMachines:
     def identity(self) -> dict[str, Any]:
         return {"backend": "fixture", "network": "deny"}
 
-    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
+    def routes(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineRoute, ...]:
         assert environment.docker_image is not None
-        return self.factory, MachineSpec(DockerImage(environment.docker_image), memory_mb=memory_mb)
+        return (MachineRoute(self.factory, MachineSpec(DockerImage(environment.docker_image), memory_mb=memory_mb)),)

@@ -9,7 +9,7 @@ from loguru import logger
 from shellbox.machine import (
     Backend,
     Command,
-    ExecutionRequirements,
+    TaskRequirements,
     Machine,
     MachineFactory,
     MachineSpec,
@@ -120,7 +120,7 @@ class OwnedMachineFactory:
     def backend(self) -> Backend:
         return self.factory.backend
 
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         self.factory.check_environment(requirements, spec)
 
     def stop_creating(self) -> None:

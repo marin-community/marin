@@ -20,15 +20,13 @@ from pathlib import Path
 from uuid import uuid4
 
 from shellbox.backends.qemu.bundle import IMAGE_METADATA_FILE
+from shellbox.backends.qemu.capabilities import QEMU_CAPABILITIES
 from shellbox.backends.qemu.image import QemuAssets, load_qemu_bundle, stage_qemu_image
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage, process_image_cache
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
-    LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
-    CommandSemantics,
-    ExecutionRequirements,
     ExitReason,
     MachineSpec,
     NetworkPolicy,
@@ -37,6 +35,7 @@ from shellbox.machine import (
     Result,
     ShellStatus,
     ShellUpdate,
+    TaskRequirements,
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
@@ -519,7 +518,7 @@ class QemuMachineFactory:
                 raise UnsupportedMachineSpec("OCI images require QEMU assets and a bundle cache")
         return spec.source
 
-    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    def check_environment(self, requirements: TaskRequirements, spec: MachineSpec) -> None:
         source = self._check_spec(spec)
         source = source.source if isinstance(source, PreparedImage) else source
         reference = (
@@ -530,8 +529,7 @@ class QemuMachineFactory:
         check_execution_requirements(
             requirements,
             spec,
-            semantics=CommandSemantics.LINUX_PROCESS,
-            capabilities=LINUX_PROCESS_CAPABILITIES,
+            capabilities=QEMU_CAPABILITIES,
             image_reference=reference,
         )
 
