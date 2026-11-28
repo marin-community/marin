@@ -4685,6 +4685,8 @@ vizier = [
 dev = [
     { name = "click" },
     { name = "cloud-sql-python-connector", extra = ["pg8000"] },
+    { name = "marin-marina" },
+    { name = "marin-shellbox", extra = ["daytona"] },
     { name = "marin-verifyit", extra = ["math", "reasoning-gym", "schema"] },
     { name = "mkdocs" },
     { name = "mkdocs-git-authors-plugin" },
@@ -4731,6 +4733,8 @@ lint = [
 ]
 test = [
     { name = "cloud-sql-python-connector", extra = ["pg8000"] },
+    { name = "marin-marina" },
+    { name = "marin-shellbox", extra = ["daytona"] },
     { name = "marin-verifyit", extra = ["math", "reasoning-gym", "schema"] },
     { name = "openapi-schema-validator" },
     { name = "plotly" },
@@ -4829,6 +4833,8 @@ provides-extras = ["gpu", "tpu", "cpu", "rocm", "vizier", "dedup", "datakit"]
 dev = [
     { name = "click", specifier = ">=8.0" },
     { name = "cloud-sql-python-connector", extras = ["pg8000"], specifier = ">=1.9" },
+    { name = "marin-marina", editable = "infra/marina" },
+    { name = "marin-shellbox", extras = ["daytona"], editable = "lib/shellbox" },
     { name = "marin-verifyit", extras = ["math", "reasoning-gym", "schema"], editable = "lib/verifyit" },
     { name = "mkdocs", specifier = ">=1.5.0" },
     { name = "mkdocs-git-authors-plugin", specifier = ">=0.9.0" },
@@ -4875,6 +4881,8 @@ lint = [
 ]
 test = [
     { name = "cloud-sql-python-connector", extras = ["pg8000"], specifier = ">=1.9" },
+    { name = "marin-marina", editable = "infra/marina" },
+    { name = "marin-shellbox", extras = ["daytona"], editable = "lib/shellbox" },
     { name = "marin-verifyit", extras = ["math", "reasoning-gym", "schema"], editable = "lib/verifyit" },
     { name = "openapi-schema-validator", specifier = "==0.6.3" },
     { name = "plotly" },

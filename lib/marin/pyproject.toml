@@ -74,6 +74,11 @@ test = [
     "pytest-timeout",
     "marin-verifyit[math,reasoning-gym,schema]",
     "universal-pathlib",
+    # The task_curation pipeline modules import shellbox's Daytona backend (which
+    # needs the daytona SDK) and marina's client at module level, so unit shards
+    # collecting them need both packages.
+    "marin-shellbox[daytona]",
+    "marin-marina",
     # for scaling law plotting tests
     "plotly",
     # SOTOPIA length-control regression tests fit a logistic model.
