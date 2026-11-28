@@ -14,7 +14,7 @@ from typing import Any
 
 from verifyit.grade import InvalidTask
 from verifyit.modes.extract import extract_boxed
-from verifyit.modes.grade_math import grade_math_candidate
+from verifyit.modes.grade_math import grade_math_candidate, math_reference_choice
 from verifyit.numeric import numeric_literal
 from verifyit.spec import (
     Constraint,
@@ -94,6 +94,9 @@ def answer_task(
 
 def math_type(expected: str) -> MathType:
     """Keep structured mathematical answers distinct from scalar values."""
+    choice = math_reference_choice(expected)
+    if choice is not None:
+        _, expected = choice
     if expected.startswith("[") and expected.endswith("]"):
         return MathType.LIST
     if expected.startswith(("[", "(")) and expected.endswith(("]", ")")) and "," in expected:
@@ -125,6 +128,7 @@ def math_answer_task(
     expected = extract_boxed(reference) or reference
     spec = MathSpec(expected=expected, math_type=math_type(expected), positive_symbols=positive_symbols)
     try:
+        # Anchored grading validates the reference value before it inspects the reply.
         grade_math_candidate(spec, "")
     except InvalidTask as error:
         return source_defect("invalid_reference", str(error))

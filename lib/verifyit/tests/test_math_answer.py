@@ -266,11 +266,65 @@ def test_math_reference_unit_chains_ordinals_and_powers_grade_numeric_value(refe
     assert grade_math.grade_math_candidate(spec, wrong_candidate).reward == 0.0
 
 
-def test_math_ordinal_after_option_label_preserves_reference_value():
-    reference = r"\textbf{(C)}\ 11^{\text{th}}"
-    spec = MathSpec(expected=reference)
-    assert grade_math.grade_math_candidate(spec, reference).reward == 1.0
-    assert grade_math.grade_math_candidate(spec, r"\textbf{(C)}\ 11").reward == 0.0
+@pytest.mark.parametrize(
+    "reference, text, reward",
+    [
+        (r"\textbf{(D)}\ 7", "D", 1.0),
+        (r"\textbf{(D)}\ 7", "(D)", 1.0),
+        (r"\textbf{(D)}\ 7", "7", 1.0),
+        (r"\textbf{(D)}\ 7", "The answer is D.", 1.0),
+        (r"\textbf{(D)}\ 7", "The answer is 7.", 1.0),
+        (r"\textbf{(D)}\ 7", "(D) 7", 1.0),
+        (r"\textbf{(D)}\ 7", r"\boxed{\textbf{(D)}\ 7}", 1.0),
+        (r"\textbf{(D)}\ 7", "C", 0.0),
+        (r"\textbf{(D)}\ 7", "8", 0.0),
+        (r"\textbf{(D)}\ 7", "(D) 8", 0.0),
+        (r"\textbf{(D)}\ 7", r"\boxed{7D}", 0.0),
+        (r"\textbf{(A)}\ 0", r"\boxed{\textbf{(B)}\ 0}", 0.0),
+        (r"\textbf{(A)}\ 0", "(B) 0", 0.0),
+        (r"\textbf{(A)}\ 0", "B 0", 0.0),
+        (r"\textbf{(A)}\ 0", r"\boxed{0}", 1.0),
+        (r"\textbf{(C)}\ \frac{1}{2}", r"\boxed{0.5}", 1.0),
+        (r"\textbf{(D)}\ \text{Friday}", "Friday", 1.0),
+        (r"\textbf{(D)}\ \text{Friday}", r"\boxed{\text{Monday}}", 0.0),
+        (r"\textbf{(C)}\ 11^{\text{th}}", r"\boxed{\textbf{(C)}\ 11^{\text{th}}}", 1.0),
+        (r"\textbf{(C)}\ 11^{\text{th}}", "11", 1.0),
+        (r"\textbf{(C)}\ 11^{\text{th}}", "(C) 12", 0.0),
+        (r"\text{(B) }\, \frac{2}{3}", "B", 1.0),
+        ("C) 315", r"\boxed{315}", 1.0),
+        ("(D) 7", r"\boxed{7}", 1.0),
+        (r"\textbf{(D)}\ -7", r"\boxed{-7}", 1.0),
+        ("(A) -3", r"\boxed{A}", 1.0),
+        ("(A) -3", r"\boxed{-3}", 1.0),
+        ("(A) -3", r"\boxed{A - 3}", 0.0),
+        ("(A)-3", r"\boxed{(A) -3}", 1.0),
+        ("(A) + 2", "A+2", 1.0),
+        ("(A) + 2", "A", 0.0),
+        (r"\textrm{(A)}\ 7", r"\boxed{A}", 1.0),
+        (r"\textbf {(A) } 7", r"\boxed{7}", 1.0),
+        (r"\mathbf{(A)}\ 0", r"\boxed{0}", 1.0),
+        (r"\mathbf{(A)}\ 0", r"\boxed{\textrm{(B)} 0}", 0.0),
+        ("(C)10", r"\boxed{C}", 1.0),
+        (r"(\textbf{C}) 10", r"\boxed{10}", 1.0),
+        (r"\textbf{(C)}\ \text{I, II, and IV only}", r"\boxed{C}", 1.0),
+        (
+            r"\textbf{(C)}\ \text{I, II, and IV only}",
+            r"\boxed{(C) \text{I, II, and IV only}}",
+            1.0,
+        ),
+        (
+            r"\textbf{(C)}\ \text{I, II, and IV only}",
+            r"\boxed{(C) \text{I, II, and III only}}",
+            0.0,
+        ),
+        (r"\textbf{(A)} \text{ and } \textbf{(C)}", r"\boxed{\textbf{(A)} \text{ and } \textbf{(C)}}", 1.0),
+        (r"\textbf{(A)} \text{ and } \textbf{(C)}", r"\boxed{A}", 0.0),
+        (r"B) \( \frac{24}{\sqrt{5}} \).", r"\boxed{B) \( \frac{24}{\sqrt{5}} \).}", 1.0),
+        (r"B) \( \frac{24}{\sqrt{5}} \).", r"\boxed{\frac{24}{\sqrt{5}}}", 1.0),
+    ],
+)
+def test_math_labelled_choice_answers(reference, text, reward):
+    assert grade_math.grade_math_text_candidate(MathSpec(expected=reference), text).reward == reward
 
 
 @pytest.mark.parametrize(

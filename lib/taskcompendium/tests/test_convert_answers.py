@@ -45,6 +45,7 @@ def reward(task: TaskSpec | ImportRejection, answer: str) -> float | None:
         (math_answer_task(ROW, prompt=" ", answer="1"), DEFECT, "missing_prompt"),
         (math_answer_task(ROW, prompt="Add.", answer=""), DEFECT, "invalid_reference"),
         (math_answer_task(ROW, prompt="Solve.", answer=r"$\boxed{\epsilon \approx$"), DEFECT, "invalid_reference"),
+        (math_answer_task(ROW, prompt="Divide.", answer=r"\frac{1}{0}"), DEFECT, "invalid_reference"),
         (
             numeric_answer_task(ROW, prompt="Add.", answer="seven", tolerance_abs=0, tolerance_rel=0),
             DEFECT,
@@ -74,6 +75,7 @@ def reward(task: TaskSpec | ImportRejection, answer: str) -> float | None:
         "math_blank_prompt",
         "math_blank_reference",
         "math_unparseable_reference",
+        "math_undefined_reference",
         "numeric_word_reference",
         "numeric_missing_reference",
         "mcq_key_beyond_options",
@@ -91,12 +93,35 @@ def test_unusable_rows_are_rejected_with_the_defect_named(converted, kind, reaso
 
 @pytest.mark.parametrize(
     "answer",
-    [r"67.\overline{3}", r"32 \text{ white}, 16 \text{ black}", r"x = \frac\pi 2 = 2", r"1$ + $2"],
+    [
+        r"67.\overline{3}",
+        r"32 \text{ white}, 16 \text{ black}",
+        r"x = \frac\pi 2 = 2",
+        r"1$ + $2",
+        r"C) \(2\) and A) \(3\).",
+    ],
 )
 def test_math_partial_reference_is_rejected_during_conversion(answer):
     converted = math_answer_task(ROW, prompt="Solve.", answer=answer)
     assert isinstance(converted, ImportRejection)
     assert (converted.kind, converted.reason) == (DEFECT, "invalid_reference")
+
+
+def test_math_choice_with_clock_time_accepts_the_label_and_literal_value():
+    answer = r"\textbf{(C)}\ 8:00\text{ p.m.}"
+    task = math_answer_task(ROW, prompt="What time is it?", answer=answer)
+
+    assert reward(task, r"\boxed{C}") == 1.0
+    assert reward(task, rf"\boxed{{{answer}}}") == 1.0
+    assert reward(task, r"\boxed{(C) 9:00\text{ p.m.}}") == 0.0
+    assert reward(task, r"\boxed{(B) 8:00\text{ p.m.}}") == 0.0
+
+
+def test_math_choice_with_an_ordered_list_accepts_the_members_without_brackets():
+    task = math_answer_task(ROW, prompt="Pick the ordered list.", answer="(C) [1, 2]")
+
+    assert reward(task, r"\boxed{1, 2}") == 1.0
+    assert reward(task, r"\boxed{2, 1}") == 0.0
 
 
 @pytest.mark.parametrize(

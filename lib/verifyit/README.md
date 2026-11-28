@@ -65,9 +65,16 @@ When a box is present, its entire content must be a numeric literal, optionally 
 Thousands separators require groups of three digits. Multiple literals such as `12 or 13` or
 `2 + 2`, malformed numbers and nonfinite values are malformed submissions and receive reward `0.0`.
 
-Default math references must parse as one whole LaTeX expression. Each member of a LIST
-reference must parse separately. A partial parse makes the task invalid; TaskCompendium rejects
-such a row during conversion as `invalid_reference`.
+For a single multiple-choice reference such as `\textbf{(D)}\ 7`, the default grader accepts
+the correct letter or an equivalent value. A reply that gives both must match both.
+When symbolic parsing yields no expression, a partial expression, or an undefined value,
+the grader compares the choice value as text after removing outer math delimiters and a
+trailing period.
+
+Other default math references, including lists of choice labels such as `(A) and (C)`,
+must parse as one whole LaTeX expression. Each member of a LIST reference must parse separately.
+TaskCompendium rejects partial parses and undefined expressions during conversion as
+`invalid_reference`.
 
 Scalar `MathSpec` contracts may set `positive_symbols = ["a_1", "a_2"]` when the public problem
 explicitly states those symbols are positive. If ordinary comparison fails, the grader checks
