@@ -66,12 +66,26 @@ class _CoordinatorRun(BaseModel):
     version: str
     required_env_vars: tuple[str, ...]
     forward_env: tuple[str, ...]
+    fingerprint: str | None = None
 
 
 _COORDINATOR_GRAPH = TypeAdapter(tuple[_CoordinatorRun, ...])
 
 
-def _coordinator_graph(handles: list[ArtifactStep]) -> tuple[_CoordinatorRun, ...]:
+def _coordinator_graph(
+    handles: list[ArtifactStep], *, execution: IrisSkyRLExecution | None = None
+) -> tuple[_CoordinatorRun, ...]:
+    if execution is not None:
+        return tuple(
+            _CoordinatorRun(
+                name=step.name,
+                version=step.version,
+                fingerprint=step.fingerprint(),
+                required_env_vars=tuple(sorted(set(execution.required_env_vars))),
+                forward_env=(),
+            )
+            for step in handles
+        )
     return tuple(
         _CoordinatorRun(
             name=step.name,
@@ -86,7 +100,7 @@ def _coordinator_graph(handles: list[ArtifactStep]) -> tuple[_CoordinatorRun, ..
     )
 
 
-def validate_coordinator_graph(handles: list[ArtifactStep]) -> None:
+def validate_coordinator_graph(handles: list[ArtifactStep], *, execution: IrisSkyRLExecution | None = None) -> None:
     """Refuse a re-entered graph whose run identities or forwarded environment names differ."""
     payload = os.environ.get(_COORDINATOR_GRAPH_ENV)
     if payload is None:
@@ -95,7 +109,7 @@ def validate_coordinator_graph(handles: list[ArtifactStep]) -> None:
         submitted = _COORDINATOR_GRAPH.validate_json(payload, strict=True)
     except ValidationError as error:
         raise click.UsageError("submitted RL graph identity is malformed") from error
-    rebuilt = _coordinator_graph(handles)
+    rebuilt = _coordinator_graph(handles, execution=execution)
     if rebuilt != submitted:
         raise click.UsageError(
             "coordinator rebuilt a different RL graph: "
@@ -138,7 +152,11 @@ def _submission_route(executions: tuple[IrisSkyRLExecution, ...]) -> _IrisSubmis
         cluster_config=cluster_config,
         target_cluster=target_cluster,
         priority=priorities.pop(),
-        timeout_hours=max(execution.coordinator_timeout_hours for execution in executions),
+        timeout_hours=(
+            0
+            if any(execution.coordinator_timeout_hours == 0 for execution in executions)
+            else max(execution.coordinator_timeout_hours for execution in executions)
+        ),
         container_profile=container_profile,
     )
 
@@ -149,13 +167,17 @@ def _coordinator_request(
     argv: tuple[str, ...],
     workspace: Path,
     env_vars: Mapping[str, str],
+    *,
+    execution: IrisSkyRLExecution | None = None,
 ) -> tuple[str, JobRequest]:
-    executions = _skyrl_executions(handles)
+    executions = (execution,) if execution is not None else _skyrl_executions(handles)
     selected_env = {name: env_vars[name] for name in _COORDINATOR_ENV_VARS if name in env_vars}
-    for execution in executions:
-        for name in execution.required_env_vars:
+    for configured_execution in executions:
+        for name in configured_execution.required_env_vars:
             selected_env[name] = env_vars[name]
-    selected_env[_COORDINATOR_GRAPH_ENV] = _COORDINATOR_GRAPH.dump_json(_coordinator_graph(handles)).decode()
+    selected_env[_COORDINATOR_GRAPH_ENV] = _COORDINATOR_GRAPH.dump_json(
+        _coordinator_graph(handles, execution=execution)
+    ).decode()
     route = _submission_route(executions)
     terminal = graph_handles(handles)[-1]
     job_name = sanitize_job_name(f"{terminal.name}-{terminal.version}-coordinator-{uuid.uuid4().hex[:8]}")
@@ -176,7 +198,7 @@ def _coordinator_request(
         ),
         environment=create_environment(workspace=str(workspace), env_vars=selected_env, extras=["cpu"]),
         priority=priority_band_value(route.priority),
-        timeout=Duration.from_hours(route.timeout_hours),
+        timeout=Duration.from_hours(route.timeout_hours) if route.timeout_hours else None,
     )
     return route.cluster_config, request
 
@@ -188,11 +210,12 @@ def submit_or_run(
     coordinator_env: Mapping[str, str],
     *,
     argv: tuple[str, ...],
+    execution: IrisSkyRLExecution | None = None,
 ) -> JobName | None:
     """Run the graph in-job, or submit it and return the coordinator's ID."""
     if get_job_info() is not None:
         if _COORDINATOR_GRAPH_ENV in os.environ:
-            validate_coordinator_graph(handles)
+            validate_coordinator_graph(handles, execution=execution)
         run(*handles, max_concurrent=max_concurrent)
         return None
 
@@ -203,6 +226,7 @@ def submit_or_run(
         argv,
         workspace,
         coordinator_env,
+        execution=execution,
     )
     with open_iris_client(config_file=Path(cluster_config), workspace=workspace) as iris_client:
         handle = FrayIrisClient.from_iris_client(iris_client).submit(request, adopt_existing=False)

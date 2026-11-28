@@ -26,6 +26,7 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
 from experiments.grug.moe_hero_ep.hero_recipe import HeroThroughputResult
 from experiments.grug.moe_hero_ep.launch_hero_sft import (
+    SFT_TOKENIZER,
     build_sft_run,
     checkpoint_step,
     permanent_checkpoint_dir,
@@ -42,7 +43,7 @@ from experiments.grug.moe_hero_ep.ops.export_cpu import (
 from experiments.grug.moe_hero_ep.ops.upload_hf import write_tokenizer_metadata
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.grug.moe_hero_ep.train import RouterBiasMode
-from experiments.sft.launcher import sft_child_resources
+from experiments.sft.launcher import PreparedData, sft_child_resources
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -67,6 +68,18 @@ class MochiSFT:
     stop_after_steps: int | None = None
     eval_every: int = 0
     expert_placement: ExpertPlacement | None = None
+    prepared_data: PreparedData | None = None
+
+    def with_data_mix(self, data: PreparedData) -> "MochiSFT":
+        """Bind a versioned LM data manifest while retaining the training recipe."""
+        return replace(self, run_id=f"{self.run_id}-mix-{data.mix_fingerprint()}", prepared_data=data)
+
+    def mix_tokenizer(self) -> str:
+        return SFT_TOKENIZER
+
+    def with_steps(self, steps: int, *, version: str) -> "MochiSFT":
+        """Set the SFT update budget and keep its final native checkpoint."""
+        return replace(self, stop_after_steps=steps, checkpoints="final", version=version)
 
     def trained(
         self,
@@ -130,6 +143,7 @@ class MochiSFT:
             version=self.version,
             resources=resources,
             checkpoints=self.checkpoints,
+            prepared_data=self.prepared_data,
         )
         if prefix is None:
             return step

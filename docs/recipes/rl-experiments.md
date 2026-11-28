@@ -70,6 +70,119 @@ campaign layout splits a 102,400-token request into 20,480 packed token position
 `train-medium-tools` runs Linux tasks and image graders on Daytona sandboxes in the RL organization, so set
 `DAYTONA_RL_API_KEY`.
 
+### Compose a versioned SFT data mix with RL
+
+Use the existing model command's `--sft` path for a complete arm, selecting the
+model's curriculum preset with `--preset`. Add an
+immutable `--sft-data-mix NAME@VERSION`, its regional URI and relative JSON manifest
+file; the preset supplies the tokenizer identity. `PreparedData` supplies an `LmDataConfig` to either SFT
+recipe while retaining optimizer settings, context, batch and allocation.
+The manifest owns component weights and data-validation splits. Packing also comes
+from the manifest unless a preset declares a prepared-data format view.
+Leave the manifest's `mixture_start_step` unset so the same mix serves both models;
+Mochi binds it to its native initializer step and rejects conflicting clocks.
+
+Each model's table declares a curriculum preset — `train-long-agentic-curriculum`
+for Mochi (72 RL updates) and for Snowball (36 RL updates) — so `--preset` selects
+the whole arm policy: the update counts, the 200-prompt holdout, the 3-update
+validation cadence and the 3-evaluation best-checkpoint window. Arms train on the
+post-holdout remainder without the agentic family-balanced batch mix, whose
+rollout pools the remainder's per-family counts cannot guarantee. `--sft-steps` is
+required and sets the SFT updates. Both models size their SFT schedule to that
+explicit budget; Mochi keeps its preset decay fraction and starts the mixture at
+the restored step. Arms inherit their layout's coordinator and job deadlines and
+resume from committed checkpoints. Failure watchdogs and agent-attempt timeouts
+still detect failed work.
+
+An arm samples 200 prompts uniformly from its own admitted RL train pool
+with a fixed seed and removes them from train by task and prompt identity.
+The derived selection records its parent, seed, count, population and held-out
+IDs. Both train and validation consume that same artifact. Validation runs
+at steps 3, 6, 9, and so on, recording raw reward. The best checkpoint maximizes
+the arithmetic mean of the last three evaluations; all three must meet coverage
+and eligibility requirements. The score window restores after restart. Main's 99%
+coverage requirement remains (198/200 scored and all 200 attempted).
+
+Every validation-step checkpoint is saved and retained. The selected best
+and final SFT artifact remain in durable storage. For example,
+print a Mochi arm without submitting work:
+
+```bash
+uv run python -m experiments.post_training.mochi_rl \
+  --preset train-long-agentic-curriculum --sft mixture-262k-176node \
+  --sft-data-mix "$MOCHI_MIX@$MOCHI_MIX_VERSION" --sft-data-uri "$MOCHI_MIX_URI" \
+  --sft-data-file mix.json \
+  --sft-steps 524 --tasks "$MOCHI_TASKS" \
+  --version 2026.11.25.2 --plan
+```
+
+The equivalent Snowball command is:
+
+```bash
+uv run python -m experiments.post_training.snowball_rl \
+  --preset train-long-agentic-curriculum --sft mixture-262k-32node \
+  --sft-data-mix "$SNOWBALL_MIX@$SNOWBALL_MIX_VERSION" --sft-data-uri "$SNOWBALL_MIX_URI" \
+  --sft-data-file mix.json \
+  --sft-steps 360 --tasks "$SNOWBALL_TASKS" \
+  --version 2026.11.25.2 --plan
+```
+
+To build only SFT and its final export, add `--through sft`. This stage uses the
+selected RL preset's coordinator route, but constructs no RL or task-selection
+steps. The coordinator checks the submitted SFT fingerprint before execution.
+Omit `--wait`, which reports RL results.
+
+The Snowball SFT preset `exp7-262k-32node` ports the resolved Exp6 SFT157
+recipe: 32 eight-H100 nodes, context parallelism 8 within each node and data
+parallelism 32 across nodes, batch 256 at 262,144 positions, MuonH with a
+constant learning rate after 30 warmup updates, then linear cooldown over the
+final 15% of updates to a 0.1× floor, FP32 parameters with BF16
+compute, token-weighted accumulation, special-token initialization and update
+scaling, and the initial C4 reference check: the raw initializer state gates
+against Exp6's recorded C4 loss before reseeding, and the post-reseed evaluation
+records the intentional shift without gating. The preset also binds Exp6's GPU
+launch environment from SFT157's consumed configuration, including both
+600-second collective termination settings and the shared compilation cache. Training allows two retries per task and 64 cumulative task failures;
+these separate Fray gates prevent a single failed startup from ending the gang.
+It keeps the same staged Snowball
+base and tokenizer bindings. Its all-position view reads existing cached
+`input_ids` with `TextLmDatasetFormat`, packing 256 documents with lookahead
+128. Stored assistant masks are ignored; padding still contributes no loss.
+The source caches and release manifest are unchanged.
+
+For an Exp7 launch, use the approved V10.1 release and set `--sft-steps` to its
+sealed one-epoch receipt's update count; the preset pins no data or step count
+of its own, so it cannot lower until both bind. V10 can be used for
+a no-run preflight with its receipt's 1,679 updates; it is not the launch mix.
+Once V10.1 is approved and sealed, bind every `EXP7_*` value below to that
+release and its epoch receipt:
+
+```bash
+uv run python -m experiments.post_training.snowball_rl \
+  --preset train-long-agentic --sft exp7-262k-32node --through sft \
+  --sft-data-mix "$EXP7_MIX@$EXP7_MIX_VERSION" --sft-data-uri "$EXP7_MIX_URI" \
+  --sft-data-file data.json \
+  --sft-steps "$EXP7_EPOCH_UPDATES" --priority production \
+  --version "$EXP7_RUN_VERSION" --plan
+```
+
+Replace `--plan` with `--run` only for the approved, sealed release. This
+submits SFT without starting RL or evaluation. The subsequent RL stage still
+needs its own normalized preset and qualified Exp6 curriculum binding.
+
+SFT uses its preset allocation in the RL coordinator's region. Stage weights,
+corpus and tokenizer in that region before any launch; this command performs
+no cross-region transfer. The existing `--init NAME@VERSION` path remains
+available for previously published models.
+
+Micro210 remains deferred until [PR #12249](https://github.com/marin-community/marin/pull/12249)
+lands its native frozen 2026.11.23 binding. Its export consumer must evaluate the
+best-window RL export, optionally evaluate SFT, and use the model-specific
+`mochi-gb200-cw-us-east-08a` or `snowball-h100-cw-us-east-02a` serving profile.
+When a row seals, the same follow-up must automatically publish the matching
+FineStore/EvalDash record under `CW_RECORDS_PREFIX` with model, checkpoint and
+policy in the run name.
+
 ### Task selection and native resume
 
 Pass `--tasks snowball-100k-agentic@2026.11.19.2` for a mixed preset. The versioned

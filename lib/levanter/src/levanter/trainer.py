@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import atexit
+import dataclasses
 import copy
 import functools
 import logging as pylogging
@@ -90,12 +91,14 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
 from levanter.utils import cloud_utils
 from levanter.utils.hardware_topology import hardware_topology_summary
-from levanter.utils.jax_utils import zeros_like_tree
+from levanter.utils.jax_utils import move_tree_to_memory_kind, zeros_like_tree
 from levanter.utils.mesh import MeshConfig, create_mesh_from_axis_specs
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import ComputeLossFunction, FilterSpec
 
 logger = pylogging.getLogger(__name__)
+_DEFAULT_LOADER_FETCH_BATCH_SIZE = 32
+_DEFAULT_LOADER_MAX_BUFFERED_BATCHES = 128
 
 X = TypeVar("X")  # Input
 M = TypeVar("M")  # Model
@@ -289,6 +292,7 @@ class Trainer:
         loss_fn: ComputeLossFunction,
         *,
         add_default_hooks: bool = True,
+        loss_weight_fn: Callable | None = None,
     ):
         """
         Args:
@@ -298,11 +302,14 @@ class Trainer:
                 either a scalar loss, or a tuple of (scalar loss, metrics_dict). The metrics dict will be automatically
                 logged to the tracker with appropriate prefixes (e.g., "train/accuracy", "eval/perplexity").
                 The function should be jit-able and should not have any side effects.
+            loss_weight_fn: Full-batch weight for a summed loss. Normalizes loss and
+                gradients consistently across microbatches, including empty-label microbatches.
         """
         self.hooks = TrainerHooks()
         self.config = config
         self.optimizer = optimizer
         self._raw_loss_function = loss_fn
+        self.loss_weight_fn = loss_weight_fn
         self._checkpointer: Optional[Checkpointer] = None
         self._xla_dump_upload: Callable[[StepInfo], None] | None = None
 
@@ -548,6 +555,10 @@ class Trainer:
 
         self.hooks.emit_event(ProgressEvent.TRAIN_STEP_STARTED)
         with capture_time() as step_time:
+            if self.config.offload_opt_state:
+                state = dataclasses.replace(
+                    state, opt_state=move_tree_to_memory_kind(state.opt_state, memory_kind="device")
+                )
             # Annotation scoped to the compiled step only (not hooks/logging below) so
             # that GPU host-side step_num timing matches TPU device-side "Steps" semantics.
             with jax.profiler.StepTraceAnnotation("train", step_num=int(state.step)):
@@ -559,6 +570,10 @@ class Trainer:
                     )
 
             loss = result.loss.item()
+            if self.config.offload_opt_state:
+                offloaded = move_tree_to_memory_kind(result.new_state.opt_state, memory_kind="pinned_host")
+                jax.block_until_ready(offloaded)
+                result.new_state = dataclasses.replace(result.new_state, opt_state=offloaded)
             self.hooks.emit_event(ProgressEvent.TRAIN_STEP_FINISHED)
 
             if self.config.crash_on_nan and jnp.isnan(loss):
@@ -726,10 +741,10 @@ class Trainer:
         return DataLoader(
             dataset,
             batch_size=batch_size,
-            max_buffered_batches=128,
+            max_buffered_batches=self.config.loader_max_buffered_batches,
             mesh=self.device_mesh,
             axis_resources=self.compute_axis_mapping,
-            fetch_batch_size=32,
+            fetch_batch_size=self.config.loader_fetch_batch_size,
             batch_axis_name=batch_name,
             allow_nondivisible_batch_size=self.config.allow_nondivisible_batch_size,
         )
@@ -801,11 +816,21 @@ class Trainer:
         """
         Batch = _resolve_axis_in_tree((batch, batch_kwargs), self.config.batch_axis_name)
 
-        # loss_fn always returns (loss, metrics), so has_aux=True
-        # Only batch inputs should be split; raw model dimensions can match the batch size.
-        grad_fn = partial(eqx.filter_value_and_grad(loss_fn, has_aux=True), model)
-
         mbs = self.config.microbatch_size
+        if self.loss_weight_fn is not None:
+            denominator = jnp.maximum(self.loss_weight_fn(*batch, **batch_kwargs), 1.0)
+            num_microsteps = max(1, Batch.size // mbs) if mbs is not None else 1
+
+            def weighted_loss(model, *microbatch, **kwargs):
+                loss, metrics = loss_fn(model, *microbatch, **kwargs)
+                factor = num_microsteps / denominator
+                return loss * factor, metrics
+
+            differentiated_loss = weighted_loss
+        else:
+            differentiated_loss = loss_fn
+        grad_fn = partial(eqx.filter_value_and_grad(differentiated_loss, has_aux=True), model)
+
         if mbs is not None:
             grad_fn = microbatched(
                 grad_fn,
@@ -883,6 +908,15 @@ class TrainerConfig:
     train_lm, train_dpo and lora_lm, and in HF exports. The eval and sampling entry points still load HF checkpoints in
     the compute dtype. In YAML: ``field_dtype_overrides: {router_bias: float32}``.
     """
+    offload_opt_state: bool = field(default=False, metadata={"fingerprint_omit_value": False})
+    loader_fetch_batch_size: int = field(
+        default=_DEFAULT_LOADER_FETCH_BATCH_SIZE, metadata={"fingerprint_omit_value": _DEFAULT_LOADER_FETCH_BATCH_SIZE}
+    )
+    loader_max_buffered_batches: int = field(
+        default=_DEFAULT_LOADER_MAX_BUFFERED_BATCHES,
+        metadata={"fingerprint_omit_value": _DEFAULT_LOADER_MAX_BUFFERED_BATCHES},
+    )
+
     quantization: Optional[QuantizationConfig] = None
     model_averaging: ModelAveragingConfig | None = None
 

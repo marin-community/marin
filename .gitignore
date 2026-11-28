@@ -255,4 +255,7 @@ lib/iris/src/iris/_build_info.py
 experiments/evaluation/campaigns/.launch-staging/
 experiments/evaluation/campaigns/.launch-snapshots/
 
+# Evaluation test fixture workspaces (created in-repo, removed on normal exit).
+.harbor-launch-*/
+
 !experiments/post_training/task_curation/scripts/fixtures/*.jsonl

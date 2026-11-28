@@ -37,8 +37,9 @@ from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState, is_job_finished
 from marin.execution.artifact import is_mutable_version, read_artifact
+from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import fingerprint_hash
-from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
 from marin.execution.lazy import run as build_artifacts
 from marin.execution.step_runner import check_cache
 from marin.execution.step_status import get_status_path
@@ -95,7 +96,9 @@ from experiments.post_training.rl_measurements import (
     read_recorded_launch,
     run_inputs,
 )
-from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME
+from experiments.post_training.task_curation.selection import (
+    FULL_VALIDATION_FILENAME,
+)
 
 _WANDB_ENTITY_ENV = "WANDB_ENTITY"
 _PUBLICATION_POLL_SECONDS = 60
@@ -278,7 +281,7 @@ def build_experiment(
     evaluation_inputs = [
         (evaluation.name, source.name, source.version)
         for evaluation in preset.evaluations
-        for source in (recipe.evaluation_source(evaluation, selection, default, preset.held_out_tasks),)
+        for source in (recipe.evaluation_source(evaluation, selection, default, preset),)
     ]
     changes = {
         "tasks": (selection.name, selection.version),
@@ -785,6 +788,16 @@ def _entry_module(module: str | None) -> str:
     return module
 
 
+def _submission_environment(context: click.Context, preset: presets.Preset) -> dict[str, str]:
+    """The coordinator submission environment: the process env plus the submitted revision and durable prefix."""
+    environment = dict(os.environ)
+    if revision := context.meta.get("sft_source_revision"):
+        environment["GIT_COMMIT"] = revision
+    if preset.output_ttl_days is not None:
+        environment["MARIN_PREFIX"] = recipe.run_prefix(preset)
+    return environment
+
+
 def _submit_from_launcher(
     module: str | None,
     argv: tuple[str, ...],
@@ -816,17 +829,12 @@ def _submit_from_launcher(
             cached_attempts[path] = cached.attempt_id
     indexed_runs = dict.fromkeys(native_ids.values(), index)
     metadata = _SUBMITTED_INDEX.dump_json(indexed_runs).decode()
-    environment = {
-        **os.environ,
+    environment = _submission_environment(context, preset) | {
         RUN_INDEX_ENV: metadata,
         CACHED_ATTEMPTS_ENV: _CACHED_ATTEMPTS.dump_json(cached_attempts).decode(),
     }
     if cohort := context.meta.get("rl_control_cohort"):
         environment[CONTROL_COHORT_ENV] = cohort.model_dump_json()
-    if revision := context.meta.get("sft_source_revision"):
-        environment["GIT_COMMIT"] = revision
-    if preset.output_ttl_days is not None:
-        environment["MARIN_PREFIX"] = recipe.run_prefix(preset)
     job = submit_or_run(module, handles, max_concurrent, environment, argv=argv)
     submitted = [
         {
@@ -875,26 +883,47 @@ def _run_command(
         preset = context.meta["rl_preset"]
         count = context.meta["rl_handle_count"]
         rl_handles = handles[:count]
+        sft_only = options["through"] == "sft"
         if (coordinator := get_job_info()) is not None:
-            validate_coordinator_graph(handles)
-            _run_graph(rl_handles, max_concurrent, recipe.run_prefix(preset), str(coordinator.job_id))
-            if following := handles[count:]:
-                build_artifacts(*following, max_concurrent=max_concurrent)
+            if sft_only:
+                validate_coordinator_graph(handles, execution=context.meta["sft_execution"])
+                build_artifacts(*handles, max_concurrent=max_concurrent)
+            else:
+                validate_coordinator_graph(handles)
+                _run_graph(rl_handles, max_concurrent, recipe.run_prefix(preset), str(coordinator.job_id))
+                if following := handles[count:]:
+                    build_artifacts(*following, max_concurrent=max_concurrent)
             return
-        job, cached_attempts = _submit_from_launcher(
-            entry_module, argv, handles, rl_handles, max_concurrent, context, preset
-        )
-        if options["wait"]:
-            _wait_for_run(
-                job,
-                rl_handles,
-                preset,
-                table=table,
-                service_url=options["url"],
-                has_following=len(handles) > count,
-                issue=options["issue"],
-                cached_attempts=cached_attempts,
+        if sft_only:
+            module = _entry_module(entry_module)
+            submitted_at = datetime.now(UTC).isoformat()
+            environment = _submission_environment(context, preset)
+            job = submit_or_run(
+                module, handles, max_concurrent, environment, argv=argv, execution=context.meta["sft_execution"]
             )
+            _print_status(
+                {
+                    "coordinator_job_id": str(job),
+                    "submitted_at": submitted_at,
+                    "through": "sft",
+                    "runs": [],
+                }
+            )
+        else:
+            job, cached_attempts = _submit_from_launcher(
+                entry_module, argv, handles, rl_handles, max_concurrent, context, preset
+            )
+            if options["wait"]:
+                _wait_for_run(
+                    job,
+                    rl_handles,
+                    preset,
+                    table=table,
+                    service_url=options["url"],
+                    has_following=len(handles) > count,
+                    issue=options["issue"],
+                    cached_attempts=cached_attempts,
+                )
 
     return click.command(
         cls=RLCommand, help=__doc__ + "\n\n" + "\n".join(f"{preset.name}: {preset.budget}" for preset in table.presets)
@@ -923,6 +952,13 @@ def command(
     @partial(_run_command, table, argv, entry_module)
     @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for this launch.")
     @click.option("--plan", is_flag=True, help="Print the plan without submission (the default).")
+    @click.option(
+        "--through",
+        type=click.Choice(("sft", "rl")),
+        default="rl",
+        show_default=True,
+        help="Build only the SFT export or continue through RL.",
+    )
     @click.option(
         "--checkpoints", type=click.Choice(("none", "latest", "best")), help="Select native checkpoint retention."
     )
@@ -1015,11 +1051,16 @@ def command(
         requirements: tuple[str, ...],
         issue: int | None,
         plan: bool,
+        through: str,
         checkpoints: presets.CheckpointPolicy | None,
         checkpoint_every: int | None,
         export: presets.CheckpointPolicy | None,
         priority: str | None,
         sft_name: str | None = None,
+        sft_data_mix: str | None = None,
+        sft_data_uri: str | None = None,
+        sft_data_file: str | None = None,
+        sft_steps: int | None = None,
     ) -> tuple[ArtifactStep, ...]:
         context = click.get_current_context()
         do_run = context.params["do_run"]
@@ -1027,6 +1068,11 @@ def command(
             raise click.UsageError("Choose either --plan or --run")
         if control is not None and not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,47}", control):
             raise click.BadParameter("use a 1-48 character control batch identifier", param_hint="--control")
+        if through == "sft":
+            if sft_name is None:
+                raise click.UsageError("--through sft requires --sft")
+            if click.get_current_context().params["wait"]:
+                raise click.UsageError("--wait reports RL results; inspect the SFT coordinator without --wait")
         if control and any(value is not None for value in (checkpoints, checkpoint_every, export, priority)):
             raise click.BadParameter("controls use only the preset's default run options")
         preset = _with_run_options(
@@ -1036,9 +1082,22 @@ def command(
             export=export,
             priority=priority,
         )
+        if (
+            preset.evaluations
+            and preset.evaluations[0].training_holdout is not None
+            and any(value is not None for value in (checkpoints, checkpoint_every, export))
+        ):
+            raise click.BadParameter(f"{preset.name} owns best-checkpoint retention and export")
         if init is not None and init_name is not None:
             raise click.UsageError("Python init and --init cannot be used together")
         initializer = init
+        mix_options = (sft_data_uri, sft_data_file)
+        if sft_name is None and (
+            sft_data_mix is not None or sft_steps is not None or any(value is not None for value in mix_options)
+        ):
+            raise click.UsageError("SFT data and step options require --sft")
+        if sft_data_mix is None and any(value is not None for value in mix_options):
+            raise click.UsageError("SFT data options require --sft-data-mix")
         if sft_name is not None:
             if init is not None or init_name is not None or resume_name is not None or control:
                 raise click.UsageError("--sft requires a fresh candidate without --init or --resume")
@@ -1052,13 +1111,51 @@ def command(
                 raise click.BadParameter(
                     f"unknown SFT preset {sft_name!r}. Choose from {', '.join(by_name)}.", param_hint="--sft"
                 )
-            from experiments.sft.launcher import HFModel, SFTSpec  # noqa: PLC0415 - load only for --sft
+            from experiments.sft.launcher import (  # noqa: PLC0415 - load only for --sft
+                HFModel,
+                PreparedData,
+                SFTPreset,
+                SFTSpec,
+            )
 
             sft = by_name[sft_name]
+            if sft_data_mix is not None:
+                name, separator, version = sft_data_mix.rpartition("@")
+                if not name or not separator or any(value is None for value in (sft_data_uri, sft_data_file)):
+                    raise click.BadParameter("--sft-data-mix requires NAME@VERSION, --sft-data-uri and --sft-data-file")
+                if sft_steps is None:
+                    raise click.BadParameter("--sft-data-mix requires --sft-steps", param_hint="--sft-steps")
+                assert isinstance(sft, SFTPreset)
+                source_recipe = sft.recipe.with_data_mix(
+                    PreparedData(
+                        ArtifactStep.adopt(name, version, sft_data_uri), sft_data_file, sft.recipe.mix_tokenizer()
+                    )
+                )
+                sft = replace(
+                    sft,
+                    recipe=source_recipe,
+                    resources=replace(sft.resources, target_cluster=preset.recipe.layout.cluster, regions=()),
+                )
+            elif (
+                sft_steps is None
+                and isinstance(sft.recipe, SFTSpec)
+                and (sft.recipe.num_train_steps is None and sft.recipe.num_train_epochs is None)
+            ):
+                raise click.BadParameter(
+                    f"--sft-steps is required: SFT preset {sft_name!r} does not pin a step count",
+                    param_hint="--sft-steps",
+                )
+            if sft_steps is not None:
+                assert isinstance(sft, SFTPreset)
+                version = resolve_version("sft-rl-arm" if sft_data_mix is not None else "sft-steps", None)
+                source_recipe = sft.recipe.with_steps(sft_steps, version=version)
+                sft = replace(sft, recipe=source_recipe)
             try:
                 initializer = sft.model(
                     coordinator_cluster=preset.recipe.layout.cluster,
-                    coordinator_prefix=recipe.run_prefix(preset) if preset.temporary_output else None,
+                    coordinator_prefix=(
+                        recipe.run_prefix(preset) if preset.temporary_output or sft_data_mix is not None else None
+                    ),
                 )
             except ValueError as error:
                 raise click.BadParameter(str(error), param_hint="--sft") from error
@@ -1068,10 +1165,16 @@ def command(
                 click.get_current_context().meta["sft_source_revision"] = revision
             sft_recipe = sft.recipe
             sft_model = sft_recipe.model if isinstance(sft_recipe, SFTSpec) else None
-            if isinstance(sft_model, HFModel) and sft_model.task_timeout_seconds is not None:
-                layout = preset.recipe.layout
-                hours = layout.coordinator_timeout_hours + math.ceil(sft_model.task_timeout_seconds / 3600)
-                layout = replace(layout, coordinator_timeout_hours=hours)
+            if (
+                isinstance(sft_model, HFModel)
+                and sft_model.task_timeout_seconds is not None
+                # An unlimited coordinator (0) stays unlimited; the SFT task timeout still applies.
+                and (hours := preset.recipe.layout.coordinator_timeout_hours)
+            ):
+                layout = replace(
+                    preset.recipe.layout,
+                    coordinator_timeout_hours=hours + math.ceil(sft_model.task_timeout_seconds / 3600),
+                )
                 preset = replace(preset, recipe=replace(preset.recipe, layout=layout))
         context.meta["rl_preset"] = preset
         if resume_name is not None:
@@ -1079,6 +1182,28 @@ def command(
         missing = [name for name in forward_env if name not in os.environ]
         if missing:
             raise click.UsageError(f"missing required environment variables: {', '.join(missing)}")
+        if through == "sft":
+            assert initializer is not None
+            _provenance(control=False)
+            if do_run:
+                materialized_config(initializer.step, recipe.run_prefix(preset))
+            context = click.get_current_context()
+            context.meta["rl_handle_count"] = 1
+            context.meta["sft_execution"] = recipe.execution_config(
+                preset, wandb_entity=os.environ.get(_WANDB_ENTITY_ENV), forward_env=forward_env
+            )
+            _print_status(
+                {
+                    "through": "sft",
+                    "sft": {
+                        "name": initializer.step.name,
+                        "version": initializer.step.version,
+                        "fingerprint": initializer.step.fingerprint(),
+                        "path": initializer.step.path(recipe.run_prefix(preset)),
+                    },
+                }
+            )
+            return (initializer.step,)
         provenance = _provenance(control=bool(control))
         from_launcher = get_job_info() is None
         run = build_experiment(
@@ -1142,6 +1267,7 @@ def command(
         snapshot = _status(replace(run, gate=rl_gate.completed_gate(run.gate)), preset, stored_only=do_run, issue=issue)
         if preset_version is not None:
             snapshot["preset_version"] = preset_version
+        snapshot["through"] = through
         _print_status(snapshot)
         if not do_run and _evaluation_failed(snapshot, preset):
             raise click.exceptions.Exit(EXIT_CODES[Verdict.FAIL])
@@ -1154,10 +1280,20 @@ def command(
         return (*rl_handles, *following)
 
     if sft_presets is not None:
-        run_command.params.append(
-            click.Option(
-                ["--sft", "sft_name"], metavar="PRESET", help="Build an SFT preset and start RL from its export."
-            )
+        run_command.params.extend(
+            [
+                click.Option(
+                    ["--sft", "sft_name"], metavar="PRESET", help="Build an SFT preset and start RL from its export."
+                ),
+                click.Option(["--sft-data-mix"], help="Immutable SFT data mix NAME@VERSION; binds the arm's SFT data."),
+                click.Option(["--sft-data-uri"], help="Regional directory of the published SFT mix."),
+                click.Option(["--sft-data-file"], help="LM data JSON manifest relative to the mix directory."),
+                click.Option(
+                    ["--sft-steps"],
+                    type=click.IntRange(min=1),
+                    help="SFT updates; required for --sft-data-mix and for SFT presets that pin no step count.",
+                ),
+            ]
         )
     return run_command
 

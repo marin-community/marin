@@ -61,12 +61,13 @@ class JuneSnowballConfig(SnowballConfig):
         through only at their defaults; a set one raises, so a run never trains without a setting it asked for.
         """
         june_fields = {field.name for field in dataclasses.fields(GrugModelConfig)}
+        defaults = SnowballConfig()
         unsupported = [
             field.name
             for field in dataclasses.fields(SnowballConfig)
             if field.name not in june_fields
             and field.name not in ("reference_checkpoint", "tokenizer")
-            and getattr(self, field.name) != field.default
+            and getattr(self, field.name) != getattr(defaults, field.name)
         ]
         if unsupported:
             raise ValueError(f"June's training kernels do not implement {unsupported}")

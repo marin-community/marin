@@ -5,6 +5,9 @@ import dataclasses
 import functools
 import logging
 import os
+import json
+import jax
+import optax
 from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
@@ -31,11 +34,28 @@ from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
+from levanter.eval import TaggedEvaluator, eval_model, lm_eval_loss
+from levanter.eval_audit import (
+    EVAL_LOSS_METRIC,
+    InitialEvalMatchConfig,
+    evaluation_input_audit,
+    initial_eval_match,
+    write_evaluation_result,
+)
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.field_dtype_overrides import hf_load_dtype
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
-from levanter.models.snowball import SnowballConfig
+from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+from levanter.models.snowball_sft import (
+    SnowballSftConfig,
+    reseed_snowball_head,
+    snowball_update_transform,
+    snowball_loss_with_dispatch_drops,
+    snowball_batch_metrics,
+)
+from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
+from rigging.filesystem.storage_path import StoragePath
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
@@ -43,6 +63,9 @@ from levanter.training_control import TrainingDashboard
 from levanter.utils.jax_utils import parameter_count
 
 logger = logging.getLogger(__name__)
+
+INITIAL_EVAL_RAW_STAGE = "initial-eval-raw"
+"""The pre-reseed gate's stage name; its match receipt is read back on the post-reseed stage."""
 
 
 @dataclass
@@ -66,6 +89,12 @@ class TrainLmConfig:
     # TODO: atm you have to at least specify a levanter model config with the same type as the hf checkpoint
 
     z_loss_weight: float = 0.0
+    global_gradient_clip: float | None = field(default=None, metadata={"fingerprint_omit_value": None})
+    snowball_sft: SnowballSftConfig | None = field(default=None, metadata={"fingerprint_omit_value": None})
+    token_weighted_accumulation: bool = field(default=False, metadata={"fingerprint_omit_value": False})
+    tensorstore_cache_bytes: int | None = field(default=None, metadata={"fingerprint_omit_value": None})
+    """Per-process jagged-cache limit, applied before loading data or model weights."""
+    initial_eval_match: InitialEvalMatchConfig | None = field(default=None, metadata={"fingerprint_omit_value": None})
 
     hf_save_path: Optional[str] = None
     hf_upload: Optional[str] = None
@@ -130,10 +159,66 @@ def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmC
         attention_implementation=requested.attention_implementation,
         moe_implementation=requested.moe_implementation,
         moe_capacity_factor=requested.moe_capacity_factor,
+        expert_weight_sharding=requested.expert_weight_sharding,
         fp32_activations=requested.fp32_activations,
         reference_checkpoint=requested.reference_checkpoint,
         tokenizer=requested.tokenizer,
     )
+
+
+def check_initial_evaluation(
+    model: LmHeadModel,
+    gate: InitialEvalMatchConfig,
+    trainer: Trainer,
+    reference_path: str | None,
+    output_root: StoragePath | None,
+    stage: str,
+) -> dict:
+    """Compare audited initial loss, writing evidence when an output root is supplied.
+
+    A ``None`` reference records the audited loss without gating on one. The post-reseed stage
+    pairs its loss with the raw gate's receipt: it always records the intentional reseed shift,
+    and the reference shift only when it gated on its own reference.
+    """
+    batch = trainer.config.EvalBatch
+    evaluator = TaggedEvaluator(
+        EvalBatch=batch,
+        tagged_eval_sets=gate.data.tagged_eval_sets(model.Pos.resize(gate.sequence_length)),
+        loss_fn=functools.partial(lm_eval_loss, EvalBatch=batch, mp=trainer.mp),
+        tokenizer=gate.data.the_tokenizer,
+        device_mesh=trainer.device_mesh,
+        axis_mapping=trainer.compute_axis_mapping,
+        max_examples_per_dataset=gate.max_examples_per_dataset,
+    )
+    metrics = eval_model(evaluator, model, prefix="eval")
+    audit = evaluation_input_audit(evaluator, gate.special_token_ids)
+    if output_root is not None:
+        write_evaluation_result(str(output_root / f"{stage}-result.json"), metrics, audit)
+    match: dict = {"initial_loss": metrics[EVAL_LOSS_METRIC], "audit": audit}
+    if reference_path is not None:
+        reference = json.loads(StoragePath(reference_path).read_text())
+        match = initial_eval_match(reference, metrics, audit, gate.absolute_tolerance)
+        match["reference_path"] = reference_path
+    prefix = stage.replace("-", "_")
+    logged = {f"{prefix}/loss": match["initial_loss"]}
+    if "delta" in match:
+        logged[f"{prefix}/delta"] = match["delta"]
+    levanter.tracker.log(logged, step=0)
+    if gate.pre_reseed_reference_path is not None and stage == "initial-eval" and output_root is not None:
+        raw_match = json.loads((output_root / f"{INITIAL_EVAL_RAW_STAGE}-match.json").read_text())
+        match["raw_match"] = raw_match
+        match["raw_loss"] = raw_match["initial_loss"]
+        match["post_reseed_loss"] = match["initial_loss"]
+        match["intentional_reseed_delta"] = match["initial_loss"] - raw_match["initial_loss"]
+        logged_deltas = {"initial_eval/intentional_reseed_delta": match["intentional_reseed_delta"]}
+        if "reference_loss" in match:
+            # Only a post-reseed stage that gated on its own reference can compare references.
+            match["reference_reseed_delta"] = match["reference_loss"] - raw_match["reference_loss"]
+            logged_deltas["initial_eval/reference_reseed_delta"] = match["reference_reseed_delta"]
+        levanter.tracker.log(logged_deltas, step=0)
+    if output_root is not None and jax.process_index() == 0:
+        (output_root / f"{stage}-match.json").write_text(json.dumps(match, indent=2))
+    return match
 
 
 def _load_lm_model_from_configured_source(
@@ -171,6 +256,19 @@ def _load_lm_model_from_configured_source(
     else:
         model = config.model.build(Vocab, key=model_key)
 
+    gate = config.initial_eval_match
+    if gate is not None and gate.pre_reseed_reference_path is not None:
+        check_initial_evaluation(
+            model,
+            gate,
+            trainer,
+            gate.pre_reseed_reference_path,
+            StoragePath(config.hf_save_path).parent if config.hf_save_path is not None else None,
+            INITIAL_EVAL_RAW_STAGE,
+        )
+    if config.snowball_sft is not None:
+        model = reseed_snowball_head(model, config.snowball_sft)
+
     if not isinstance(config.adapter, NoAdaptorConfig):
         model = config.adapter.apply(model, key=adapter_key, axis_mapping=parameter_axis_mapping)
 
@@ -178,6 +276,8 @@ def _load_lm_model_from_configured_source(
 
 
 def main(config: TrainLmConfig):
+    if config.tensorstore_cache_bytes is not None:
+        set_jagged_array_read_cache_bytes(config.tensorstore_cache_bytes)
     if isinstance(config.model, SnowballConfig) and config.model.router_dot_fp32:
         if config.trainer.field_dtype_overrides.get("router_bias") != jnp.dtype("float32"):
             raise ValueError("FP32 router dot requires trainer.field_dtype_overrides to map router_bias to float32")
@@ -236,16 +336,44 @@ def main(config: TrainLmConfig):
 
     levanter.trainer.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
+    if config.global_gradient_clip is not None:
+        optimizer = optax.chain(optax.clip_by_global_norm(config.global_gradient_clip), optimizer)
+    if config.snowball_sft is not None:
+        if not isinstance(config.model, SnowballConfig):
+            raise ValueError("Snowball SFT controls require a Snowball model")
+        optimizer = optax.chain(optimizer, snowball_update_transform(config.snowball_sft))
 
     def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
-        return model.next_token_loss_and_metrics(example, key=key, logsumexp_weight=config.z_loss_weight)
+        reduction = hax.sum if config.token_weighted_accumulation else hax.mean
+        if config.snowball_sft is not None and config.snowball_sft.record_dispatch_counts:
+            if not isinstance(model, SnowballLMHeadModel):
+                raise ValueError("Dispatch counts require a Snowball model")
+            loss, metrics = snowball_loss_with_dispatch_drops(
+                model, example, z_loss_weight=config.z_loss_weight, reduction=reduction
+            )
+        else:
+            loss, metrics = model.next_token_loss_and_metrics(
+                example, key=key, logsumexp_weight=config.z_loss_weight, reduction=reduction
+            )
+        if config.snowball_sft is not None:
+            metrics.update(snowball_batch_metrics(example))
+        return loss, metrics
+
+    def loss_weight(example: LmExample, *, key=None):
+        del key
+        return hax.sum(example.loss_weight).scalar()
 
     # Using the trainer as a context manager does 3 things:
     # 1. Sets the device mesh
     # 2. Sets the axis mapping (for fsdp)
     # 3. Sets the global metrics tracker
     with (
-        Trainer(config.trainer, optimizer, loss_function) as trainer,
+        Trainer(
+            config.trainer,
+            optimizer,
+            loss_function,
+            loss_weight_fn=loss_weight if config.token_weighted_accumulation else None,
+        ) as trainer,
         TrainingDashboard(config, trainer.request_checkpoint, config.trainer.id or "unknown"),
     ):
         # randomness in jax is tightly controlled by "keys" which are the states of the random number generators
@@ -297,7 +425,7 @@ def main(config: TrainLmConfig):
         install_tensorstore_metrics_hook_if_enabled(trainer)
 
         # Get the tagged evaluation datasets
-        tagged_eval_datasets = config.data.tagged_eval_sets(Pos)
+        tagged_eval_datasets = [] if config.trainer.max_eval_batches == 0 else config.data.tagged_eval_sets(Pos)
 
         adapter_key = jrandom.fold_in(model_key, ord("a"))
         load_source_model = functools.partial(
@@ -356,6 +484,16 @@ def main(config: TrainLmConfig):
             )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.model)})
+        if config.initial_eval_match is not None and not resuming:
+            gate = config.initial_eval_match
+            check_initial_evaluation(
+                state.eval_model,
+                gate,
+                trainer,
+                gate.reference_path,
+                StoragePath(config.hf_save_path).parent if config.hf_save_path is not None else None,
+                "initial-eval",
+            )
 
         max_eval_examples_per_ds = config.trainer.max_eval_batches
         if max_eval_examples_per_ds is not None:

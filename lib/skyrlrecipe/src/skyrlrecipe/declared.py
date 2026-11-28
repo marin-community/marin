@@ -110,6 +110,7 @@ class BestCheckpointCallback(Section):
     expected_tasks: int
     minimum_scored_tasks: int
     selection_metric: str = unset_field()
+    selection_window: PositiveInt = unset_field()
     save_after_fraction: int | float = unset_field()
     preservation_max_drop: NumberMap | None = unset_field()
 

@@ -1,0 +1,202 @@
+{
+  "data_seed": 0,
+  "global_gradient_clip": 1,
+  "model": {
+    "attention_implementation": null,
+    "expert_weight_sharding": {
+      "expert": [
+        "expert",
+        "context"
+      ],
+      "hidden": [
+        "data"
+      ],
+      "intermediate": "model"
+    },
+    "fp32_activations": false,
+    "head_dim": 128,
+    "hidden_dim": 2560,
+    "initializer_std": 0.0098821,
+    "intermediate_dim": 1280,
+    "layer_norm_eps": 1e-05,
+    "max_seq_len": 262144,
+    "moe_capacity_factor": 1.0,
+    "moe_implementation": "ring_gather_combine",
+    "num_experts": 256,
+    "num_experts_per_token": 4,
+    "num_heads": 20,
+    "num_kv_heads": 5,
+    "num_layers": 26,
+    "qk_mult": 1.5703274004183787,
+    "reference_checkpoint": null,
+    "rope": {
+      "scaling_factor": null,
+      "theta": 10000.0
+    },
+    "router_combine_fp32": false,
+    "router_dot_fp32": false,
+    "shared_expert_intermediate_dim": 2560,
+    "sliding_window": 2048,
+    "tokenizer": null,
+    "vocab_size": 128256
+  },
+  "optimizer": {
+    "adam_lr": 1.153846153846154e-05,
+    "backend_steps": 5,
+    "beta1": 0.9062,
+    "beta2": 0.95,
+    "coefficient_type": "quintic",
+    "cooldown": null,
+    "cycle_length": null,
+    "cycles": null,
+    "decay": 1863,
+    "default_weight_decay_mask": null,
+    "epsilon": 3.8339433005718795e-15,
+    "expert_normalization": "all_experts",
+    "gate_router_weight_decay": 0.0,
+    "haps": null,
+    "learning_rate": 5e-05,
+    "lr_schedule": "constant",
+    "max_grad_norm": null,
+    "min_lr_ratio": 0.1,
+    "momentum": 0.95,
+    "muon_epsilon": 1e-08,
+    "nesterov": true,
+    "rewarmup": 0.0,
+    "schedule_extension": null,
+    "use_syrk": true,
+    "warmup": 30,
+    "weight_decay": 0.1,
+    "weight_decay_modules": null
+  },
+  "snowball_sft": {
+    "anchor_token_ids": [
+      3560,
+      1984,
+      1781,
+      4320,
+      5507,
+      842,
+      128001
+    ],
+    "freeze_router_bias": true,
+    "record_dispatch_counts": true,
+    "special_token_ids": [
+      128006,
+      128007,
+      128002,
+      128003,
+      128005,
+      128011,
+      128009
+    ],
+    "special_token_lr_multiplier": 5.656854249492381
+  },
+  "source_artifact": "long-loop-exp6/round6/sft@2026.11.24.157:3babee46",
+  "source_cooldown": {
+    "fraction": 0.15,
+    "min_lr_ratio": 0.1
+  },
+  "source_revision": "ad16b4832d32733879d5ca22a368b3b3e5ff643f",
+  "source_runtime_entrypoint": "ad16b4832d32733879d5ca22a368b3b3e5ff643f:experiments/sft/launcher.py::levanter_train_request",
+  "source_runtime_env": {
+    "JAX_COMPILATION_CACHE_DIR": "s3://marin-us-east-08a/tmp/ttl=30d/compilation-cache",
+    "JAX_PLATFORMS": "cuda,cpu",
+    "XLA_FLAGS": "--xla_gpu_shard_autotuning=false --xla_dump_to=/tmp/long-loop-xla --xla_dump_hlo_as_text --xla_gpu_first_collective_call_terminate_timeout_seconds=600 --xla_gpu_nccl_termination_timeout_seconds=600"
+  },
+  "source_runtime_receipt": {
+    "sha256": "2c8b9adc035d2c7bef6a67da3124a6da947bd4f435621b0978a7058b76c20266",
+    "uri": "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp6/long-loop-exp6/round6/sft/2026.11.24.157/consumed-config.json"
+  },
+  "tensorstore_cache_bytes": 100000000,
+  "token_weighted_accumulation": true,
+  "train_seq_len": 262144,
+  "trainer": {
+    "field_dtype_overrides": {},
+    "jax_compilation_cache_dir": "s3://marin-us-east-08a/tmp/ttl=30d/compilation-cache",
+    "jax_config": {
+      "jax_explain_cache_misses": "True",
+      "jax_log_compiles": "True",
+      "jax_pjrt_client_create_options": "allocator:cuda_async",
+      "jax_softmax_custom_jvp": "True",
+      "jax_threefry_partitionable": "True"
+    },
+    "loader_fetch_batch_size": 4,
+    "loader_max_buffered_batches": 512,
+    "mesh": {
+      "axes": {
+        "context": 8,
+        "expert": 1,
+        "model": 1,
+        "replica": 1
+      },
+      "batch_axis_name": "batch",
+      "compute_mapping": {},
+      "dcn_axes": {
+        "data": -1,
+        "replica_dcn": 1
+      },
+      "param_mapping": {
+        "embed": "data"
+      },
+      "shared_mapping": {}
+    },
+    "mp": {
+      "compute_dtype": {
+        "__dtype__": "bfloat16"
+      },
+      "output_dtype": {
+        "__dtype__": "bfloat16"
+      },
+      "param_dtype": {
+        "__dtype__": "float32"
+      }
+    },
+    "offload_opt_state": true,
+    "per_device_eval_parallelism": 1,
+    "per_device_parallelism": 1,
+    "progress_watchdog": {
+      "diagnostic_timeout": null,
+      "process_timeout": {
+        "days": 0,
+        "microseconds": 0,
+        "seconds": 1800
+      },
+      "startup_grace_period": {
+        "days": 0,
+        "microseconds": 0,
+        "seconds": 0
+      },
+      "startup_timeout": {
+        "days": 0,
+        "microseconds": 0,
+        "seconds": 5400
+      },
+      "step_timeout": {
+        "days": 0,
+        "microseconds": 0,
+        "seconds": 600
+      }
+    },
+    "seed": 0,
+    "steps_per_eval": 1000,
+    "train_batch_size": 256,
+    "watch": {
+      "include_histograms": false,
+      "include_norms": true,
+      "include_per_parameter_norms": false,
+      "interval": 1,
+      "split_scan_layers": true,
+      "watch_targets": [
+        "params",
+        "updates",
+        "grads"
+      ]
+    },
+    "xla_dump_upload": {
+      "enabled": true,
+      "ttl_days": 30
+    }
+  },
+  "z_loss_weight": 0.0001
+}

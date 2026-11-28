@@ -10,6 +10,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from fractions import Fraction
+from pathlib import Path
 from typing import Annotated, ClassVar, Literal
 
 from finestore.rl.rl_progress import Invariant
@@ -44,7 +45,7 @@ from experiments.post_training.rl_checkpoint_eval import (
     CheckpointCohort,
     checkpoint_cohorts,
 )
-from experiments.post_training.task_curation.selection import TRAIN_FILENAME
+from experiments.post_training.task_curation.selection import TRAIN_FILENAME, VALIDATION_FILENAME, TrainingHoldout
 
 UPDATE_SECONDS_METRIC = "speed/update_seconds"
 GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
@@ -126,6 +127,7 @@ class Evaluation:
     sample: int | None = None
     every: int | None = None
     at_start: bool = False
+    training_holdout: TrainingHoldout | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.isidentifier():
@@ -254,6 +256,7 @@ class Training:
                     initial_model_uri=initial_model_uri,
                     expected_tasks=expected_tasks,
                     minimum_scored_tasks=minimum_scored_tasks,
+                    **({"selection_window": preset.best_window} if preset.best_window > 1 else {}),
                 )
             )
         every = preset.checkpoint_every
@@ -440,6 +443,7 @@ class Preset:
     objectives: tuple[Metric, ...] = ()
     gaps: tuple[str, ...] = ()
     budget: str = "hours to days"
+    best_window: int = 1
 
     def __post_init__(self) -> None:
         if not set(self.measured).issubset(self.recipe.layout.workload.planned_steps(self.updates)):
@@ -498,6 +502,52 @@ class Preset:
     @property
     def guarded(self) -> Evaluation | None:
         return (self.held_out or self.evaluations[0]) if self.gated and self.evaluations else None
+
+
+def curriculum_preset(preset: Preset, *, name: str, holdout: int, every: int, window: int) -> Preset:
+    """Declare a curriculum-validation arm that selects its best checkpoint from held-out prompts.
+
+    The arm samples ``holdout`` prompts from its own admitted training selection, removes them
+    from training, and evaluates them every ``every`` updates. The best checkpoint maximizes the
+    arithmetic mean of the last ``window`` evaluations. Layouts, deadlines and seed stay
+    inherited: a stalled arm stops at its job deadline, and ``--wait`` polls with a finite
+    coordinator timeout.
+
+    The base's family-balanced batch mix is dropped: the arm trains on the post-holdout
+    remainder, whose per-family counts cannot guarantee the full mix's rollout pools.
+    """
+    if not preset.evaluations:
+        raise ValueError(f"curriculum preset {name} requires a base preset with an evaluation")
+    if holdout < 1 or every < 1 or window < 1:
+        raise ValueError(f"curriculum preset {name} requires positive holdout, cadence and window")
+    evaluation = replace(
+        preset.evaluations[0],
+        name="curriculum",
+        file=Path(VALIDATION_FILENAME).stem,
+        source="tasks",
+        sample=None,
+        every=every,
+        at_start=False,
+        training_holdout=TrainingHoldout(holdout, preset.seed),
+        profile=preset.evaluations[0].profile.replace(n_samples_per_prompt=1),
+    )
+    return replace(
+        preset,
+        name=name,
+        # The remainder cannot guarantee the base mix's rollout pools (see docstring).
+        batch_mix=None,
+        evaluations=(evaluation,),
+        held_out_tasks=None,
+        checkpoint_evaluation=(),
+        checkpoints="best",
+        export="best",
+        checkpoint_every=every,
+        keep_every=every,
+        best_window=window,
+        temporary_output=False,
+        retention=replace(preset.retention, checkpoints_in_run_output=True),
+        budget=f"{preset.updates} RL updates",
+    )
 
 
 @dataclass(frozen=True)

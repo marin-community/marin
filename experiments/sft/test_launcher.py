@@ -4,6 +4,7 @@
 import json
 import sys
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
@@ -12,10 +13,12 @@ import numpy as np
 import pytest
 from fray.current_client import set_current_client
 from haliax import Axis
-from levanter.data.text.datasets import LmDataConfig, dataset_for_component
+from levanter.data.text.datasets import DatasetComponent, LmDataConfig, dataset_for_component
+from levanter.data.text.formats import PrebuiltLmDatasetFormat, TextLmDatasetFormat
 from levanter.store.cache import SerialCacheWriter
 from levanter.utils.thread_utils import blocking_wait
 from marin.execution.artifact import Artifact
+from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
 from marin.execution.step_status import StatusFile
 from marin.training.training import DEFAULT_HF_CHECKPOINTS_PATH
@@ -25,6 +28,8 @@ from rigging.timing import Duration
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.sft_launch import GrugModel
 from experiments.post_training.snowball_sft import (
+    EXP7_262K_32NODE,
+    EXP7_TOKENIZER,
     HF_MODEL,
     HF_REVISION,
     MIXTURE_262K_32NODE,
@@ -102,6 +107,140 @@ def test_prepared_sft_submits_the_recipe_timeout(tmp_path):
 
     [request] = requests
     assert request.timeout == timeout
+
+
+def test_prepared_full_token_loss_ignores_assistant_weights_and_preserves_padding(tmp_path):
+    source = tmp_path / "release"
+    source.mkdir()
+    original = LmDataConfig(
+        tokenizer=MIXTURE_TOKENIZER,
+        auto_build_caches=False,
+        components={
+            "sft": DatasetComponent(
+                cache_dir="/regional/cache",
+                flat_cache=True,
+                format=PrebuiltLmDatasetFormat(loss_weights_key="loss_weights"),
+            )
+        },
+        num_validation_sequences={"sft": 8},
+    )
+    document = draccus.encode(original)
+    document["components"]["sft"]["format"].pop("loss_weight_transform")
+    (source / "data.json").write_text(json.dumps(document))
+    prepared = PreparedData(
+        ArtifactStep.adopt("tests/release", "2026.11.25", str(source)), "data.json", MIXTURE_TOKENIZER
+    )
+    spec = replace(
+        MIXTURE_SPEC,
+        prepared_data=prepared,
+        prepared_data_format=TextLmDatasetFormat(),
+        pack=256,
+        pack_lookahead_window=128,
+    )
+    step = spec.trained(MIXTURE_262K_32NODE.resources).step
+    data = materialized_config(step, str(tmp_path)).train_config.data
+    [component] = data.components.values()
+    rows = [
+        {
+            "input_ids": np.array([11, 12, 13, 14, 15], dtype=np.int32),
+            "loss_weights": np.array([0, 0, 1, 1, 0], dtype=np.float32),
+        },
+        {"input_ids": np.array([21, 22, 23], dtype=np.int32), "loss_weights": np.array([0, 1, 0], dtype=np.float32)},
+    ]
+    with SerialCacheWriter(str(tmp_path / "cache"), rows[0]) as writer:
+        writer.write_batch(rows)
+    dataset = dataset_for_component(
+        component,
+        Axis("position", 12),
+        writer.result(),
+        eos_id=None,
+        block_cross_document_attention=True,
+        remainder="pad",
+    )
+    [example] = blocking_wait(dataset.get_batch([0]))
+    np.testing.assert_array_equal(example.tokens, [11, 12, 13, 14, 15, 21, 22, 23, 0, 0, 0, 0])
+    np.testing.assert_array_equal(example.loss_weight, [1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0])
+    assert data.num_validation_sequences == original.num_validation_sequences
+    assert json.loads((source / "data.json").read_text()) == document
+    assert (
+        step.fingerprint()
+        != replace(spec, prepared_data_format=None).trained(MIXTURE_262K_32NODE.resources).step.fingerprint()
+    )
+
+
+def test_exp7_resolves_exp6_sft_controls_at_the_native_boundary(tmp_path):
+    reference = json.loads(
+        (Path(__file__).parents[1] / "post_training/snowball_sft_data/exp6-sft-controls.json").read_text()
+    )
+    data = LmDataConfig(tokenizer=EXP7_TOKENIZER, auto_build_caches=False)
+    (tmp_path / "data.json").write_text(json.dumps(draccus.encode(data)))
+    binding = PreparedData(ArtifactStep.adopt("tests/exp7", "2026.11.25", str(tmp_path)), "data.json", EXP7_TOKENIZER)
+    spec = EXP7_262K_32NODE.recipe.with_data_mix(binding).with_steps(1893, version="2026.11.25.7")
+    step = spec.trained(EXP7_262K_32NODE.resources).step
+    config = materialized_config(step, str(tmp_path)).train_config
+    actual = {
+        key: draccus.encode(getattr(config, key))
+        for key in reference
+        if not key.startswith("source_") and key != "trainer"
+    }
+    actual["trainer"] = {
+        key: (
+            json.loads(canonical_json(getattr(config.trainer, key)))
+            if key in {"mp", "progress_watchdog"}
+            else draccus.encode(getattr(config.trainer, key))
+        )
+        for key in reference["trainer"]
+    }
+    actual["snowball_sft"]["special_token_lr_multiplier"] = actual["snowball_sft"].pop("special_token_update_multiplier")
+    for key in ("model", "optimizer"):
+        actual[key].pop("type", None)
+    for key, value in reference.items():
+        if key.startswith("source_"):
+            continue
+        if key == "optimizer":
+            value = {**value, "decay": reference["source_cooldown"]["fraction"], "lr_schedule": "linear"}
+        if key == "trainer":
+            assert {name: actual[key][name] for name in value} == value
+        else:
+            assert actual[key] == value, key
+    for updates in (1893, 1679):
+        adjusted = spec.with_steps(updates, version="2026.11.25.7")
+        native = materialized_config(adjusted.trained(EXP7_262K_32NODE.resources).step, str(tmp_path)).train_config
+        cooldown = reference["source_cooldown"]
+        tail = int(cooldown["fraction"] * updates)
+        begin = updates - tail
+        points = (0, 15, 30, begin, begin + tail // 2, updates)
+        scales = [
+            min(point / 30, 1)
+            * max(cooldown["min_lr_ratio"], 1 - max(point - begin, 0) / tail * (1 - cooldown["min_lr_ratio"]))
+            for point in points
+        ]
+        for group in ("learning_rate", "adam_lr"):
+            peak = reference["optimizer"][group]
+            curve = native.optimizer.lr_scheduler(native.trainer.num_train_steps, override_lr=peak)
+            np.testing.assert_allclose([curve(point) for point in points], np.asarray(scales) * peak, rtol=1e-6)
+    requests = []
+    with set_current_client(
+        SimpleNamespace(
+            submit=lambda request: (requests.append(request) or SimpleNamespace(wait=lambda **_kwargs: None))
+        )
+    ):
+        step.run(materialized_config(step, str(tmp_path)))
+    [request] = requests
+    # The child leaves the band unset; the coordinator flow resolves it to the parent's band.
+    assert request.priority == 0
+    assert request.max_retries_failure == 2 and request.max_task_failures == 64
+    for name, expected in reference["source_runtime_env"].items():
+        observed = request.environment.env_vars[name]
+        if name == "XLA_FLAGS":
+            observed_flags = {flag.partition("=")[0]: flag.partition("=")[2] for flag in observed.split()}
+            expected_flags = {flag.partition("=")[0]: flag.partition("=")[2] for flag in expected.split()}
+            assert observed_flags == expected_flags
+        else:
+            assert observed == expected, name
+    assert request.resources.target_cluster == "cw-rno2a"
+    assert request.resources.replicas == 32 and request.resources.device.count == 8
+    assert request.timeout is None
 
 
 def test_openthoughts_keeps_one_conversation_per_context_window(tmp_path):

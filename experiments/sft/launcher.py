@@ -82,17 +82,27 @@ import jmp
 from fray.types import ANY_REGION, GpuConfig, ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import is_hf_model_id
-from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
-from levanter.data.text.formats import ChatLmDatasetFormat
+from levanter.data.text.datasets import (
+    ConcatDatasetComponent,
+    DatasetComponent,
+    DatasetComponentBase,
+    LmDataConfig,
+    UrlDatasetSourceConfig,
+)
+from levanter.data.text.formats import ChatLmDatasetFormat, LmDatasetFormatBase
+from levanter.eval_audit import InitialEvalMatchConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.lm_model import LmConfig
 from levanter.models.qwen import Qwen3Config
+from levanter.models.snowball_sft import SnowballSftConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
 from levanter.utils.mesh import MeshConfig
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import Artifact, is_mutable_version
+from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext, lower
+from marin.execution.remote import FailureBudget
 from marin.execution.step_runner import StepRunner
 from marin.experiment.checkpoints import HfToLevanterCheckpoint
 from marin.experiment.train import train_job
@@ -238,7 +248,13 @@ def _levanter_train_config(
         hf_save_dtype=jnp.dtype(spec.hf_save_dtype) if spec.hf_save_dtype is not None else None,
         hf_save_chat_template=spec.chat_template,
         hf_generation_eos_token_ids=list(eos_token_ids),
-        z_loss_weight=0.0,
+        z_loss_weight=spec.z_loss_weight,
+        global_gradient_clip=spec.global_gradient_clip,
+        snowball_sft=spec.snowball_sft,
+        token_weighted_accumulation=spec.token_weighted_accumulation,
+        data_seed=spec.data_seed,
+        tensorstore_cache_bytes=spec.tensorstore_cache_bytes,
+        initial_eval_match=spec.initial_eval_match,
     )
 
 
@@ -281,6 +297,11 @@ def _levanter_pod_config(
     gpu_allocator = not ctx.is_fingerprint and isinstance(resources.device, GpuConfig)
     if gpu_allocator:
         _validate_gpu_mesh(spec, resources)
+    env_vars = dict(spec.env_vars)
+    if spec.xla_flags:
+        # XLA_FLAGS is space-separated; append to rather than replace an env-supplied value.
+        joined = " ".join(spec.xla_flags)
+        env_vars["XLA_FLAGS"] = f"{env_vars['XLA_FLAGS']} {joined}" if "XLA_FLAGS" in env_vars else joined
     return TrainLmOnPodConfig(
         train_config=_levanter_train_config(
             spec,
@@ -295,7 +316,7 @@ def _levanter_pod_config(
         ),
         resources=resources,
         output_path=ctx.output_path,
-        env_vars={"XLA_FLAGS": " ".join(spec.xla_flags)} if spec.xla_flags else None,
+        env_vars=env_vars or None,
         auto_build_caches=data_config.auto_build_caches,
     )
 
@@ -352,6 +373,7 @@ class HFModel(_LevanterModelSource):
     model: LmConfig = field(default_factory=Qwen3Config)
     eos_token_ids: Sequence[int] = LLAMA3_CHAT_EOS_TOKEN_IDS
     task_timeout_seconds: int | None = None
+    failure_budget: FailureBudget = field(default_factory=FailureBudget)
     # Built once: ArtifactStep compares by identity, so init_deps and build_train_config must share it.
     _mirror: ArtifactStep[LevanterCheckpoint] | None = field(init=False, repr=False, compare=False)
 
@@ -370,7 +392,13 @@ class HFModel(_LevanterModelSource):
     @property
     def run(self) -> Callable[..., None]:
         timeout = None if self.task_timeout_seconds is None else Duration.from_seconds(self.task_timeout_seconds)
-        return partial(train_job, timeout=timeout)
+        # priority stays unset: train_job submits with PRIORITY_BAND_INHERIT, and the coordinator
+        # flow resolves it to the parent job's band.
+        return partial(
+            train_job,
+            timeout=timeout,
+            failure_budget=self.failure_budget,
+        )
 
     def init_deps(self) -> tuple[ArtifactStep, ...]:
         return () if self._mirror is None else (self._mirror,)
@@ -578,6 +606,23 @@ class PreparedData:
     file: str
     tokenizer: str
 
+    def mix_fingerprint(self) -> str:
+        """Identify a versioned mix without reading its unbuilt manifest."""
+        if is_mutable_version(self.step.version):
+            raise ValueError("SFT data mixes require an immutable artifact version")
+        return fingerprint_hash(
+            json.dumps((self.step.name, self.step.version, self.step.fingerprint_payload(), self.file, self.tokenizer))
+        )
+
+    def load(self, ctx: StepContext) -> LmDataConfig:
+        """Read the completed manifest, checking its declared tokenizer."""
+        path = prefix_join(ctx.artifact_path(self.step), self.file)
+        with StoragePath(path).open("r") as stream:
+            data = draccus.decode(LmDataConfig, json.load(stream))
+        if data.tokenizer != self.tokenizer:
+            raise ValueError("prepared_data file tokenizer does not match prepared_data.tokenizer")
+        return data
+
 
 @dataclass(frozen=True)
 class SFTSpec:
@@ -593,6 +638,15 @@ class SFTSpec:
     chat_template: str  # any jinja carrying a {% generation %} block (completions-only mask)
     datasets: Sequence[DatasetSpec | ArtifactDatasetSpec]  # the instruction mixture
     optimizer: OptimizerConfig  # e.g. AdamConfig for the Levanter backend
+    trainer_config: TrainerConfig | None = None
+    """Backend template; SFTSpec owns batch, steps, parallelism, mesh and checkpoint policy."""
+    z_loss_weight: float = 0.0
+    global_gradient_clip: float | None = None
+    initial_eval_match: InitialEvalMatchConfig | None = None
+    snowball_sft: SnowballSftConfig | None = None
+    token_weighted_accumulation: bool = False
+    data_seed: int | None = None
+    tensorstore_cache_bytes: int | None = None
     mesh: MeshConfig | None = None
     seq_len: int = 4096
     pack: bool | int = True  # chat packs by default; an integer caps the number of conversations per example
@@ -607,7 +661,10 @@ class SFTSpec:
     hf_save_dtype: str | None = None
     wandb_project: str = "marin-sft-launcher"
     prepared_data: PreparedData | None = None
+    prepared_data_format: LmDatasetFormatBase | None = None
+    pack_lookahead_window: int | None = None
     per_device_parallelism: int = -1
+    env_vars: Mapping[str, str] = field(default_factory=dict)
     xla_flags: tuple[str, ...] = ()
     checkpointer: CheckpointerConfig = field(
         default_factory=lambda: CheckpointerConfig(
@@ -626,7 +683,14 @@ class SFTSpec:
     def __post_init__(self) -> None:
         if self.per_device_parallelism != -1 and self.per_device_parallelism <= 0:
             raise ValueError("per_device_parallelism must be -1 or positive")
-        if (self.num_train_steps is None) == (self.num_train_epochs is None):
+        if self.num_train_steps is None and self.num_train_epochs is None:
+            # A spec may defer its length to ``with_steps``: an SFT preset whose mix and step count
+            # arrive at launch, or one that binds prepared data before the count. ``sft_step``
+            # refuses such a spec until ``with_steps`` sets the count. A spec with its own datasets
+            # has no deferred form -- it must pin its length up front.
+            if self.datasets:
+                raise ValueError("Set exactly one of num_train_steps or num_train_epochs.")
+        elif self.num_train_steps is not None and self.num_train_epochs is not None:
             raise ValueError("Set exactly one of num_train_steps or num_train_epochs.")
         if self.prepared_data is not None and self.num_train_epochs is not None:
             raise ValueError("prepared_data requires num_train_steps")
@@ -640,6 +704,30 @@ class SFTSpec:
                 raise ValueError("prepared_data and datasets are mutually exclusive")
             if self.prepared_data.tokenizer != self.model.tokenizer_cache_key():
                 raise ValueError("prepared_data.tokenizer must match the SFT model's tokenizer")
+
+    def with_data_mix(self, data: PreparedData) -> SFTSpec:
+        """Replace only the data input and give the changed run its own identity."""
+        return replace(self, name=f"{self.name}-mix-{data.mix_fingerprint()}", datasets=(), prepared_data=data)
+
+    def mix_tokenizer(self) -> str:
+        return self.model.tokenizer_cache_key()
+
+    def with_steps(self, steps: int, *, version: str) -> SFTSpec:
+        """Set the update budget and run without a total task deadline.
+
+        The step count joins the run name so two budgets on one mix at one ``--version`` never
+        share an output path.
+        """
+        model = replace(self.model, task_timeout_seconds=None) if isinstance(self.model, HFModel) else self.model
+        return replace(
+            self,
+            name=f"{self.name}-{steps}-steps",
+            num_train_steps=steps,
+            num_train_epochs=None,
+            version=version,
+            timeout=None,
+            model=model,
+        )
 
     def trained(
         self, resources: ResourceConfig, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None
@@ -664,6 +752,14 @@ class SFTRecipe(Protocol):
     def trained(
         self, resources: ResourceConfig, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None
     ) -> ArtifactHfModel: ...
+
+    def with_data_mix(self, data: PreparedData) -> SFTRecipe: ...
+
+    def with_steps(self, steps: int, *, version: str) -> SFTRecipe: ...
+
+    def mix_tokenizer(self) -> str:
+        """The one tokenizer identity a bound data mix may declare."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -802,26 +898,32 @@ def _trainer(
     spec: SFTSpec, *, num_train_steps: int, gpu_allocator: bool, use_explicit_mesh_axes: bool = False
 ) -> TrainerConfig:
     """Trainer config. ``gpu_allocator`` adds the GPU-only cuda_async PJRT allocator."""
-    jax_config = dict(DEFAULT_JAX_CONFIG)
+    jax_config = dict(spec.trainer_config.jax_config if spec.trainer_config is not None else DEFAULT_JAX_CONFIG)
     if gpu_allocator:
-        # The cuda_async allocator is the resume-OOM defrag fix (marin #7115), GPU-only: passing
-        # allocator:... to PJRT_Client_Create aborts the TPU backend and JAX falls back to CPU.
+        # GPU-only: TPU PJRT rejects the cuda_async allocator option.
         jax_config["jax_pjrt_client_create_options"] = "allocator:cuda_async"
+    authored = spec.trainer_config
+    mesh = spec.mesh if spec.mesh is not None else (authored.mesh if authored is not None else MeshConfig())
+    shared = {
+        "id": sft_run_id(spec),
+        "train_batch_size": spec.batch_size,
+        "num_train_steps": num_train_steps,
+        "per_device_parallelism": spec.per_device_parallelism,
+        "use_explicit_mesh_axes": use_explicit_mesh_axes,
+        "mesh": mesh,
+        "checkpointer": spec.checkpointer,
+        "jax_config": jax_config,
+    }
+    if authored is not None:
+        return replace(authored, **shared)
     return TrainerConfig(
-        id=sft_run_id(spec),
-        train_batch_size=spec.batch_size,
-        num_train_steps=num_train_steps,
         steps_per_eval=500,
-        jax_config=jax_config,
         mp=jmp.get_policy(_MARIN_PRECISION),
-        per_device_parallelism=spec.per_device_parallelism,
-        use_explicit_mesh_axes=use_explicit_mesh_axes,
-        mesh=spec.mesh if spec.mesh is not None else MeshConfig(),
         tracker=WandbConfig(
             project=spec.wandb_project,
             tags=["sft", "levanter", spec.name.split("/")[-1]],
         ),
-        checkpointer=spec.checkpointer,
+        **shared,
     )
 
 
@@ -897,6 +999,20 @@ def _resolve_epoch_steps(ctx: StepContext, spec: SFTSpec, chat_cache: ArtifactSt
     return math.ceil(spec.num_train_epochs * total_tokens / (spec.seq_len * spec.batch_size))
 
 
+def _prepared_component(component: DatasetComponentBase, spec: SFTSpec) -> DatasetComponentBase:
+    if isinstance(component, ConcatDatasetComponent):
+        return replace(
+            component,
+            children={name: _prepared_component(child, spec) for name, child in component.children.items()},
+        )
+    if not isinstance(component, DatasetComponent):
+        raise ValueError("Prepared data format overrides require cached dataset components")
+    assert spec.prepared_data_format is not None
+    return replace(
+        component, format=spec.prepared_data_format, pack=spec.pack, pack_lookahead_window=spec.pack_lookahead_window
+    )
+
+
 def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterCheckpoint]:
     """The chat-SFT run as a lazy ``ArtifactStep[LevanterCheckpoint]``.
 
@@ -923,13 +1039,25 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
             assert spec.num_train_steps is not None
             if ctx.is_fingerprint:
                 data_config = LmDataConfig(tokenizer=prepared.tokenizer, auto_build_caches=False)
-                return {"prepared_data_manifest": path, "training": train_config(ctx, data_config, spec.num_train_steps)}
-            with StoragePath(path).open("r") as stream:
-                data_config = draccus.decode(LmDataConfig, json.load(stream))
-            if data_config.tokenizer != prepared.tokenizer:
-                raise ValueError("prepared_data file tokenizer does not match prepared_data.tokenizer")
+                config = {
+                    "prepared_data_manifest": path,
+                    "training": train_config(ctx, data_config, spec.num_train_steps),
+                }
+                if spec.prepared_data_format is not None:
+                    config["prepared_data_format"] = spec.prepared_data_format
+                    config["pack_lookahead_window"] = spec.pack_lookahead_window
+                    config["pack"] = spec.pack
+                return config
+            data_config = prepared.load(ctx)
             if data_config.tokenizer != model.resolve_tokenizer(ctx):
                 raise ValueError("prepared_data file tokenizer must match the resolved SFT model tokenizer")
+            if spec.prepared_data_format is not None:
+                data_config = replace(
+                    data_config,
+                    components={
+                        name: _prepared_component(component, spec) for name, component in data_config.components.items()
+                    },
+                )
             return train_config(ctx, data_config, spec.num_train_steps)
 
     elif spec.num_train_epochs is not None:

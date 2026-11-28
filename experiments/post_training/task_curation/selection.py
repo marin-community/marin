@@ -31,8 +31,8 @@ from finestore.rl.strata import (
 )
 from finestore.schema import arrow_schema
 from marin.execution.artifact import Artifact, is_mutable_version, validate_path_segment, validate_version
-from marin.execution.fingerprint import register_fingerprint
-from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.fingerprint import fingerprint_hash, register_fingerprint
+from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, artifact_identity
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_evidence
@@ -105,6 +105,15 @@ AAII_CATEGORIES = MappingProxyType(
     }
 )
 TASK_MANIFEST_SCHEMA = arrow_schema(SelectionTaskRow)
+TRAINING_HOLDOUT_VERSION = "2026.11.25.1"
+
+
+@dataclass(frozen=True)
+class TrainingHoldout:
+    """A seeded uniform sample removed from a curriculum's training population."""
+
+    count: int
+    seed: int
 
 
 class GraderKind(StrEnum):
@@ -394,9 +403,9 @@ def _panel_source_tasks(
         raise ValueError(f"Panel source row count changed: {source.uri}: expected {source.rows}, read {count}")
 
 
-def _parquet_rows(path: StoragePath, column: str) -> Iterator[dict[str, Any]]:
+def _parquet_rows(path: StoragePath, *columns: str) -> Iterator[dict[str, Any]]:
     with path.open("rb") as stream:
-        for batch in pq.ParquetFile(stream).iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=[column]):
+        for batch in pq.ParquetFile(stream).iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=list(columns)):
             yield from batch.to_pylist()
 
 
@@ -690,6 +699,12 @@ def write_training(
     return counts
 
 
+def _active_selection_row(value: Mapping[str, Any]) -> SelectionTaskRow:
+    task = TaskSpec.model_validate_json(value[TASK_SPEC_COLUMN])
+    tags = TaskStrata.model_validate({key: value[key] for key in TaskStrata.model_fields})
+    return _selection_row(task, tags, state=MembershipState.ACTIVE)
+
+
 def prepare(config: SelectionConfig) -> None:
     """Publish selected training TaskSpecs and the fixed and complete heldout panels."""
     environments = _grader_environments(config.sources)
@@ -728,11 +743,9 @@ def prepare(config: SelectionConfig) -> None:
             yield from annotations
             for batch in pq.ParquetFile(directory / TRAIN_FILENAME).iter_batches(batch_size=PARQUET_BATCH_ROWS):
                 for value in batch.to_pylist():
-                    task = TaskSpec.model_validate_json(value[TASK_SPEC_COLUMN])
-                    tags = TaskStrata.model_validate({key: value[key] for key in TaskStrata.model_fields})
-                    row = _selection_row(task, tags, state=MembershipState.ACTIVE)
+                    row = _active_selection_row(value)
                     if row.grader_kind == GraderKind.HARNESS:
-                        harness_datasets.add(task.source.dataset)
+                        harness_datasets.add(TaskSpec.model_validate_json(value[TASK_SPEC_COLUMN]).source.dataset)
                     yield row.model_dump(mode="json")
 
         write_parquet_file(manifest_rows(), str(directory / TASK_MANIFEST_FILENAME), schema=TASK_MANIFEST_SCHEMA)
@@ -777,6 +790,89 @@ def _publish_selection(directory: Path, output_path: str, task_files: tuple[str,
     for name in (*task_files, TASK_MANIFEST_FILENAME):
         (destination / name).upload_from(str(directory / name))
     (destination / SUMMARY_FILENAME).write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+
+
+def _training_holdout(
+    selection: str, output: str, holdout: TrainingHoldout, parent_identity: str, selection_name: str
+) -> None:
+    source = StoragePath(selection)
+    parent = json.loads((source / SUMMARY_FILENAME).read_text())
+    population, validation = seeded_sample(
+        _parquet_rows(source / TRAIN_FILENAME, *TASK_SCHEMA.names),
+        size=holdout.count,
+        key=lambda row: seeded_order(json.loads(row[TASK_SPEC_COLUMN])["id"], holdout.seed),
+    )
+    if population <= holdout.count:
+        raise ValueError("The curriculum must contain more prompts than the holdout")
+    heldout_keys = {
+        key for row in validation for key in _panel_keys(TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN])).exclusion
+    }
+    training_families: Counter[str] = Counter()
+    validation_families = Counter(row["family"] for row in validation)
+
+    def training_rows():
+        for row in _parquet_rows(source / TRAIN_FILENAME, *TASK_SCHEMA.names):
+            task = TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN])
+            if not heldout_keys.isdisjoint(_panel_keys(task).exclusion):
+                continue
+            training_families[row["family"]] += 1
+            yield row
+
+    with TemporaryDirectory(prefix="curriculum-holdout-") as temporary:
+        directory = Path(temporary)
+        write_parquet_file(training_rows(), str(directory / TRAIN_FILENAME), schema=TASK_SCHEMA)
+        for filename in (VALIDATION_FILENAME, FULL_VALIDATION_FILENAME):
+            write_parquet_file(iter(validation), str(directory / filename), schema=TASK_SCHEMA)
+
+        def manifest_rows():
+            for filename in (TRAIN_FILENAME, VALIDATION_FILENAME):
+                for batch in pq.ParquetFile(directory / filename).iter_batches(batch_size=PARQUET_BATCH_ROWS):
+                    for row in batch.to_pylist():
+                        yield _active_selection_row(row).model_dump(mode="json")
+
+        write_parquet_file(manifest_rows(), str(directory / TASK_MANIFEST_FILENAME), schema=TASK_MANIFEST_SCHEMA)
+        summary = {
+            "selection_strata": (
+                SelectionDefinition(
+                    name=selection_name,
+                    version=TRAINING_HOLDOUT_VERSION,
+                    parent=SelectionParent(
+                        root=selection,
+                        name=parent["selection_strata"]["name"],
+                        version=parent["selection_strata"]["version"],
+                    ),
+                    sampling="seeded uniform holdout from train, excluded by task and prompt identity",
+                    task_files=(TRAIN_FILENAME, FULL_VALIDATION_FILENAME),
+                    active_files=(TRAIN_FILENAME, VALIDATION_FILENAME),
+                ).model_dump(mode="json")
+            ),
+            "recipe": parent["recipe"],
+            "training_holdout": {**asdict(holdout), "parent": parent_identity, "population": population},
+            "training_rows": sum(training_families.values()),
+            "training_family_counts": dict(training_families),
+            "validation_rows": len(validation),
+            "full_validation_rows": len(validation),
+            "validation_family_counts": dict(validation_families),
+            "validation_task_ids": [json.loads(row[TASK_SPEC_COLUMN])["id"] for row in validation],
+        }
+        _publish_selection(directory, output, (TRAIN_FILENAME, VALIDATION_FILENAME, FULL_VALIDATION_FILENAME), summary)
+
+
+def curriculum_holdout_step(selection: ArtifactStep, holdout: TrainingHoldout) -> ArtifactStep:
+    """Bind a random training holdout and the remaining training rows as one selection."""
+    identity = artifact_identity(selection)
+    suffix = fingerprint_hash(json.dumps((identity, asdict(holdout)), sort_keys=True))
+    name = f"{selection.name}-holdout-{suffix}"
+    return apply(
+        name,
+        _training_holdout,
+        version=TRAINING_HOLDOUT_VERSION,
+        selection=selection,
+        output=OUT,
+        holdout=holdout,
+        parent_identity=identity,
+        selection_name=name,
+    )
 
 
 def _pinned_inputs(name: str, sources: tuple[HeldoutSource, ...]) -> tuple[ArtifactStep, ...]:

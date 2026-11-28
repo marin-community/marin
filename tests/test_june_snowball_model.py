@@ -18,7 +18,7 @@ from jax.sharding import AbstractMesh, AxisType, use_abstract_mesh
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.layers.attention import AttentionMask
-from levanter.models.snowball import SnowballConfig
+from levanter.models.snowball import ExpertWeightSharding, SnowballConfig
 
 from experiments.june_tpu_67b_a2b.moe.model import MoEMLP, RMSNorm
 from experiments.june_tpu_67b_a2b.moe.rl_model import JuneSnowballConfig, split_june_pipeline_model
@@ -150,7 +150,13 @@ def test_june_adapter_uses_june_capacity_default_from_hf_config():
 
 
 @pytest.mark.parametrize(
-    "setting", [{"router_dot_fp32": True}, {"moe_capacity_factor": 2.0}, {"router_combine_fp32": True}]
+    "setting",
+    [
+        {"router_dot_fp32": True},
+        {"moe_capacity_factor": 2.0},
+        {"router_combine_fp32": True},
+        {"expert_weight_sharding": ExpertWeightSharding(expert=("expert", "context"))},
+    ],
 )
 def test_june_training_config_rejects_a_set_snowball_only_setting(setting):
     with pytest.raises(ValueError, match=next(iter(setting))):

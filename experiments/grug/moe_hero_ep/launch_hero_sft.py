@@ -83,6 +83,7 @@ from experiments.grug.moe_hero_ep.train import (
     WatchMode,
     run_grug,
 )
+from experiments.sft.launcher import PreparedData
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +162,11 @@ class SftMixturePlan:
 
     @property
     def decay_steps(self) -> int:
-        return max(2, round(self.steps * SFT_DECAY_FRACTION))
+        return _sft_decay_steps(self.steps)
+
+
+def _sft_decay_steps(updates: int) -> int:
+    return max(2, round(updates * SFT_DECAY_FRACTION))
 
 
 def plan_sft_mixture(stores: Mapping[str, SftStore], *, batch_size: int, replay_fraction: float) -> SftMixturePlan:
@@ -348,6 +353,7 @@ def build_sft_run(
     version: str | None = None,
     resources: ResourceConfig | None = None,
     checkpoints: Literal["periodic", "final", "none"] = "periodic",
+    prepared_data: PreparedData | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the hero SFT run that continues ``initialize_from`` at ``start_step``.
 
@@ -360,6 +366,10 @@ def build_sft_run(
     routed experts of ``initialize_from`` so each capacity block carries a similar load.
     """
     allocation = sft_resources(dp_racks)
+    if prepared_data is not None:
+        prepared_data.mix_fingerprint()
+        if prepared_data.tokenizer != SFT_TOKENIZER:
+            raise ValueError("prepared_data.tokenizer must match the Mochi SFT tokenizer")
     if muon_lr <= 0 or adam_lr <= 0:
         raise ValueError("learning rates must be positive")
     if expert_placement is not None and not expert_placement.permutes(initialize_from):
@@ -375,12 +385,20 @@ def build_sft_run(
             num_layers=model.num_layers, num_experts=model.num_experts, expert_axis_size=expert_axis_size
         )
     batch_size = hero_rack_batch_size(model.max_seq_len) * dp_racks
-    stores = load_sft_stores()
-    plan = plan_sft_mixture(stores, batch_size=batch_size, replay_fraction=replay_fraction)
-    num_train_steps = start_step + plan.steps
+    if prepared_data is None:
+        stores = load_sft_stores()
+        plan = plan_sft_mixture(stores, batch_size=batch_size, replay_fraction=replay_fraction)
+        updates = plan.steps
+        decay_steps = plan.decay_steps
+    else:
+        if stop_after_steps is None:
+            raise ValueError("Prepared Mochi SFT data requires an explicit update budget")
+        updates = stop_after_steps
+        decay_steps = _sft_decay_steps(updates)
+    num_train_steps = start_step + updates
     stop_step = num_train_steps if stop_after_steps is None else start_step + stop_after_steps
     if stop_step > num_train_steps:
-        raise ValueError(f"stop_after_steps={stop_after_steps} is past the {plan.steps}-step epoch")
+        raise ValueError(f"stop_after_steps={stop_after_steps} is past the {updates}-step epoch")
 
     # The restored optimizer state comes from the hero's pretraining recipe, which fixes beta2 and epsilon.
     _, pretrain_optimizer = build_hero_configs(
@@ -392,7 +410,7 @@ def build_sft_run(
         learning_rate=muon_lr,
         adam_lr=adam_lr,
         warmup=0,
-        decay=plan.decay_steps,
+        decay=decay_steps,
         min_lr_ratio=SFT_MIN_LR_RATIO,
         weight_decay=0.0,
         gate_router_weight_decay=0.0,
@@ -425,18 +443,20 @@ def build_sft_run(
     train_resources = allocation if resources is None else resources
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
-    validation = validation_datasets() if eval_every > 0 else []
-    length_statistics = harrier_length_statistics()
+    if prepared_data is None:
+        validation = validation_datasets() if eval_every > 0 else []
+        length_statistics = harrier_length_statistics()
+        data_deps = (HARRIER_MIX_2026_08_18_STORE, length_statistics, *validation)
+    else:
+        data_deps = (prepared_data.step,)
     logger.info(
-        "Hero SFT %s: %d updates of %d sequences, %d blocks of %d, replay %.4f, decay over the last %d updates, "
+        "Hero SFT %s: %d updates of %d sequences, data %s, decay over the last %d updates, "
         "router bias %s, capacity factor %g",
         run_id,
-        plan.steps,
-        plan.batch_size,
-        plan.num_blocks,
-        plan.block_size,
-        plan.replay_fraction,
-        plan.decay_steps,
+        updates,
+        batch_size,
+        prepared_data.step.name if prepared_data is not None else str(SFT_STORES_MANIFEST),
+        decay_steps,
         router_bias_mode.value,
         capacity_factor,
     )
@@ -505,16 +525,30 @@ def build_sft_run(
             ),
             context_axis_size=context_axis_size,
         )
-        replay = harrier_long_context_data_config(
-            ctx=ctx,
-            start_step=0,
-            max_seq_len=model.max_seq_len,
-            validation=[],
-            stats_path=ctx.artifact_path(length_statistics),
-        )
-        data = sft_data_config(
-            stores, plan, start_step=start_step, replay=replay, validation=validation_components(ctx, validation)
-        )
+        if prepared_data is None:
+            replay = harrier_long_context_data_config(
+                ctx=ctx,
+                start_step=0,
+                max_seq_len=model.max_seq_len,
+                validation=[],
+                stats_path=ctx.artifact_path(length_statistics),
+            )
+            data = sft_data_config(
+                stores, plan, start_step=start_step, replay=replay, validation=validation_components(ctx, validation)
+            )
+        else:
+            if ctx.is_fingerprint:
+                data = LmDataConfig(
+                    tokenizer=prepared_data.tokenizer,
+                    cache_dir=prefix_join(ctx.artifact_path(prepared_data.step), prepared_data.file),
+                    auto_build_caches=False,
+                    mixture_start_step=start_step,
+                )
+            else:
+                data = prepared_data.load(ctx)
+                if data.mixture_start_step not in (None, start_step):
+                    raise ValueError("Prepared data mixture_start_step differs from the Mochi initializer")
+                data = dataclasses.replace(data, mixture_start_step=start_step)
         return GrugRunConfig(
             model=model,
             data=data,
@@ -531,7 +565,7 @@ def build_sft_run(
                     compute_bpb=True,
                     dropless_eval=True,
                 )
-                if validation
+                if eval_every > 0
                 else None
             ),
             stop_after_steps=stop_step,
@@ -544,7 +578,7 @@ def build_sft_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(HARRIER_MIX_2026_08_18_STORE, length_statistics, *validation),
+        deps=data_deps,
         runtime_args={"train_resources": train_resources},
     )
 

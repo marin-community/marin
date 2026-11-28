@@ -75,6 +75,7 @@ from experiments.post_training.task_curation.selection import (
     TASK_MANIFEST_FILENAME,
     TASK_SPEC_COLUMN,
     GraderKind,
+    curriculum_holdout_step,
 )
 from experiments.post_training.task_curation.swesmith_training import SWESMITH_DATASET, native_swesmith_selection
 
@@ -123,7 +124,10 @@ _DERIVED_RECIPE_KEYS = frozenset(
         "generator.inference_engine_expert_parallel_size",
     }
 )
-RUNNER_KEYS = _DERIVED_RECIPE_KEYS | {"generator.trajectory_retention", "generator.run_engines_locally"}
+RUNNER_KEYS = _DERIVED_RECIPE_KEYS | {
+    "generator.trajectory_retention",
+    "generator.run_engines_locally",
+}
 _GATED_KEYS = frozenset(
     {
         "trainer.max_steps",
@@ -143,6 +147,8 @@ def selection_summary(selection: ArtifactStep) -> dict:
 
 
 def evaluation_answer_count(evaluation: Evaluation, tasks: ArtifactStep) -> int:
+    if evaluation.training_holdout is not None:
+        return evaluation.training_holdout.count * evaluation.answers
     key = "training_rows" if not evaluation.held_out else f"{evaluation.file}_rows"
     return (evaluation.sample or selection_summary(tasks)[key]) * evaluation.answers
 
@@ -447,7 +453,11 @@ def _training_config(
     trainer = sections.Trainer(
         max_steps=preset.updates or 1,
         micro_forward_batch_size_per_gpu=micro_batch,
-        eval_interval=max(1, preset.updates) if preset.evaluations else -1,
+        eval_interval=(
+            preset.evaluations[0].every
+            if preset.evaluations and preset.evaluations[0].training_holdout is not None
+            else max(1, preset.updates) if preset.evaluations else -1
+        ),
         resume_mode="latest" if preset.checkpoints != "none" else "none",
         ckpt_interval=0,
         hf_save_interval=-1,
@@ -594,8 +604,12 @@ def run_spec(
     profiles = {}
     expected_tasks = 0
     for index, evaluation in enumerate(chosen):
-        evaluation_tasks = evaluation_source(evaluation, selection, default, preset.held_out_tasks)
-        _refuse_judged(selection_summary(evaluation_tasks), evaluation.file)
+        evaluation_tasks = evaluation_source(evaluation, selection, default, preset, training_source=training_selection)
+        if evaluation.training_holdout is not None:
+            assert index == 0
+            training_selection = evaluation_tasks
+        else:
+            _refuse_judged(selection_summary(evaluation_tasks), evaluation.file)
         tasks_for_evaluation = evaluation_tasks
         if evaluation.sample is not None:
             tasks_for_evaluation = sampled_tasks_step(
@@ -694,41 +708,59 @@ def run_step(
     preset: presets.Preset, spec: SkyRLSpec, *, wandb_entity: str | None = None, forward_env: tuple[str, ...] = ()
 ) -> ArtifactStep[SkyRLRun]:
     """Bind an RL specification to its declared execution resources."""
-    layout = preset.recipe.layout
     config = yaml.safe_load(spec.config_yaml)
-    required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
-    if preset.output_ttl_days is not None:
-        required_env += ("MARIN_PREFIX",)
-    required_env += tuple(_recipe_env(config))
     return skyrl_step(
         spec,
-        IrisSkyRLExecution(
-            cluster=layout.cluster,
-            cluster_config=cluster_config_path(layout.cluster),
-            cpu=layout.host_cpu,
-            memory=layout.host_memory,
-            disk=layout.host_disk,
-            priority=layout.priority,
-            max_retries=0,
-            target_cluster=layout.cluster,
-            parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=layout.coordinator_timeout_hours,
-            job_timeout_seconds=layout.job_timeout_seconds,
-            wandb_entity=wandb_entity or preset.wandb_entity,
-            required_env_vars=tuple(dict.fromkeys((*required_env, *forward_env))),
-            container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
-            role_topology=layout.role_topology,
-        ),
+        execution_config(preset, wandb_entity=wandb_entity, forward_env=(*forward_env, *_recipe_env(config))),
         export_hf=preset.export != "none",
     )
 
 
+def execution_config(
+    preset: presets.Preset, *, wandb_entity: str | None = None, forward_env: tuple[str, ...] = ()
+) -> IrisSkyRLExecution:
+    """Return the preset's Iris placement, limits and required environment names."""
+    layout = preset.recipe.layout
+    required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
+    if preset.output_ttl_days is not None:
+        required_env += ("MARIN_PREFIX",)
+    return IrisSkyRLExecution(
+        cluster=layout.cluster,
+        cluster_config=cluster_config_path(layout.cluster),
+        cpu=layout.host_cpu,
+        memory=layout.host_memory,
+        disk=layout.host_disk,
+        priority=layout.priority,
+        max_retries=0,
+        target_cluster=layout.cluster,
+        parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
+        coordinator_timeout_hours=layout.coordinator_timeout_hours,
+        job_timeout_seconds=layout.job_timeout_seconds,
+        wandb_entity=wandb_entity or preset.wandb_entity,
+        required_env_vars=tuple(dict.fromkeys((*required_env, *forward_env))),
+        container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+        role_topology=layout.role_topology,
+    )
+
+
 def evaluation_source(
-    evaluation: Evaluation, selection: ArtifactStep, default: ArtifactStep, held_out_tasks: str | None
+    evaluation: Evaluation,
+    selection: ArtifactStep,
+    default: ArtifactStep,
+    preset: Preset,
+    *,
+    training_source: ArtifactStep | None = None,
 ) -> ArtifactStep:
+    if evaluation.training_holdout is not None:
+        source = (
+            training_source
+            if training_source is not None
+            else _training_selection(selection, selection_summary(selection), preset.recipe.config.to_skyrl())
+        )
+        return curriculum_holdout_step(source, evaluation.training_holdout)
     if evaluation.source == "default":
         return default
     if evaluation.source == "tasks":
         return selection
-    assert held_out_tasks is not None
-    return selection_artifact(held_out_tasks)
+    assert preset.held_out_tasks is not None
+    return selection_artifact(preset.held_out_tasks)
