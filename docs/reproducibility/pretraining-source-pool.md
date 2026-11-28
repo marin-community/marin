@@ -141,3 +141,9 @@ verify that staging completed.
 Provider availability can change after a Marin revision is published. A
 provider removal, license change, or expired credential may prevent a later
 byte-for-byte reconstruction even though the original recipe remains pinned.
+
+## Recovering the selected Hero corpus
+
+The [metadata-only Hero dataset proposal](hero-metadata-release-proposal.md)
+describes an index for reconstructing the selected corpus from these sources
+without rerunning global corpus curation.
