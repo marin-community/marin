@@ -19,6 +19,7 @@ import threading
 import time
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
+from dataclasses import dataclass
 from pathlib import Path
 
 from rigging.filesystem.cluster_config import StoreType, store_config
@@ -37,6 +38,7 @@ from iris.cluster.config import (
     ControllerVmConfig,
     CoreweavePlatformConfig,
     IrisClusterConfig,
+    NodeStorageHealthConfig,
     assert_no_inlined_secrets,
     config_to_dict,
     resolve_principal_references,
@@ -571,6 +573,14 @@ def _build_s3_task_env(endpoint: str) -> dict[str, str]:
 # ============================================================================
 
 
+@dataclass(frozen=True)
+class _ControllerStartPreparation:
+    controller_env: dict[str, str]
+    s3_enabled: bool
+    storage_health: NodeStorageHealthConfig | None
+    storage_credentials: dict[str, str] | None
+
+
 class K8sControllerProvider:
     """Controller lifecycle + connectivity for Kubernetes (CoreWeave CKS) clusters.
 
@@ -604,7 +614,6 @@ class K8sControllerProvider:
             )
         self._poll_interval = poll_interval
         self._shutdown_event = threading.Event()
-        self._s3_enabled = False
         self._controller_secret_specs: tuple[tuple[str, ...], ...] = ()
         self._prepared_controller_env: dict[str, str] | None = None
 
@@ -647,9 +656,12 @@ class K8sControllerProvider:
         (all no-ops if unchanged). wait_for_deployment_ready returns
         immediately if the Deployment is already available.
         """
+        preparation = self._prepare_controller_start(config)
+        return self._apply_controller_start(config, preparation, fresh=fresh)
+
+    def _prepare_controller_start(self, config: IrisClusterConfig) -> _ControllerStartPreparation:
+        """Resolve restart inputs and validate prerequisites without changing resources."""
         cw = config.controller.coreweave
-        port = cw.port or 10000
-        service_name = cw.service_name or "iris-controller-svc"
         if not cw.scale_group:
             raise InfraError("CoreWeave controller config must set scale_group")
         if cw.scale_group not in config.scale_groups:
@@ -662,20 +674,36 @@ class K8sControllerProvider:
             self.preflight_controller(config)
         assert self._prepared_controller_env is not None
 
+        self.verify_prerequisites(config)
+        assert_no_inlined_secrets(config)
+        s3_enabled = self.uses_s3_storage(config)
+        storage_health = config.kubernetes_provider.node_health and config.kubernetes_provider.node_health.storage
+        # Resolve values only in the deploy process; rendered config carries paths.
+        storage_credentials = _resolve_s3_credentials() if s3_enabled or storage_health is not None else None
+        return _ControllerStartPreparation(
+            controller_env=self._prepared_controller_env,
+            s3_enabled=s3_enabled,
+            storage_health=storage_health,
+            storage_credentials=storage_credentials,
+        )
+
+    def _apply_controller_start(
+        self, config: IrisClusterConfig, preparation: _ControllerStartPreparation, *, fresh: bool = False
+    ) -> str:
+        """Apply prepared controller resources and wait for the deployment."""
+        cw = config.controller.coreweave
+        port = cw.port or 10000
+        service_name = cw.service_name or "iris-controller-svc"
+
         # storage.local_state_dir set => mount it from node-local hostPath rather
         # than the default network-attached PVC.
         local_state_hostpath = bool(config.storage.local_state_dir)
         state_mount_path = config.storage.local_state_dir or _DEFAULT_STATE_MOUNT_PATH
 
-        self.verify_prerequisites(config)
-
-        # Resolve values only in the deploy process; rendered config carries paths.
-        assert_no_inlined_secrets(config)
-        self._s3_enabled = self.uses_s3_storage(config)
-        default_env = _build_s3_task_env(self._config.object_storage_endpoint) if self._s3_enabled else {}
-        storage_health = config.kubernetes_provider.node_health and config.kubernetes_provider.node_health.storage
-        if self._s3_enabled or storage_health is not None:
-            self.ensure_secret(STORAGE_SECRET_NAME, _resolve_s3_credentials())
+        default_env = _build_s3_task_env(self._config.object_storage_endpoint) if preparation.s3_enabled else {}
+        storage_health = preparation.storage_health
+        if preparation.storage_credentials is not None:
+            self.ensure_secret(STORAGE_SECRET_NAME, preparation.storage_credentials)
         storage_environment = {
             **default_env,
             **config.defaults.task_env,
@@ -704,8 +732,8 @@ class K8sControllerProvider:
                 }
             )
 
-        if self._prepared_controller_env:
-            self.ensure_secret(CONTROLLER_SECRET_NAME, self._prepared_controller_env)
+        if preparation.controller_env:
+            self.ensure_secret(CONTROLLER_SECRET_NAME, preparation.controller_env)
 
         config_json = self._config_json_for_configmap(config)
         configmap_manifest = {
@@ -740,7 +768,7 @@ class K8sControllerProvider:
         secret_names = [
             secret
             for secret, projected in (
-                (STORAGE_SECRET_NAME, self.uses_s3_storage(config)),
+                (STORAGE_SECRET_NAME, preparation.s3_enabled),
                 (CONTROLLER_SECRET_NAME, _projects_controller_env_secret(config)),
             )
             if projected
@@ -822,21 +850,11 @@ class K8sControllerProvider:
         self._kubectl.rollout_status(K8sResource.DEPLOYMENTS, "iris-controller")
 
     def restart_controller(self, config: IrisClusterConfig) -> str:
-        # Verify read-only prerequisites before start_controller applies any
-        # resource, so an authorization failure cannot arm a stale restore.
         try:
-            cw = config.controller.coreweave
-            if not cw.scale_group or cw.scale_group not in config.scale_groups:
-                raise InfraError(f"Controller scale_group {cw.scale_group!r} is not configured")
-            self.preflight_controller(config)
-            self.verify_prerequisites(config)
-            assert_no_inlined_secrets(config)
-            storage_health = config.kubernetes_provider.node_health and config.kubernetes_provider.node_health.storage
-            if self.uses_s3_storage(config) or storage_health is not None:
-                _resolve_s3_credentials()
+            preparation = self._prepare_controller_start(config)
         except Exception as e:
             raise ControllerRestartNotStarted(f"Controller restart failed before Kubernetes changes: {e}") from e
-        return self.start_controller(config)
+        return self._apply_controller_start(config, preparation)
 
     def _delete_controller_deployment_and_wait(self) -> None:
         """Wait for the old controller to completely be stopped so we can reuse the PV."""
