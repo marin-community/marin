@@ -84,3 +84,9 @@ trials:
   commit: 227dddee7b
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+potential:
+  score: 7
+  rationale: −0.0186 on competitive-d512 at equal steps; d768/d1024/d1280 rungs still running, no hero-mfu → 7
+  model: claude-opus-5-5
+  date: '2026-11-28'
+  inputs_digest: 024769b7b010
