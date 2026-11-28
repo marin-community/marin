@@ -5,10 +5,10 @@ r"""Grade mathematical answers, either symbolically or as a number with toleranc
 
 The default anchored profile takes the last ``\boxed{}`` expression, or the last non-empty line when the output has
 none. References parse as a whole LaTeX expression after removing a multiple-choice label, if present.
-Labelled references accept the matching label or value. Candidates first use
-anchored LaTeX (``$...$``), then math-verify's own anchors (``the answer is ...``) if that yields
-nothing. Other profiles retain raw source extraction or require a boxed expression; their parser
-options remain task-controlled.
+Labelled references accept the matching label or value, and a reply that gives both must match both.
+Candidates first use anchored LaTeX (``$...$``), then math-verify's own anchors (``the answer is ...``)
+if that yields nothing. Other profiles retain raw source extraction or require a boxed expression; their
+parser options remain task-controlled.
 
 ``math_type`` selects the comparison. Set and interval answers allow math-verify's set/relation
 comparison, so an expected ``(2, \infty)`` accepts a candidate ``x > 2``. A list is an ordered
@@ -76,7 +76,8 @@ TERMINAL_UNIT_SUFFIX = re.compile(
 UNIT_GROUP_CONTENT = re.compile(UNIT_GROUP_CONTENT_PATTERN)
 ORDINAL_SUFFIX = re.compile(r"^(\s*[0-9]+)\^\{\\text\{(?:st|nd|rd|th)\}\}(?=\s*(?:" + TEXT_GROUP_COMMAND + r"\{|$))")
 
-_CHOICE_MARKER = r"(?:\(\s*[A-E]\s*\)|[A-E][.)])"
+_CHOICE_LETTER = r"[A-E]"
+_CHOICE_MARKER = rf"(?:\(\s*{_CHOICE_LETTER}\s*\)|{_CHOICE_LETTER}[.)])"
 _CHOICE_COMMAND = r"\\(?:textbf|text|mathrm|mbox)"
 _CHOICE_GAP = r"(?:\s|~|\\(?:[ ,:;!]|q?quad\b))"
 _CHOICE_SPACING = re.compile(rf"{_CHOICE_GAP}+")
@@ -84,8 +85,8 @@ _CHOICE_REFERENCE = re.compile(
     rf"{_CHOICE_COMMAND}\{{\s*(?P<formatted>{_CHOICE_MARKER})\s*\}}|(?P<plain>{_CHOICE_MARKER})(?={_CHOICE_GAP})"
 )
 _CHOICE_CANDIDATE = re.compile(
-    rf"{_CHOICE_COMMAND}\{{\s*(?P<formatted>{_CHOICE_MARKER}|[A-E])\s*\}}"
-    rf"|(?P<plain>{_CHOICE_MARKER}|[A-E](?={_CHOICE_GAP}|$))"
+    rf"{_CHOICE_COMMAND}\{{\s*(?P<formatted>{_CHOICE_MARKER}|{_CHOICE_LETTER})\s*\}}"
+    rf"|(?P<plain>{_CHOICE_MARKER}|{_CHOICE_LETTER}(?={_CHOICE_GAP}|$))"
 )
 _CHOICE_ANSWER_PREFIX = re.compile(r"^(?:the\s+)?(?:final\s+)?answer(?:\s+is\b|\s*:)\s*", re.IGNORECASE)
 _INFIX_OPERATOR = re.compile(r"[+\-*/^=<>]|\\(?:cdot|times|div|leq?|geq?|neq?)\b")
@@ -591,6 +592,10 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
             if not match and spec.allow_additive_constant:
                 match = _additive_constant_match(expected, parsed)
         return scored(float(match), extracted=candidate, expected=spec.expected)
+    return _grade_anchored_math(spec, candidate)
+
+
+def _grade_anchored_math(spec: MathSpec, candidate: str) -> Reward:
     reference_text = strip_math_delimiters(spec.expected)
     choice = _split_choice(reference_text, _CHOICE_REFERENCE)
     if choice and (
