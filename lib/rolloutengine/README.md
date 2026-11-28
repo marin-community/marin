@@ -66,6 +66,15 @@ watchdogs and bearer lifetimes include the bounded queue allowance. Detached age
 commands retain a hard setup + queue + execution safety watchdog, while their
 local active agent budget stays unchanged.
 
+A full external trial can own its actor phase with
+`RolloutEngine(..., actor_deadline_owners={name: ActorDeadlineOwner.HARNESS})`.
+The task's declared limits still validate and reach the harness unchanged. Only
+the recorder's duplicate actor timers are disabled; the engine's attempt deadline,
+token/turn limits and cleanup remain in force. SkyRL uses this binding for original
+Harbor trials so their verifier can finish after the agent deadline expires.
+Harbor receives the original package environment; its recording engine does not
+allocate another machine for the same image.
+
 `trajectory_runner.inference_queue_timeout` bounds cumulative admission wait
 separately (2280 seconds by default). A never-scheduled request becomes an
 `InferenceAdmissionTimeout`, not a total-turn timeout or a scored zero. The rollout

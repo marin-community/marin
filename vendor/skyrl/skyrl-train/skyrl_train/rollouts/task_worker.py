@@ -25,7 +25,7 @@ from taskcompendium.grading_result import GradingFailure, Outcome
 from skyrl_train.rollouts.agent_runtime import harbor_trial_engine_requirements
 from taskcompendium.models import NoGrader, ReasoningMarkupPolicy
 from verifyit.modes.grade_judge import JudgeConnection
-from rolloutengine.harness.core import Harness
+from rolloutengine.harness.core import ActorDeadlineOwner, Harness
 from rolloutengine.harness.external import AgentHarness
 from rolloutengine.models import (
     GenerationLimitReached,
@@ -576,20 +576,7 @@ class TaskRolloutWorker:
             # The bound Harbor trial retains and executes the original setup.
             # The recording engine must not provision a second task machine for it.
             engine_task = lowered.task.model_copy(update={"environment_requirements": engine_requirements})
-            # Harbor owns the phase deadlines and must still run its verifier
-            # after an agent timeout. The outer attempt deadline covers the full trial.
-            lowered = lowered.model_copy(
-                update={
-                    "task": engine_task,
-                    "limits": lowered.limits.model_copy(
-                        update={
-                            "model_turn_timeout": None,
-                            "tool_turn_timeout": None,
-                            "total_turn_timeout": None,
-                        }
-                    ),
-                }
-            )
+            lowered = lowered.model_copy(update={"task": engine_task})
         elif harbor is not None and self.installed_agents is not None:
             if not is_shell_harness(lowered.harness):
                 raise ValueError("SkyRL agents require a Shellbox task grader")
@@ -608,7 +595,11 @@ class TaskRolloutWorker:
             lowered = harbor.configured_spec(lowered, phase=phase)
         lowered, harnesses = self._configured_task_and_harnesses(lowered, harbor, session_id, phase)
         factories = self.factories if phase == "train" else self.factories | self.eval_factories
-        engine = RolloutEngine(factories, harnesses)
+        engine = RolloutEngine(
+            factories,
+            harnesses,
+            actor_deadline_owners={HARBOR_TRIAL_SESSION: ActorDeadlineOwner.HARNESS},
+        )
         try:
             engine.check(lowered)
         except (ValueError, NotImplementedError) as error:

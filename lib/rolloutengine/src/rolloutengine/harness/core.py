@@ -10,6 +10,7 @@ The harness does not grade: the engine grades the rollout with the task's grader
 
 from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Protocol
 
 from shellbox.machine import Machine
@@ -18,6 +19,13 @@ from taskcompendium.models import TaskSpec
 from rolloutengine.models import ContextRecovery, EventSink, ModelTurn, Prompt, RolloutLimits
 
 OUTPUT_LIMIT_OPTION_KEYS = ("max_tokens", "max_completion_tokens", "max_output_tokens")
+
+
+class ActorDeadlineOwner(StrEnum):
+    """Who enforces the actor phase within the engine's attempt watchdog."""
+
+    ENGINE = "engine"
+    HARNESS = "harness"
 
 
 def reply_options_match(previous: dict[str, Any], current: dict[str, Any]) -> bool:

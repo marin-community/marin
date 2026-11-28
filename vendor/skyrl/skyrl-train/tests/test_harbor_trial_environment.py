@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 import pytest
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import EnvironmentRequirements, TaskSpec
 
 from skyrl_train.rollouts.agent_runtime import harbor_trial_engine_requirements
 
@@ -24,16 +24,11 @@ def real_task() -> TaskSpec:
 def test_real_row_declares_the_package_environment_and_is_accepted():
     task = real_task()
     engine = harbor_trial_engine_requirements(task)
-    # The TaskSpec declaration is identical to the package's [environment] mapping.
-    assert engine == task.environment_requirements.model_copy(
-        update={"setup_commands": (), "working_directory": None}
+    # Harbor consumes the verified package environment, not the recording engine.
+    assert engine == EnvironmentRequirements()
+    assert task.environment_requirements.docker_image.startswith(
+        "ghcr.io/marin-community/rl-data-swe-rebench-v2-1-actor@sha256:"
     )
-    # The pinned actor image is the one the re-seal declared in both places.
-    assert engine.docker_image.startswith("ghcr.io/marin-community/rl-data-swe-rebench-v2-1-actor@sha256:")
-    assert engine.command_semantics == task.environment_requirements.command_semantics
-    # Setup commands and the working directory keep their own override paths: stripped
-    # from the engine view, still present on the TaskSpec.
-    assert engine.setup_commands == () and engine.working_directory is None
     assert task.environment_requirements.setup_commands != ()
     assert task.environment_requirements.working_directory == "/testbed"
 
@@ -65,5 +60,14 @@ def test_added_tool_provider_fails_closed():
         "shell": {"action_interface": "shell", "initial_state": {"cwd": "/"}}
     }
     task = TaskSpec.model_validate_json(json.dumps(drifted))
+    with pytest.raises(ValueError, match="disagree with the Harbor package"):
+        harbor_trial_engine_requirements(task)
+
+
+def test_unbound_capability_is_not_discarded_with_the_recording_environment():
+    task = real_task()
+    task = task.model_copy(
+        update={"environment_requirements": task.environment_requirements.model_copy(update={"capabilities": ("gpu",)})}
+    )
     with pytest.raises(ValueError, match="disagree with the Harbor package"):
         harbor_trial_engine_requirements(task)

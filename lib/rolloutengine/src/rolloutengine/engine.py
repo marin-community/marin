@@ -19,7 +19,7 @@ from taskcompendium.runtime.output_capture import captured_output_files
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.event_delivery import _EventDelivery
 from rolloutengine.grading import _grade_rollout
-from rolloutengine.harness.core import Harness, HarnessContext
+from rolloutengine.harness.core import ActorDeadlineOwner, Harness, HarnessContext
 from rolloutengine.machines import _prepare_machine
 from rolloutengine.models import (
     GRADING_SECONDS_METRIC,
@@ -82,6 +82,10 @@ class RolloutEngine:
     ``TaskRolloutSpec.harness``; each run supplies the model under rollout. The harness runs the turns, and
     the engine grades the rollout with the task's grader. An optional observer receives progress events
     while each attempt runs.
+
+    ``actor_deadline_owners`` delegates named harnesses' actor timers to an external
+    trial runner. Declared limits still validate and reach the harness unchanged;
+    the engine retains the full-attempt deadline, token/turn limits and cleanup.
     """
 
     def __init__(
@@ -90,10 +94,12 @@ class RolloutEngine:
         harnesses: Mapping[str, Harness],
         *,
         observer: RolloutObserver | None = None,
+        actor_deadline_owners: Mapping[str, ActorDeadlineOwner] | None = None,
     ):
         self.machine_factories = machine_factories
         self.harnesses = harnesses
         self.observer = observer
+        self.actor_deadline_owners = dict(actor_deadline_owners or {})
 
     def check(self, spec: TaskRolloutSpec) -> None:
         """Reject a spec before any machine starts: unknown factories or harness, or unsupported requirements."""
@@ -119,7 +125,14 @@ class RolloutEngine:
             spec,
             harness,
             run_id,
-            _Recorder(model, spec.limits, spec.trace, events, context_recovery=harness.context_recovery),
+            _Recorder(
+                model,
+                spec.limits,
+                spec.trace,
+                events,
+                context_recovery=harness.context_recovery,
+                actor_deadline_owner=self.actor_deadline_owners.get(spec.harness, ActorDeadlineOwner.ENGINE),
+            ),
             _Cleanup(spec.limits.cleanup_timeout),
             events,
             GradeResult(Outcome.UNAVAILABLE, None, "Execution has no final grade"),

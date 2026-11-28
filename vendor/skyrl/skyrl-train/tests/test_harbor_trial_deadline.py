@@ -1,85 +1,83 @@
-"""Launch-time harbor lowering honors a task's declared deadline (the .722 fix).
+"""Declared Harbor deadlines survive the complete launch-time worker binding."""
 
-The .722 launch of v3-anchor-r41-compact died in prepare_task: the lowered row's
-total_turn_timeout was None while the SWE-rebench task declared agent_timeout_sec 3000.
-The fixture is the literal TaskRolloutSpec of one c55add0e pool row.
-"""
-
-import json
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
-import yaml
+import pytest
+from harbor.models.trial.config import AgentConfig
 from omegaconf import OmegaConf
-from rolloutengine.models import RolloutLimits, TaskRolloutSpec
+from rolloutengine.models import TaskRolloutSpec
+from shellbox.backends.daytona.connection import DaytonaConnection
 
+from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
+from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings
 from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
+from skyrl_train.rollouts.task_projections import WholeTaskProjection
+from skyrl_train.rollouts.task_worker import TaskRolloutWorker
 
 FIXTURE = Path(__file__).parent / "fixtures" / "swe_rebench_c55add0e_rollout.json"
-COMPILED = Path(
-    "/Users/benfeuer/Documents/experiments/active/rl-data-campaign/"
-    "validation/v3-anchor-r41-compact/2026.11.27.722/native-controls/compiled.yaml"
-)
 
 
 def real_spec(**limit_updates) -> TaskRolloutSpec:
     spec = TaskRolloutSpec.model_validate_json(FIXTURE.read_text())
-    if limit_updates:
-        spec = spec.model_copy(update={"limits": spec.limits.model_copy(update=limit_updates)})
-    return spec
+    return spec.model_copy(update={"limits": spec.limits.model_copy(update=limit_updates)})
 
 
 def harbor_settings() -> HarborTaskSettings:
-    config = yaml.safe_load(COMPILED.read_text())
-    return HarborTaskSettings.from_config(OmegaConf.create(config["skyrl"]["terminal_bench_config"]))
-
-
-def test_unset_total_turn_timeout_without_override_is_derived_from_the_declared_deadline():
-    """A dropped total_turn_timeout is restored from the task's declared agent deadline.
-
-    The .722 in-region lowering produced total_turn_timeout None for a task that declares
-    agent_timeout_sec 3000; the deadline fallback derives it from the declaration instead.
-    """
-    settings = harbor_settings()
-    settings = settings.model_copy() if hasattr(settings, "model_copy") else settings
-    # Simulate the in-region path with no harbor override configured.
-    without_override = HarborTaskSettings(
-        environment=settings.environment,
-        verifier=settings.verifier,
-        agent_timeout=None,
-        max_agent_timeout=None,
-        max_turns=settings.max_turns,
-        timeout_multiplier=settings.timeout_multiplier,
-        eval_timeout=settings.eval_timeout,
-        concurrent_trials=settings.concurrent_trials,
-        error_handling=settings.error_handling,
-        reward_shaping=settings.reward_shaping,
-        retry=settings.retry,
-        attempt_timeout=settings.attempt_timeout,
-        declared_error_handling_fields=settings.declared_error_handling_fields,
+    return HarborTaskSettings.from_config(
+        OmegaConf.create({"harbor": {"override_timeout_sec": 1800, "max_timeout_sec": 1800}})
     )
+
+
+def test_unset_actor_limit_uses_the_declared_deadline():
+    settings = replace(harbor_settings(), agent_timeout=None, max_agent_timeout=None)
     spec = real_spec(total_turn_timeout=None)
-    configured = without_override.configured_spec(spec, phase="train")
-    deadline = spec.task.execution_requirements.agent_timeout_sec
-    assert configured.limits.total_turn_timeout == deadline
-    # The validation rule (total <= declared agent deadline) is satisfiable by construction.
-    assert configured.limits.total_turn_timeout <= deadline
-
-
-def test_override_total_turn_timeout_is_kept_and_honors_the_declared_deadline():
-    """A configured override stays in force when it honors the task's declared deadline."""
-    settings = harbor_settings()
-    spec = real_spec()
     configured = settings.configured_spec(spec, phase="train")
-    deadline = spec.task.execution_requirements.agent_timeout_sec
-    assert configured.limits.total_turn_timeout == 1800.0
-    assert configured.limits.total_turn_timeout <= deadline
+    assert configured.limits.total_turn_timeout == spec.task.execution_requirements.agent_timeout_sec
 
 
-def test_the_fix_does_not_touch_tasks_without_declared_requirements():
-    settings = harbor_settings()
-    spec = real_spec(total_turn_timeout=None)
-    bare = spec.model_copy(
-        update={"task": spec.task.model_copy(update={"execution_requirements": None})}
+def test_configured_actor_limit_keeps_the_stricter_override():
+    configured = harbor_settings().configured_spec(real_spec(), phase="train")
+    assert configured.limits.total_turn_timeout == 1800
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["train", "eval"])
+@pytest.mark.parametrize("actor_timeout", [1800, 4000])
+async def test_real_harbor_trial_preparation_keeps_and_checks_the_actor_limit(tmp_path, phase, actor_timeout):
+    async def unexpected_request(request):
+        pytest.fail("Preparation must not call inference")
+
+    tokenizer = SimpleNamespace(eos_token_id=0)
+    config = OmegaConf.create({})
+    runtime = InstalledAgentRuntime(
+        InstalledAgentSettings(
+            agent=AgentConfig(name="pi"), output_path=str(tmp_path),
+            setup_timeout=5, run_timeout=1800, cleanup_timeout=5,
+            service_startup_timeout=5, service_shutdown_timeout=5,
+        ),
+        AgentInferenceBackend("fixture", 131072, unexpected_request, tokenizer),
+        98304,
+        daytona_connection=DaytonaConnection(api_key="unused-test-key"),
+        eval_daytona_connection=DaytonaConnection(api_key="unused-test-key"),
     )
-    configured = settings.configured_spec(bare, phase="train")
-    assert configured.limits.total_turn_timeout == 1800.0
+    settings = replace(harbor_settings(), agent_timeout=None, max_agent_timeout=None, eval_timeout=None)
+    worker = TaskRolloutWorker(
+        config, WholeTaskProjection(config, tokenizer), None, {}, harbor=settings,
+        max_verifier_workers=0, inference_queue_timeout=2280, shutdown_timeout=5, installed_agents=runtime,
+    )
+    spec = real_spec(total_turn_timeout=actor_timeout)
+    try:
+        if actor_timeout > spec.task.execution_requirements.agent_timeout_sec:
+            with pytest.raises(ValueError, match="actor limit must honor"):
+                worker.prepare_task(spec, phase=phase, session_id="deadline")
+            return
+        prepared = worker.prepare_task(spec, phase=phase, session_id="deadline")
+        assert prepared.spec.limits.total_turn_timeout == actor_timeout
+        assert prepared.spec.task.execution_requirements == spec.task.execution_requirements
+        assert prepared.spec.limits.attempt_timeout == spec.limits.attempt_timeout
+        assert prepared.spec.limits.verifier_timeout == spec.limits.verifier_timeout
+        assert prepared.spec.limits.cleanup_timeout == spec.limits.cleanup_timeout
+    finally:
+        await worker.shutdown()

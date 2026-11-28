@@ -17,7 +17,13 @@ from shellbox.machine import Machine
 from taskcompendium.models import TaskSpec
 
 from rolloutengine.cleanup import _Cleanup
-from rolloutengine.harness.core import OUTPUT_LIMIT_OPTION_KEYS, Harness, HarnessContext, reply_options_match
+from rolloutengine.harness.core import (
+    OUTPUT_LIMIT_OPTION_KEYS,
+    ActorDeadlineOwner,
+    Harness,
+    HarnessContext,
+    reply_options_match,
+)
 from rolloutengine.models import (
     BUDGET_STOP_REASON,
     LENGTH_STOP_REASON,
@@ -187,9 +193,17 @@ class _Recorder:
         events: EventSink,
         *,
         context_recovery: ContextRecovery,
+        actor_deadline_owner: ActorDeadlineOwner = ActorDeadlineOwner.ENGINE,
     ):
         self.model = model
-        self.limits = limits
+        # A full external trial owns its actor phase and must still verify after
+        # that phase expires. Only the recorder's duplicate actor clocks are
+        # disabled; the checked spec and engine's attempt clock remain intact.
+        self.limits = (
+            limits.model_copy(update={"model_turn_timeout": None, "tool_turn_timeout": None, "total_turn_timeout": None})
+            if actor_deadline_owner is ActorDeadlineOwner.HARNESS
+            else limits
+        )
         self.mode = mode
         self.events = events
         self.context_recovery = context_recovery

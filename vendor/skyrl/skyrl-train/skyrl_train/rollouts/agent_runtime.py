@@ -93,7 +93,6 @@ def harbor_trial_engine_requirements(task: TaskSpec) -> EnvironmentRequirements:
         return engine
     environment = package_config(task).environment
     declared = EnvironmentRequirements.model_construct(
-        capabilities=task.environment_requirements.capabilities,
         command_semantics=CommandSemantics.LINUX_PROCESS,
         docker_image=environment.docker_image,
         environment_variables=dict(environment.env),
@@ -106,7 +105,9 @@ def harbor_trial_engine_requirements(task: TaskSpec) -> EnvironmentRequirements:
             f"(TaskSpec: {engine.model_dump(exclude_none=True)}; "
             f"package: {declared.model_dump(exclude_none=True)})"
         )
-    return engine
+    # The original trial consumes the verified package environment. Its
+    # recording engine must not allocate a second machine for the same image.
+    return EnvironmentRequirements()
 
 
 def trial_setup_commands(task: TaskSpec) -> tuple[str, ...]:
