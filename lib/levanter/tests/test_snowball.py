@@ -1271,3 +1271,17 @@ def test_snowball_init_preserves_weights_and_shardings_with_sharded_temporaries(
             assert weight.sharding == want, (name, weight.sharding, want)
 
         assert initialized.memory_analysis().temp_size_in_bytes < replicated.memory_analysis().temp_size_in_bytes / 3
+
+
+@pytest.mark.tpu
+@pytest.mark.skipif(jax.default_backend() != "tpu", reason="requires TPU RMSNorm")
+def test_snowball_tpu_rmsnorm_matches_shared_reference():
+    cfg = _tiny_config(hidden_dim=128, num_layers=2)
+    with jax.set_mesh(compact_grug_mesh()):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(19))
+        tokens = _device_batched_ids(cfg.vocab_size, 8)
+        forward = eqx.filter_jit(lambda model, tokens: model(tokens))
+        reference = forward(model.with_batch_invariant_rmsnorm("reference"), tokens)
+        actual = forward(model.with_batch_invariant_rmsnorm("pallas_tpu"), tokens)
+
+    np.testing.assert_allclose(actual.array, reference.array, atol=2e-6, rtol=2e-6)

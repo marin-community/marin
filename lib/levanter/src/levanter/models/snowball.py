@@ -60,6 +60,9 @@ from levanter.grug.sharding import (
     unshard,
 )
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+from levanter.kernels.pallas.autotune_utils import named_sharding_of
+from levanter.kernels.pallas.rms_norm import Implementation as RmsNormImplementation
+from levanter.kernels.pallas.rms_norm import batch_invariant_rms_norm
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache
 from levanter.metrics import Metric, ReductionType
@@ -405,6 +408,7 @@ class RMSNorm(eqx.Module):
 
     weight: jax.Array
     eps: float = eqx.field(static=True)
+    implementation: RmsNormImplementation | None = eqx.field(static=True, default=None)
 
     @staticmethod
     def init(dim: int, eps: float) -> "RMSNorm":
@@ -413,6 +417,12 @@ class RMSNorm(eqx.Module):
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
         weight = unshard(self.weight)
+        if self.implementation is not None:
+            if self.implementation == "pallas_tpu" and _context_axis() is not None:
+                raise ValueError("Batch-invariant TPU RMSNorm requires an unsharded context axis")
+            output = batch_invariant_rms_norm(x, weight, self.eps, self.implementation)
+            sharding = named_sharding_of(x)
+            return reshard(output, sharding) if sharding is not None and not sharding.mesh.empty else output
         dtype = x.dtype
         x = x.astype(jnp.float32)
         variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
@@ -979,6 +989,17 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
 
     transformer: SnowballTransformer
     _config: SnowballConfig = eqx.field(static=True)
+
+    def with_batch_invariant_rmsnorm(self, implementation: RmsNormImplementation) -> "SnowballLMHeadModel":
+        """Select the same weighted normalization for learner and paged decode."""
+        transformer = jax.tree.map(
+            lambda layer: (
+                dataclasses.replace(layer, implementation=implementation) if isinstance(layer, RMSNorm) else layer
+            ),
+            self.transformer,
+            is_leaf=lambda layer: isinstance(layer, RMSNorm),
+        )
+        return dataclasses.replace(self, transformer=transformer)
 
     @property
     def config(self) -> SnowballConfig:
