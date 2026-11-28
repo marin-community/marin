@@ -54,7 +54,7 @@ class ControllerProvider(Protocol):
         ...
 
     def restart_controller(self, config: IrisClusterConfig) -> str:
-        """Restart in-place; raise ControllerRestartNotStarted if no resources changed."""
+        """Restart in-place; preflight failures may raise ControllerRestartNotStarted before resource changes."""
         ...
 
     def stop_controller(self, config: IrisClusterConfig) -> None:
