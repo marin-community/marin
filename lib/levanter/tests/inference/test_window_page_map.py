@@ -21,6 +21,8 @@ def test_window_pool_reuses_expired_page_and_preserves_live_suffix():
     state = replace(state, used_mask=hax.named(jnp.array([True]), "seq"))
     compact = WindowPageMap.init(logical_pages=logical_pages, window_pages=2, window=4)
     remap = jax.jit(WindowPageMap.remap)
+    count_available = jax.jit(WindowPageMap.num_available_window_pages)
+    available = []
     translated = []
     for logical in range(logical_pages):
         pages = hax.named(
@@ -38,9 +40,12 @@ def test_window_pool_reuses_expired_page_and_preserves_live_suffix():
             new_token_dests=hax.named(logical * page_size + jnp.arange(page_size), "position"),
             page_size=page_size,
         )
+        available.append(count_available(compact, live, work))
         compact, result = remap(compact, live, work)
         translated.append((result.page_indices.array, result.new_token_dests.array))
 
+    # The final write can reuse one slot even though both slots already have owners.
+    np.testing.assert_array_equal(available, [2, 1, 1])
     first_slot, second_slot, _ = np.asarray(translated[1][0])[0]
     assert first_slot != second_slot
     np.testing.assert_array_equal(translated[2][0], [[INVALID, second_slot, first_slot]])
