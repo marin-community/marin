@@ -12,6 +12,8 @@ live in the region.
 import argparse
 import subprocess
 
+from experiments.post_training.task_curation.judges import require_review_serving_root
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -40,6 +42,7 @@ def main() -> None:
     )
     parser.add_argument("--timeout", default="259200", help="Job timeout in seconds (default: three days).")
     args = parser.parse_args()
+    require_review_serving_root(args.target_cluster)
 
     script_uri = (
         "https://raw.githubusercontent.com/marin-community/marin/"

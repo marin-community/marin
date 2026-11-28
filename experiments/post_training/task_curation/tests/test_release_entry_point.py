@@ -335,6 +335,9 @@ def _release_config(tmp_path: Path, release_id: str = "testrelease") -> Path:
         },
         "production_version": 41,
         "preview_base_version": 30,
+        # the prior snapshot id the re-cut detection compares the catalog's served
+        # snapshot against (the fixture plan's prior snapshot id)
+        "prior_snapshot_id": "assembly-prior-v1",
     }
     path = tmp_path / "release-config.json"
     path.write_text(json.dumps(config))
@@ -525,3 +528,46 @@ def test_landing_log_flag_points_the_guard_default(plan_document, tmp_path):
     assert exit_code == 0
     assert entry_point.guard.landing_log_path() == log
     del os.environ["ATLAS_PUSH_LOG"]
+
+
+def test_plan_argument_preserves_storage_uris():
+    """The sealed derived plan travels by storage URI, and --plan must carry it to
+    load_plan verbatim: pathlib collapses an embedded s3:// to s3:/ (a mid-path
+    double slash), which made the first URI-carried submission open the sealed plan
+    as a local file and refuse."""
+    args = entry_point.build_parser().parse_args(
+        [
+            "--version",
+            "atlas-2026.11.27",
+            "--plan",
+            "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/atlas-2026.11.27-2026.11.27.0505/release-plan.json",
+            "run",
+        ]
+    )
+    assert args.plan == (
+        "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/atlas-2026.11.27-2026.11.27.0505/release-plan.json"
+    )
+    assert isinstance(args.plan, str)
+    # the collapse this regression guards against
+    assert str(Path("s3://bucket/plan.json")) == "s3:/bucket/plan.json"
+
+
+def test_bundled_landing_log_attests_a_freeze_this_machine_never_landed(tmp_path):
+    """The atlas-push landing log is per-machine: a freeze another checkout landed
+    never appears in it, so the submitter composes the bundle's log with its own
+    git-verified attestation entry — and leaves a log that already records the
+    freeze byte-for-byte unchanged."""
+    freeze = "4575c6990764595891d0ea1cb513f9268152170b"
+    log = tmp_path / "landings.jsonl"
+    log.write_text('{"at": "2026-11-27T00:00:00+00:00", "sha": "' + "b" * 64 + '", "who": "other"}\n')
+
+    bundled = entry_point._bundled_landing_log(log, freeze).decode()
+    entries = [json.loads(line) for line in bundled.splitlines()]
+    assert len(entries) == 2
+    assert entries[0]["sha"] == "b" * 64
+    assert entries[1]["sha"] == freeze
+    assert entries[1]["who"] == "atlas-release submit"
+
+    # a log that already records the freeze travels unchanged
+    log.write_text(bundled)
+    assert entry_point._bundled_landing_log(log, freeze).decode() == bundled

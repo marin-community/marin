@@ -9,11 +9,16 @@ import pytest
 from click.testing import CliRunner
 from finestore.rl.curation import OversightEvidence, OversightLevel
 from finestore.rl.licenses import (
+    LICENSE_RESOLVER_VERSION,
+    LicenseCheckRule,
+    LicenseCheckVerdict,
     LicenseClass,
     LicenseDecision,
     LicenseDecisionKind,
+    LicenseEvidence,
     LicenseReceipt,
     LicenseSourcePin,
+    check_license,
     require_license,
 )
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
@@ -67,6 +72,122 @@ def test_license_evidence_controls_permission(license_id, classification, allowe
     else:
         with pytest.raises(ValueError, match="blocks ingest and admission"):
             require_license(receipt, "Marin:fixture", "train", ban=None)
+
+
+def _kimina_prover_promptset_receipt() -> LicenseReceipt:
+    """The real Kimina-Prover-Promptset receipt shape (revision 3009c548d90160d0): the
+    dataset card declares no licence while the README body claims Apache-2.0."""
+    card = "https://huggingface.co/datasets/project-numina/Kimina-Prover-Promptset/resolve/3009c548d90160d0f5e963d72238610c6732f812/README.md"
+    return LicenseReceipt(
+        resolver_version=LICENSE_RESOLVER_VERSION,
+        source_id="ProjectNumina:Kimina-Prover-Promptset",
+        dataset_id="project-numina/Kimina-Prover-Promptset",
+        revision="3009c548d90160d0f5e963d72238610c6732f812",
+        resolved_at=datetime(2026, 11, 28, tzinfo=UTC).isoformat(),
+        evidence=[
+            LicenseEvidence(
+                url=card,
+                kind="dataset_card",
+                sha256="e" * 64,
+                license_ids=["missing"],
+                quoted_lines=["L1: ---", "L2: dataset_info:", "L3:   features:"],
+            ),
+            LicenseEvidence(
+                url=card,
+                kind="readme_license",
+                sha256="e" * 64,
+                license_ids=["Apache-2.0"],
+                quoted_lines=["L54: The dataset is available under the Apache License, Version 2.0."],
+            ),
+            LicenseEvidence(
+                url=card,
+                kind="readme_notice",
+                sha256="e" * 64,
+                license_ids=[],
+                quoted_lines=["(no license statement in this document)"],
+            ),
+        ],
+        bundled_third_party=False,
+        model_generated_outputs=True,
+    )
+
+
+def test_missing_card_licence_fails_closed_against_permissive_readme_signal():
+    """Regression (coordinator ruling, the real Kimina-Prover-Promptset receipt): a dataset
+    card that declares no licence must FAIL even when the README body claims a permissive
+    licence — the readme signal does not rescue a missing card declaration."""
+    check = check_license(_kimina_prover_promptset_receipt())
+    assert check.verdict is LicenseCheckVerdict.FAIL
+    assert check.rule_id is LicenseCheckRule.MISSING
+    assert check.quote == "L1: ---"
+    with pytest.raises(ValueError, match="blocks ingest and admission"):
+        require_license(_kimina_prover_promptset_receipt(), "ProjectNumina:Kimina-Prover-Promptset", "train", ban=None)
+
+
+def test_unknown_card_licence_id_fails_closed():
+    """An unknown licence id (the licence table does not recognize it) fails closed."""
+    receipt = fixture_license("Marin:fixture", "fixture/data", "a" * 40).model_copy(
+        update={
+            "evidence": [
+                LicenseEvidence(
+                    url="https://example.test/README.md",
+                    kind="dataset_card",
+                    sha256="e" * 64,
+                    license_ids=["some-unheard-of-license-1.0"],
+                    quoted_lines=["L1: ---", "L2: license: some-unheard-of-license-1.0"],
+                )
+            ]
+        }
+    )
+    check = check_license(receipt)
+    assert check.verdict is LicenseCheckVerdict.FAIL
+    assert check.rule_id is LicenseCheckRule.MISSING
+
+
+def test_card_body_licence_declaration_is_extracted_when_front_matter_lacks_one():
+    """Regression (the allenai/IFBench_test README at ed7c12452594b7028b15807b86d3938150b663ae):
+    the card's YAML front matter declares no licence while the body's License section
+    declares ODC-BY-1.0 — the card evidence must carry the body declaration, not
+    'missing', so the fail-closed gate passes the actually-declared licence."""
+    document = (
+        b"---\n"
+        b"dataset_info:\n"
+        b"  features:\n"
+        b"  - name: key\n"
+        b"    dtype: string\n"
+        b"---\n"
+        b"# IFBench\n\n"
+        b"## License\n\n"
+        b"This dataset is licensed under ODC-BY-1.0. It is intended for research and educational use.\n"
+    )
+    receipt = fixture_license("Evalchemy:ifbench", "allenai/IFBench_test", "ed" * 20).model_copy(
+        update={
+            "evidence": [
+                license_evidence(
+                    "https://huggingface.co/datasets/allenai/IFBench_test/README.md", document, "dataset_card"
+                )
+            ]
+        }
+    )
+    assert receipt.evidence[0].license_ids == ["odc-by"]
+    assert any("ODC-BY-1.0" in line for line in receipt.evidence[0].quoted_lines)
+    check = check_license(receipt)
+    assert check.verdict is LicenseCheckVerdict.PASS
+    assert check.rule_id is LicenseCheckRule.PERMISSIVE
+    require_license(receipt, "Evalchemy:ifbench", "train", ban=None)
+
+
+def test_card_with_neither_front_matter_nor_body_licence_still_fails_closed():
+    """The body fallback does not loosen the gate: a card with no declaration anywhere
+    still fails F2."""
+    document = b"---\ndataset_info:\n  features:\n  - name: key\n    dtype: string\n---\n# A dataset\n"
+    receipt = fixture_license("Marin:fixture", "fixture/data", "a" * 40).model_copy(
+        update={"evidence": [license_evidence("https://example.test/README.md", document, "dataset_card")]}
+    )
+    assert receipt.evidence[0].license_ids == ["missing"]
+    check = check_license(receipt)
+    assert check.verdict is LicenseCheckVerdict.FAIL
+    assert check.rule_id is LicenseCheckRule.MISSING
 
 
 def test_restrictive_file_overrides_permissive_card_and_affirmative_terms_do_not_restrict():
@@ -127,9 +248,10 @@ def test_hardmath_exception_admits_exactly_this_source_and_scope(monkeypatch):
         registry = json.loads(license_registry.LICENSE_BANS)
         exceptions = [ban for ban in registry["bans"] if ban.get("exception")]
         # The 2026-11-26 option-(a) ruling adds the pafitis:hardmath@rhs variant row; this row
-        # stays the base identity's exception.
-        assert len(exceptions) == 2 and exceptions[0]["source_id"] == source_id
-        exception = exceptions[0]["exception"]
+        # stays the base identity's exception. Ruling 48 (2026-11-27) adds the TaskTrove
+        # OpenSWE keep-only exception, so the recorded census is three.
+        assert len(exceptions) == 3
+        exception = next(ban["exception"] for ban in exceptions if ban["source_id"] == source_id)
         assert exception["upstream_revision"] == revision
         assert exception["use"] == "train"
         assert exception["receipt_sha256"] == ("fe67508421dd34ee42d5dbb92926320697d211a173981fa98c331c043565b2ef")
@@ -189,7 +311,9 @@ def test_hardmath_rhs_variant_exception_admits_the_declared_pin_and_scopes_exact
     try:
         registry = json.loads(license_registry.LICENSE_BANS)
         exceptions = [ban for ban in registry["bans"] if ban.get("exception")]
-        assert len(exceptions) == 2
+        # Ruling 48 (2026-11-27) adds the TaskTrove OpenSWE keep-only exception, so the
+        # recorded census is three.
+        assert len(exceptions) == 3
         variant_row = next(ban for ban in exceptions if ban["source_id"] == variant_id)
         assert variant_row["upstream_id"] == upstream
         assert variant_row["exception"]["use"] == "train"

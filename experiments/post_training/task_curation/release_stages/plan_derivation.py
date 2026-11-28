@@ -61,7 +61,12 @@ from experiments.post_training.task_curation.lexical_artifacts import ActorCensu
 from experiments.post_training.task_curation.release_stages import census as census_stage
 from experiments.post_training.task_curation.release_stages import declarations as declarations_stage
 from experiments.post_training.task_curation.release_stages.admission_check import prior_available_sources
-from experiments.post_training.task_curation.release_stages.graph import PLAN_KIND, ReleasePlan, write_plan
+from experiments.post_training.task_curation.release_stages.graph import (
+    DIFFICULTY_SNAPSHOTS,
+    PLAN_KIND,
+    ReleasePlan,
+    write_plan,
+)
 from experiments.post_training.task_curation.release_stages.history_staging import Query
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 from experiments.post_training.task_curation.release_stages.qc_browse import changed_review_sources
@@ -81,6 +86,7 @@ DERIVATION_RECEIPT_NAME = "derivation-receipt.json"
 # The in-repo fingerprint index the identity compose reads targets from; a module
 # constant so tests can point the derivation at a fixture index.
 REGISTRY_INDEX_PATH = Path(__file__).parent / "plans" / "registry-index.json"
+REGISTRY_INDEX_RELPATH = Path("experiments/post_training/task_curation/release_stages/plans/registry-index.json")
 
 # The measured dependency pins the requirement vocabulary the release's surveys
 # were measured under; the module file's digest and the schema digest are both
@@ -132,7 +138,9 @@ def seal_prior_state(declarations: dict[str, dict], query: Query, load_id: str, 
     backend, identity = reconstruct_prior_surveys(query, load_id)
     refs = {}
     for name, document in (
-        ("declarations", {"kind": "atlas-prior-state-declarations", "declarations": declarations}),
+        # The flat source map: every prior-declarations consumer (the declarations
+        # stage, the snapshot drift check, the QC-browse slices) reads this shape.
+        ("declarations", declarations),
         ("backend", backend),
         ("identity", identity),
     ):
@@ -334,7 +342,10 @@ def _read_registry_index(targets: tuple[str, ...]) -> ArtifactRef:
             f"the registry index at the freeze revision lacks {len(missing)} target entries;"
             " refresh the export before the cut: " + str(sorted(missing)[:5])
         )
-    return ArtifactRef(uri=str(REGISTRY_INDEX_PATH), sha256=hashlib.sha256(payload).hexdigest())
+    # The pin carries the repo-relative path: the stage reads the bundled file and
+    # verifies this digest — a deriving machine's absolute path never reaches a
+    # stage input.
+    return ArtifactRef(uri=REGISTRY_INDEX_RELPATH.as_posix(), sha256=hashlib.sha256(payload).hexdigest())
 
 
 def _measured_dependency(repo_root: Path, revision: str) -> dict:
@@ -626,6 +637,15 @@ def derive_release_plan(
 
     prior_curriculum = _verify_prior_pin(prior_pins["composed_release"], "prior_release.composed_release")
     prior_inventory = {canonical_source_id(row["id"]): row for row in prior_curriculum["inventory"]}
+    if recut:
+        # The release re-cuts its own served state: the frozen layer's post-publish
+        # re-pins (conversion reruns, follow-up releases) bind the NEXT release, so
+        # targeting drifts against what is SERVED, not against the config's older
+        # pinned documents. A re-pinned retained source the release does adopt must be
+        # policy-listed (DELIBERATE_EXCLUSIONS keeps it explicit); silent drift
+        # adoption is not a re-cut behavior.
+        prior_declarations = prior.declarations
+        prior_inventory = {}
     replacements = {
         source_id
         for previous in (prior_declarations, prior_inventory)
@@ -682,6 +702,12 @@ def derive_release_plan(
     grader_drift_reference = (drift_reference_fn or _measure_grader_drift_reference)(
         repo_root, config.freeze_source_revision, declared
     )
+    # The registry's difficulty seal binds at derive time (the same rule load_plan
+    # applies on resume): a sealed plan and its registered difficulty seal stay
+    # coherent, so the derivation seals the binding instead of leaving the field
+    # for the load-time adoption to diverge from the sealed bytes.
+    bound = json.loads(DIFFICULTY_SNAPSHOTS.read_text()).get(config.release_id)
+    difficulty_snapshot = ArtifactRef.model_validate(bound) if bound is not None else None
 
     plan_identity = {
         "release_id": config.release_id,
@@ -757,9 +783,11 @@ def derive_release_plan(
         recut=recut,
         removed_sources=tuple(sorted(removed_ids)),
         deliberate_exclusions=tuple(sorted(deliberate_ids)),
+        panel_copy_exclusions=tuple(sorted(copy_exclusions)),
         main_source_sync=config.main_source_sync,
         strict_audit_local=config.strict_audit_local,
         grader_drift_reference=grader_drift_reference,
+        difficulty_snapshot=difficulty_snapshot,
         validation_grading_environments={},
         validation_integrity_contracts={
             source_id: record

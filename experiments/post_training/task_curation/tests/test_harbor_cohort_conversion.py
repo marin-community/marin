@@ -262,8 +262,50 @@ def test_separate_verifier_container_is_rejected():
             f'[verifier.environment]\ndocker_image = "registry/other@sha256:' + "b" * 64 + '"\n'
         )
     )
-    with pytest.raises(CohortConversionRejected, match="separate verifier container"):
+    with pytest.raises(CohortConversionRejected, match="separate verifier container with its own image"):
         _convert(task)
+
+
+def test_declared_separate_without_a_verifier_image_converts_as_the_sandbox_grader():
+    """Coordinator ruling (2026-11-28, FineEnvs): a declared-separate verifier with NO
+    [verifier.environment] image means a fresh grading machine from the task's own
+    image — the sandbox grader the module already builds — so it converts; only a
+    declared verifier image stays behind the Harbor runtime."""
+    task = _package(
+        task_toml=(
+            f'[environment]\ndocker_image = "{CONTROL_IMAGE}"\n\n'
+            '[verifier]\ntimeout_sec = 900.0\nenvironment_mode = "separate"\n'
+            'network_mode = "no-network"\n\n'
+            '[[verifier.collect]]\ncommand = "python3 /opt/pack_submission.py"\n'
+        )
+    )
+    out = _convert(task)
+    grader = out.task.grader
+    assert grader.kind == "script"
+    assert grader.environment.docker_image == CONTROL_IMAGE
+    assert grader.environment.docker_build is None
+    collect = [command.argv[-1] for command in grader.collect]
+    assert "python3 /opt/pack_submission.py" in collect
+    assert any("tar -C /tests -xzf" in step for step in collect)
+    assert collect[-1].startswith("rm -rf /logs/verifier")
+    assert grader.timeout == 900.0
+    assert out.changed_fields == ("environment_requirements", "execution_requirements", "grader", "tags", "labels")
+
+
+def test_declared_separate_inherits_the_default_mode_stays_fail_closed():
+    """A declared-separate mode recorded WITHOUT any [verifier.environment] table still
+    converts (the same ruling); the mode falling out of a declared verifier environment
+    table without an image key is not a distinct container and converts too."""
+    task = _package(
+        task_toml=(
+            f'[environment]\ndocker_image = "{CONTROL_IMAGE}"\n\n'
+            "[verifier]\ntimeout_sec = 900.0\n\n"
+            '[verifier.environment]\nenv = { VERIFIER_MODE = "strict" }\n'
+        )
+    )
+    out = _convert(task)
+    assert out.task.grader.kind == "script"
+    assert out.task.grader.environment.docker_image == CONTROL_IMAGE
 
 
 def test_multi_step_and_windows_are_rejected():

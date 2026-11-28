@@ -43,6 +43,7 @@ uv run --frozen --prerelease=allow --with-editable ./lib/taskcompendium[pipeline
   --output-root "$OUTPUT_ROOT" \
   --artifact-version "$VERSION" \
   --converter-revision "$REVISION" \
+  --use train \
   --report "$REPORT" \
   --run
 cat "$REPORT"

@@ -29,6 +29,23 @@ def receipts_from_documents[T: BaseModel](
     return receipts
 
 
+def receipts_from_references[T: BaseModel](
+    documents: Mapping[str, Mapping[str, object]], model: type[T], kind: str
+) -> dict[str, T]:
+    """Merge index-ordered shard documents; a source re-pinned by a newer reference
+    resolves to that newest receipt (the licence-resolution repair path). The caller
+    passes the documents in their reference order."""
+    receipts = {}
+    for document in (document for _, document in documents.items()):
+        for source_id, record in document.items():
+            source_id = canonical_source_id(source_id)
+            receipt = model.model_validate(record)
+            if source_id != receipt.model_dump()["source_id"]:
+                raise ValueError(f"Mismatched {kind} source identity: {source_id}")
+            receipts[source_id] = receipt
+    return receipts
+
+
 def read_receipt_shards[T: BaseModel](
     directory: Path, model: type[T], kind: str, *, load_json: Callable[[Path], dict]
 ) -> dict[str, T]:

@@ -318,6 +318,25 @@ PENDING_MEASUREMENT_SOURCES = (
 )
 
 
+def measured_pending_sources(selected: set[str]) -> dict[str, RlDataSource]:
+    """Pending-intake sources whose retained cohort an explicit ``-retained`` selection runs.
+
+    A pending source's verified retained release is its live population: selecting the
+    cohort's ``<name>-retained`` invocation binds the same measured receipts the
+    declaration audit's handed-on rows get, so the campaign's population and its
+    decontamination receipt share one pin. Nothing is read unless a selection names a
+    retained cohort.
+    """
+    if not selected:
+        return {}
+    cohort_names = {f"{source.name}-retained": source for source in PENDING_MEASUREMENT_SOURCES}
+    handed_on = [cohort_names[name] for name in selected if name in cohort_names]
+    if not handed_on:
+        return {}
+    bound = bind_measured_receipts(handed_on)
+    return {f"{source.name}-retained": bound_source for source, bound_source in zip(handed_on, bound, strict=True)}
+
+
 def configured_sources() -> list[RlDataSource]:
     """Return source populations registered for Atlas evidence binding."""
     sources = [

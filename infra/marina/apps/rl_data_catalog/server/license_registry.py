@@ -4,7 +4,7 @@
 """Versioned user decisions; Python packaging preserves this registry in hosted backends."""
 
 LICENSE_BANS = r"""{
-  "version": "2026.11.26.b-license-exceptions.2",
+  "version": "2026.11.28.b-license-exceptions.1",
   "bans": [
     {
       "source_id": "FWeindel:validated-tasks/tmax11-v1.1",
@@ -448,8 +448,8 @@ LICENSE_BANS = r"""{
     },
     {
       "source_id": "TaskTrove:GAIR__OpenSWE__openswe_oss",
-      "upstream_id": "unverified-origin:2ac88a442692",
-      "upstream_revision": "dc6df1f3f949439ad1fdd27ffa034a913184405c",
+      "upstream_id": "GAIR/OpenSWE",
+      "upstream_revision": "a8db93af5335df2c8baac0cd1ff367e4d475d3d7",
       "classification": "unknown",
       "license_ids": [
         "apache-2.0",
@@ -463,7 +463,19 @@ LICENSE_BANS = r"""{
       ],
       "decided_at": "2026-11-15T17:27:51.574674+00:00",
       "decision_by": "user via coordinator",
-      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+      "issue_url": "https://github.com/marin-community/marin/issues/11497",
+      "exception": {
+        "decided_at": "2026-11-27T00:00:00+00:00",
+        "decision_by": "user via coordinator (Claude session b610073d)",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/open-athena/openswe-oss-keep-only-20261126a/tree/20a87df9d9baddf70572d7f0d236b31e46e1384",
+          "https://huggingface.co/datasets/GAIR/OpenSWE/tree/a8db93af5335df2c8baac0cd1ff367e4d475d3d7"
+        ],
+        "rationale": "Ruling 48 (2026-11-27): keep-only release only, train use; resolved upstream pinned in evidence.",
+        "receipt_sha256": "30d53f89f82f62d484a663dbd8cf34523374b2d221a22185ae2deefe1e1ae5b1",
+        "upstream_revision": "a8db93af5335df2c8baac0cd1ff367e4d475d3d7",
+        "use": "train"
+      }
     },
     {
       "source_id": "TaskTrove:GAIR__OpenSWE__openswe_other",

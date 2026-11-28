@@ -35,9 +35,18 @@ from experiments.post_training.task_curation.grader_drift import (
     SealedRecipeReference,
 )
 from experiments.post_training.task_curation.lexical_artifacts import ActorCensus, SourceTextPopulation
+from experiments.post_training.task_curation.release_stages import (
+    declarations as declarations_module,
+)
 from experiments.post_training.task_curation.release_stages import declarations as declarations_stage
 from experiments.post_training.task_curation.release_stages import graph as graph_module
 from experiments.post_training.task_curation.release_stages import plan_derivation
+from experiments.post_training.task_curation.release_stages import (
+    preflight_slices as preflight_slices_module,
+)
+from experiments.post_training.task_curation.release_stages import (
+    qc_browse as qc_browse_stage,
+)
 from experiments.post_training.task_curation.release_stages import (
     snapshot_publication as snapshot_publication_stage,
 )
@@ -55,6 +64,8 @@ from experiments.post_training.task_curation.release_stages.plan_derivation impo
 from experiments.post_training.task_curation.release_stages.preflight_slices import (
     SliceSelection,
     _snapshot_publication_witness,
+    slice_inputs,
+    slice_runner,
 )
 from experiments.post_training.task_curation.release_stages.release_config import (
     ExcludedSource,
@@ -509,11 +520,9 @@ def test_recut_retains_against_the_served_state(tmp_path, frozen_layer, deployme
     deployment = region_deployment(CLUSTER)
     release_root = f"{deployment.region_prefix}preview-release/testrelease-{FREEZE_ARTIFACT_VERSION}"
     sealed = json.loads(StoragePath(f"{release_root}/prior-state/declarations.json").read_bytes())
-    # the retained prior state carries exactly the served catalog's rows
-    assert sorted(sealed["declarations"]) == sorted(
-        source_id for source_id in served_declarations if source_id in (RETAINED_ID,)
-    )
-    assert sealed["declarations"][RETAINED_ID] == served_declarations[RETAINED_ID]
+    # the flat source map: every prior-declarations consumer reads this shape
+    assert sorted(sealed) == sorted(source_id for source_id in served_declarations if source_id in (RETAINED_ID,))
+    assert sealed[RETAINED_ID] == served_declarations[RETAINED_ID]
     backend = json.loads(StoragePath(f"{release_root}/prior-state/backend.json").read_bytes())
     assert backend["snapshot_id"] == "assembly-served-prior-v1"
     identity = json.loads(StoragePath(f"{release_root}/prior-state/identity.json").read_bytes())
@@ -1195,3 +1204,244 @@ def test_served_survey_reconstruction_keyset_pages():
     assert all(params["limit"] == 64 for params in fingerprint_calls)
     assert len(identity["fingerprints"]) == 150
     assert len(backend["matrix"]) == len(backend_survey["matrix"]) and backend["sources"] == []
+
+
+def test_recut_corpus_expects_the_scoped_census(tmp_path, frozen_layer, deployment, monkeypatch):
+    """The corpus step's expected source count flows from the census-inputs document:
+    a re-cut's scoped document (the new admissions' rows only) and its census receipt
+    (exactly those results) must satisfy the corpus stage's row checks."""
+    layer = _source_layer(tmp_path, (RETAINED_ID, TARGET_ID))
+    prior = _prior_pins(tmp_path, _declaration_dump(layer))
+    config = _config(prior, prior_snapshot_id="assembly-config-prior-snapshot-v1")
+    served_declarations = _declaration_dump(layer)
+
+    monkeypatch.setattr(plan_derivation, "derived_contract_receipts", _contract_receipts_factory({TARGET_ID: 2}))
+    derived = derive_release_plan(
+        config,
+        repo_root=REPO_ROOT,
+        query=_recut_query(served_declarations),
+        sources_fn=lambda: layer,
+        prior_catalog_reader=lambda root, q: read_prior_catalog_state(
+            root,
+            q,
+            catalog_factory=_catalog_factory((RETAINED_ID,), declarations=served_declarations),
+            receipt_keys_fn=lambda: {},
+        ),
+        drift_reference_fn=lambda root, revision, declared: GraderDriftReference(
+            main=MainRecipeReference(revision="e" * 40, merge_base=revision),
+            sources={
+                source_id: SealedRecipeReference(source_id=source_id, converter_revision=revision)
+                for source_id in declared
+            },
+        ),
+    )
+    plan = ReleasePlan.model_validate(derived.plan_document)
+    assert plan.recut is True
+    assert plan.targets == (TARGET_ID,)
+
+    lowered = release_graph(plan)
+    census_inputs_step = lowered.stages["census_inputs"]
+
+    class _Ctx:
+        is_fingerprint = False
+
+        def resolved(self, handle):
+            if handle is census_inputs_step:
+                return SimpleNamespace(uri="census-inputs", sha256="digest", source_count=1)
+            return SimpleNamespace(receipt=SimpleNamespace(model_dump=lambda mode="json": {"ok": True}))
+
+    config = lowered.stages["corpus_assembly"].build_config(_Ctx())
+    assert config["expected_sources"] == 1
+    assert config["targets"] == (TARGET_ID,)
+
+
+def test_recut_targets_against_the_served_state(tmp_path, frozen_layer, deployment, monkeypatch):
+    """On a re-cut, targeting drifts against what is SERVED: a retained source the
+    config's pinned prior documents describe staleness for (its served row matches the
+    frozen layer) is not a target — the frozen layer's post-publish drift binds the
+    next release, not this one."""
+    layer = _source_layer(tmp_path, (RETAINED_ID, TARGET_ID))
+    served_declarations = _declaration_dump(layer)
+    stale_pin_dump = {
+        **served_declarations,
+        RETAINED_ID: {**served_declarations[RETAINED_ID], "dataset_id": "fixture-pinned-old"},
+    }
+    prior = _prior_pins(tmp_path, stale_pin_dump)
+    config = _config(prior, prior_snapshot_id="assembly-config-prior-snapshot-v1")
+
+    monkeypatch.setattr(plan_derivation, "derived_contract_receipts", _contract_receipts_factory({TARGET_ID: 2}))
+    derived = derive_release_plan(
+        config,
+        repo_root=REPO_ROOT,
+        query=_recut_query(served_declarations),
+        sources_fn=lambda: layer,
+        prior_catalog_reader=lambda root, q: read_prior_catalog_state(
+            root,
+            q,
+            catalog_factory=_catalog_factory((RETAINED_ID,), declarations=served_declarations),
+            receipt_keys_fn=lambda: {},
+        ),
+        drift_reference_fn=lambda root, revision, declared: GraderDriftReference(
+            main=MainRecipeReference(revision="e" * 40, merge_base=revision),
+            sources={
+                source_id: SealedRecipeReference(source_id=source_id, converter_revision=revision)
+                for source_id in declared
+            },
+        ),
+    )
+
+    plan = ReleasePlan.model_validate(derived.plan_document)
+    plan.validate_shape()
+    assert plan.targets == (TARGET_ID,)
+    assert RETAINED_ID not in plan.targets
+    assert plan.deliberate_exclusions == ()
+    assert plan.expected_source_count == 2
+
+
+def test_recut_adopts_a_genuine_repin(tmp_path, frozen_layer, deployment, monkeypatch):
+    """A retained source the frozen layer genuinely re-pins past its served row is a
+    re-cut target: the tip is the source of truth, so the re-pin ships (its data
+    stages run) while every other retained source stays cache-skipped."""
+    layer = _source_layer(tmp_path, (RETAINED_ID, TARGET_ID))
+    prior = _prior_pins(tmp_path, _declaration_dump(layer))
+    config = _config(prior, prior_snapshot_id="assembly-config-prior-snapshot-v1")
+    served_declarations = _declaration_dump(layer)
+
+    # the frozen layer re-pins the retained source past its served row
+    repinned = layer[RETAINED_ID].declaration.model_copy(update={"dataset_id": "fixture-repinned"})
+    layer[RETAINED_ID] = SimpleNamespace(info=layer[RETAINED_ID].info, declaration=repinned)
+
+    monkeypatch.setattr(
+        plan_derivation, "derived_contract_receipts", _contract_receipts_factory({RETAINED_ID: 2, TARGET_ID: 2})
+    )
+    derived = derive_release_plan(
+        config,
+        repo_root=REPO_ROOT,
+        query=_recut_query(served_declarations),
+        sources_fn=lambda: layer,
+        prior_catalog_reader=lambda root, q: read_prior_catalog_state(
+            root,
+            q,
+            catalog_factory=_catalog_factory((RETAINED_ID,), declarations=served_declarations),
+            receipt_keys_fn=lambda: {},
+        ),
+        drift_reference_fn=lambda root, revision, declared: GraderDriftReference(
+            main=MainRecipeReference(revision="e" * 40, merge_base=revision),
+            sources={
+                source_id: SealedRecipeReference(source_id=source_id, converter_revision=revision)
+                for source_id in declared
+            },
+        ),
+    )
+
+    plan = ReleasePlan.model_validate(derived.plan_document)
+    plan.validate_shape()
+    assert plan.targets == (RETAINED_ID, TARGET_ID)
+    assert plan.deliberate_exclusions == ()
+
+
+def test_qc_browse_exclusions_come_from_the_plan_in_slice_and_run(tmp_path):
+    """The qc-browse panel count check uses one exclusion set everywhere: the plan's
+    measured copy exclusions (derived against the served state), both in the run-mode
+    graph inputs and in the preflight slice inputs — the slice's check therefore
+    matches the real run's instead of recomputing against a different document pair."""
+    plan = fixture_plan(panel_copy_exclusions=("Marin:fixture",))
+    document = {"Marin:fixture": {"dataset_id": "fixture", "dataset_revision": "1", "pipeline": None}}
+    raw = (json.dumps(document, sort_keys=True) + "\n").encode()
+    path = tmp_path / "declarations.json"
+    path.write_bytes(raw)
+    ref = {"uri": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
+
+    run_inputs = graph_module._qc_browse_inputs(plan, ref)
+    assert set(run_inputs["exclusions"]) == {"Marin:fixture"}
+
+    slice_document = slice_inputs("qc_browse_plan", plan, SliceSelection())
+    assert set(slice_document["exclusions"]) == {"Marin:fixture"}
+    assert slice_document["expected_panels"] == run_inputs["expected_panels"] == plan.expected_panels
+
+
+def test_declarations_slice_carries_the_deliberate_exclusions(monkeypatch):
+    """The preflight's declarations slice runs the same carry-forward the run-mode
+    stage does: an excluded source's served declaration substitutes before the drift
+    check, so the slice cannot fail on a policy-listed re-pin."""
+    plan = fixture_plan(deliberate_exclusions=("Marin:fixture",))
+    captured = {}
+
+    def fake_run_declarations(inputs, **kwargs):
+        captured["inputs"] = inputs
+        return {"source_count": 2, "targets": list(inputs.targets)}
+
+    monkeypatch.setattr(declarations_module, "run_declarations", fake_run_declarations)
+    proof = slice_runner("declarations", plan, SliceSelection())()
+    assert captured["inputs"].deliberate_exclusions == ("Marin:fixture",)
+    assert proof["mode"] == "dry-run"
+
+
+def test_qc_browse_plan_slice_uses_the_measured_exclusions(monkeypatch):
+    """The preflight's qc-browse-plan slice runs the plan's measured copy exclusions —
+    the same set the run-mode graph passes — so its prior-load panel count check
+    matches the real run's."""
+    plan = fixture_plan(panel_copy_exclusions=("Marin:fixture",))
+    captured = {}
+
+    def fake_plan_qc_browse(inputs, **kwargs):
+        captured["inputs"] = inputs
+        return {"panels": [], "excluded": []}
+
+    monkeypatch.setattr(qc_browse_stage, "plan_qc_browse", fake_plan_qc_browse)
+    monkeypatch.setattr(
+        preflight_slices_module.paced_query,
+        "open_paced_query",
+        lambda service_url, applet_id, control: (lambda sql, parameters: {"rows": []}),
+    )
+    proof = slice_runner("qc_browse_plan", plan, SliceSelection())()
+    assert set(captured["inputs"].exclusions) == {"Marin:fixture"}
+    assert captured["inputs"].expected_panels == plan.expected_panels
+    assert proof["mode"] == "dry-run"
+
+
+def test_derivation_binds_the_registered_difficulty_seal(tmp_path, frozen_layer, deployment, monkeypatch):
+    """The registry's difficulty seal binds at derive time: the sealed plan carries the
+    binding instead of leaving it for load_plan's resume-time adoption to diverge from
+    the sealed bytes (the v45 plan-node refusal)."""
+    registry = {"testrelease": {"uri": "gs://bucket/difficulty/release-seals/testrelease/seal.json", "sha256": "d" * 64}}
+    registry_path = tmp_path / "difficulty_snapshots.json"
+    registry_path.write_text(json.dumps(registry))
+    monkeypatch.setattr(plan_derivation, "DIFFICULTY_SNAPSHOTS", registry_path)
+
+    layer = _source_layer(tmp_path, (RETAINED_ID, TARGET_ID))
+    prior = _prior_pins(tmp_path, _declaration_dump(layer))
+    config = _config(prior)
+
+    monkeypatch.setattr(plan_derivation, "derived_contract_receipts", _contract_receipts_factory({TARGET_ID: 2}))
+    derived = derive_release_plan(
+        config,
+        repo_root=REPO_ROOT,
+        query=_applet_query(PRIOR_LOAD_ID, PRIOR_CURRICULUM_LOAD_ID, [RETAINED_ID], [RETAINED_ID]),
+        sources_fn=lambda: layer,
+        prior_catalog_reader=lambda root, q: read_prior_catalog_state(
+            root,
+            q,
+            catalog_factory=_catalog_factory((RETAINED_ID,)),
+            receipt_keys_fn=lambda: {},
+        ),
+        drift_reference_fn=lambda root, revision, declared: GraderDriftReference(
+            main=MainRecipeReference(revision="e" * 40, merge_base=revision),
+            sources={
+                source_id: SealedRecipeReference(source_id=source_id, converter_revision=revision)
+                for source_id in declared
+            },
+        ),
+    )
+
+    plan = ReleasePlan.model_validate(derived.plan_document)
+    assert plan.difficulty_snapshot is not None
+    assert plan.difficulty_snapshot.sha256 == "d" * 64
+
+
+def test_registry_index_pin_is_repo_relative():
+    """The derivation's registry-index pin carries the repo-relative path (the stage
+    reads the bundled file by digest) — never the deriving machine's absolute path."""
+    ref = plan_derivation._read_registry_index(("TaskTrove:GAIR__OpenSWE__openswe_oss",))
+    assert ref.uri == "experiments/post_training/task_curation/release_stages/plans/registry-index.json"
+    assert not ref.uri.startswith("/")

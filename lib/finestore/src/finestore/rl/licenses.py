@@ -364,18 +364,25 @@ def check_license(receipt: LicenseReceipt, ban: LicenseBan | None = None) -> Lic
         None,
     )
     terms = next((item for item in evidence if item.unidentified_third_party_terms), None)
+    card = next((item for item in evidence if item.kind == "dataset_card"), None)
     signals = [item for item in evidence if set(item.license_ids) - {MISSING_LICENSE_ID}]
     permissive = [item for item in signals if license_verdict(tuple(item.license_ids)) is LicenseVerdict.ALLOWED]
     unknown = [item for item in signals if license_verdict(tuple(item.license_ids)) is not LicenseVerdict.ALLOWED]
     dataset_permissive = [item for item in permissive if item.kind != TASK_LICENSE_FILE_KIND]
+    # The dataset card is authoritative: when it declares no licence, other evidence
+    # (readme references, task-file licences) does not rescue the source.
+    card_missing = card is not None and not (set(card.license_ids) - {MISSING_LICENSE_ID})
     if restricted is not None:
         verdict, rule, selected = LicenseCheckVerdict.FAIL, LicenseCheckRule.RESTRICTED, restricted
     elif terms is not None:
         verdict, rule, selected = LicenseCheckVerdict.ESCALATE, LicenseCheckRule.THIRD_PARTY, terms
+    elif card_missing:
+        verdict, rule, selected = LicenseCheckVerdict.FAIL, LicenseCheckRule.MISSING, card
     elif not signals:
         verdict, rule, selected = LicenseCheckVerdict.FAIL, LicenseCheckRule.MISSING, evidence[0]
-    elif dataset_permissive and unknown:
-        verdict, rule, selected = LicenseCheckVerdict.ESCALATE, LicenseCheckRule.CONFLICT, unknown[0]
+    elif unknown:
+        # An unknown licence id fails closed: the licence table does not recognize it.
+        verdict, rule, selected = LicenseCheckVerdict.FAIL, LicenseCheckRule.MISSING, unknown[0]
     elif dataset_permissive:
         verdict, rule, selected = LicenseCheckVerdict.PASS, LicenseCheckRule.PERMISSIVE, dataset_permissive[0]
     else:

@@ -3,11 +3,13 @@
 
 """The registry credential's parsing and the environment of a publish's jobs, submitted through a recording fake."""
 
+import contextlib
 import hashlib
 import json
 import subprocess
 from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
@@ -30,12 +32,14 @@ from taskforge.sandbox.image_builder import (
     BuildFailed,
     ImageJobFailed,
     ImageJobPolicy,
+    IrisImageBuilder,
     RegistryCredential,
     manifest_readback,
     submit_job,
     wait_succeeded,
 )
 from taskforge.sandbox.image_push import ARCHIVE_URI_ENV, REGISTRY_AUTH_SECRET, archive_request
+from taskforge.sandbox.images import BUILD_LIMITS, docker_build_from_directory
 
 PASSWORD = "registry-password"
 CREDENTIAL_JSON = json.dumps({"registry": "registry.example", "user": "publisher", "password": PASSWORD})
@@ -59,6 +63,7 @@ class RecordingCluster:
         self.env_vars: dict[str, dict[str, str]] = {}
         self.secrets: dict[str, dict[str, str]] = {}
         self.policies: dict[str, dict[str, object]] = {}
+        self.resources: dict[str, job_pb2.ResourceSpecProto] = {}
 
     def submit_job(
         self,
@@ -73,7 +78,12 @@ class RecordingCluster:
         self.env_vars[job_id.name] = dict(environment.env_vars)
         self.secrets[job_id.name] = task_secret_values(environment)
         self.policies[job_id.name] = {key: kwargs[key] for key in ("priority_band", "timeout", "scheduling_timeout")}
+        self.resources[job_id.name] = resources
         return job_id
+
+    def shutdown(self, *args: object, **kwargs: object) -> None:
+        """The client shutdown the no-wait submit calls after recording; nothing to release."""
+        self.shutdown_calls = getattr(self, "shutdown_calls", 0) + 1
 
 
 @pytest.fixture
@@ -123,6 +133,61 @@ def test_a_malformed_credential_fails_without_quoting_it(text):
         RegistryCredential.from_json(text)
 
     assert PASSWORD not in str(error.value)
+
+
+def test_a_no_wait_submit_records_the_build_job_and_drives_no_push(tmp_path, monkeypatch):
+    """submit_build_with_timings submits exactly the build job and returns its identity; nothing waits."""
+    (tmp_path / REGISTRY_CREDENTIAL_ENV).write_text(CREDENTIAL_JSON)
+    monkeypatch.setenv(SECRETS_DIR_ENV, str(tmp_path))
+    cluster = RecordingCluster()
+    builder = IrisImageBuilder(
+        cluster="marin",
+        target_cluster="cw-us-east-02a",
+        credential=RegistryCredential.from_json(CREDENTIAL_JSON),
+        policy=POLICY,
+    )
+    context = Path(tmp_path) / "ctx"
+    context.mkdir()
+    (context / "Dockerfile").write_text("FROM docker.io/library/bash:5\n")
+    build = docker_build_from_directory(context, BUILD_LIMITS)
+    entered: list[SimpleNamespace] = []
+
+    @contextlib.contextmanager
+    def fake_connect(**kwargs):
+        entered.append(SimpleNamespace(**kwargs))
+        yield SimpleNamespace(url="http://controller.example", credentials=None)
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr("taskforge.sandbox.image_builder.connect_controller", fake_connect)
+        patcher.setattr(
+            "taskforge.sandbox.image_builder.IrisClient",
+            SimpleNamespace(
+                remote=lambda *a, **k: IrisClient(cast(ClusterClient, cluster)),
+            ),
+        )
+        submitted = builder.submit_build_with_timings(build, "example/repo")
+
+    assert submitted.destination == "registry.example/example/repo:" + submitted.tag
+    assert submitted.build_digest == submitted.tag.removeprefix("build-").split("-")[0] or submitted.build_digest
+    assert sorted(cluster.env_vars) == ["taskforge-image-build-" + submitted.tag[-12:]]
+    assert cluster.env_vars[sorted(cluster.env_vars)[0]]["DESTINATION"] == submitted.destination
+    # The no-wait submit drives no push job and records no cancel: the build runs untouched.
+    assert not any("push" in name for name in cluster.env_vars)
+    assert len(entered) == 1 and entered[0].cluster_name == "marin"
+    # The default build job carries the builder's 4 GiB; the memory override raises it.
+    build_name = sorted(cluster.env_vars)[0]
+    assert cluster.resources[build_name].memory_bytes == 4 * 1024**3
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr("taskforge.sandbox.image_builder.connect_controller", fake_connect)
+        patcher.setattr(
+            "taskforge.sandbox.image_builder.IrisClient",
+            SimpleNamespace(remote=lambda *a, **k: IrisClient(cast(ClusterClient, cluster))),
+        )
+        submitted = builder.submit_build_with_timings(build, "example/repo", memory_bytes=8 * 1024**3)
+    raised_name = next(name for name in cluster.env_vars if name != build_name)
+    assert cluster.resources[raised_name].memory_bytes == 8 * 1024**3
+    assert submitted.destination == "registry.example/example/repo:" + submitted.tag
 
 
 @pytest.mark.parametrize(

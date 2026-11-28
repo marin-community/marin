@@ -205,6 +205,20 @@ class ImageJobFailed(RuntimeError):
 
 
 @dataclass(frozen=True)
+class BuildSubmitted:
+    """A build job submitted without waiting; nothing is pinned until its push job runs.
+
+    The caller tracks the job through the controller (a watchdog) and drives the push from
+    the finished build's output archive.
+    """
+
+    job_id: str
+    destination: str
+    build_digest: str
+    tag: str
+
+
+@dataclass(frozen=True)
 class Published:
     image: str
     build_digest: str
@@ -290,6 +304,7 @@ def submit_job(
     secrets: dict[str, str],
     target_cluster: str,
     policy: ImageJobPolicy,
+    memory_bytes: int | None = None,
 ) -> Job:
     """Submit an image job with explicit values and the storage credentials it needs.
 
@@ -311,7 +326,7 @@ def submit_job(
             secrets={**storage, **secrets},
             secret_behavior=SecretBehavior.ISOLATE,
         ),
-        resources=ResourceSpec(cpu=2, memory=4 * 1024**3, disk=20 * 1024**3),
+        resources=ResourceSpec(cpu=2, memory=memory_bytes or 4 * 1024**3, disk=20 * 1024**3),
         task_image=image,
         container_profile=job_pb2.CONTAINER_PROFILE_DEFAULT,
         constraints=[Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=target_cluster)],
@@ -356,6 +371,60 @@ class IrisImageBuilder:
         """
         # A publish waits through both declared deadlines; keep the event loop free.
         return (await asyncio.to_thread(self.publish_with_timings, build, repository)).image
+
+    def submit_build_with_timings(
+        self, build: DockerBuild, repository: str, *, memory_bytes: int | None = None
+    ) -> BuildSubmitted:
+        """Submit the build job without waiting, for submitters that track completion elsewhere.
+
+        The job's environment and context are exactly the publish path's; nothing waits and
+        nothing is cancelled, so a submit that returned leaves the build running. The push job
+        and the digest pinning continue from the finished build's output archive.
+        ``memory_bytes`` raises the build job's memory above the default 4 GiB for heavy
+        dependency installs (an OOMKilled build is under-sized, not a class defect).
+        """
+        check_build_limits(build, BUILD_LIMITS)
+        if not REPOSITORY.fullmatch(repository):
+            raise ValueError(f"not an OCI repository name: {repository!r}")
+        digest = build_digest(build)
+        run_id = uuid.uuid4().hex[:12]
+        tag = f"build-{digest.removeprefix('sha256:')[:32]}-{run_id}"
+        destination = f"{self.credential.registry}/{repository}:{tag}"
+        with connect_controller(cluster_name=self.cluster, controller_url=self.controller_url) as endpoint:
+            client = IrisClient.remote(endpoint.url, workspace=None, credentials=endpoint.credentials)
+            try:
+                build_job = submit_job(
+                    client,
+                    name=f"taskforge-image-build-{run_id}",
+                    entrypoint=Entrypoint(
+                        command=["bash", "-c", BUILD_SCRIPT],
+                        workdir_files={CONTEXT_FILE: build_context_archive(build)},
+                    ),
+                    image=BUILD_IMAGE,
+                    env={
+                        "CRANE_URL": CRANE_URL,
+                        "CRANE_SHA256": CRANE_SHA256,
+                        "KANIKO_IMAGE": KANIKO_IMAGE,
+                        "CONTEXT_FILE": CONTEXT_FILE,
+                        "DOCKERFILE": "Dockerfile",
+                        "BUILD_SETUP_FAILED_EXIT": str(BUILD_SETUP_FAILED_EXIT),
+                        "DESTINATION": destination,
+                    },
+                    secrets={},
+                    target_cluster=self.target_cluster,
+                    policy=self.policy,
+                    memory_bytes=memory_bytes,
+                )
+            finally:
+                client.shutdown()
+        logger.info("submitted build job %s for %s (no wait)", build_job.job_id, destination)
+        return BuildSubmitted(str(build_job.job_id), destination, digest, tag)
+
+    async def submit_build(
+        self, build: DockerBuild, repository: str, *, memory_bytes: int | None = None
+    ) -> BuildSubmitted:
+        """The async form of :meth:`submit_build_with_timings`; the event loop stays free."""
+        return await asyncio.to_thread(self.submit_build_with_timings, build, repository, memory_bytes=memory_bytes)
 
     def publish_with_timings(self, build: DockerBuild, repository: str) -> Published:
         """Publish ``build`` under ``repository``, blocking until the image is pushed and read back."""

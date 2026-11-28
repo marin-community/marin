@@ -84,6 +84,22 @@ class IdentityBackendComposeInputs:
             raise ValueError(f"targets carry {len(self.targets)} ids, expected {self.expected_target_count}")
 
 
+REGISTRY_INDEX_RELPATH = Path("experiments/post_training/task_curation/release_stages/plans/registry-index.json")
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+
+
+def read_bundled_registry_index(pin: ArtifactRef) -> dict:
+    """The registry index travels as a digest, not a path: when the pin matches the
+    bundled repo-relative file, the stage reads that file — a deriving machine's
+    absolute path never becomes a stage's read path (the in-region bundle has no such
+    filesystem). A pin that does not match the bundled bytes reads through the storage
+    layer (the tests' injected indexes; a genuinely divergent pin fails there)."""
+    payload = (_REPO_ROOT / REGISTRY_INDEX_RELPATH).read_bytes()
+    if hashlib.sha256(payload).hexdigest() == pin.sha256:
+        return json.loads(payload)
+    return read_ref(pin)
+
+
 def read_ref(ref: ArtifactRef) -> dict[str, Any]:
     """Read and digest-verify one sealed JSON reference."""
     payload = StoragePath(ref.uri).read_bytes()
@@ -310,7 +326,7 @@ def _compose(
     composed_sources = verify_backend_alignment(prior_backend, fresh, targets, inputs.removed_sources)
     backend_survey = compose_backend_survey(prior_backend, fresh, composed_sources, snapshot_id=inputs.snapshot_id)
 
-    index = read_ref(inputs.registry_index)
+    index = read_bundled_registry_index(inputs.registry_index)
     registry_revision = index.get("revision")
     if not isinstance(registry_revision, str) or not registry_revision:
         raise ValueError("registry index carries no revision")

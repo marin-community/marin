@@ -272,6 +272,7 @@ class ReleasePlan(BaseModel):
     rebound_tasks: int = 0
     recut: bool = False
     deliberate_exclusions: tuple[str, ...] = ()
+    panel_copy_exclusions: tuple[str, ...] = ()
     removed_sources: tuple[str, ...] = ()
     main_source_sync: main_source_sync_stage.MainSourceSyncPlan | None = None
     strict_audit_local: bool = False
@@ -1445,7 +1446,10 @@ def _corpus_assembly_step(
             "inputs": {"uri": inputs_doc.uri, "sha256": inputs_doc.sha256},
             "census_receipt": _resolved_receipt(ctx, census),
             "output_root": stage_output_root(plan, "corpus"),
-            "expected_sources": plan.expected_source_count,
+            # A re-cut's census-inputs document is scoped to the new admissions, and
+            # the re-cut census receipt carries exactly those results — the expected
+            # count flows from the document, not the release's full source count.
+            "expected_sources": inputs_doc.source_count,
             "targets": plan.targets,
             "workers": sizing.workers,
             "slice_output_root": plan.slice_output_root or None,
@@ -1730,9 +1734,10 @@ def _text_scan_merge_step(
 
 
 def _qc_browse_inputs(plan: ReleasePlan, declarations_ref: dict) -> dict:
-    current = read_ref(ArtifactRef(**declarations_ref))
-    prior = read_ref(plan.pins.prior_declarations)
-    copy_exclusions = set(plan.qc_exclusions) | qc_browse_stage.changed_review_sources(prior, current)
+    # The derivation measured the copy exclusions against the served state (the
+    # same pair the panel expectation used); recomputing them here against a
+    # different document pair would desynchronize the panel count check.
+    copy_exclusions = set(plan.panel_copy_exclusions)
     return {
         "release_id": plan.release_id,
         "prior_load_id": plan.prior.load_id,
@@ -1830,6 +1835,7 @@ def _snapshot_publication_step(
             "catalog_root": plan.catalog_root,
             "release_root": plan.release_root,
             "targets": plan.targets,
+            "deliberate_exclusions": plan.deliberate_exclusions,
             "removed_sources": plan.removed_sources,
             "expected_source_count": plan.expected_source_count,
             "expected_contract_count": plan.expected_contract_count,

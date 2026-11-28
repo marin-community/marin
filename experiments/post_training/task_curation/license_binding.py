@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from experiments.post_training.task_curation.receipt_shards import (
     read_receipt_shards,
     receipts_from_documents,
+    receipts_from_references,
 )
 from experiments.post_training.task_curation.reference_data import (
     DataReferenceIndex,
@@ -55,7 +56,9 @@ def read_license_receipts(path: Path) -> dict[str, LicenseReceipt]:
             # A single staged receipts document, as license_check --receipts-output writes.
             receipts = receipts_from_documents({path.name: document}, LicenseReceipt, "license receipt")
         else:
-            receipts = receipts_from_documents(load_referenced_json(path), LicenseReceipt, "license receipt")
+            # The index-ordered registry read: a source re-pinned by a newer reference
+            # (the licence-resolution repair path) resolves to that newest receipt.
+            receipts = receipts_from_references(load_referenced_json(path), LicenseReceipt, "license receipt")
     if any(key != receipt.source_id for key, receipt in receipts.items()):
         raise ValueError("License registry key differs from the receipt source identity")
     return receipts

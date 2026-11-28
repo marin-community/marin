@@ -422,6 +422,8 @@ def test_deliberate_exclusion_carries_the_served_declaration(tmp_path, monkeypat
     assert document[SOURCE_A]["dataset_id"] == "fixture"
     assert document[SOURCE_B]["dataset_id"] == "fixture"
     assert proof["source_count"] == 2
+    # the receipt records the substitution so it is auditable
+    assert proof["deliberate_exclusions"] == [SOURCE_A]
 
 
 def test_deliberate_exclusion_unknown_to_prior_refuses(tmp_path, monkeypatch):

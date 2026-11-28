@@ -7,7 +7,7 @@ import hashlib
 import json
 from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from finestore.rl.curation import (
     ASSESSMENTS,
@@ -47,6 +47,7 @@ from finestore.rl.curation import (
     register_catalog,
     validate_items,
 )
+from finestore.rl.curation import QualifiedSourceDeclaration as SourceDeclaration
 from finestore.store import DataStore
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.filesystem.storage_path import StoragePath
@@ -57,7 +58,7 @@ from experiments.post_training.task_curation.campaign import CampaignStatus
 from experiments.post_training.task_curation.catalog_identity import canonical_attempt, canonical_snapshot_source
 from experiments.post_training.task_curation.curation_catalog import RUNS
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
-from experiments.post_training.task_curation.source import RlDataSource
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from infra.marina.apps.rl_data_catalog.server.admission import (
     require_catalog_declaration,
     require_content_result,
@@ -370,8 +371,19 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
         lease.release()
 
 
+class PublicationSource(Protocol):
+    """The source surface the assembly publication projects: the stable id and the
+    catalog declaration it publishes."""
+
+    @property
+    def info(self) -> SourceInfo: ...
+
+    @property
+    def declaration(self) -> SourceDeclaration: ...
+
+
 def publish_assembly_snapshot(
-    root: str, snapshot_id: str, sources: Iterable[RlDataSource], *, assembly_commit: str
+    root: str, snapshot_id: str, sources: Iterable[PublicationSource], *, assembly_commit: str
 ) -> CatalogSnapshot:
     """Publish the current declarations as a catalog release: the assembly publication path.
 

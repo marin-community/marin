@@ -146,7 +146,9 @@ def run_corpus_assembly(
     """Assemble the corpus; ``dry_run`` assembles one real source into the slice root."""
     alert_feeds = feeds if feeds is not None else (alerts.WATCHDOG_FEED,)
     mode = "dry-run" if dry_run else "write"
-    alerts.stage_started(inputs.release_id, "corpus_assembly", {"mode": mode}, alert_feeds)
+    alerts.stage_started(
+        inputs.release_id, "corpus_assembly", {"mode": mode, **({"only": only} if only else {})}, alert_feeds
+    )
     try:
         inputs.validate()
         rows = read_census_rows(inputs.inputs, inputs.source_revision)
@@ -201,7 +203,10 @@ def run_corpus_assembly(
                 raise ValueError("corpus proof readback mismatch")
             proof["receipt"] = {"uri": str(proof_path), "sha256": hashlib.sha256(raw_proof).hexdigest()}
         alerts.stage_finished(
-            inputs.release_id, "corpus_assembly", {"mode": mode, "sources": len(rows), "tasks": tasks}, alert_feeds
+            inputs.release_id,
+            "corpus_assembly",
+            {"mode": mode, "sources": len(rows), "tasks": tasks, **({"only": only} if only else {})},
+            alert_feeds,
         )
         return proof
     except Exception as error:

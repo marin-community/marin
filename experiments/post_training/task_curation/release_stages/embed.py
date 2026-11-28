@@ -47,6 +47,8 @@ class EmbedInputs:
     expected_task_count: int
     parity_receipt: ArtifactRef | None = None
     gpu_runtime: str | None = None
+    only: str | None = None
+    """The bounded slice source a preflight dry-run builds the plan for; None in write mode."""
 
     def validate(self) -> None:
         """Refuse malformed inputs before any read runs."""
@@ -133,7 +135,12 @@ def run_embed(
     """Run one embedding pass; ``dry_run`` builds the stage plan without executing."""
     alert_feeds = feeds if feeds is not None else (alerts.WATCHDOG_FEED,)
     mode = "dry-run" if dry_run else "write"
-    alerts.stage_started(inputs.release_id, "embed", {"mode": mode, "device": inputs.device}, alert_feeds)
+    alerts.stage_started(
+        inputs.release_id,
+        "embed",
+        {"mode": mode, "device": inputs.device, **({"only": inputs.only} if inputs.only else {})},
+        alert_feeds,
+    )
     try:
         inputs.validate()
         configure_coreweave_s3()
@@ -157,7 +164,12 @@ def run_embed(
             "sql_writes": 0,
         }
         if dry_run:
-            alerts.stage_finished(inputs.release_id, "embed", {"mode": mode, "tasks": total_tasks}, alert_feeds)
+            alerts.stage_finished(
+                inputs.release_id,
+                "embed",
+                {"mode": mode, "tasks": total_tasks, **({"only": inputs.only} if inputs.only else {})},
+                alert_feeds,
+            )
             return proof
         run_stage(
             inputs.corpus.uri,
