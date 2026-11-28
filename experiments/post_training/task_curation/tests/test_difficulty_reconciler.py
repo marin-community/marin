@@ -5,11 +5,14 @@
 
 import hashlib
 import json
+from collections import Counter
 from dataclasses import replace
 from datetime import UTC, datetime
+from threading import Lock
 
 import pytest
 from finestore.rl.difficulty import Solver
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.glm import GLM_MODEL
 from experiments.post_training.task_curation.difficulty.accounting import GpuAccounting
@@ -18,7 +21,9 @@ from experiments.post_training.task_curation.difficulty.ledger import (
     LEDGER_VERSION,
     REPAIR_VERIFICATIONS_DIRECTORY,
     append_rows,
+    partition_rows,
     read_rows,
+    row_payload,
 )
 from experiments.post_training.task_curation.difficulty.legacy import LegacyReasonError, admission_cause, legacy_gaps
 from experiments.post_training.task_curation.difficulty.planner import (
@@ -507,3 +512,48 @@ def test_repair_verification_plans_ahead_of_the_same_priority_band(tmp_path):
     )
     actions = plan([other, lean_cell], [], ledger_root=str(root))
     assert [a.sources[0].source_id for a in actions if isinstance(a, AttemptBatch)][:1] == [SOURCE.source_id]
+
+
+def test_ledger_growing_past_old_cache_ceiling_reuses_history_and_reads_new_partitions(monkeypatch):
+    root = "memory://difficulty-cache-capacity-regression"
+    base = row("fixture")
+    objects = {}
+    # This is the measured campaign size that exceeded the old 131,072-entry LRU.
+    for index in range(135073):
+        payload = (json.dumps(row_payload(replace(base, attempt_id=f"attempt-{index}")), sort_keys=True) + "\n").encode()
+        objects[root + "/v1/rows/" + hashlib.sha256(payload).hexdigest() + ".jsonl"] = payload
+    reads = Counter()
+    lock = Lock()
+    original_glob, original_read = StoragePath.glob, StoragePath.read_bytes
+    history = frozenset(objects)
+
+    def list_objects(path):
+        if str(path) == root + "/v1/rows/*.jsonl":
+            return [StoragePath(uri) for uri in objects]
+        return original_glob(path)
+
+    def read_object(path):
+        uri = str(path)
+        if uri not in objects:
+            return original_read(path)
+        with lock:
+            reads[uri] += 1
+            if uri in history and reads[uri] > 1:
+                raise ConnectionError("Historical objects must not be downloaded again")
+        return objects[uri]
+
+    monkeypatch.setattr(StoragePath, "glob", list_objects)
+    monkeypatch.setattr(StoragePath, "read_bytes", read_object)
+    partition_rows.cache_clear()
+    try:
+        first = read_rows(root)
+        assert len(first) == len(objects)
+        appended = replace(base, attempt_id="new-arrival", recorded_at="2026-11-28T12:00:00+00:00")
+        payload = (json.dumps(row_payload(appended), sort_keys=True) + "\n").encode()
+        uri = root + "/v1/rows/" + hashlib.sha256(payload).hexdigest() + ".jsonl"
+        objects[uri] = payload
+        second = read_rows(root)
+        assert second == sorted([*first, appended], key=lambda value: (value.recorded_at, value.attempt_id))
+        assert len(reads) == len(objects) and set(reads.values()) == {1}
+    finally:
+        partition_rows.cache_clear()

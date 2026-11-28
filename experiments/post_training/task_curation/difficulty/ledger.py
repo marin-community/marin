@@ -5,9 +5,11 @@
 
 import hashlib
 import json
+import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
-from functools import lru_cache
+from functools import cache
 
 from finestore.rl.difficulty import PROTOCOL_ID, Solver
 from pydantic import TypeAdapter
@@ -33,7 +35,7 @@ PANELS_DIRECTORY = "panels"
 REPAIR_VERIFICATIONS_DIRECTORY = "repair-verifications"
 DEFAULT_LEDGER = "s3://marin-us-east-02a/marin/rl-data/atlas/difficulty-ledger"
 LEDGER_READ_WORKERS = 32
-LEDGER_PARTITION_CACHE_SIZE = 131072
+LOGGER = logging.getLogger(__name__)
 digest = json_sha256
 
 
@@ -106,7 +108,7 @@ def append_rows(root: str, rows: list[LedgerRow]) -> str | None:
     return str(path)
 
 
-@lru_cache(maxsize=LEDGER_PARTITION_CACHE_SIZE)
+@cache
 def partition_rows(uri: str) -> tuple[LedgerRow, ...]:
     """Decode one immutable content-addressed partition once per controller process."""
     return decode_partition_rows(StoragePath(uri).read_bytes())
@@ -142,6 +144,8 @@ def decode_partition_rows(payload: bytes) -> tuple[LedgerRow, ...]:
 
 
 def read_rows(root: str) -> list[LedgerRow]:
+    started = time.monotonic()
+    before = partition_rows.cache_info()
     rows: dict[str, LedgerRow] = {}
     paths = sorted(str(path) for path in (StoragePath(root) / LEDGER_VERSION / "rows" / "*.jsonl").glob())
     with ThreadPoolExecutor(max_workers=LEDGER_READ_WORKERS) as pool:
@@ -150,4 +154,19 @@ def read_rows(root: str) -> list[LedgerRow]:
                 if row.attempt_id in rows and rows[row.attempt_id] != row:
                     raise ValueError(f"Conflicting ledger evidence: {row.attempt_id}")
                 rows[row.attempt_id] = row
+    after = partition_rows.cache_info()
+    LOGGER.info(
+        "DIFFICULTY_LEDGER_READ %s",
+        json.dumps(
+            {
+                "partitions": len(paths),
+                "rows": len(rows),
+                "partition_cache_hits": after.hits - before.hits,
+                "partition_cache_misses": after.misses - before.misses,
+                "cached_partitions": after.currsize,
+                "elapsed_seconds": time.monotonic() - started,
+            },
+            sort_keys=True,
+        ),
+    )
     return sorted(rows.values(), key=lambda row: (row.recorded_at, row.attempt_id))

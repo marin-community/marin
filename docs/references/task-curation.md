@@ -3076,6 +3076,14 @@ Harbor consumes its usage-report JSON.
 New DATA attempts have distinct action identities; existing EVAL receipts remain
 valid, and in-flight children drain before a controller replacement.
 
+The controller retains decoded immutable ledger partitions for its process
+lifetime. A fixed-size LRU can repeatedly download the full sorted ledger once
+its partition count exceeds the cache capacity. Memory use grows with retained
+history; provision the controller for all partitions it reads during its lifetime.
+`DIFFICULTY_LEDGER_READ` reports partition and row counts, cache hits and misses,
+and read duration. New partitions are discovered on every read, and conflicting
+attempt evidence still fails closed.
+
 For a TPU campaign, repeated `--provider-available` arguments restrict new
 attempts to the listed solvers whose pools qualify. Omitting the arguments admits
 all qualified solvers. To drain Large before replacing its serving owner, list
