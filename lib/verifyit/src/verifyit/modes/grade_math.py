@@ -4,7 +4,8 @@
 r"""Grade mathematical answers, either symbolically or as a number with tolerance.
 
 The default anchored profile takes the last ``\boxed{}`` expression, or the last non-empty line when the output has
-none. References parse as a whole LaTeX expression. Candidates first use
+none. References parse as a whole LaTeX expression after removing a multiple-choice label, if present.
+Labelled references accept the matching label or value. Candidates first use
 anchored LaTeX (``$...$``), then math-verify's own anchors (``the answer is ...``) if that yields
 nothing. Other profiles retain raw source extraction or require a boxed expression; their parser
 options remain task-controlled.
@@ -74,6 +75,30 @@ TERMINAL_UNIT_SUFFIX = re.compile(
 )
 UNIT_GROUP_CONTENT = re.compile(UNIT_GROUP_CONTENT_PATTERN)
 ORDINAL_SUFFIX = re.compile(r"^(\s*[0-9]+)\^\{\\text\{(?:st|nd|rd|th)\}\}(?=\s*(?:" + TEXT_GROUP_COMMAND + r"\{|$))")
+
+_CHOICE_MARKER = r"(?:\(\s*[A-E]\s*\)|[A-E][.)])"
+_CHOICE_COMMAND = r"\\(?:textbf|text|mathrm|mbox)"
+_CHOICE_GAP = r"(?:\s|~|\\(?:[ ,:;!]|q?quad\b))"
+_CHOICE_SPACING = re.compile(rf"{_CHOICE_GAP}+")
+_CHOICE_REFERENCE = re.compile(
+    rf"{_CHOICE_COMMAND}\{{\s*(?P<formatted>{_CHOICE_MARKER})\s*\}}|(?P<plain>{_CHOICE_MARKER})(?={_CHOICE_GAP})"
+)
+_CHOICE_CANDIDATE = re.compile(
+    rf"{_CHOICE_COMMAND}\{{\s*(?P<formatted>{_CHOICE_MARKER}|[A-E])\s*\}}"
+    rf"|(?P<plain>{_CHOICE_MARKER}|[A-E](?={_CHOICE_GAP}|$))"
+)
+_CHOICE_ANSWER_PREFIX = re.compile(r"^(?:the\s+)?(?:final\s+)?answer(?:\s+is\b|\s*:)\s*", re.IGNORECASE)
+_INFIX_OPERATOR = re.compile(r"[+\-*/^=<>]|\\(?:cdot|times|div|leq?|geq?|neq?)\b")
+
+
+def _split_choice(text: str, label_pattern: re.Pattern[str]) -> tuple[str, str] | None:
+    match = label_pattern.match(text)
+    if match is None:
+        return None
+    marker = match["formatted"] or match["plain"]
+    value = text[match.end() :]
+    gap = _CHOICE_SPACING.match(value)
+    return marker.strip("().").strip(), value[gap.end() :] if gap else value
 
 
 def _math_verify_parse(text: str, extraction_config: Sequence[object] | None = None, **kwargs: Any) -> list:
@@ -566,8 +591,17 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
             if not match and spec.allow_additive_constant:
                 match = _additive_constant_match(expected, parsed)
         return scored(float(match), extracted=candidate, expected=spec.expected)
+    reference_text = strip_math_delimiters(spec.expected)
+    choice = _split_choice(reference_text, _CHOICE_REFERENCE)
+    if choice and (
+        not choice[1]
+        # A parenthesized variable followed by an infix operator is an expression.
+        or (reference_text.startswith("(") and _INFIX_OPERATOR.match(choice[1]))
+    ):
+        choice = None
+    reference = choice[1] if choice else spec.expected
     is_list = spec.math_type is MathType.LIST
-    reference_members = _split_members(spec.expected) if is_list else [spec.expected]
+    reference_members = _split_members(reference) if is_list else [reference]
     if is_list:
         # A connector after a list comma normalizes to another leading comma.
         reference_members = [LEADING_LIST_CONNECTOR.sub("", member) for member in reference_members]
@@ -577,7 +611,15 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
     if not all(_is_expression(member) for member in expected):
         raise InvalidTask(f"math-verify cannot parse expected {spec.expected!r}")
 
-    candidate_members = _split_members(candidate) if is_list else [candidate]
+    answer = candidate
+    if choice:
+        answer = strip_math_delimiters(_CHOICE_ANSWER_PREFIX.sub("", candidate.strip()).removesuffix("."))
+        selection = _split_choice(answer, _CHOICE_CANDIDATE)
+        if selection:
+            label, answer = selection
+            if label != choice[0] or not answer:
+                return scored(float(label == choice[0]), extracted=candidate, expected=spec.expected)
+    candidate_members = _split_members(answer) if is_list else [answer]
     if len(candidate_members) != len(expected):
         return scored(0.0, extracted=candidate, expected=spec.expected)
     with _deadline_phase(MATH_DEADLINE_CANDIDATE_PARSE):
