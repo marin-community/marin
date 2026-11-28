@@ -68,10 +68,6 @@ def controller_vm_name(label_prefix: str) -> str:
     return f"iris-controller-{label_prefix}"
 
 
-class ControllerRestartNotStarted(RuntimeError):
-    """The controller restart failed before changing the VM."""
-
-
 @dataclass
 class ControllerStatus:
     """Status of the controller."""
