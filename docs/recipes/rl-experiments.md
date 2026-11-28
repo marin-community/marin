@@ -29,8 +29,8 @@ Use `train-long` for EvalLite or `train-long-checkpoint-eval` to add the agentic
 
 | Preset | What it measures | Default work and estimated cost | Evaluation and gate | When to use it | Ran on GPU |
 |---|---|---|---|---| --- |
-| Snowball `train-long` | Full training and checkpoint quality | 40 H100s, 100 updates by default, hours to days. Check the plan and use the reported GPU-hours for cost. | EvalLite active set of 100 tasks at step 0 and every 10 updates. Evaluation coverage invariants, without a calibrated control comparison. | Train a release candidate with checkpoint recovery and durable HF export. | Ran with a five-step SFT initializer and two RL updates |
-| Snowball `train-long-checkpoint-eval` | Full training with agentic checkpoint evaluation | 40 H100s, 100 updates by default, hours to days plus Daytona sandbox costs. | EvalLite plus 90 agent episodes at each checkpoint evaluation. Coverage invariants without a calibrated control comparison. | Qualify current training weights on BFCL, SWE-bench Verified and OpenThoughts-TBLite. Requires the [Daytona evaluation account and sandbox capacity](#agentic-checkpoint-evaluation). | CPU plan only |
+| Snowball `train-long` | Full training and checkpoint quality | 40 H100s, 100 updates by default, hours to days. Check the plan and use the reported GPU-hours for cost. | EvalLite at step 0 and every 10 updates. Evaluation coverage invariants, without a calibrated control comparison. | Train a release candidate with checkpoint recovery and durable HF export. | Ran with a five-step SFT initializer and two RL updates |
+| Snowball `train-long-checkpoint-eval` | Full training with agentic checkpoint evaluation | 40 H100s, 100 updates by default, hours to days plus Daytona sandbox costs. | EvalLite and agentic cohorts at each checkpoint evaluation. Coverage invariants without a calibrated control comparison. | Qualify training weights on the [checkpoint evaluation cohorts](https://github.com/marin-community/marin/blob/main/experiments/post_training/README.md#checkpoint-evaluation-cohorts). Requires the [Daytona evaluation account and sandbox capacity](#agentic-checkpoint-evaluation). | CPU plan only |
 
 Mochi RL starts from the production SFT step-400407 export and its pinned Hugging Face tokenizer.
 Use `--sft PRESET` to build a starting model or `--init NAME@VERSION` to use a published model.
@@ -40,7 +40,7 @@ A preset ending in `-agentic` trains on agent tasks. Snowball's `train-long-chec
 | Mochi preset | When to use it | Layout | Ran on GPU |
 | --- | --- | --- | --- |
 | `train-medium` | Short one-turn training check. | 15 nodes × 4 GB200s, one rack | Ran with an explicit initializer and checkpointing enabled |
-| `train-medium-agentic` | Short mixed run with tool-using and one-turn tasks. | 15 nodes × 4 GB200s, one rack | Ran with the v3 task selection, reduced batches and checkpointing enabled |
+| `train-medium-agentic` | Short mixed run with tool-using and one-turn tasks. | 15 nodes × 4 GB200s, one rack | [Ran with reduced batches and checkpointing enabled](https://github.com/marin-community/marin/pull/11728) |
 | `train-long` | One-turn training with held-out evaluation. | 15 nodes × 4 GB200s, one rack | CPU plan only |
 | `train-long-3rack` | One-turn training with dedicated racks for training and inference. | 48 nodes × 4 GB200s, three racks | CPU plan only |
 | `train-long-agentic` | Mixed training and held-out evaluation with a single-rack allocation. | 15 nodes × 4 GB200s, one rack | CPU plan only |
@@ -51,13 +51,13 @@ Enable checkpointing if you need to resume. The default Mochi run path is under 
 `tmp/ttl=3d/` prefix. Set `MARIN_PREFIX` to a durable S3 root for runs that may use the full 96-hour time limit.
 
 Both Mochi layouts restrict NCCL to the `ibp` InfiniBand rails. The long presets evaluate the
-100-task active set as `eval_lite_100`.
+EvalLite active set as `eval_lite_100`.
 
 | Snowball preset | When to use it | Layout | Checkpoints and export | Ran on GPU |
 | --- | --- | --- | --- | --- |
-| `train-medium-agentic` | Ten updates with held-out evaluation on one inference engine. | `h100x88`, 11 nodes × 8 H100s | Best eligible policy. | Ran with the v4 task selection, reduced batches and a bounded attempt |
+| `train-medium-agentic` | Ten updates with held-out evaluation on one inference engine. | `h100x88`, 11 nodes × 8 H100s | Best eligible policy. | [Ran with reduced batches and a bounded attempt](https://github.com/marin-community/marin/pull/11728) |
 | `train-long-agentic` | Up to 10,000 updates with held-out evaluation on 22 inference engines. | `h100x256`, 32 nodes × 8 H100s | Best eligible policy. | CPU plan only |
-| `train-medium-tools` | Ten updates on a `--tasks` selection of shell-tool tasks. | `p40`, 5 nodes × 8 H100s | None by default. | Ran three updates on a 164-task forge selection |
+| `train-medium-tools` | Ten updates on a `--tasks` selection of shell-tool tasks. | `p40`, 5 nodes × 8 H100s | None by default. | [Ran three updates](https://github.com/marin-community/marin/pull/11921) |
 
 When a trained step has the best eligible score, a successful waiting run keeps that native
 checkpoint and returns its HF export. When step zero wins, the result points to the starting HF
@@ -72,20 +72,22 @@ campaign layout splits a 102,400-token request into 20,480 packed token position
 
 ### Task selection and native resume
 
-Pass `--tasks snowball-100k-agentic@2026.11.19.2` for a mixed preset. The versioned
-selection contains the admitted SWE v4 agent tasks and the one-turn training rows. Both task
-families must be present, and training rows must be disjoint from the held-out evaluation.
+Pass `--tasks NAME@VERSION` for a mixed preset. Both task families must be present,
+and training rows must be disjoint from the held-out evaluation. The
+[selection README](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#snowball-training-selections)
+records the composition of the published mixed selection.
 
 Use `--resume NAME@VERSION` with checkpointing enabled to restore the newest retained recovery
 checkpoint and its original model identity from a run that has stopped. A running source's
 rolling cleanup can remove the checkpoint after you pin it. The source needs an immutable
 version and a retained native checkpoint. `--init` starts from published weights and is mutually
-exclusive with `--resume`. Set `SOURCE_RUN` to the source run's artifact name and version from its plan.
+exclusive with `--resume`. Set `SOURCE_RUN` to the source run's artifact name and version from its plan,
+and `TASK_SELECTION` to a published mixed selection's `NAME@VERSION`.
 
 ```bash
 uv run python -m experiments.post_training.mochi_rl \
   --preset train-medium-agentic --version 2026.11.19.1 --checkpoints latest \
-  --tasks snowball-100k-agentic@2026.11.19.2 --resume "$SOURCE_RUN" --plan
+  --tasks "$TASK_SELECTION" --resume "$SOURCE_RUN" --plan
 ```
 
 ### Compose SFT and RL
@@ -365,7 +367,7 @@ under the preset's output root.
 ## Tasks and evaluation
 
 [EvalLite](../references/task-curation.md#evallite) is the held-out selection evaluated by speed-short,
-learning-medium and data-medium; train-long uses the 100-task active set. EvalLite evaluations request one
+learning-medium and data-medium; train-long uses the active set. EvalLite evaluations request one
 greedy answer per task with natural replies up to 8,192 tokens. Data-short evaluates a sample of 256
 candidate training tasks with four sampled answers each; it does not evaluate EvalLite.
 
@@ -406,18 +408,17 @@ The dashboards are available through the [RL Grafana dashboard](https://grafana.
 
 ## Agentic checkpoint evaluation
 
-`train-long-checkpoint-eval` evaluates 30 pinned tasks each from BFCL, SWE-bench Verified
-and OpenThoughts-TBLite. Set `DAYTONA_EVAL_API_KEY` before submitting.
-The cohorts share SkyRL's evaluation pool with EvalLite. Up to 90 agent episodes can run
-concurrently across the three cohorts. Daytona builds the pinned task environments in
+`train-long-checkpoint-eval` uses the pinned
+[checkpoint evaluation cohorts](https://github.com/marin-community/marin/blob/main/experiments/post_training/README.md#checkpoint-evaluation-cohorts).
+Set `DAYTONA_EVAL_API_KEY` before submitting. The cohorts share SkyRL's
+evaluation pool with EvalLite. Daytona builds their task environments in
 declarative mode, and Terminus-2 evaluates the same frozen policy as EvalLite.
 
 A checkpoint is eligible when it attempts every task and scores at least 99% of the EvalLite
 active set and 90% of each agentic cohort. `eval/all` weights verifier scores by the number
 of scored tasks. Per-cohort metrics use `eval/<cohort>/all/`. Each task has one trial.
 Terminus-2 can take up to 32 main turns with up to 8,192 reply tokens per request within
-the engine's serving window. BFCL and SWE-bench use verifier deadlines of 300 and 3,000 seconds.
-OpenThoughts-TBLite uses each task's verifier deadline, capped at 3,600 seconds.
+the engine's serving window. Each cohort uses its configured verifier deadline.
 Infrastructure failures can retry once. A result with unconfirmed sandbox cleanup is unscored.
 
 Agentic cohort results are stored under the named evaluation directories in `exports/`.
@@ -461,7 +462,8 @@ IDs and TaskSpec digests against the saved per-task results.
 |---|---|
 | layout-p40-only | calibrated training gates cover the 40-GPU layout; other layouts need qualification |
 | mismatch-is-agreement | mismatch measures policy agreement; exactness claims need an explicit zero-mismatch bound |
-| AAII coverage; no-agentic-tasks | scientific reasoning, coding, General and a single-turn Agents stand-in; multi-turn tools and long context need separate qualification |
+| aaii-coverage | the current panel does not qualify multi-turn tools or long context; see the [EvalLite composition](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#evallite) |
+| no-agentic-tasks | one-turn presets do not train on agent tasks; mixed and shell-tool presets clear this gap when selected |
 | no-image-sandbox | image-only tasks need a sandbox backend |
 
 ## Add a model entry
