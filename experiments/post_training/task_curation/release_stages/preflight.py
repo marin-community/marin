@@ -20,7 +20,7 @@ from pathlib import Path
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref
 
 PREFLIGHT_RECEIPT_NAME = "preflight-receipt.json"
 PREFLIGHT_KIND = "release-stage-preflight"
@@ -75,20 +75,21 @@ def input_digests(inputs: dict) -> dict[str, str]:
     return {"inputs": hashlib.sha256(document.encode()).hexdigest()}
 
 
-def receipt_path(output_root: str, stage: str, name: str = PREFLIGHT_RECEIPT_NAME) -> StoragePath:
-    return StoragePath(f"{output_root}/preflight/{stage}/{name}")
+def receipt_directory(
+    output_root: str, stage: str, landed_sha: str, digests: dict[str, str], name: str = PREFLIGHT_RECEIPT_NAME
+) -> StoragePath:
+    context = input_digests({"repo_sha": landed_sha, "input_digests": digests})["inputs"]
+    return StoragePath(output_root) / "preflight" / stage / name.removesuffix(".json") / context
 
 
 def write_receipt(output_root: str, receipt: PreflightReceipt, name: str = PREFLIGHT_RECEIPT_NAME) -> ArtifactRef:
-    """Seal the receipt write-once; a rerun must use a fresh release prefix."""
-    raw = (json.dumps(json.loads(receipt.model_dump_json()), indent=2, sort_keys=True) + "\n").encode()
-    path = receipt_path(output_root, receipt.stage, name)
+    """Append a content-addressed receipt without replacing earlier attempts."""
+    raw = receipt.model_dump_json().encode()
+    path = receipt_directory(output_root, receipt.stage, receipt.repo_sha, receipt.input_digests, name)
+    path = path / f"{receipt.digest()}.json"
     if path.exists():
         if path.read_bytes() != raw:
-            raise ValueError(
-                f"preflight receipt for {receipt.stage} already exists with different content at {path};"
-                " rerun preflight after resolving the failure, not over it"
-            )
+            raise ValueError(f"preflight receipt content-address collision for {receipt.stage} at {path}")
     else:
         path.write_bytes(raw, auto_mkdir=True)
     if path.read_bytes() != raw:
@@ -96,11 +97,24 @@ def write_receipt(output_root: str, receipt: PreflightReceipt, name: str = PREFL
     return ArtifactRef(uri=str(path), sha256=hashlib.sha256(raw).hexdigest())
 
 
-def read_receipt(output_root: str, stage: str) -> PreflightReceipt | None:
-    path = receipt_path(output_root, stage)
-    if not path.exists():
-        return None
-    return PreflightReceipt.model_validate_json(path.read_text())
+def read_receipt(
+    output_root: str,
+    stage: str,
+    landed_sha: str,
+    digests: dict[str, str],
+    name: str = PREFLIGHT_RECEIPT_NAME,
+) -> PreflightReceipt | None:
+    """Read the latest attempt for this exact revision and input context."""
+    paths = (receipt_directory(output_root, stage, landed_sha, digests, name) / "*.json").glob()
+    receipts = []
+    for path in paths:
+        receipt = PreflightReceipt.model_validate(
+            read_ref(ArtifactRef(uri=str(path), sha256=path.name.removesuffix(".json")))
+        )
+        if receipt.stage != stage or receipt.repo_sha != landed_sha or receipt.input_digests != digests:
+            raise ValueError(f"preflight receipt has a different revision or input context: {path}")
+        receipts.append(receipt)
+    return max(receipts, key=lambda receipt: (receipt.checked_at, receipt.ok, receipt.digest()), default=None)
 
 
 def receipt_is_fresh(receipt: PreflightReceipt | None, landed_sha: str, digests: dict[str, str]) -> bool:
@@ -114,7 +128,7 @@ def receipt_is_fresh(receipt: PreflightReceipt | None, landed_sha: str, digests:
 
 def require_fresh_preflight(output_root: str, stage: str, landed_sha: str, digests: dict[str, str]) -> PreflightReceipt:
     """Refuse a stage whose preflight receipt is missing, failed, or stale."""
-    receipt = read_receipt(output_root, stage)
+    receipt = read_receipt(output_root, stage, landed_sha, digests)
     if not receipt_is_fresh(receipt, landed_sha, digests):
         state = "missing" if receipt is None else ("failed" if not receipt.ok else "stale")
         raise ValueError(

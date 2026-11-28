@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 from marin.execution import lazy
 from rigging.filesystem.step_status import read_step_status
-from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.release_stages import __main__ as entry_point
 from experiments.post_training.task_curation.release_stages import graph as release_graph_module
@@ -78,10 +77,13 @@ def test_preflight_mode_runs_a_slice_and_seals_a_fresh_receipt(tmp_path, plan_do
     assert exit_code == 0
     assert "OK census_inputs:" in output
     assert checked == ["experiments/post_training/task_curation/release_stages/graph.py"]
-    receipt = json.loads(
-        StoragePath(f"{tmp_path / 'release'}/preflight/census_inputs/preflight-receipt.json").read_text()
+    receipt = preflight_module.read_receipt(
+        str(tmp_path / "release"),
+        "census_inputs",
+        entry_point.repo_head(entry_point.REPO_ROOT),
+        preflight_module.input_digests({"node": "census_inputs"}),
     )
-    assert receipt["ok"] is True and receipt["slice_evidence"]["node"] == "census_inputs"
+    assert receipt is not None and receipt.ok and receipt.slice_evidence["node"] == "census_inputs"
     # A second preflight serves the fresh receipt without re-running the slice.
     exit_code = entry_point.main(_argv(plan_document, "preflight", "--stage", "census_inputs"))
     assert exit_code == 0
@@ -221,7 +223,7 @@ def test_root_command_runs_the_one_idempotent_verb():
     removed the mapping entirely: run is idempotent.
     """
     plan = fixture_plan()
-    script = entry_point._root_command(plan, "p/r40.json")[-1]
+    script = entry_point._root_command(plan, "p/r40.json", plan.source_revision)[-1]
     assert ' "$VERB"' not in script
     assert "ATTEMPT=" not in script
     assert script.rstrip().endswith(" run")
@@ -229,16 +231,19 @@ def test_root_command_runs_the_one_idempotent_verb():
 
 def test_selected_submission_enters_only_the_requested_graph_stage(plan_document, monkeypatch):
     plan = entry_point.load_plan(plan_document)
-    script = entry_point._root_command(plan, str(plan_document), ("snapshot_publication",))[-1]
+    bundle_revision = "f" * 40
+    script = entry_point._root_command(plan, str(plan_document), bundle_revision, ("snapshot_publication",))[-1]
     arguments = shlex.split(script.split(" exec ", 1)[1])[4:]
     captured = []
-    monkeypatch.setattr(entry_point, "_attest_revision", lambda *args: None)
+    attested = []
+    monkeypatch.setattr(entry_point, "_attest_revision", lambda args, plan: attested.append(args.source_revision))
     monkeypatch.setattr(entry_point, "assert_submission_allowed", lambda *args: None)
     monkeypatch.setattr(entry_point, "run_handles", lambda *handles, **kwargs: captured.extend(handles))
 
     assert entry_point.main(arguments) == 0
     assert len(captured) == 2
     assert captured[-1].name.endswith("-snapshot_publication")
+    assert attested == [bundle_revision] and bundle_revision != plan.source_revision
 
 
 def test_interrupted_graph_resumes_and_skips_sealed_nodes(tmp_path, monkeypatch):
@@ -323,6 +328,31 @@ def test_ensure_preflight_serves_a_fresh_receipt_without_rerunning(tmp_path, pla
     monkeypatch.setattr(preflight_module, "run_preflight", _no_slice)
     out = preflight_slices.ensure_preflight("census", plan)
     assert out.ok and out.input_digests == digests
+
+
+def test_changed_upstream_preflight_appends_evidence_and_reuses_each_context(tmp_path, monkeypatch):
+    plan = fixture_plan(release_root=str(tmp_path / "release"))
+    root = Path(plan.release_root)
+    legacy = root / "preflight" / "snapshot_publication" / "preflight-receipt.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"historical": true}\n')
+    original = legacy.read_bytes()
+    upstream = {"contract_census": "a" * 64}
+    revision = ["b" * 40]
+    monkeypatch.setattr(preflight_slices, "repo_head", lambda *args: revision[0])
+    monkeypatch.setattr(preflight_slices, "_upstream_witness", lambda *args: (dict(upstream), {}))
+    first = preflight_slices.ensure_preflight("snapshot_publication", plan)
+    upstream["contract_census"] = "c" * 64
+    second = preflight_slices.ensure_preflight("snapshot_publication", plan)
+    assert second.input_digests != first.input_digests
+    assert preflight_slices.ensure_preflight("snapshot_publication", plan) == second
+    upstream["contract_census"] = "a" * 64
+    assert preflight_slices.ensure_preflight("snapshot_publication", plan) == first
+    revision[0] = "d" * 40
+    third = preflight_slices.ensure_preflight("snapshot_publication", plan)
+    assert third.repo_sha == revision[0] and third != first
+    assert legacy.read_bytes() == original
+    assert preflight_module.read_receipt(str(root), first.stage, first.repo_sha, first.input_digests) == first
 
 
 def test_slice_inputs_are_digest_stable(plan_document):
@@ -468,10 +498,17 @@ def test_preflight_mode_runs_the_prior_witness(tmp_path, plan_document, monkeypa
     output = capsys.readouterr().out
     assert exit_code == 0
     assert "WITNESS-OK snapshot_publication:" in output
-    witness_path = StoragePath(f"{tmp_path / 'release'}/preflight/snapshot_publication/prior-witness-receipt.json")
-    receipt = json.loads(witness_path.read_text())
-    assert receipt["ok"] is True and receipt["mode"] == "prior-witness"
-    assert receipt["slice_evidence"] == {"witness": True}
+    plan = entry_point.load_plan(plan_document)
+    digests = preflight_module.input_digests(preflight_slices.witness_inputs("snapshot_publication", plan))
+    receipt = preflight_module.read_receipt(
+        str(tmp_path / "release"),
+        "snapshot_publication",
+        entry_point.repo_head(entry_point.REPO_ROOT),
+        digests,
+        preflight_slices.WITNESS_RECEIPT_NAME,
+    )
+    assert receipt is not None and receipt.ok and receipt.mode == "prior-witness"
+    assert receipt.slice_evidence == {"witness": True}
     # A second preflight serves the fresh witness without re-running it.
     exit_code = entry_point.main(_argv(plan_document, "preflight", "--stage", "snapshot_publication"))
     assert exit_code == 0
@@ -481,7 +518,15 @@ def test_preflight_mode_runs_the_prior_witness(tmp_path, plan_document, monkeypa
     with pytest.raises(ValueError, match="slice is blocked"):
         preflight_slices.ensure_preflight("snapshot_publication", plan)
     # The run-gate receipt document was never written.
-    assert not StoragePath(f"{tmp_path / 'release'}/preflight/snapshot_publication/preflight-receipt.json").exists()
+    assert (
+        preflight_module.read_receipt(
+            str(tmp_path / "release"),
+            "snapshot_publication",
+            receipt.repo_sha,
+            digests,
+        )
+        is None
+    )
 
 
 def test_preflight_mode_reports_a_failed_witness_and_exits_nonzero(tmp_path, plan_document, monkeypatch, capsys):
@@ -580,22 +625,22 @@ def test_plan_argument_preserves_storage_uris():
     assert str(Path("s3://bucket/plan.json")) == "s3:/bucket/plan.json"
 
 
-def test_bundled_landing_log_attests_a_freeze_this_machine_never_landed(tmp_path):
-    """The atlas-push landing log is per-machine: a freeze another checkout landed
+def test_bundled_landing_log_attests_a_bundle_this_machine_never_landed(tmp_path):
+    """The atlas-push landing log is per-machine: a bundle revision another checkout landed
     never appears in it, so the submitter composes the bundle's log with its own
     git-verified attestation entry — and leaves a log that already records the
-    freeze byte-for-byte unchanged."""
-    freeze = "4575c6990764595891d0ea1cb513f9268152170b"
+    revision byte-for-byte unchanged."""
+    bundle_revision = "4575c6990764595891d0ea1cb513f9268152170b"
     log = tmp_path / "landings.jsonl"
     log.write_text('{"at": "2026-11-27T00:00:00+00:00", "sha": "' + "b" * 64 + '", "who": "other"}\n')
 
-    bundled = entry_point._bundled_landing_log(log, freeze).decode()
+    bundled = entry_point._bundled_landing_log(log, bundle_revision).decode()
     entries = [json.loads(line) for line in bundled.splitlines()]
     assert len(entries) == 2
     assert entries[0]["sha"] == "b" * 64
-    assert entries[1]["sha"] == freeze
+    assert entries[1]["sha"] == bundle_revision
     assert entries[1]["who"] == "atlas-release submit"
 
-    # a log that already records the freeze travels unchanged
+    # a log that already records the bundle revision travels unchanged
     log.write_text(bundled)
-    assert entry_point._bundled_landing_log(log, freeze).decode() == bundled
+    assert entry_point._bundled_landing_log(log, bundle_revision).decode() == bundled

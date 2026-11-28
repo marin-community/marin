@@ -62,6 +62,7 @@ from marin.execution.step_runner import StepRunner
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.step_status import read_step_status
+from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 
 from experiments.post_training.task_curation.atlas_deployment import ATLAS_SERVICE
@@ -354,10 +355,24 @@ def mode_status(args) -> int:
     selection = SliceSelection(source=args.source)
     rows = []
     for node in sorted(graph.stages):
-        preflight_ref = preflight_module.read_receipt(plan.release_root, node)
+        preflight_ref = None
+        digests: dict[str, str] = {}
+        receipt_glob = (
+            StoragePath(plan.release_root)
+            / "preflight"
+            / node
+            / preflight_module.PREFLIGHT_RECEIPT_NAME.removesuffix(".json")
+            / "*/*.json"
+        )
+        if receipt_glob.glob():
+            if node in preflight_slices.RUNNABLE_NODES:
+                digests = preflight_module.input_digests(preflight_slices.slice_inputs(node, plan, selection))
+            else:
+                witness = preflight_slices._upstream_witness(node, plan)
+                digests = witness[0] if witness is not None else {}
+            preflight_ref = preflight_module.read_receipt(plan.release_root, node, landed, digests)
         state = "missing"
         if preflight_ref is not None:
-            digests = preflight_module.input_digests(preflight_slices.slice_inputs(node, plan, selection))
             state = "fresh" if preflight_module.receipt_is_fresh(preflight_ref, landed, digests) else "stale"
             if not preflight_ref.ok:
                 state = "failed"
@@ -493,7 +508,9 @@ def _submit_environment() -> dict[str, str]:
     return env
 
 
-def _root_command(plan: ReleasePlan, plan_relative: str, stages: tuple[str, ...] = ()) -> list[str]:
+def _root_command(
+    plan: ReleasePlan, plan_relative: str, bundle_revision: str, stages: tuple[str, ...] = ()
+) -> list[str]:
     """The root job's entrypoint: one idempotent verb on every attempt.
 
     There is no run/resume choice and no attempt-aware mapping: every attempt
@@ -516,30 +533,30 @@ def _root_command(plan: ReleasePlan, plan_relative: str, stages: tuple[str, ...]
         + " --plan "
         + plan_relative
         + " --source-revision "
-        + plan.source_revision
+        + bundle_revision
         + " run"
         + "".join(" --stage " + shlex.quote(stage) for stage in stages)
     )
     return ["bash", "-lc", script]
 
 
-def _bundled_landing_log(landing_log: Path, freeze_revision: str) -> bytes:
+def _bundled_landing_log(landing_log: Path, bundle_revision: str) -> bytes:
     """The landing log the bundle carries: the submitting checkout's log, with the
-    plan freeze's git-verified landing entry appended when this machine's log lacks it.
+    bundle revision's git-verified landing entry appended when this machine's log lacks it.
 
     The atlas-push landing log is per-machine (~/.local/share/atlas-push), and a freeze
-    another checkout landed never appears in it — the submitter therefore verifies the
-    freeze's containment against the landed branch tip with git (proof this checkout
-    actually has) and records that attestation in the bundled copy.
+    another checkout landed never appears in it. The submitter verifies the bundle
+    revision against the landed tip and the freeze's containment with git, then
+    records the bundle revision's attestation in the copy.
     """
     entries = landing_log.read_text(encoding="utf-8") if landing_log.is_file() else ""
-    if guard.sha_in_landing_log(freeze_revision, landing_log):
+    if guard.sha_in_landing_log(bundle_revision, landing_log):
         return entries.encode()
     entry = {
         "at": datetime.now(tz=UTC).isoformat(timespec="seconds"),
-        "sha": freeze_revision,
+        "sha": bundle_revision,
         "who": "atlas-release submit",
-        "what": "attested landed: git containment of the plan freeze against the atlas-env-audit tip",
+        "what": "attested landed: bundle revision is the atlas-env-audit tip and contains the plan freeze",
     }
     return (entries.rstrip("\n") + "\n" + json.dumps(entry, sort_keys=True) + "\n").encode()
 
@@ -574,8 +591,8 @@ def _submit_root(args) -> int:
     snapshot = Path(tempfile.mkdtemp(prefix="atlas-release-bundle-"))
     subprocess.run(["git", "worktree", "add", "--detach", str(snapshot), revision], cwd=REPO_ROOT, check=True)
     try:
-        (snapshot / "atlas-landing-log.jsonl").write_bytes(_bundled_landing_log(landing_log, plan.source_revision))
-        command = _root_command(plan, relative, stages)
+        (snapshot / "atlas-landing-log.jsonl").write_bytes(_bundled_landing_log(landing_log, revision))
+        command = _root_command(plan, relative, revision, stages)
         name = f"atlas-release-{plan.release_id}-{plan.artifact_version}-{uuid.uuid4().hex[:8]}"
         with connect_controller(cluster_name=args.cluster) as endpoint:
             with IrisClient.remote(

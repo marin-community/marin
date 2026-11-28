@@ -45,13 +45,12 @@ def test_run_preflight_seals_a_fresh_receipt(tmp_path, monkeypatch):
     assert receipt.ok and receipt.repo_sha == repo_head
     assert checked == ["experiments/post_training/task_curation/release_stages/census.py"]
     assert receipt.slice_evidence["tasks"] == 2
-    stored = json.loads((tmp_path / "release" / "preflight" / "census" / "preflight-receipt.json").read_text())
-    assert stored["ok"] is True
+    assert preflight.read_receipt(str(tmp_path / "release"), "census", repo_head, receipt.input_digests) == receipt
     assert preflight.receipt_is_fresh(receipt, repo_head, receipt.input_digests)
 
 
 def test_run_preflight_records_failure_and_refuses(tmp_path, monkeypatch):
-    _init_repo(tmp_path / "repo")
+    repo_head = _init_repo(tmp_path / "repo")
 
     def failing_type_check(module, repo_root):
         raise ValueError("type check failed")
@@ -66,8 +65,8 @@ def test_run_preflight_records_failure_and_refuses(tmp_path, monkeypatch):
             repo_root=tmp_path / "repo",
             slice_runner=lambda: {},
         )
-    stored = json.loads((tmp_path / "release" / "preflight" / "census" / "preflight-receipt.json").read_text())
-    assert stored["ok"] is False and "type check failed" in stored["error"]
+    stored = preflight.read_receipt(str(tmp_path / "release"), "census", repo_head, preflight.input_digests({}))
+    assert stored is not None and not stored.ok and "type check failed" in stored.error
 
 
 def test_receipt_digest_binds_the_document():
@@ -116,10 +115,32 @@ def test_guard_refuses_a_stage_whose_preflight_is_stale_or_missing(tmp_path, mon
         preflight_digests={"census": digests},
     )
     # Stale inputs: refusal.
-    with pytest.raises(ValueError, match="stale"):
+    with pytest.raises(ValueError, match="no fresh preflight receipt"):
         assert_submission_allowed(
             repo,
             package,
             preflight_output_root=str(tmp_path / "release"),
             preflight_digests={"census": {"inputs": "e" * 64}},
         )
+
+
+def test_failed_preflight_can_recover_without_changing_earlier_evidence(tmp_path):
+    receipt = preflight.PreflightReceipt(
+        stage="snapshot_publication",
+        mode="upstream",
+        repo_sha="a" * 40,
+        input_digests={"contract": "b" * 64},
+        ok=False,
+        error="not ready",
+        checked_at="2026-11-28T12:00:00+00:00",
+    )
+    root = str(tmp_path)
+    failed_ref = preflight.write_receipt(root, receipt)
+    original = Path(failed_ref.uri).read_bytes()
+    with pytest.raises(ValueError, match="failed"):
+        preflight.require_fresh_preflight(root, receipt.stage, receipt.repo_sha, receipt.input_digests)
+    recovered = receipt.model_copy(update={"ok": True, "error": None, "checked_at": "2026-11-28T12:01:00+00:00"})
+    recovered_ref = preflight.write_receipt(root, recovered)
+    assert recovered_ref != failed_ref
+    assert preflight.require_fresh_preflight(root, receipt.stage, receipt.repo_sha, receipt.input_digests) == recovered
+    assert Path(failed_ref.uri).read_bytes() == original

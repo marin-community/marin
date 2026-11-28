@@ -350,7 +350,13 @@ the upstream-witness receipt over the sealed declarations, so it prefights after
   write-once with byte-identical readback.
 - Lazy-artifact records (provenance, config, typed results): the storage prefix,
   `atlas-release-<release-id>-<node>/<artifact_version>`.
-- Preflight receipts: `<release_root>/preflight/<node>/preflight-receipt.json`.
+- Preflight receipts: `<release_root>/preflight/<node>/preflight-receipt/<context-sha>/<receipt-sha>.json`.
+  The context binds the landed revision and input digests. Each attempt is immutable;
+  changed upstreams or code create a new context, and retries append a new receipt.
+  The gate reads the latest attempt in its exact context. Prior witnesses use a
+  separate `prior-witness-receipt` directory and cannot satisfy the run-mode gate.
+  Regional preflights attest the submitted code bundle's revision; the plan keeps
+  its population-freeze revision separately.
 - Stage alerts: every stage emits start/finish/fail events directly to the ops
   feed / job-watchdog `alerts.jsonl`; each stage submission proposes its own
   watchdog registry entry (the registry stays operator-owned).

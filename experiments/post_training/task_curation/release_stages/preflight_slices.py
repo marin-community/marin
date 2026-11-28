@@ -720,12 +720,10 @@ def run_prior_witness(
     root = output_root or plan.release_root
     inputs = witness_inputs(node, plan)
     digests = preflight_module.input_digests(inputs)
-    stored = preflight_module.receipt_path(root, node, WITNESS_RECEIPT_NAME)
-    if stored.exists():
-        existing = preflight_module.PreflightReceipt.model_validate_json(stored.read_text())
-        if existing.mode == "prior-witness" and existing.input_digests == digests and existing.ok:
-            return existing
     repo_sha = repo_head(repo_root)
+    existing = preflight_module.read_receipt(root, node, repo_sha, digests, WITNESS_RECEIPT_NAME)
+    if existing is not None and existing.mode == "prior-witness" and existing.ok:
+        return existing
     now = datetime.now(tz=UTC).isoformat(timespec="seconds")
     try:
         preflight_module.type_check_module(module_path(node), repo_root)
@@ -774,17 +772,16 @@ def ensure_preflight(
     selection = selection or SliceSelection()
     root = output_root or plan.release_root
     landed = repo_head(repo_root)
-    existing = preflight_module.read_receipt(root, node)
     if node not in RUNNABLE_NODES:
         witness = _upstream_witness(node, plan)
         if witness is None:
             reason = BLOCK_REASONS.get(node, "no slice runner")
-            state = "missing" if existing is None else ("failed" if not existing.ok else "stale")
             raise ValueError(
-                f"stage {node} has no fresh preflight receipt ({state}) and its slice is blocked: {reason};"
+                f"stage {node} has no fresh preflight receipt and its slice is blocked: {reason};"
                 " run its upstream stages first, then preflight it"
             )
         digests, evidence = witness
+        existing = preflight_module.read_receipt(root, node, landed, digests)
         if preflight_module.receipt_is_fresh(existing, landed, digests):
             return existing
         receipt = preflight_module.PreflightReceipt(
@@ -800,6 +797,7 @@ def ensure_preflight(
         return receipt
     inputs = slice_inputs(node, plan, selection)
     digests = preflight_module.input_digests(inputs)
+    existing = preflight_module.read_receipt(root, node, landed, digests)
     if preflight_module.receipt_is_fresh(existing, landed, digests):
         return existing
     return preflight_module.run_preflight(
