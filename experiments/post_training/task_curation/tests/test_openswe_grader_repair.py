@@ -12,12 +12,12 @@ import pytest
 from experiments.post_training.task_curation.datasets.openswe import convert, grader_repair
 from experiments.post_training.task_curation.datasets.openswe.sources import OpenSweRow
 from experiments.post_training.task_curation.tests.test_openswe_conversion import (
-    CANONICAL_DOCKERFILE,
     CONDENSED,
     LICENSE_PARTITION,
+)
+from experiments.post_training.task_curation.tests.test_openswe_conversion import (
     row as make_row,
 )
-
 
 GOLDEN = "diff --git a/w.py b/w.py\n--- a/w.py\n+++ b/w.py\n@@ -1 +1,2 @@\n+fixed\n"
 TEST_PATCH = "diff --git a/test_w.py b/test_w.py\n--- a/test_w.py\n+++ b/test_w.py\n@@ -1 +1,2 @@\n+assert fixed\n"
@@ -49,7 +49,7 @@ def test_direct_golden_heredoc_is_repairable_and_excised():
     assert GOLDEN not in repaired
     assert "Applying golden patch" not in repaired
     assert TEST_PATCH in repaired
-    assert 'pytest -q' in repaired
+    assert "pytest -q" in repaired
     assert "OPENSWE_EXIT_CODE" in repaired
     # The repaired grader re-classifies clean against the same row.
     assert grader_repair.classify_grader(grader_row(eval_script=repaired)).verdict == "clean"
@@ -169,7 +169,10 @@ def test_reset_drops_when_no_test_files_are_named():
 
 def test_scan_counts_classes():
     rows = [
-        grader_row(instance_id="acme__clean-1", eval_script='#!/bin/bash\ncd /testbed\npytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n'),
+        grader_row(
+            instance_id="acme__clean-1",
+            eval_script='#!/bin/bash\ncd /testbed\npytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n',
+        ),
         grader_row(instance_id="acme__golden-2", eval_script=direct_golden_script()),
         grader_row(
             instance_id="acme__stuck-3",
