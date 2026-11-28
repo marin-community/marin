@@ -498,7 +498,10 @@ def test_compose_adopts_only_receipt_verified_contract_fields(tmp_path, evidence
             compose.compose_plan(document, expected, ())
         return
     sealed = _seal_compose_manifest(
-        declarations={target["id"]: target},
+        declarations={
+            **{row["id"]: row for row in compose.read_reference(document["old_release"])["inventory"]},
+            target["id"]: target,
+        },
         contract_receipts={target["id"]: DerivedContractReceipt.model_validate(receipt)},
         targets=(target["id"],),
         prior_release=document["old_release"],
