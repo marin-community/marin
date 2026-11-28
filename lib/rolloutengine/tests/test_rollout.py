@@ -517,6 +517,35 @@ async def test_deadline_during_grading_keeps_captured_outputs(deadline):
     assert caught.value.grade.diagnostics[GRADING_DURATION_SECONDS] > 0
 
 
+class UnstartedVerifierFactory(RecordingShellSimFactory):
+    """Machines whose second creation, the verifier's, times out on its own startup deadline."""
+
+    async def create(self, spec):
+        if self.machines:
+            raise TimeoutError("The verifier machine did not start")
+        return await super().create(spec)
+
+
+async def test_a_verifier_machine_startup_timeout_is_an_execution_failure_not_the_deadline():
+    spec = rollout_spec(
+        report_task(output_paths=("/workspace/report.txt",)),
+        machine=machine_runtime(),
+        verifier_machine=machine_runtime(),
+        harness="fixture",
+        verifier_timeout=60,
+    )
+    harness = StepHarness(lambda context: OutputWritingEpisode(context, "echo ready > /workspace/report.txt"))
+    with pytest.raises(RolloutInterrupted) as caught:
+        await engine(
+            ReplayModel([{"role": "assistant", "content": "ready"}]),
+            {"local": UnstartedVerifierFactory()},
+            harnesses={"fixture": harness},
+        ).run_task(spec)
+    assert caught.value.operation == RolloutOperation.GRADE
+    assert caught.value.grade.failure is None
+    assert caught.value.grade.diagnostics[GRADING_FAILURE] == GradingFailure.EXECUTION
+
+
 async def test_output_capture_over_the_file_budget_interrupts_grading():
     command = f"mkdir -p /workspace/out && cd /workspace/out && touch $(seq {MAX_OUTPUT_FILES + 1})"
     factory = RecordingShellSimFactory()

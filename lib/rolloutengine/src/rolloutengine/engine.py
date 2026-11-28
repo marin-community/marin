@@ -246,8 +246,9 @@ class RolloutEngine:
             model_message_indices = tuple(len(step.messages) - 1 for step in conversation.steps)
         started = time.monotonic()
         failure = None
+        deadline = asyncio.timeout(spec.limits.verifier_timeout)
         try:
-            async with asyncio.timeout(spec.limits.verifier_timeout):
+            async with deadline:
                 attempt.outputs = await _captured_outputs(spec, machine)
                 grade = await _grade_rollout(
                     spec,
@@ -262,9 +263,13 @@ class RolloutEngine:
                     verifier=attempt.verifier,
                 )
         except TimeoutError as error:
-            attempt.grade = GradeResult(
-                Outcome.INFRA_ERROR, None, "Verifier deadline expired", failure=GradingFailure.TIMEOUT
-            )
+            # A timeout of its own, such as a verifier machine that did not start, is an execution failure.
+            if deadline.expired():
+                attempt.grade = GradeResult(
+                    Outcome.INFRA_ERROR, None, "Verifier deadline expired", failure=GradingFailure.TIMEOUT
+                )
+            else:
+                failure = GradingFailure.EXECUTION
             raise _Interrupted(RolloutOperation.GRADE) from error
         except asyncio.CancelledError:
             # If the attempt deadline fired during grading, the caller receives this observation.
