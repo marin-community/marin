@@ -35,7 +35,7 @@ from levanter.inference.utils import INVALID, is_valid
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import PageCache
-from levanter.layers.sampler import Sampler
+from levanter.layers.sampler import LogprobMode, Sampler
 from levanter.models.lm_model import LmHeadModel
 from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_size
 
@@ -82,6 +82,9 @@ class InferenceEngineConfig:
 
     compute_dtype: jnp.dtype = jnp.bfloat16
     """KV cache dtype. Default bfloat16 for performance/accuracy balance."""
+
+    logprob_mode: LogprobMode = LogprobMode.BEHAVIOR
+    """Distribution used to score generated tokens."""
 
     max_queued_tokens: int = 512
     """Capacity of the token queue used between sampling and decode packing."""
@@ -886,7 +889,7 @@ class InferenceEngine:
             max_queued_tokens=config.max_queued_tokens,
         )
         vocab_axis = model.Vocab
-        sampler = Sampler(vocab_axis)
+        sampler = Sampler(vocab_axis, logprob_mode=config.logprob_mode)
         return cls(
             model=model,
             tokenizer=tokenizer,

@@ -526,6 +526,42 @@ def test_a_lock_file_save_publishes_one_manifest_version_per_wave(tmp_path):
         np.testing.assert_array_equal(np.asarray(restored[name]), value)
 
 
+def test_waiters_from_an_earlier_commit_share_the_next_manifest_wave(tmp_path):
+    base = ts.KvStore.open({"driver": "ocdbt", "base": {"driver": "file", "path": f"{tmp_path}/"}}).result(
+        timeout=_ASYNC_TEST_TIMEOUT
+    )
+
+    async def scenario():
+        gate = HostByteBudget(2, on_blocked=lambda: waves.close_blocked_wave())
+        waves = tensorstore_serialization._ManifestWaves(
+            base, ts.Context(), gate, expected_writes=3, create_metadata=True, commit_order=None
+        )
+
+        def stage(wave, name, data):
+            # Deliver staging completion before the event loop can resume the next waiter.
+            wave.bound.write(name, data).result(timeout=_ASYNC_TEST_TIMEOUT)
+            waves._write_finished(wave, None)
+
+        async def stage_waiting_write(name, data):
+            await gate.acquire(len(data))
+            stage(waves.reserve(len(data)), name, data)
+
+        await gate.acquire(2)
+        first = waves.reserve(2)
+        second = asyncio.create_task(stage_waiting_write("second", b"b"))
+        third = asyncio.create_task(stage_waiting_write("third", b"c"))
+        # Let both tasks reach the budget wait while the first write is still pending.
+        await asyncio.sleep(0)
+        stage(first, "first", b"aa")
+        await asyncio.wait_for(asyncio.gather(second, third), timeout=_ASYNC_TEST_TIMEOUT)
+        for commit in waves.commits:
+            commit.result(timeout=_ASYNC_TEST_TIMEOUT)
+
+    asyncio.run(scenario())
+    assert _ocdbt_version_count(tmp_path) == 3  # Empty database plus two commits.
+    assert [base.read(name).result().value for name in ("first", "second", "third")] == [b"aa", b"b", b"c"]
+
+
 def test_a_spilling_lock_file_save_of_a_bare_array_restores(tmp_path):
     """A PyTree that is one array and spills the budget stays at the OCDBT root."""
     values = np.arange(16, dtype=np.float32)
