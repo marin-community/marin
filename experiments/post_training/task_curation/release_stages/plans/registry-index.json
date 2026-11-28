@@ -1041,6 +1041,11 @@
       "sha256": "2065d4bb0ca453cf3ac8eae3f2ca087f3622f0079c9f72e041a8e70be3b25076",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2065d4bb0ca453cf.json"
     },
+    "Newfacade:LeetCodeDataset": {
+      "input_sha256": "983af40e24ee6465066bfc7b4777ecff0bf989171dfdcf043e25567d462d120a",
+      "sha256": "0c4c38d792caf64e92dcc44f7fe8797f1857c5b96a04bde0fe660bdf289708ec",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/pending-cleanup-admission-20261127-v1/Newfacade_LeetCodeDataset.json"
+    },
     "Nvidia:Nemotron-RL-Instruction-Following-Citation-Formatting-v1": {
       "input_sha256": "a979e4210fea0bdf62514a124c5c41ab6b625faa8e91e604f2c53adee3420c4e",
       "sha256": "5ca78c72e7e21987a809edac8cb5678f62603663644d5fdb7c9af8bf04025a3c",
@@ -1825,6 +1830,16 @@
       "input_sha256": "2e4237e857f1c7ec631055e727c4b34a27780b325e2a7955efbe7b9e0301077e",
       "sha256": "758cc2a90d510a013d91e13d9dfa434734bd4f6c8685c091b86b1edd45e1f575",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/litecoder-terminalworld/2026.11.22.1/terminalworld-seven-neighbor-survey-v1/source-identities.json"
+    },
+    "Tiger-lab:AceCode-89K": {
+      "input_sha256": "0d00fd7512a243713293c71f0771a15989ff494a3a4cdbdfda3bdaf45dd9b960",
+      "sha256": "2d651e6e33693dff07db90822af5d03ff92f443e0712a65d95fb50ecc98df041",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/pending-cleanup-admission-20261127-v1/Tiger-lab_AceCode-89K.json"
+    },
+    "Tiger-lab:StructEval": {
+      "input_sha256": "be279bddc74841e8c60bc6a1e8a2f166853ee8cd52f9a3719e04c13e443c20a8",
+      "sha256": "46e2078fe009469447b26077f5533f4fd6d98c2921d680b1b86cfcb152f6f0c1",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/pending-cleanup-admission-20261127-v1/Tiger-lab_StructEval.json"
     },
     "Yatin:Edge-Agent-Reasoning-WebSearch-260K": {
       "input_sha256": "c4cdb95a3be3db8d3dc5cd7323e09efbab13d154f24ed2d14c5fbb2d02ea3190",

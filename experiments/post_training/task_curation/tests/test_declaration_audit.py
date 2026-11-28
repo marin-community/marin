@@ -556,3 +556,32 @@ def test_the_census_demand_exemption_names_exactly_excluded_empty_sources():
     assert declaration_audit.exempt_unmeasured_sources(sources) == frozenset(
         {"Test:zero-excluded", "Test:none-excluded", "Test:deprecated-empty"}
     )
+
+
+def test_registry_index_gaps_name_every_uncovered_declared_source():
+    """The admission flow registers each newly declared source's identity document in
+    the registry index (the compose reads its targets there); the landing gate names
+    every declared source the index does not cover, and only those."""
+    index = {"sources": {"Test:covered": {"uri": "s3://example/covered.json", "sha256": "a" * 64}}}
+    declared = frozenset({"Test:covered", "Test:uncovered-a", "Test:uncovered-b"})
+    assert declaration_audit.registry_index_gaps(declared, index) == ["Test:uncovered-a", "Test:uncovered-b"]
+
+
+def test_registry_index_gaps_refuse_a_shapeless_index():
+    declared = frozenset({"Test:declared-source"})
+    assert declaration_audit.registry_index_gaps(declared, {}) == ["Test:declared-source"]
+    assert declaration_audit.registry_index_gaps(declared, {"sources": "not-a-mapping"}) == ["Test:declared-source"]
+
+
+def test_registry_index_gaps_pass_when_every_declared_source_is_covered():
+    index = {
+        "sources": {
+            source_id: {"uri": "s3://example/x.json", "sha256": "b" * 64}
+            for source_id in (
+                "Test:one",
+                "Test:two",
+                "Test:unrelated-retained-source",
+            )
+        }
+    }
+    assert declaration_audit.registry_index_gaps(frozenset({"Test:one", "Test:two"}), index) == []
