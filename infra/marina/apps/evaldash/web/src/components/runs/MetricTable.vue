@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { formatScore } from '@/utils/formatting'
+import { formatScore, formatValue } from '@/utils/formatting'
 import type { MetricRow } from '@/utils/runMetrics'
 
 defineProps<{ rows: MetricRow[]; keyPrefix?: string }>()
@@ -23,7 +23,7 @@ defineProps<{ rows: MetricRow[]; keyPrefix?: string }>()
       >
         <td class="px-3 py-2 font-mono text-[13px]">{{ m.task }}</td>
         <td class="px-3 py-2 font-mono text-[13px]">{{ m.metric }}</td>
-        <td class="px-3 py-2 text-right tabular-nums text-text-secondary">{{ m.value }}</td>
+        <td class="px-3 py-2 text-right tabular-nums text-text-secondary">{{ formatValue(m.value) }}</td>
         <td class="px-3 py-2 text-right tabular-nums">{{ formatScore(m.value) }}</td>
       </tr>
     </tbody>

@@ -1,7 +1,15 @@
 // Small presentational helpers shared across pages.
 
+const MISSING_VALUE = '—'
+
+const VALUE_FORMATTER = new Intl.NumberFormat('en-US', {
+  notation: 'standard',
+  useGrouping: false,
+  maximumSignificantDigits: 2,
+})
+
 export function formatTimestamp(iso: string | null | undefined): string {
-  if (!iso) return '—'
+  if (!iso) return MISSING_VALUE
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
   return d.toLocaleString(undefined, {
@@ -14,15 +22,24 @@ export function formatTimestamp(iso: string | null | undefined): string {
 }
 
 export function formatScore(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '—'
+  if (value === null || value === undefined || Number.isNaN(value)) return MISSING_VALUE
   // Accuracy-style metrics live in [0, 1]; show as a percentage. Anything else
   // (already a percentage, a count) is shown with three significant decimals.
   if (value >= 0 && value <= 1) return (value * 100).toFixed(1)
   return value.toFixed(3)
 }
 
+// Raw metrics keep safe integers exact and round other finite values without exponent notation.
+export function formatValue(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return MISSING_VALUE
+  if (!Number.isFinite(value)) return String(value)
+  if (Number.isSafeInteger(value)) return String(value)
+  const text = VALUE_FORMATTER.format(value)
+  return /^-?[1-9]$/.test(text) ? `${text}.0` : text
+}
+
 export function shortSha(sha: string | null | undefined): string {
-  if (!sha) return '—'
+  if (!sha) return MISSING_VALUE
   return sha.length > 10 ? sha.slice(0, 10) : sha
 }
 
@@ -80,7 +97,7 @@ export function formatDelta(value: number | null | undefined): string {
 
 // Epoch-milliseconds timestamp (iris/finelog) -> short local time, or '—'.
 export function formatMillis(ms: number | null | undefined): string {
-  if (ms === null || ms === undefined) return '—'
+  if (ms === null || ms === undefined) return MISSING_VALUE
   return formatTimestamp(new Date(ms).toISOString())
 }
 export function protoTimestampMillis(
@@ -90,7 +107,7 @@ export function protoTimestampMillis(
 }
 
 export function formatDuration(startMs: number | null | undefined, endMs: number | null | undefined): string {
-  if (!startMs) return '—'
+  if (!startMs) return MISSING_VALUE
   const end = endMs ?? Date.now()
   const seconds = Math.max(0, Math.round((end - startMs) / 1000))
   if (seconds < 60) return `${seconds}s`
