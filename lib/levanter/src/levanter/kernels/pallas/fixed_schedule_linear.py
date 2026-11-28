@@ -1,7 +1,15 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Batch-invariant TPU dense projection used by the opt-in Snowball path."""
+"""Keep dense projection logits bitwise stable for exact policy replay.
+
+Serving and the learner can project the same activation row in batches of
+different sizes or on different row shardings. Those layouts can change the
+floating-point summation order and therefore the logits used to score that token.
+This kernel fixes the reduction order along the contraction dimension within
+each TPU generation, so the same inputs and weights produce identical logits
+across supported batch layouts.
+"""
 
 from __future__ import annotations
 
