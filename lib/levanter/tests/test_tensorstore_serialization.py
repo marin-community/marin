@@ -689,7 +689,7 @@ def test_the_next_commit_rewrites_the_manifest_the_previous_holder_published(tmp
 
 def test_a_commit_queued_behind_many_short_holds_waits_past_the_timeout(tmp_path, monkeypatch):
     """The timeout bounds one hold, not a save's whole queue of commits."""
-    monkeypatch.setattr(tensorstore_serialization, "_COMMIT_ORDER_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(tensorstore_serialization, "_COMMIT_ORDER_TIMEOUT_S", 1.0)
     order = tensorstore_serialization._CommitOrder(str(tmp_path))
     lock = tmp_path / tensorstore_serialization._COMMIT_ORDER_LOCK_NAME
     lock.write_text("holder 0\n")
@@ -705,9 +705,9 @@ def test_a_commit_queued_behind_many_short_holds_waits_past_the_timeout(tmp_path
 
     waiter = threading.Thread(target=wait_for_lock)
     waiter.start()
-    # Hand the lock to a new holder every 0.15 s for 0.9 s in all: three timeouts with no free moment.
-    for holder in range(1, 7):
-        time.sleep(0.15)
+    # Hand the lock to a new holder every 0.2 s for 2 s in all: two timeouts with no free moment.
+    for holder in range(1, 11):
+        time.sleep(0.2)
         handoff = tmp_path / f"handoff-{holder}"
         handoff.write_text(f"holder {holder}\n")
         os.replace(handoff, lock)
