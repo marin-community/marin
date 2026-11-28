@@ -146,6 +146,17 @@ def convert_population(
         except convert.OpenSweRowExcluded as excluded:
             exclusions.append(row_conversion_record(row, excluded))
             continue
+        except Exception as error:  # a per-row failure fails that row closed, never the conversion
+            LOGGER.exception("unexpected conversion failure for %s", row.instance_id)
+            exclusions.append(
+                {
+                    "instance_id": row.instance_id,
+                    "reason": "unexpected_error",
+                    "detail": str(error)[:1200],
+                    "evidence": {"exception": type(error).__name__},
+                }
+            )
+            continue
         record = row_conversion_record(row, outcome)
         if record is not None:
             exclusions.append(record)

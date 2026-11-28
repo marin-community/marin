@@ -172,7 +172,12 @@ def qualification_population(
         if row.instance_id in excluded_instance_ids:
             counts["sample_records"] += 1
             continue
-        classification = grader_repair.classify_grader(row)
+        try:
+            classification = grader_repair.classify_grader(row)
+        except Exception as error:  # a per-row classification failure fails that row closed, never the shard
+            LOGGER.warning("classification failed for %s: %s", row.instance_id, str(error)[:300])
+            counts["converter_unrepairable"] += 1
+            continue
         if classification.verdict == "unrepairable":
             counts["converter_unrepairable"] += 1
             continue

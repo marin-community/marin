@@ -190,8 +190,16 @@ def classify_grader(row: OpenSweRow) -> GraderClassification:
     )
     # A grader that never runs cannot be repaired into one that grades: the
     # verifier executes the upstream bytes verbatim, so a script bash refuses
-    # to parse scores 0 for every agent state, no-op and oracle alike.
-    parse = subprocess.run(["bash", "-n"], input=script.encode(), capture_output=True, timeout=60)
+    # to parse scores 0 for every agent state, no-op and oracle alike. A parse
+    # that cannot complete is the same fail-closed outcome for that one row,
+    # never a crash.
+    try:
+        parse = subprocess.run(["bash", "-n"], input=script.encode(), capture_output=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        classification.verdict = "unrepairable"
+        classification.reason = "eval_script_parse_timeout"
+        classification.detail = "the eval_script did not parse within 60 seconds; the row fails closed"
+        return classification
     if parse.returncode != 0:
         classification.verdict = "unrepairable"
         classification.reason = "eval_script_syntax_error"

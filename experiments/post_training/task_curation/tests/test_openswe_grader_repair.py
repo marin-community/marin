@@ -7,9 +7,11 @@ classifier finds it from the row's own bytes, the repair drops the golden
 application so the agent's diff is what gets tested, and unrepairable rows
 exclude with the ruling's typed reason."""
 
+import subprocess
+
 import pytest
 
-from experiments.post_training.task_curation.datasets.openswe import convert, grader_repair
+from experiments.post_training.task_curation.datasets.openswe import convert, corpus_qualification, grader_repair
 from experiments.post_training.task_curation.datasets.openswe.sources import OpenSweRow
 from experiments.post_training.task_curation.tests.test_openswe_conversion import (
     CONDENSED,
@@ -248,6 +250,41 @@ def test_single_exit_marker_stays_repairable():
     )
     classification = grader_repair.classify_grader(grader_row(eval_script=script))
     assert classification.verdict == "repairable"
+
+
+def test_parse_timeout_fails_that_row_closed(monkeypatch):
+    """A parse that cannot complete is a typed exclusion for that ONE row,
+    never a crash (the coordinator's ruling on the qualification shards' bash
+    -n timeouts)."""
+
+    def hang(command, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=command, timeout=60)
+
+    monkeypatch.setattr(grader_repair.subprocess, "run", hang)
+    classification = grader_repair.classify_grader(grader_row(eval_script="#!/bin/bash\ncd /testbed\npytest -q\n"))
+    assert classification.verdict == "unrepairable"
+    assert classification.reason == "eval_script_parse_timeout"
+    assert "fails closed" in classification.detail
+
+
+def test_population_scan_survives_a_failing_classification(monkeypatch):
+    """Every per-row exception becomes a typed row drop; the shard's
+    population scan keeps going."""
+    calls = {"count": 0}
+    real_classify = grader_repair.classify_grader
+
+    def explode_on_second(row):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise RuntimeError("classification exploded")
+        return real_classify(row)
+
+    monkeypatch.setattr(grader_repair, "classify_grader", explode_on_second)
+    rows = [grader_row(instance_id=f"acme__row-{index}") for index in range(4)]
+    population, counts = corpus_qualification.qualification_population(rows, frozenset())
+    assert [row.instance_id for row in population] == ["acme__row-0", "acme__row-2", "acme__row-3"]
+    assert counts["converter_unrepairable"] == 1
+    assert counts["population"] == 3
 
 
 def test_scan_counts_classes():
