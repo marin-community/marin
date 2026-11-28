@@ -4,10 +4,8 @@
 r"""Grade mathematical answers, either symbolically or as a number with tolerance.
 
 The default anchored profile takes the last ``\boxed{}`` expression, or the last non-empty line when the output has
-none. References parse as a whole LaTeX expression after removing a multiple-choice label, if present.
-Labelled references accept the matching label or value, and a reply that gives both must match both.
-When the reference's choice value has no defined symbolic parse, the grader compares its text
-after removing outer math delimiters and a trailing period.
+none. References parse as whole LaTeX expressions. For a single labelled choice, the
+grader parses the value and falls back to text comparison when it has no defined symbolic parse.
 Candidates first use anchored LaTeX (``$...$``), then math-verify's own anchors (``the answer is ...``)
 if that yields nothing. Other profiles retain raw source extraction or require a boxed expression; their
 parser options remain task-controlled.

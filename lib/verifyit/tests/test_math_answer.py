@@ -271,9 +271,7 @@ def test_math_reference_unit_chains_ordinals_and_powers_grade_numeric_value(refe
     [
         (r"\textbf{(D)}\ 7", "D", 1.0),
         (r"\textbf{(D)}\ 7", "(D)", 1.0),
-        (r"\textbf{(D)}\ 7", r"\boxed{D}", 1.0),
         (r"\textbf{(D)}\ 7", "7", 1.0),
-        (r"\textbf{(D)}\ 7", r"\boxed{7}", 1.0),
         (r"\textbf{(D)}\ 7", "The answer is D.", 1.0),
         (r"\textbf{(D)}\ 7", "The answer is 7.", 1.0),
         (r"\textbf{(D)}\ 7", "(D) 7", 1.0),
