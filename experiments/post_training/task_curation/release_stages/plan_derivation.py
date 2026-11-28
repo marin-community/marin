@@ -170,13 +170,34 @@ def reconstruct_prior_surveys(query: Query, load_id: str) -> tuple[dict, dict]:
             raise ValueError(f"the prior load {load_id} carries {len(rows)} survey rows, expected exactly 1")
         return rows[0]
 
-    backend_row = one("SELECT survey, survey_id FROM atlas_backend_surveys WHERE load_id=:load", {"load": load_id})
-    backend = dict(backend_row["survey"])
+    def paged(sql_template: str, order_column: str, page_size: int) -> list[dict]:
+        """Keyset-paged reads: the applet query caps each response at 5 MB, and the
+        fingerprint rows carry the bounded review sample (~60 KB each). Every bound
+        parameter must appear in the SQL, so the first page omits :after."""
+        rows: list[dict] = []
+        after: str | None = None
+        while True:
+            parameters: dict = {"load": load_id, "limit": page_size}
+            predicate = "TRUE" if after is None else order_column + " > :after"
+            sql = sql_template.format(predicate=predicate) + " ORDER BY " + order_column + " LIMIT :limit"
+            if after is not None:
+                parameters["after"] = after
+            page = query(sql, parameters)["rows"]
+            if not page:
+                return rows
+            rows.extend(page)
+            after = page[-1][order_column]
+
+    backend = dict(
+        one("SELECT survey, survey_id FROM atlas_backend_surveys WHERE load_id=:load", {"load": load_id})["survey"]
+    )
     backend["sources"] = [
         row["capabilities"]
-        for row in query(
-            "SELECT capabilities FROM atlas_backend_sources WHERE load_id=:load ORDER BY source_id", {"load": load_id}
-        )["rows"]
+        for row in paged(
+            "SELECT capabilities, source_id FROM atlas_backend_sources WHERE load_id=:load AND ({predicate})",
+            "source_id",
+            500,
+        )
     ]
     backend["matrix"] = [
         row["cell"]
@@ -186,27 +207,33 @@ def reconstruct_prior_surveys(query: Query, load_id: str) -> tuple[dict, dict]:
     ]
     BackendSurvey.model_validate(backend)
 
-    identity_row = one("SELECT metadata, survey_id FROM atlas_identity_surveys WHERE load_id=:load", {"load": load_id})
-    identity = dict(identity_row["metadata"])
+    identity = dict(
+        one("SELECT metadata, survey_id FROM atlas_identity_surveys WHERE load_id=:load", {"load": load_id})["metadata"]
+    )
     fingerprints = {
         row["id"]: row["source_fingerprint"]
-        for row in query(
-            "SELECT id, source_fingerprint FROM atlas_sources WHERE load_id=:load"
-            " AND source_fingerprint IS NOT NULL ORDER BY id",
-            {"load": load_id},
-        )["rows"]
+        for row in paged(
+            "SELECT id, source_fingerprint FROM atlas_sources"
+            " WHERE load_id=:load AND source_fingerprint IS NOT NULL AND ({predicate})",
+            "id",
+            64,
+        )
     }
     reviews = [
         row["review"]
-        for row in query(
-            "SELECT review FROM atlas_duplicate_reviews WHERE load_id=:load ORDER BY left_source", {"load": load_id}
-        )["rows"]
+        for row in paged(
+            "SELECT review, left_source FROM atlas_duplicate_reviews WHERE load_id=:load AND ({predicate})",
+            "left_source",
+            500,
+        )
     ]
     groups_by_id: dict[str, dict] = {}
-    for row in query(
-        "SELECT id, duplicate_group FROM atlas_sources WHERE load_id=:load AND duplicate_group IS NOT NULL ORDER BY id",
-        {"load": load_id},
-    )["rows"]:
+    for row in paged(
+        "SELECT id, duplicate_group FROM atlas_sources"
+        " WHERE load_id=:load AND duplicate_group IS NOT NULL AND ({predicate})",
+        "id",
+        500,
+    ):
         group = row["duplicate_group"]
         groups_by_id.setdefault(group["group_id"], group)
     identity["fingerprints"] = fingerprints
