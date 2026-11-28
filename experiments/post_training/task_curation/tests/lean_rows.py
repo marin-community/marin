@@ -18,7 +18,8 @@ from experiments.post_training.task_curation.datasets.lean import numina, proofs
 PROOFNET = proofs.sources()[0].config
 NUMINA = numina.sources()[0].config
 NUMINA_FIXTURE = Path(__file__).parent / "fixtures/lean/numina_rows.json"
-"""Rows copied from the pinned NuminaMath-LEAN payload whose human proofs check with the grader's toolchain."""
+"""Rows copied from the pinned NuminaMath-LEAN payload whose human proofs check with the grader's toolchain. The
+first row's hypotheses contradict each other; the fixed reply does not prove the second row and proves the third."""
 PROOFS_FIXTURE = Path(__file__).parent / "fixtures/lean/proofnet_proofs.json"
 """Rows copied from the pinned ProofNet-Verified payload, each with a proof checked by the grader's toolchain."""
 
@@ -60,6 +61,8 @@ REAL_PROOFS = real_proofs()
 
 
 NUMINA_ROWS = json.loads(NUMINA_FIXTURE.read_text())
+NUMINA_TASK_ROWS = NUMINA_ROWS[1:]
+"""The fixture rows the recipe turns into tasks."""
 
 
 def numina_row(**fields: Any) -> dict[str, Any]:
@@ -79,19 +82,35 @@ def numina_row(**fields: Any) -> dict[str, Any]:
     return {**row, **fields}
 
 
-def prime_inputs(
-    directory: Path, *, unported: Iterable[str] = (), misformalized: Iterable[str] = ()
+def numina_inputs(
+    directory: Path, *not_proved: dict[str, Any], unported: Iterable[str] = (), misformalized: Iterable[str] = ()
 ) -> dict[str, StoragePath]:
-    """Prime Intellect's two NuminaMath-LEAN lists, staged as the source's inputs, holding the given uuids."""
+    """The source's staged inputs: Prime Intellect's two lists holding the given uuids, and the reply outcomes of
+    the fixture rows, as the published ``numina_replies.json`` records them, and of ``not_proved``, rows the fixed
+    reply does not prove."""
     staged = {}
     for name, uuids in (("unported", unported), ("misformalized", misformalized)):
         (directory / name).mkdir()
         (directory / name / f"{name}.json.gz").write_bytes(gzip.compress(json.dumps(sorted(uuids)).encode()))
         staged[name] = StoragePath(str(directory / name))
+    contradictory, unproved, proved = (numina.proof_key(row) for row in NUMINA_ROWS)
+    replies = {
+        "checked": {**json.loads(numina.PROOFS_FILE.read_text())["checked"], "replies": numina.REPLIES},
+        "contradictory": [contradictory],
+        "contradiction_unknown": [],
+        "fixed_reply": {
+            "proved": [proved],
+            "not_proved": [unproved, *(numina.proof_key(row) for row in not_proved)],
+            "unknown": [],
+        },
+    }
+    (directory / "replies").mkdir()
+    (directory / "replies" / numina.replies_source().filename).write_text(json.dumps(replies))
+    staged["replies"] = StoragePath(str(directory / "replies"))
     return staged
 
 
 def with_passing_proof(monkeypatch: Any, row: dict[str, Any]) -> dict[str, Any]:
-    """``row``, with its human proof counted as passing for this test only."""
+    """``row``, with its human proof counted as passing, for this test only."""
     monkeypatch.setattr(numina, "PASSING_PROOFS", numina.PASSING_PROOFS | {numina.proof_key(row)})
     return row

@@ -22,5 +22,17 @@
   "problem_type": "Algebra",
   "question_type": "math-word-problem",
   "exam": "unknown"
+ },
+ {
+  "uuid": "a12bc0d4-1410-5e54-a05d-901d8370fbe6",
+  "problem": "4. Eight friends went to a restaurant for a meal, and the cost was to be shared equally among them. Because Judy forgot to bring money, the other seven friends each paid an extra 2.50 yuan. Therefore, the total cost of this meal was ( ) yuan.\n(A) 120\n(B) 128\n(C) 140\n(D) 144\n(E) 160",
+  "author": "human",
+  "ground_truth_type": "complete",
+  "formal_statement": "import Mathlib\n\ntheorem algebra_323431 {x : ℝ} (hx : x ≠ 0) (h : 7 * (x / 8 + 2.50) = x) :\n    x = 140 := by",
+  "formal_ground_truth": "import Mathlib\n\ntheorem algebra_323431 {x : ℝ} (hx : x ≠ 0) (h : 7 * (x / 8 + 2.50) = x) :\n    x = 140 := by\n  ring_nf at h\n  linarith",
+  "source": "secondary_math",
+  "problem_type": "Algebra",
+  "question_type": "MCQ",
+  "exam": "unknown"
  }
 ]
