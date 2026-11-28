@@ -20,7 +20,7 @@ model vocab. Two inputs are resolved here rather than left implicit:
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass, replace
 
 import draccus
 from fray.types import ResourceConfig
@@ -158,16 +158,20 @@ def hf_to_levanter(
     tokenizer_revision: str | None = None,
     compute_dtype: str = DEFAULT_COMPUTE_DTYPE,
     resources: ResourceConfig = DEFAULT_CONVERT_RESOURCES,
+    model_overrides: Mapping[str, object] | None = None,
 ) -> HfToLevanterCheckpoint:
     """Convert ``hf_id@hf_revision`` to a native Levanter model checkpoint as a lazy ``ArtifactStep``.
 
     ``tokenizer`` defaults to ``hf_id``; ``tokenizer_revision`` defaults to ``hf_revision``. The returned
     handle carries the resolved ``LmConfig`` (read from the pinned HF ``config.json`` now, so it is
-    identity-bearing) and the conversion step.
+    identity-bearing) and the conversion step. ``model_overrides`` replaces fields of the resolved config,
+    such as runtime settings the HF ``config.json`` does not carry.
     """
     tokenizer = tokenizer or hf_id
     tokenizer_revision = tokenizer_revision or hf_revision
     model_config = resolve_lm_config(model_type, hf_id, hf_revision)
+    if model_overrides:
+        model_config = replace(model_config, **model_overrides)
     model_config_json = draccus.encode(model_config)
     fingerprint_model_config_json = _omit_fingerprint_fields(model_config, model_config_json)
     assert isinstance(fingerprint_model_config_json, dict)

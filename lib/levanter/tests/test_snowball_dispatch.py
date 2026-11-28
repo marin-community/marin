@@ -13,6 +13,7 @@ from jax.sharding import AxisType, Mesh
 
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.layers.attention import AttentionMask
+from levanter.models.lm_model import LmExample
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.testing.devices import use_test_devices
 
@@ -126,3 +127,66 @@ def test_dropless_bos_routes_ignore_companions_and_padding():
             np.testing.assert_array_equal(counts.sender_dropped, np.zeros(3))
             np.testing.assert_array_equal(counts.receiver_dropped, np.full(3, 48))
             np.testing.assert_array_equal(counts.dropped, np.full(3, 48))
+
+
+@pytest.mark.multidevice
+def test_training_forward_keeps_padding_out_of_lossy_expert_capacity():
+    """Padding (segment id -1) takes no expert slots in the training forward, so it cannot push real tokens out."""
+    batch, sequence, real_length = 4, 8, 3
+
+    def config(capacity):
+        return SnowballConfig(
+            vocab_size=32,
+            hidden_dim=16,
+            intermediate_dim=16,
+            shared_expert_intermediate_dim=16,
+            num_experts=4,
+            num_experts_per_token=1,
+            num_layers=1,
+            num_heads=2,
+            num_kv_heads=1,
+            head_dim=8,
+            max_seq_len=16,
+            sliding_window=4,
+            attention_implementation="reference",
+            moe_implementation="ring",
+            moe_capacity_factor=capacity,
+        )
+
+    axes = (hax.Axis("batch", batch), hax.Axis("position", sequence))
+    # Left padding: a row's padding comes before its real tokens in dispatch order.
+    real = np.broadcast_to(np.arange(sequence) >= sequence - real_length, (batch, sequence))
+    tokens = (np.arange(batch * sequence).reshape(batch, sequence) * 7 + 2) % 32
+    tokens[~real] = 0
+    ids = hax.named(jnp.asarray(tokens), axes)
+
+    def mask(padding_segment):
+        segments = hax.named(jnp.asarray(np.where(real, 0, padding_segment)), axes)
+        return AttentionMask.causal().with_segment_ids(segments, segments.rename({"position": "key_position"}))
+
+    with (
+        use_test_devices(2),
+        jax.set_mesh(compact_grug_mesh(expert_axis_size=2)),
+        hax.axis_mapping({"batch": ("replica_dcn", "data", "expert")}),
+    ):
+        dropless = SnowballLMHeadModel.init(hax.Axis("vocab", 32), config(None), key=jax.random.PRNGKey(2))
+        lossy = SnowballLMHeadModel.init(hax.Axis("vocab", 32), config(1.0), key=jax.random.PRNGKey(2))
+        # At capacity 1.0 the real assignments fit, but counting the padding pushes some out.
+        drops = eqx.filter_jit(lambda m, valid: m.activations_with_stats(ids, valid, attn_mask=mask(1))[1].dropped)
+        assert int(drops(lossy, hax.named(jnp.asarray(real), axes)).sum()) == 0
+        assert int(drops(lossy, hax.named(jnp.ones((batch, sequence), bool), axes)).sum()) > 0
+
+        forward = eqx.filter_jit(lambda m, attn_mask: m.activations(ids, attn_mask).array)
+        expected = np.asarray(forward(dropless, mask(-1)))[real]
+        np.testing.assert_allclose(np.asarray(forward(lossy, mask(-1)))[real], expected, rtol=1e-5, atol=1e-5)
+        # The same padding as its own (valid) document competes for capacity and drops real tokens.
+        assert not np.allclose(np.asarray(forward(lossy, mask(1)))[real], expected, rtol=1e-5, atol=1e-5)
+
+        # The training drop metric counts only real tokens' assignments, and padding is not a drop.
+        def drop_fraction(attn_mask):
+            example = LmExample(tokens=ids, loss_weight=hax.ones(axes), attn_mask=attn_mask)
+            metrics = eqx.filter_jit(lambda m: m.next_token_loss_and_metrics(example)[1])(lossy)
+            return float(metrics["moe/dropped_assignment_fraction"])
+
+        assert drop_fraction(mask(-1)) == 0.0
+        assert drop_fraction(mask(1)) > 0.0

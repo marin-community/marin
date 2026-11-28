@@ -49,6 +49,7 @@ from levanter.grug.attention import (
     apply_rotary_embedding,
     attention,
     ragged_paged_attention,
+    token_validity_from_attention_mask,
 )
 from levanter.grug.grug_moe import MoEExpertMlpPspecs, MoeImplementation, MoEExpertMlp
 from levanter.grug.sharding import (
@@ -227,10 +228,11 @@ class SnowballConfig(HFCompatConfig):
     moe_implementation: Optional[MoeImplementation] = None
     router_dot_fp32: bool = False
     """Upcast compute-view router operands before the dot; does not change storage or HF metadata."""
-    moe_capacity_factor: float = 1.0
-    """Expert-parallel capacity: each expert shard keeps at most ``factor x assignments / shards`` routed
-    assignments and silently drops the rest. At the expert-axis size it covers every assignment (dropless). A
-    runtime knob like ``router_dot_fp32``: not exported in HF metadata."""
+    moe_capacity_factor: Optional[float] = None
+    """Expert-parallel capacity. ``None`` (the default) is dropless: the factor resolves to the expert-axis size when
+    the MoE layer is built, so every routed assignment is kept. A number sets a lossy capacity explicitly: each expert
+    shard keeps at most ``factor x assignments / shards`` routed assignments and silently drops the rest. A runtime
+    knob like ``router_dot_fp32``: not exported in HF metadata."""
     fp32_activations: bool = False
     """Compute the SiLU and sigmoid activations in FP32 and cast to the input dtype once: GatedNorm, the attention
     head gate, the shared MLP and the routed experts. Off, they run in the compute dtype. A runtime knob like
@@ -248,7 +250,7 @@ class SnowballConfig(HFCompatConfig):
             raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
         if self.num_experts_per_token > self.num_experts:
             raise ValueError("num_experts_per_token must be <= num_experts")
-        if not self.moe_capacity_factor > 0:
+        if self.moe_capacity_factor is not None and not self.moe_capacity_factor > 0:
             raise ValueError(f"moe_capacity_factor must be positive, got {self.moe_capacity_factor}")
         if self.shared_expert_intermediate_dim <= 0:
             raise ValueError("snowball requires an always-on shared expert (shared_expert_intermediate_dim > 0)")
@@ -623,10 +625,10 @@ class MoeForwardStats(eqx.Module):
 
     Backends mask invalid assignments before counting drops. Receiver losses are
     counted after sender selection, so their sum counts each lost assignment once.
-    Padding skips are not capacity drops, and padding does not consume capacity in
-    this forward. The unmasked training forward (``activations``,
-    ``compute_next_token_loss``) lets padding consume capacity, so these counts
-    describe it only at dropless capacity or on a batch with no padding.
+    Padding skips are not capacity drops, and padding does not consume capacity. The
+    training forward (``activations``, ``compute_next_token_loss``) skips the same
+    padding, read from negative segment ids in its attention mask, so these counts
+    describe it whenever its mask marks the padding that ``token_valid`` excludes.
     """
 
     routes: Array
@@ -642,7 +644,7 @@ class MoeForwardOutput(NamedTuple):
     """One MoE-bearing forward's output with its optional observers.
 
     ``routes`` is set when the caller asked for the selected expert ids. ``counts``
-    is set when the caller passed ``token_valid`` or enabled capacity reporting.
+    is set when the caller enabled capacity reporting with ``collect_counts``.
     """
 
     output: Array
@@ -681,7 +683,10 @@ class SnowballMoEMLP(eqx.Module):
                 key=k_expert,
                 implementation=cfg.moe_implementation,
                 activation=silu_fp32 if cfg.fp32_activations else ActivationFunctionEnum.silu,
-                capacity_factor=cfg.moe_capacity_factor,
+                # At the expert-axis size, ring capacity covers every assignment.
+                capacity_factor=(
+                    float(expert_axis_size) if cfg.moe_capacity_factor is None else cfg.moe_capacity_factor
+                ),
                 combine_in_fp32=cfg.router_combine_fp32,
                 pspecs=MoEExpertMlpPspecs(hidden=_FSDP_AXES),
             ),
@@ -706,6 +711,7 @@ class SnowballMoEMLP(eqx.Module):
         *,
         collect_counts: bool = False,
     ) -> MoeForwardOutput:
+        """``token_valid`` keeps padding out of expert capacity; ``collect_counts`` also returns the drop counts."""
         b, s, _ = x.shape
         x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
         router_input = x_flat
@@ -729,17 +735,16 @@ class SnowballMoEMLP(eqx.Module):
         combine_weights = combine_weights_f if self.cfg.router_combine_fp32 else combine_weights_f.astype(x.dtype)
 
         valid_flat = None if token_valid is None else reshard(token_valid.reshape(b * s), P(_token_spec()[0]))
-        report_capacity_overflow = token_valid is not None or collect_counts
         result = self.expert_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
             mesh=get_abstract_mesh(),
             token_valid=valid_flat,
-            report_capacity_overflow=report_capacity_overflow,
+            report_capacity_overflow=collect_counts,
         )
         counts = None
-        if report_capacity_overflow:
+        if collect_counts:
             routed_flat, counts = cast(tuple[Array, MoeDispatchCounts], result)
         else:
             routed_flat = cast(Array, result)
@@ -791,19 +796,7 @@ class SnowballBlock(eqx.Module):
         long_mask: AttentionMask,
         use_long: Bool[Array, ""],
     ) -> Float[Array, "B S D"]:
-        return self.forward(x, short_mask, long_mask, use_long, return_routes=False)[0]
-
-    def forward(
-        self,
-        x: Float[Array, "B S D"],
-        short_mask: AttentionMask,
-        long_mask: AttentionMask,
-        use_long: Bool[Array, ""],
-        return_routes: bool,
-    ) -> tuple[Float[Array, "B S D"], Array | None]:
-        """The block output and, with ``return_routes``, the MoE's selected expert ids [B, S, K] (an observer)."""
-        result = self._forward(x, short_mask, long_mask, use_long, return_routes)
-        return result.output, result.routes
+        return self._forward(x, short_mask, long_mask, use_long, return_routes=False).output
 
     def _forward(
         self,
@@ -914,7 +907,7 @@ class SnowballTransformer(eqx.Module):
         self, token_ids: Array, token_valid: Array, mask: AttentionMask | None = None
     ) -> tuple[Array, MoeForwardStats]:
         """Run causal attention with document segments, dispatch validity and counts."""
-        result = self._forward(token_ids, mask, True, token_valid)
+        result = self._forward(token_ids, mask, True, token_valid, collect_counts=True)
         assert result.routes is not None and result.counts is not None
         stats = MoeForwardStats(result.routes, result.counts.sender_dropped, result.counts.receiver_dropped)
         return result.output, stats
@@ -933,6 +926,11 @@ class SnowballTransformer(eqx.Module):
         if mask is None:
             mask = AttentionMask.causal()
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        if token_valid is None and segment_ids is not None:
+            # Padding (negative segment ids) must not take expert capacity from real tokens.
+            token_valid = token_validity_from_attention_mask(
+                mask, batch_size=token_ids.shape[0], sequence_length=token_ids.shape[1]
+            )
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
@@ -952,15 +950,10 @@ class SnowballTransformer(eqx.Module):
 
         def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag):
             layer, use_long = layer_and_flag
-            if token_valid is not None or collect_counts:
-                result = layer._forward(
-                    carry, short_mask, long_mask, use_long, return_routes, token_valid, collect_counts=collect_counts
-                )
-                return result.output, (result.routes, result.counts)
-            if return_routes:
-                hidden, routes = layer.forward(carry, short_mask, long_mask, use_long, return_routes=True)
-                return hidden, (routes, None)
-            return layer(carry, short_mask, long_mask, use_long), (None, None)
+            result = layer._forward(
+                carry, short_mask, long_mask, use_long, return_routes, token_valid, collect_counts=collect_counts
+            )
+            return result.output, (result.routes, result.counts)
 
         # Bound routed-expert activation memory during the backward pass as well as forward.
         hidden, (routes, counts) = jax.lax.scan(jax.checkpoint(_scan_layer), hidden, (stacked, long_schedule))
@@ -1021,9 +1014,9 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         """Return hidden states, routes and raw per-call valid-assignment counts.
 
         Callers must sum the count arrays across microbatches for update totals.
-        ``token_valid`` excludes padding from capacity here; the training forward
-        passes no mask, so zero drops here prove it dropped nothing only at dropless
-        capacity or with no padding (see ``MoeForwardStats``).
+        ``token_valid`` excludes padding from capacity here. The training forward
+        excludes the padding its attention mask marks with negative segment ids
+        (see ``MoeForwardStats``).
         """
         if token_valid.axes != input_ids.axes or token_valid.dtype != jnp.bool_:
             raise ValueError("token_valid must be boolean with the token axes")
@@ -1088,14 +1081,23 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         return hax.named(hidden, out_axes), result.routes, result.counts
 
     def next_token_loss_and_metrics(self, example: LmExample, *, key=None, **kwargs):
-        """Return loss and the dropped assignment fraction over all positions, including padding."""
+        """Return loss and the dropped fraction of real tokens' assignments.
+
+        Padding (negative segment ids) is routed nowhere, so it is neither a drop nor in the denominator.
+        """
         activations, _, counts = self._activations(example.tokens, False, example.attn_mask, collect_counts=True)
         assert counts is not None
         loss = self._loss_from_activations(example, activations, **kwargs)
-        assignments = example.tokens.array.size * self.config.num_experts_per_token * self.config.num_layers
+        mask = example.attn_mask
+        if isinstance(mask, LmHeadAttentionMask) and mask.segment_ids is not None:
+            query_segments = mask.segment_ids[0].broadcast_to(example.tokens.axes).array
+            real_tokens = jnp.sum(query_segments >= 0, dtype=jnp.float32)
+        else:
+            real_tokens = float(example.tokens.array.size)
+        assignments = real_tokens * (self.config.num_experts_per_token * self.config.num_layers)
         return loss, {
             "moe/dropped_assignment_fraction": Metric.from_value(
-                counts.dropped.sum(dtype=jnp.float32) / float(assignments), ReductionType.MEAN
+                counts.dropped.sum(dtype=jnp.float32) / jnp.maximum(assignments, 1.0), ReductionType.MEAN
             )
         }
 
