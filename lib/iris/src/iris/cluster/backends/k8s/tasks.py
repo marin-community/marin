@@ -163,6 +163,45 @@ COREWEAVE_ACCESS_KEYS_URL = "https://console.coreweave.com/object-storage/access
 
 _ARM64_ARCHITECTURES = frozenset({b"aarch64", b"arm64"})
 
+# The NVIDIA plugin supplies IDs as a comma-separated list or as mount names.
+# Keep numeric accelerator IDs for existing launchers that consume ordinals.
+_PRIVILEGED_GPU_SETUP = r"""iris_set_cuda_devices() {
+    local allocation=${NVIDIA_VISIBLE_DEVICES:-void}
+    local path id inventory pci index uuid ordinal=0
+    local -a assigned=() visible=()
+
+    case "$allocation" in
+        all|none|void) allocation=/var/run/nvidia-container-devices ;;
+    esac
+    if [[ $allocation == /* ]]; then
+        for path in "$allocation"/*; do
+            [[ -e $path && ! -d $path ]] && assigned+=("${path##*/}")
+        done
+    else
+        IFS=, read -r -a assigned <<< "$allocation"
+    fi
+    [[ ${#assigned[@]} -eq $1 ]] || return 1
+
+    inventory=$(
+        set -o pipefail
+        env -u CUDA_VISIBLE_DEVICES nvidia-smi --query-gpu=pci.bus_id,index,uuid --format=csv,noheader | LC_ALL=C sort
+    ) || return 1
+    while IFS=', ' read -r pci index uuid; do
+        [[ -n $pci && -n $index && -n $uuid ]] || return 1
+        for id in "${assigned[@]}"; do
+            [[ $id == "$index" || $id == "$uuid" ]] || continue
+            visible+=("$ordinal")
+            break
+        done
+        ordinal=$((ordinal + 1))
+    done <<< "$inventory"
+    [[ ${#visible[@]} -eq $1 ]] || return 1
+
+    local IFS=,
+    export CUDA_DEVICE_ORDER=PCI_BUS_ID
+    export CUDA_VISIBLE_DEVICES="${visible[*]}"
+}"""
+
 
 def validate_coreweave_credentials(env: Mapping[str, str]) -> str | None:
     """Check the submitted storage keys and explain how to supply missing credentials."""
@@ -629,9 +668,21 @@ class PodConfig:
     egress_allowlist: EgressAllowlistConfig | None = None
 
 
-def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
+def _build_task_script(run_req: job_pb2.RunTaskRequest, privileged_gpu_count: int) -> str:
     """Build a shell script that runs the setup steps then the run_command."""
-    lines = ["set -e", "ulimit -c 0", "mkdir -p /app", "cd /app"]
+    lines = ["set -e", "ulimit -c 0"]
+    if privileged_gpu_count:
+        lines.extend(
+            [
+                _PRIVILEGED_GPU_SETUP,
+                f"if ! iris_set_cuda_devices {privileged_gpu_count}; then",
+                "    echo '[iris] Could not match the NVIDIA device plugin allocation to "
+                f"{privileged_gpu_count} requested GPUs' >&2",
+                "    exit 1",
+                "fi",
+            ]
+        )
+    lines.extend(['mkdir -p "$IRIS_WORKDIR"', 'cd "$IRIS_WORKDIR"'])
     lines.extend(render_setup_steps(run_req.entrypoint.setup_commands))
     # Activate the venv the setup script populated. Conditional on it existing so
     # a custom or no-setup script that brings its own environment runs as-is.
@@ -1016,21 +1067,6 @@ def _build_pod_manifest(
         combined[SECRETS_DIR_ENV] = str(SECRETS_DIR)
         for name, value in secret_file_environment(job_secrets).items():
             combined.setdefault(name, value)
-    env_list: list[dict] = [{"name": k, "value": v} for k, v in combined.items()]
-    # Pod IP via downward API -- not expressible as a static value.
-    env_list.append(
-        {
-            "name": "IRIS_ADVERTISE_HOST",
-            "valueFrom": {"fieldRef": {"fieldPath": "status.podIP"}},
-        }
-    )
-    env_list.append(
-        {
-            "name": IRIS_NODE_NAME_ENV,
-            "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}},
-        }
-    )
-
     # Parse resources first so device info is known before building volumes.
     resources: dict = {}
     gpu_count = 0
@@ -1078,6 +1114,18 @@ def _build_pod_manifest(
             resources.setdefault("requests", {})["ephemeral-storage"] = disk_quantity
             resources.setdefault("limits", {})["ephemeral-storage"] = disk_quantity
 
+    privileged_gpu_count = gpu_count if run_req.container_profile == job_pb2.CONTAINER_PROFILE_PRIVILEGED else 0
+    if privileged_gpu_count:
+        # Kubelet injects this value from the plugin after assigning the GPUs.
+        combined.pop("NVIDIA_VISIBLE_DEVICES", None)
+    env_list: list[dict] = [{"name": k, "value": v} for k, v in combined.items()]
+    env_list.extend(
+        [
+            {"name": "IRIS_ADVERTISE_HOST", "valueFrom": {"fieldRef": {"fieldPath": "status.podIP"}}},
+            {"name": IRIS_NODE_NAME_ENV, "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
+        ]
+    )
+
     is_gang = bool(run_req.coscheduling.group_by)
     has_accelerator = gpu_count > 0 or has_tpu
     shm_limit_bytes = memory_limit_bytes
@@ -1098,7 +1146,7 @@ def _build_pod_manifest(
         "env": env_list,
         "workingDir": WORKDIR_MOUNT.container_path,
         "volumeMounts": vol_mounts,
-        "command": ["bash", "-lc", _build_task_script(run_req)],
+        "command": ["bash", "-lc", _build_task_script(run_req, privileged_gpu_count)],
         # Without this, a non-zero exit leaves containerStatuses[].state.terminated
         # with an empty message and a bare "Error" reason, burying the actual
         # crash (JAX traceback, fatal-error banner, OOM abort, ...) in logs the

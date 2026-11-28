@@ -4,6 +4,8 @@
 """Tests for pod manifest building: naming, env vars, volumes, constraints, init containers."""
 
 import json
+import os
+import subprocess
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -1504,6 +1506,64 @@ def test_task_script_exec_run_command():
     script = _build_task_script(req)
     lines = script.split("\n")
     assert lines[-1] == "exec python train.py"
+
+
+@pytest.mark.parametrize(
+    ("allocation", "expected_mask"),
+    [
+        ("GPU-four,GPU-two", "2,4"),
+        ("mounts", "2,4"),
+        ("1,4", "2,4"),
+        ("missing-mounts", None),
+        ("GPU-four,GPU-unknown", None),
+    ],
+)
+def test_privileged_gpu_task_uses_device_plugin_allocation(tmp_path, allocation, expected_mask):
+    req = make_run_req("/test-job/0")
+    req.container_profile = job_pb2.CONTAINER_PROFILE_PRIVILEGED
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=2))
+    req.environment.env_vars.update({"CUDA_VISIBLE_DEVICES": "0,1", "NVIDIA_VISIBLE_DEVICES": "all"})
+    req.entrypoint.run_command.argv[:] = ["printenv", "CUDA_VISIBLE_DEVICES", "CUDA_DEVICE_ORDER"]
+    task = _build_pod_manifest(req, pod_config())["spec"]["containers"][0]
+    env = {entry["name"]: entry["value"] for entry in task["env"] if "value" in entry}
+    assert "NVIDIA_VISIBLE_DEVICES" not in env
+
+    # The node has five GPUs with NVML indices that differ from PCI order.
+    nvidia_smi = tmp_path / "nvidia-smi"
+    nvidia_smi.write_text(
+        "#!/bin/sh\n"
+        "cat <<'EOF'\n"
+        "00000000:05:00.0, 1, GPU-four\n"
+        "00000000:01:00.0, 0, GPU-zero\n"
+        "00000000:02:00.0, 2, GPU-one\n"
+        "00000000:03:00.0, 4, GPU-two\n"
+        "00000000:04:00.0, 3, GPU-three\n"
+        "EOF\n"
+    )
+    nvidia_smi.chmod(0o755)
+    if allocation == "mounts":
+        devices = tmp_path / "assigned-devices"
+        devices.mkdir()
+        (devices / "GPU-two").touch()
+        (devices / "GPU-four").touch()
+        (devices / "imex").mkdir()
+        allocation = str(devices)
+    elif allocation == "missing-mounts":
+        allocation = str(tmp_path / "missing-devices")
+
+    env.update(
+        NVIDIA_VISIBLE_DEVICES=allocation,
+        IRIS_WORKDIR=str(tmp_path),
+        IRIS_VENV=str(tmp_path / "venv"),
+        PATH=os.pathsep.join((str(tmp_path), os.defpath)),
+    )
+    result = subprocess.run(["bash", "-c", task["command"][2]], env=env, capture_output=True, text=True)
+    if expected_mask is None:
+        assert result.returncode != 0
+        assert not result.stdout
+    else:
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.splitlines() == [expected_mask, "PCI_BUS_ID"]
 
 
 def test_build_common_iris_env_no_controller_address():

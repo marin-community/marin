@@ -97,8 +97,14 @@ allocatable capacity, scheduling, and Pod state; hardware history remains in
 `telemetry_v1`. `K8sTaskProvider.schedule()` and `autoscale()` are no-ops.
 Capacity and task state come from Kubernetes nodes, Pods, and Kueue workloads.
 
-GPU Pods request `nvidia.com/gpu`. On clusters with `host_network: true`, they
-also request `rdma/ib` and use `ClusterFirstWithHostNet`. H100 nodes on
+GPU Pods request `nvidia.com/gpu`. For privileged GPU tasks, Iris reads the
+NVIDIA device plugin's allocation and uses `nvidia-smi` to set
+`CUDA_VISIBLE_DEVICES` in PCI bus order before setup and the task command run.
+Startup fails if Iris cannot match the allocation to the requested number of
+GPUs. Privileged processes retain host device access even with this CUDA mask.
+
+On clusters with `host_network: true`, GPU Pods also request `rdma/ib` and use
+`ClusterFirstWithHostNet`. H100 nodes on
 `cw-us-east-02a` and `cw-rno2a` and GB200 nodes on `cw-us-east-08a` also carry a
 front-end Ethernet NIC whose RoCE functions (`mlx5_0`–`mlx5_8`) a pod sees beside
 the InfiniBand rails (`ibp0`–`ibp7` on H100, `ibp0`–`ibp3` on GB200) when it runs
