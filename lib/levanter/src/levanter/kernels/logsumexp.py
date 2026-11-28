@@ -103,8 +103,8 @@ def _shifted_normalizer_jvp(primals, tangents):
     pivot_dot = jnp.sum(jnp.where(is_pivot, tangent, 0), axis=-1)
     log_probs = (logits - pivot[..., None]) - correction[..., None]
     probabilities = jax.lax.exp(log_probs, accuracy=jax.lax.AccuracyMode.HIGHEST)
-    # Differentiate the tail in pivot-relative coordinates. At high confidence,
-    # the pivot derivative is the negative tail mass, which survives rounding.
+    # The correction's derivative with respect to the pivot is the negative
+    # normalized tail mass, which survives rounding at high confidence.
     tail_probs = jnp.where(is_pivot, 0, probabilities)
     correction_dot = jnp.sum(tail_probs * (tangent - pivot_dot[..., None]), axis=-1)
     index_dot = jnp.zeros_like(pivot_index, dtype=jax.dtypes.float0)
