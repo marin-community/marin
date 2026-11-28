@@ -1835,6 +1835,7 @@ def _snapshot_publication_step(
             "catalog_root": plan.catalog_root,
             "release_root": plan.release_root,
             "targets": plan.targets,
+            "deliberate_exclusions": plan.deliberate_exclusions,
             "removed_sources": plan.removed_sources,
             "expected_source_count": plan.expected_source_count,
             "expected_contract_count": plan.expected_contract_count,

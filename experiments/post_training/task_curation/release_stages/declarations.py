@@ -186,6 +186,9 @@ def run_declarations(
             "prior_declarations": {"uri": inputs.prior_declarations.uri, "sha256": inputs.prior_declarations.sha256},
             "source_count": len(source_ids),
             "targets": list(inputs.targets),
+            # the deliberately excluded sources whose served declaration this release
+            # carries verbatim (recorded so the substitution is auditable)
+            "deliberate_exclusions": list(inputs.deliberate_exclusions),
             "prior_source_count": len(prior),
             "dry_run": dry_run,
             "sql_writes": 0,

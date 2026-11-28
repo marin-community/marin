@@ -35,9 +35,18 @@ from experiments.post_training.task_curation.grader_drift import (
     SealedRecipeReference,
 )
 from experiments.post_training.task_curation.lexical_artifacts import ActorCensus, SourceTextPopulation
+from experiments.post_training.task_curation.release_stages import (
+    declarations as declarations_module,
+)
 from experiments.post_training.task_curation.release_stages import declarations as declarations_stage
 from experiments.post_training.task_curation.release_stages import graph as graph_module
 from experiments.post_training.task_curation.release_stages import plan_derivation
+from experiments.post_training.task_curation.release_stages import (
+    preflight_slices as preflight_slices_module,
+)
+from experiments.post_training.task_curation.release_stages import (
+    qc_browse as qc_browse_stage,
+)
 from experiments.post_training.task_curation.release_stages import (
     snapshot_publication as snapshot_publication_stage,
 )
@@ -56,6 +65,7 @@ from experiments.post_training.task_curation.release_stages.preflight_slices imp
     SliceSelection,
     _snapshot_publication_witness,
     slice_inputs,
+    slice_runner,
 )
 from experiments.post_training.task_curation.release_stages.release_config import (
     ExcludedSource,
@@ -1348,3 +1358,43 @@ def test_qc_browse_exclusions_come_from_the_plan_in_slice_and_run(tmp_path):
     slice_document = slice_inputs("qc_browse_plan", plan, SliceSelection())
     assert set(slice_document["exclusions"]) == {"Marin:fixture"}
     assert slice_document["expected_panels"] == run_inputs["expected_panels"] == plan.expected_panels
+
+
+def test_declarations_slice_carries_the_deliberate_exclusions(monkeypatch):
+    """The preflight's declarations slice runs the same carry-forward the run-mode
+    stage does: an excluded source's served declaration substitutes before the drift
+    check, so the slice cannot fail on a policy-listed re-pin."""
+    plan = fixture_plan(deliberate_exclusions=("Marin:fixture",))
+    captured = {}
+
+    def fake_run_declarations(inputs, **kwargs):
+        captured["inputs"] = inputs
+        return {"source_count": 2, "targets": list(inputs.targets)}
+
+    monkeypatch.setattr(declarations_module, "run_declarations", fake_run_declarations)
+    proof = slice_runner("declarations", plan, SliceSelection())()
+    assert captured["inputs"].deliberate_exclusions == ("Marin:fixture",)
+    assert proof["mode"] == "dry-run"
+
+
+def test_qc_browse_plan_slice_uses_the_measured_exclusions(monkeypatch):
+    """The preflight's qc-browse-plan slice runs the plan's measured copy exclusions —
+    the same set the run-mode graph passes — so its prior-load panel count check
+    matches the real run's."""
+    plan = fixture_plan(panel_copy_exclusions=("Marin:fixture",))
+    captured = {}
+
+    def fake_plan_qc_browse(inputs, **kwargs):
+        captured["inputs"] = inputs
+        return {"panels": [], "excluded": []}
+
+    monkeypatch.setattr(qc_browse_stage, "plan_qc_browse", fake_plan_qc_browse)
+    monkeypatch.setattr(
+        preflight_slices_module.paced_query,
+        "open_paced_query",
+        lambda service_url, applet_id, control: (lambda sql, parameters: {"rows": []}),
+    )
+    proof = slice_runner("qc_browse_plan", plan, SliceSelection())()
+    assert set(captured["inputs"].exclusions) == {"Marin:fixture"}
+    assert captured["inputs"].expected_panels == plan.expected_panels
+    assert proof["mode"] == "dry-run"

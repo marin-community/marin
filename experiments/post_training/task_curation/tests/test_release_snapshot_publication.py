@@ -210,3 +210,27 @@ def test_check_only_emits_alerts_and_zero_writes(tmp_path, monkeypatch):
     assert not (tmp_path / "releases/rtest").exists() or not list((tmp_path / "releases/rtest").iterdir())
     rows = [json.loads(line) for line in feed.read_text().splitlines()]
     assert [row["kind"] for row in rows] == ["STAGE_START", "STAGE_FINISH"]
+
+
+def test_deliberate_exclusions_carry_the_served_declaration(tmp_path, monkeypatch):
+    """A deliberately excluded source's served declaration substitutes into the
+    publication's checked current (and would publish verbatim) — the frozen layer's
+    re-pin is not adopted, and the carried document's digest is what the proof seals."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    head = _init_repo(repo)
+    served_row = {"dataset_id": "served", "dataset_revision": "r1", "pipeline": None}
+    prior_path = tmp_path / "prior.json"
+    prior_path.write_text(json.dumps({"Test:One": served_row}))
+    inputs = _inputs(tmp_path, source_revision=head, deliberate_exclusions=("Test:One",))
+    frozen_current = {
+        "Test:One": {"dataset_id": "repinned", "dataset_revision": "r2", "pipeline": None},
+        "Test:Two": {"dataset_id": "two", "dataset_revision": "r", "pipeline": None},
+    }
+    monkeypatch.setattr(sp, "verify_current_declarations", lambda inputs: dict(frozen_current))
+    monkeypatch.setattr(sp, "verify_no_prior_drift", lambda inputs, current, prior: None)
+    monkeypatch.setattr(sp, "verify_survey_alignment", lambda inputs, current: ({}, {}))
+    proof = sp.run_snapshot_publication(inputs, check_only=True, repo_root=repo, prior_declarations_uri=str(prior_path))
+    carried = {**frozen_current, "Test:One": served_row}
+    expected = hashlib.sha256((json.dumps(carried, indent=2, sort_keys=True) + "\n").encode()).hexdigest()
+    assert proof["declarations_sha256"] == expected

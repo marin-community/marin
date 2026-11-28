@@ -322,6 +322,7 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
                     targets=plan.targets,
                     prior_declarations=plan.pins.prior_declarations,
                     removed_sources=plan.removed_sources,
+                    deliberate_exclusions=plan.deliberate_exclusions,
                 ),
                 dry_run=True,
                 repo_root=REPO_ROOT,
@@ -558,7 +559,7 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
                     output_root=f"{root}/qc-browse",
                     expected_panels=plan.expected_panels,
                     workers=1,
-                    exclusions=plan.qc_exclusions,
+                    exclusions=plan.panel_copy_exclusions,
                     service_url=plan.service.service_url,
                     applet_id=plan.service.applet_id,
                 ),
@@ -654,6 +655,7 @@ def _snapshot_publication_witness(plan: ReleasePlan, selection: SliceSelection) 
         release_root=plan.release_root,
         targets=plan.targets,
         removed_sources=plan.removed_sources,
+        deliberate_exclusions=plan.deliberate_exclusions,
         expected_source_count=plan.expected_source_count,
         expected_contract_count=plan.expected_contract_count,
         expected_contract_tasks=plan.expected_contract_tasks,
@@ -662,7 +664,11 @@ def _snapshot_publication_witness(plan: ReleasePlan, selection: SliceSelection) 
         backend_receipt=plan.pins.prior_backend,
     )
     revision = snapshot_publication_stage.verify_repo_state(REPO_ROOT, inputs)
-    current = snapshot_publication_stage.verify_current_declarations(inputs)
+    current = snapshot_publication_stage.carry_deliberate_exclusions(
+        inputs,
+        snapshot_publication_stage.verify_current_declarations(inputs),
+        plan.pins.prior_declarations.uri,
+    )
     snapshot_publication_stage.verify_no_prior_drift(inputs, current, plan.pins.prior_declarations.uri)
     return {
         "witness": WITNESS_NODES["snapshot_publication"],

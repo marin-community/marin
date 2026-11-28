@@ -11,6 +11,7 @@ stage writes object storage, not SQL, but the same pre-write discipline applies)
 """
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import subprocess
@@ -52,6 +53,7 @@ class SnapshotPublicationInputs:
     census_receipt: ArtifactRef
     identity_receipt: ArtifactRef
     backend_receipt: ArtifactRef
+    deliberate_exclusions: tuple[str, ...] = ()
 
     def validate(self) -> None:
         """Refuse malformed inputs before any read runs."""
@@ -129,6 +131,27 @@ def verify_current_declarations(inputs: SnapshotPublicationInputs) -> dict[str, 
     for source in sources.values():
         require_catalog_declaration(source.declaration)
     return current
+
+
+def carry_deliberate_exclusions(
+    inputs: SnapshotPublicationInputs, current: dict[str, dict], prior_declarations_uri: str
+) -> dict[str, dict]:
+    """A deliberately excluded source carries the prior release's declaration verbatim.
+
+    The frozen layer's re-pin is not adopted (the reason lives in the policy config's
+    DELIBERATE_EXCLUSIONS), so the served row substitutes — the same substitution the
+    declarations stage seals into the release's declarations document.
+    """
+    if not inputs.deliberate_exclusions:
+        return current
+    prior = json.loads(StoragePath(prior_declarations_uri).read_text())
+    missing = sorted(set(inputs.deliberate_exclusions) - set(prior))
+    if missing:
+        raise ValueError(f"deliberate exclusions the prior release never declared: {missing[:5]}")
+    return {
+        **current,
+        **{source_id: prior[source_id] for source_id in inputs.deliberate_exclusions},
+    }
 
 
 def verify_no_prior_drift(
@@ -215,7 +238,7 @@ def run_snapshot_publication(
     alerts.stage_started(inputs.release_id, "snapshot_publication", {"mode": mode}, alert_feeds)
     try:
         revision = verify_repo_state(repo_root, inputs)
-        current = verify_current_declarations(inputs)
+        current = carry_deliberate_exclusions(inputs, verify_current_declarations(inputs), prior_declarations_uri)
         verify_no_prior_drift(inputs, current, prior_declarations_uri)
         _identity, _backend = verify_survey_alignment(inputs, current)
         proof: dict[str, object] = {
@@ -252,7 +275,18 @@ def run_snapshot_publication(
                 f" {inputs.prior_snapshot_id!r}"
             )
         publish = publish if publish is not None else publish_assembly_snapshot
-        result = publish(inputs.catalog_root, inputs.snapshot_id, all_sources().values(), assembly_commit=revision)
+        # The publication writes the carried declarations: an excluded source's served
+        # row publishes verbatim, not the frozen layer's re-pin.
+        sources = []
+        for source in all_sources().values():
+            source_id = canonical_source_id(source.info.id)
+            if source_id in inputs.deliberate_exclusions and source_id in current:
+                sources.append(
+                    dataclasses.replace(source, declaration=type(source.declaration).model_validate(current[source_id]))
+                )
+            else:
+                sources.append(source)
+        result = publish(inputs.catalog_root, inputs.snapshot_id, sources, assembly_commit=revision)
         if CurationCatalog(inputs.catalog_root).current().snapshot_id != inputs.snapshot_id:
             raise ValueError(f"catalog pointer did not move to {inputs.snapshot_id!r}")
         final = {
