@@ -12,7 +12,7 @@ from finestore.rl.status_taxonomy import DataRestriction
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.pipeline.models import SourceStatus
+from taskcompendium.pipeline.models import IntendedUse, SourceStatus
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
@@ -27,6 +27,9 @@ class NumbersConfig:
     name: str
     input_path: Path
     version: str = "1"
+    # The driver resolves every campaign source's declared use to plan the
+    # cross-source dedup gate; a local ingestion source is not a training source.
+    intended_use: IntendedUse = IntendedUse.EVAL
     dataset: SourceReference = NUMBERS_DATASET
     files: tuple[str, ...] = ()
 
