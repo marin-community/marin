@@ -11,11 +11,13 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from .app import EvaldashConfig, PostgresIngestor, StoreMode
 from .playground_reports import ingest_reports
+from .policy_admission import ingest_policy_admission
 from .results_db import verify_schema
 
 
 def main() -> int:
-    """Copy new playground reports, then reconcile every record prefix, into EvalDash's PostgreSQL schema once."""
+    """Copy new playground reports, reconcile every record prefix, then read released eval policies, into EvalDash's
+    PostgreSQL schema once."""
     config = EvaldashConfig.from_env(os.environ)
     if config.store is not StoreMode.POSTGRES:
         raise RuntimeError("the scheduled EvalDash ingest requires the postgres store")
@@ -27,6 +29,9 @@ def main() -> int:
         failures = ingest_reports(engine, config.report_prefixes)
         ingestor = PostgresIngestor(engine, config.prefixes, config.ingest_interval, config.revalidate_after)
         failures += asyncio.run(ingestor.run_once())
+        # After the records: admission reads the catalog's runs of each released version.
+        if not ingest_policy_admission(engine, config.releases_prefix):
+            failures += ("policy releases",)
         if failures:
             raise RuntimeError(f"EvalDash ingest failed for prefixes: {', '.join(failures)}")
         return 0

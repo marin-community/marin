@@ -15,12 +15,14 @@ EvalDash.
 from __future__ import annotations
 
 import logging
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from itertools import batched
 
 import sqlalchemy
+from evalrecords.policy_release import NO_RELEASES, ReleaseAdmission
 from evalrecords.records import EvalRunRecord
 from evalrecords.repeat_aggregates import normalize_repeat_record
 from sqlalchemy import (
@@ -167,6 +169,16 @@ catalog_state = Table(
     CheckConstraint("singleton", name="eval_catalog_state_singleton"),
 )
 
+policy_admission = Table(
+    "policy_admission",
+    metadata,
+    Column("singleton", Boolean, primary_key=True),
+    Column("admission", json_type, nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint("singleton", name="policy_admission_singleton"),
+)
+"""The released policy manifests and compliance files EvalDash admits runs by, as one ``ReleaseAdmission``."""
+
 
 @dataclass(frozen=True)
 class SourceState:
@@ -223,6 +235,7 @@ class CatalogSnapshot:
     records: list[EvalRunRecord]
     generation: int
     updated_at: datetime
+    admission: ReleaseAdmission
 
 
 @dataclass(frozen=True)
@@ -402,10 +415,12 @@ def fetch_snapshot(engine: Engine) -> CatalogSnapshot:
         state_stmt = sqlalchemy.select(catalog_state.c.generation, catalog_state.c.updated_at)
         generation, updated_at = conn.execute(state_stmt).one()
         rows = conn.execute(sqlalchemy.select(catalog_runs.c.record).order_by(catalog_runs.c.created_at)).scalars().all()
+        admission = conn.execute(sqlalchemy.select(policy_admission.c.admission)).scalar_one_or_none()
     return CatalogSnapshot(
         records=[EvalRunRecord.model_validate(row) for row in rows],
         generation=generation,
         updated_at=updated_at,
+        admission=NO_RELEASES if admission is None else ReleaseAdmission.model_validate(admission),
     )
 
 
@@ -434,6 +449,37 @@ def source_states(engine: Engine, prefix: str) -> dict[str, SourceState]:
         )
         for row in rows
     }
+
+
+def catalog_records_of_versions(engine: Engine, versions: Collection[str]) -> list[EvalRunRecord]:
+    """The serving records labelled with any of ``versions``."""
+    if not versions:
+        return []
+    stmt = sqlalchemy.select(catalog_runs.c.record).where(
+        catalog_runs.c.record["version"].as_string().in_(sorted(versions))
+    )
+    with engine.begin() as conn:
+        return [EvalRunRecord.model_validate(row) for row in conn.execute(stmt).scalars()]
+
+
+def store_admission(engine: Engine, admission: ReleaseAdmission) -> bool:
+    """Replace the stored policy admission and publish a new serving generation; False when it is unchanged."""
+    payload = admission.model_dump(mode="json")
+    with engine.begin() as conn:
+        if conn.execute(sqlalchemy.select(policy_admission.c.admission)).scalar_one_or_none() == payload:
+            return False
+        _upsert(
+            conn,
+            policy_admission,
+            [{"singleton": True, "admission": payload, "updated_at": datetime.now(UTC)}],
+            "singleton",
+        )
+        conn.execute(
+            catalog_state.update()
+            .where(catalog_state.c.singleton.is_(True))
+            .values(generation=catalog_state.c.generation + 1, updated_at=sqlalchemy.func.now())
+        )
+    return True
 
 
 def catalog_generation(engine: Engine) -> int:

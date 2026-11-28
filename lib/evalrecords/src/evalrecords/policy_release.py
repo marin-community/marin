@@ -10,13 +10,15 @@ run's record by ``policy verify``, says whether that run complies with its polic
 """
 
 import hashlib
+from collections.abc import Sequence
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import prefix_join
 
-from evalrecords.records import CW_RECORDS_PREFIX, record_path
+from evalrecords.eval_policy import record_policy_violations
+from evalrecords.records import CW_RECORDS_PREFIX, EvalRunRecord, record_path
 
 RELEASES_PREFIX = prefix_join(CW_RECORDS_PREFIX, "policy-releases")
 RELEASE_TAG_PREFIX = "eval-policy-"
@@ -95,3 +97,63 @@ def record_sha256(records_prefix: str, run_id: str) -> str:
     """The digest of a run's ``record.json`` bytes, as a release or compliance file pins it."""
     with open_url(record_path(records_prefix, run_id), "rb") as handle:
         return hashlib.sha256(handle.read()).hexdigest()
+
+
+class ReleaseAdmission(BaseModel):
+    """Which runs of released policy versions a published cohort admits.
+
+    A released version's cohort holds the runs its manifest pins, scored as the manifest records them, and the
+    version's other runs that ``policy verify`` found valid and full at the release commit, such as a training
+    checkpoint evaluated after the release. Other versions keep their own admission rules.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    releases: dict[str, PolicyRelease] = {}
+    """By version."""
+    compliance: dict[str, RunCompliance] = {}
+    """By run ID."""
+
+    def violations(self, record: EvalRunRecord) -> tuple[str, ...]:
+        """Why a record is not admitted to its cohort; empty when it is."""
+        release = self.releases.get(record.version) if record.version is not None else None
+        if release is None:
+            return record_policy_violations(record)
+        if any(run.run_id == record.run_id for run in release.runs):
+            return ()
+        compliance = self.compliance.get(record.run_id)
+        if compliance is None or compliance.version != record.version:
+            return ("not pinned by the release and not verified",)
+        reasons = [f"verify: {problem}" for problem in compliance.problems]
+        if compliance.verdict is not Verdict.VALID and not reasons:
+            reasons.append("verify found it invalid")
+        if not compliance.full:
+            reasons.append("a smoke run")
+        if record.provenance.git_sha != release.commit or compliance.commit != release.commit:
+            reasons.append(f"ran at {record.provenance.git_sha[:12]}, not the release commit {release.commit[:12]}")
+        return tuple(reasons)
+
+    def view(self, records: Sequence[EvalRunRecord], version: str | None) -> list[EvalRunRecord]:
+        """The records as a cohort of ``version`` sees them: a release's pinned runs, including runs a patch carries
+        from its base, carry its version and the scores its manifest records."""
+        release = self.releases.get(version) if version is not None else None
+        if release is None:
+            return list(records)
+        pinned = {run.run_id: run for run in release.runs}
+        return [
+            (
+                record.model_copy(
+                    update={
+                        "version": version,
+                        "metrics": pinned[record.run_id].scores,
+                        "canonical_metrics": pinned[record.run_id].scores,
+                    }
+                )
+                if record.run_id in pinned
+                else record
+            )
+            for record in records
+        ]
+
+
+NO_RELEASES = ReleaseAdmission()

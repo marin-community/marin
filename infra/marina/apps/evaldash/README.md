@@ -245,6 +245,14 @@ benchmark config, evaluator revision, and thinking mode. Results share a row by 
 the selected cohort, including benchmark-specific serving overrides. Each run retains its source
 configuration and digest.
 
+A released eval policy version ([`experiments/evaluation/policy`](../../../../experiments/evaluation/policy/README.md))
+is a verified cohort too. Ingest reads its manifest from `POLICY_RELEASES_PREFIX` and, for each other run
+labelled with its version, the `policy-compliance.json` that `policy verify` wrote beside the record. The
+cohort holds the runs the manifest pins, at the scores it records, including runs a patch carries from its
+base release under an older label, and runs that `verify` found valid and full at the release commit, such
+as a training checkpoint evaluated after the release. Its other runs are policy-rejected with the reason.
+EvalDash cannot see the git tag that completes a release, so it treats every manifest as released.
+
 Within the selected cohort, each benchmark uses the newest run that clears the request's admission rules
 (`min_coverage`, default 0.9, and a succeeded status). `min_benchmark_coverage`, also 0.9, is the share
 of the benchmark the run set out to grade; a capped run whose benchmark size is unrecorded is never
@@ -316,6 +324,7 @@ Resolved once when the kernel mounts the app, from the environment:
 | --- | --- | --- |
 | `RECORDS_PREFIXES` | the four roots above | Comma-separated record roots, highest precedence first. |
 | `PLAYGROUND_REPORT_PREFIXES` | the two report prefixes above | Comma-separated playground report roots. |
+| `POLICY_RELEASES_PREFIX` | `s3://marin-us-east-02a/marin/evals/policy-releases` | Where released eval policy manifests are. |
 | `EVALDASH_STORE` | `postgres` | `local` serves from the record snapshot with no database. |
 | `EVALDASH_INGEST_INTERVAL` | `600` | Local-store polling cadence. Production uses the manifest's ten-minute schedule. |
 | `EVALDASH_INGEST_JOB` | unset | Full Cloud Run job resource queued by `POST /refresh`; Marina derives it from the manifest in production. |
@@ -336,6 +345,7 @@ db_migrations.py        the migration runner and its schema ledger
 migrations/             frozen numbered database migrations
 record_reconciliation.py  version checks and record validation
 playground_reports.py   playground report ingest, list, and detail
+policy_admission.py     released eval policy manifests and run compliance files
 metrics.py              panel and comparison views over the shared statistics engine
 discovery.py            resolve a VM internal IP from a GCE list filter
 cluster.py              Iris and finelog generated Connect clients over Direct VPC egress
