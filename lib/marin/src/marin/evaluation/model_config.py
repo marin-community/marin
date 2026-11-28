@@ -17,6 +17,7 @@ from marin.evaluation.eval_env import EVALUATION_REQUEST_TIMEOUT_SECONDS
 from marin.inference.config import (
     ObjectStoreLoadMode,
     SpeculativeServingConfig,
+    UpstreamVllmNightly,
     VllmSource,
     resolve_tokenizer_revision,
     validate_serving_geometry_args,
@@ -91,6 +92,7 @@ class ServeConfig:
     tensor_parallel_size: int | None = None
     data_parallel_size: int | None = None
     pipeline_parallel_size: int = 1
+    pipeline_layer_partition: tuple[int, ...] = field(default=(), metadata={"fingerprint_omit_value": ()})
     instances: int = 1
     gpu_memory_utilization: float | None = None
     max_model_len: int | None = None
@@ -108,6 +110,7 @@ class ServeConfig:
     hf_hub_disable_xet: bool = False
     vllm_source: VllmSource | None = None
     vllm_version: str | None = None
+    vllm_nightly: UpstreamVllmNightly | None = field(default=None, metadata={"fingerprint_omit_value": None})
     vllm_plugin_requirements: tuple[str, ...] = ()
     object_store_load_mode: ObjectStoreLoadMode = ObjectStoreLoadMode.STREAM
     vllm_extra_args: tuple[str, ...] = ()
@@ -120,6 +123,8 @@ class ServeConfig:
             raise ValueError("upstream vLLM serving requires an exact vllm_version")
         if self.vllm_version is not None and self.vllm_source is not VllmSource.UPSTREAM:
             raise ValueError("vllm_version requires vllm_source=upstream")
+        if self.vllm_nightly is not None and self.vllm_version is None:
+            raise ValueError("vllm_nightly requires the exact vllm_version its commit index publishes")
         if self.backend is not ServeBackend.VLLM and (self.vllm_source is not None or self.vllm_plugin_requirements):
             raise ValueError("vLLM source and plugins require the vLLM backend")
         if self.pipeline_parallel_size < 1:
@@ -138,6 +143,11 @@ class ServeConfig:
             if self.instances > 1:
                 raise ValueError("pipeline parallelism requires instances=1")
             validate_serving_geometry_args(self.vllm_extra_args)
+        if self.pipeline_layer_partition:
+            if len(self.pipeline_layer_partition) != self.pipeline_parallel_size:
+                raise ValueError("pipeline_layer_partition needs one layer count per pipeline stage")
+            if any(layers < 1 for layers in self.pipeline_layer_partition):
+                raise ValueError("pipeline_layer_partition layer counts must be positive")
         if self.gpu_memory_utilization is not None:
             if not 0 < self.gpu_memory_utilization <= 1:
                 raise ValueError("gpu_memory_utilization must be in (0, 1]")

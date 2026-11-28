@@ -1,0 +1,34 @@
+# Inkling 2 Small: 594B-A17B multimodal MoE in its native NVFP4 checkpoint (393 GB), 1M context, served
+# text-only on one 4x GB200 node at TP4 as in the vLLM recipe. Inkling support is not in a vLLM release
+# yet, so this pins an upstream nightly that includes it; replace the pin with vLLM 0.35.0 once it ships.
+# The template's reasoning_effort runs from none (no reasoning) to max and defaults to high, so
+# thinking-off benchmarks use none.
+# The repo ships an mtp.safetensors draft head outside its weight index, which object-store streaming
+# would load as model weights, so weights are staged to local disk and loaded through the index.
+name: inkling-2-small
+location: thinkingmachines/Inkling-2-Small
+revision: 885d78bfca61a7e9a498e33cfa7ad35850533b8c
+apply_chat_template: true
+generation:
+  thinking_off_template_kwargs:
+    reasoning_effort: none
+resource_hint:
+  gpu:
+    GB200: 4
+  disk: 600g
+serve:
+  tensor_parallel_size: 4
+  max_model_len: 73728
+  limit_mm_per_prompt: '{"image":0}'
+  object_store_load_mode: stage_local
+  reasoning_parser: inkling
+  tool_call_parser: inkling
+  vllm_source: upstream
+  vllm_version: 0.34.1rc1.dev13+g12eb1d4ee
+  vllm_nightly:
+    commit: 12eb1d4eec9288b21f5d6d0ac31ffe84f47d91da
+    torch_backend: cu132
+    cuda_toolchain_version: 13.2.78
+agent:
+  agent_kwargs:
+    thinking_format: chat-template

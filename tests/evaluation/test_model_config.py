@@ -22,6 +22,7 @@ from marin.evaluation.model_config import (
 from marin.evaluation.serving_config import _serve_host_memory, inference_config_for_model
 from marin.inference.config import BrokerConfig, LevanterEngineConfig, VllmSource
 from marin.inference.vllm_backend import vllm_launcher
+from transformers.utils.chat_template_utils import render_jinja_template
 
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
@@ -203,6 +204,44 @@ serve:
     assert launcher.cache_identity() != vllm_launcher(replace(engine, extra_requirements=())).cache_identity()
 
 
+def test_gpu_catalog_can_pin_an_upstream_vllm_nightly(tmp_path):
+    commit = "12eb1d4eec9288b21f5d6d0ac31ffe84f47d91da"
+    model = load_model_config(
+        _write(
+            tmp_path,
+            "nightly.yaml",
+            f"""\
+name: nightly-smoke
+location: org/model
+resource_hint:
+  gpu:
+    GB200: 4
+  memory: 128g
+serve:
+  tensor_parallel_size: 4
+  auto_overrides: false
+  vllm_source: upstream
+  vllm_version: 0.34.1rc1.dev13+g12eb1d4ee
+  vllm_nightly:
+    commit: {commit}
+    torch_backend: cu132
+    cuda_toolchain_version: 13.2.78
+""",
+        )
+    )
+    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="GB200", gpu_count=4)
+    engine = inference_config_for_model(model, choice, env_vars={}, priority=job_pb2.PRIORITY_BAND_INHERIT).engine
+
+    launcher = vllm_launcher(engine)
+    command = launcher.command()
+    assert command[command.index("--from") + 1] == "vllm[runai]==0.34.1rc1.dev13+g12eb1d4ee"
+    assert command[command.index("--extra-index-url") + 1] == f"https://wheels.vllm.ai/{commit}/"
+    assert command[command.index("--torch-backend") + 1] == "cu132"
+    requirements = [command[index + 1] for index, value in enumerate(command) if value == "--with"]
+    assert "nvidia-cuda-nvcc==13.2.78" in requirements
+    assert launcher.cache_identity() != vllm_launcher(replace(engine, nightly=None)).cache_identity()
+
+
 def test_gpu_lowering_sets_catalog_owned_runai_request_timeout():
     model = ModelConfig(
         name="large-s3-model",
@@ -220,6 +259,25 @@ def test_gpu_lowering_sets_catalog_owned_runai_request_timeout():
 
     assert lowered.iris.worker_environment.env_vars["RUNAI_STREAMER_CONCURRENCY"] == "4"
     assert lowered.iris.worker_environment.env_vars["RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"] == "60000"
+
+
+def test_gpu_lowering_sets_pipeline_layer_partition():
+    model = ModelConfig(
+        name="shared-kv-model",
+        location="s3://models/shared-kv",
+        resource_hint=ResourceHint(gpu={"GB200": 4}, memory="768g"),
+        serve=ServeConfig(
+            tensor_parallel_size=4,
+            pipeline_parallel_size=2,
+            pipeline_layer_partition=(35, 37),
+            auto_overrides=False,
+        ),
+    )
+    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="GB200", gpu_count=4)
+
+    lowered = inference_config_for_model(model, choice, env_vars={}, priority=job_pb2.PRIORITY_BAND_INHERIT)
+
+    assert lowered.iris.worker_environment.env_vars["VLLM_PP_LAYER_PARTITION"] == "35,37"
 
 
 @pytest.mark.parametrize(("setting", "expected"), [(True, "1"), (False, "0"), (None, "inherited")])
@@ -378,6 +436,21 @@ def test_model_registry_callers_cannot_mutate_the_cached_catalog():
     del registry[removed_name]
 
     assert removed_name in models()
+
+
+def test_k2_horizon_template_renders_history_without_thinking_as_empty_thinking():
+    template = models()["k2-horizon-375b-a23b"].serve.chat_template
+    history = {"role": "assistant", "content": "Prior answer"}
+    # vLLM passes a request's reasoning to the template as both reasoning and reasoning_content.
+    empty_thinking = {**history, "reasoning": "", "reasoning_content": ""}
+
+    def render(assistant: dict[str, str]) -> str:
+        conversation = [{"role": "user", "content": "Hi"}, assistant, {"role": "user", "content": "Next"}]
+        return render_jinja_template([conversation], chat_template=template, add_generation_prompt=True)[0][0]
+
+    rendered = render(history)
+    assert rendered == render(empty_thinking)
+    assert "<|ifm|im_start|>assistant\n<ifm|think>\n</ifm|think>Prior answer<|ifm|im_end|>" in rendered
 
 
 def test_gpu_required_model_rejects_tpu_override():

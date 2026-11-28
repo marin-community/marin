@@ -80,9 +80,11 @@ from transformers import (  # noqa: E402  # noqa: E402
     AutoTokenizer,
     PreTrainedTokenizerBase,
     PreTrainedTokenizerFast,
+    TokenizersBackend,
 )
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
 from transformers.dynamic_module_utils import get_class_from_dynamic_module  # noqa: E402
+from transformers.models.auto.tokenization_auto import get_tokenizer_config  # noqa: E402
 
 if TYPE_CHECKING:
     # transformers is an optional dep; keep guard to avoid import at type-check time only
@@ -1516,12 +1518,23 @@ def _is_retryable_hf_exception(exc: Exception) -> bool:
 
 
 def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> HfTokenizer:
-    """Like AutoTokenizer.from_pretrained, but works with gs:// paths or anything on fsspec"""
+    """Load a tokenizer from Hugging Face or an fsspec path."""
     with _patch_hf_hub_download():
+        tokenizer_config = _hf_hub_retry(
+            lambda: get_tokenizer_config(model_name_or_path, revision=revision, cache_dir=local_cache_dir),
+            action=f"read tokenizer config for {model_name_or_path!r}",
+        )
+        # AutoTokenizer parses the model config first, which can fail for models with a usable generic tokenizer.
+        tokenizer_class = (
+            TokenizersBackend
+            if tokenizer_config.get("tokenizer_class") == _TRANSFORMERS_V5_FAST_TOKENIZER_CLASS
+            and "auto_map" not in tokenizer_config
+            else AutoTokenizer
+        )
         return cast(
             HfTokenizer,
             _hf_hub_retry(
-                lambda: AutoTokenizer.from_pretrained(
+                lambda: tokenizer_class.from_pretrained(
                     model_name_or_path,
                     revision=revision,
                     cache_dir=local_cache_dir,

@@ -29,7 +29,7 @@ from iris.cluster.types import JobName
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.external_dependencies import CUDA_TOOLCHAIN_VERSION_BY_BACKEND, VLLM_GPU_RELEASE
-from marin.inference import iris_vllm
+from marin.inference import iris_vllm, vllm_server
 from marin.inference.backend import ModelSpec
 from marin.inference.broker import InferenceBroker
 from marin.inference.config import (
@@ -531,7 +531,7 @@ def test_isolated_cuda_vllm_marin_fork_rejects_unpublished_architecture(monkeypa
         IsolatedCudaVllm(source=VllmType.MARIN_FORK).command()
 
 
-def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
+def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc_and_flashinfer_kernels(tmp_path, monkeypatch):
     site_packages = tmp_path / "site-packages"
     nvcc = site_packages / "nvidia" / "cu13" / "bin" / "nvcc"
     nvcc.parent.mkdir(parents=True)
@@ -547,6 +547,14 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
     dist_info.mkdir()
     (dist_info / "METADATA").write_text("Metadata-Version: 2.4\nName: nvidia-cuda-nvcc\nVersion: 13.0.88\n")
     (dist_info / "RECORD").write_text("nvidia/cu13/bin/nvcc,,\n")
+    flashinfer_info = site_packages / "flashinfer_python-0.7.3.dist-info"
+    flashinfer_info.mkdir()
+    (flashinfer_info / "METADATA").write_text("Metadata-Version: 2.4\nName: flashinfer-python\nVersion: 0.7.3\n")
+    # A node cache that already holds this FlashInfer version's kernel wheel.
+    node_cache = tmp_path / "node-cache"
+    flashinfer_kernels = node_cache / "flashinfer-cubin" / "0.7.3"
+    flashinfer_kernels.mkdir(parents=True)
+    monkeypatch.setattr(vllm_server, "SCRATCH_CACHE_PATH", str(node_cache))
 
     tool_bin = tmp_path / "tool-bin"
     tool_bin.mkdir()
@@ -556,7 +564,8 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
         "#!/usr/bin/env python3\n"
         "import json, os, pathlib, sys\n"
         "pathlib.Path(os.environ['CAPTURE']).write_text(json.dumps({"
-        "'args': sys.argv[1:], 'cuda_home': os.environ['CUDA_HOME'], 'path': os.environ['PATH']}))\n"
+        "'args': sys.argv[1:], 'cuda_home': os.environ['CUDA_HOME'], 'path': os.environ['PATH'], "
+        "'pythonpath': os.environ['PYTHONPATH']}))\n"
     )
     vllm.chmod(0o755)
 
@@ -569,6 +578,8 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
         "nvidia-nvvm==13.0.88",
     }
     assert not any(requirement.startswith("nvidia-cuda-nvrtc==") for requirement in requirements)
+    # The vllm[runai] extra only sets a floor, so the streamer must be pinned exactly.
+    assert any(requirement.startswith("runai-model-streamer[s3]==") for requirement in requirements)
     assert "addressing_style = virtual" in Path(launcher.env()["AWS_CONFIG_FILE"]).read_text()
     bootstrap_index = command.index("-c")
     bootstrap = command[bootstrap_index + 1]
@@ -588,6 +599,7 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
     assert (nvcc.parent.parent / "lib64").resolve() == cuda_lib.resolve()
     assert (cuda_lib / "libcudart.so").resolve() == cudart.resolve()
     assert (cuda_lib / "libnvrtc.so").resolve() == nvrtc.resolve()
+    assert observed["pythonpath"].split(os.pathsep)[0] == str(flashinfer_kernels)
 
 
 def test_isolated_cuda_vllm_upstream_requires_version():
@@ -823,12 +835,16 @@ def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatc
 @pytest.mark.parametrize("task_index", [0, 1])
 @pytest.mark.parametrize("fail", [False, True])
 @pytest.mark.parametrize("tensor_parallel_size,data_parallel_size", [(8, 1), (1, 8)])
+@pytest.mark.parametrize("load_mode", [ObjectStoreLoadMode.STREAM, ObjectStoreLoadMode.STAGE_LOCAL])
 def test_pipeline_service_endpoint_and_shutdown_lifecycle(
-    monkeypatch, task_index, fail, tensor_parallel_size, data_parallel_size
+    monkeypatch, tmp_path, task_index, fail, tensor_parallel_size, data_parallel_size, load_mode
 ):
     events = []
     endpoints = []
     argv = []
+    served_paths = []
+    weights = StoragePath(f"memory://pipeline-models/{tmp_path.name}")
+    (weights / "config.json").write_text('{"model_type": "fake"}')
     coordinator = iris_vllm.VllmCoordinatorActor("127.0.0.1")
     if task_index == 0:
         coordinator.follower_stopped(1)
@@ -870,6 +886,11 @@ def test_pipeline_service_endpoint_and_shutdown_lifecycle(
     @contextmanager
     def process(**kwargs):
         argv.extend(kwargs["extra_args"])
+        served_path = kwargs["model"].path
+        served_paths.append(served_path)
+        if load_mode is ObjectStoreLoadMode.STAGE_LOCAL:
+            # Each task serves its own local copy, already complete when vLLM starts.
+            assert Path(served_path, "config.json").read_text() == '{"model_type": "fake"}'
         events.append("started")
         try:
             yield SimpleNamespace(
@@ -884,10 +905,11 @@ def test_pipeline_service_endpoint_and_shutdown_lifecycle(
     monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", process)
     service = IrisServiceConfig(
         model=ServedModelConfig(
-            weights="org/model",
+            weights=str(weights),
             tensor_parallel_size=tensor_parallel_size,
             max_model_len=4096,
             chat_template_content="{{ messages }}",
+            object_store_load_mode=load_mode,
         ),
         engine=VllmEngineConfig(extra_args=("--enable-prefix-caching",)),
         iris=IrisConfig(
@@ -931,6 +953,10 @@ def test_pipeline_service_endpoint_and_shutdown_lifecycle(
     assert options.node_rank == task_index
     assert options.data_parallel_start_rank == (0 if data_parallel_size > 1 else None)
     assert options.headless == (task_index == 1)
+    if load_mode is ObjectStoreLoadMode.STAGE_LOCAL:
+        assert not Path(served_paths[0]).exists()
+    else:
+        assert served_paths == [str(weights)]
     if fail:
         assert events == ["started", "stopped"]
         assert endpoints == []

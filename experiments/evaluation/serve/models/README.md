@@ -38,6 +38,7 @@ serve:                          # ServeConfig -> model-server behavior
   tensor_parallel_size: 2
   data_parallel_size: null
   pipeline_parallel_size: 1
+  pipeline_layer_partition: []  # VLLM_PP_LAYER_PARTITION; layers per pipeline stage, e.g. [35, 37]
   gpu_memory_utilization: null
   max_model_len: 32768
   max_num_batched_tokens: null  # vLLM prefill-token budget
@@ -50,7 +51,8 @@ serve:                          # ServeConfig -> model-server behavior
   vllm_use_flashinfer_sampler: null # VLLM_USE_FLASHINFER_SAMPLER; false uses the built-in sampler
   vllm_use_nccl_symm_mem: null  # VLLM_USE_NCCL_SYMM_MEM; all-reduce, all-gather and reduce-scatter
   vllm_source: null             # GPU default is marin_fork; upstream requires vllm_version
-  vllm_version: null            # exact upstream PyPI version, e.g. "0.29.0"
+  vllm_version: null            # exact upstream version, e.g. "0.29.0"
+  vllm_nightly: null            # {commit, torch_backend, cuda_toolchain_version} for an unreleased vllm_version
   vllm_plugin_requirements: []  # pinned packages installed with GPU vLLM in its isolated environment
   vllm_extra_args: ["--enable-prefix-caching"]   # escape hatch for flags without a typed field
   chat_template: null           # jinja served in place of the tokenizer's own
@@ -76,6 +78,20 @@ For a GPU model whose architecture is supplied by a vLLM plugin, set `vllm_sourc
 an exact `vllm_version`, and a plugin requirement pinned to a release or commit. These fields are
 part of the model catalog and the recorded effective serving configuration. The plugin is installed
 in the same isolated environment as vLLM; TPU serving does not accept these GPU-specific settings.
+
+A Marin-owned tool-call parser lives in `experiments/evaluation/serve/vllm_plugins/`. Load it with
+`--tool-parser-plugin` in `vllm_extra_args`, giving the file's path from the repository root, and
+select it with `tool_call_parser`. Iris runs the server from the root of the job's workspace bundle,
+and vLLM fails at startup when the file is missing or the parser name is unregistered.
+
+A GPU model that needs upstream support not yet in a vLLM release can pin a nightly build. Set
+`vllm_source: upstream`, `vllm_nightly.commit` to the full upstream `main` commit,
+`vllm_nightly.torch_backend` to the CUDA build its wheels target (for example `cu132`),
+`vllm_nightly.cuda_toolchain_version` to the CUDA toolkit that PyTorch build pins (for example
+`13.2.78` for `torch==2.14.0+cu132`), and
+`vllm_version` to the exact version that commit's index at `https://wheels.vllm.ai/<commit>/vllm/`
+publishes, for example `0.34.1rc1.dev13+g12eb1d4ee`. Not every `main` commit has published wheels;
+pick one whose index exists. Replace the pin with a release once one includes the support.
 
 ## vLLM eager execution
 
@@ -131,6 +147,10 @@ Set `serve.pipeline_parallel_size` to the number of Iris tasks in one vLLM servi
 Each task runs one pipeline stage. For example, `resource_hint.gpu: {H100: 8}` with
 `tensor_parallel_size: 8`, `pipeline_parallel_size: 2`, and `data_parallel_size: 1`
 requests 16 GPUs across two tasks and exposes one endpoint.
+
+vLLM splits layers evenly across pipeline stages by default. A model whose layers share KV caches across
+a stage boundary fails at startup and needs an explicit split: set `serve.pipeline_layer_partition` to
+one layer count per stage, which Marin passes to vLLM as `VLLM_PP_LAYER_PARTITION`.
 
 Multi-node serving requires the vLLM backend, an explicit GPU resource hint, and an explicit
 tensor parallel size. Tensor parallel size times data parallel size must equal GPUs per task.
@@ -200,5 +220,5 @@ ServingGeometry(
 
 This gives four tasks, four local ranks per task and 16 router targets. Omitted model TP uses
 geometry; explicit TP must match. Multi-task or routed geometry requires `instances=1`, `broker=None`.
-`ServedModelConfig.object_store_load_mode` defaults to `STREAM`, which multi-task GPU serving requires.
-Single-task serving also supports local weight staging.
+`ServedModelConfig.object_store_load_mode` defaults to `STREAM`. With `STAGE_LOCAL`, every task stages its
+own local copy of the weights before vLLM starts.

@@ -1,0 +1,30 @@
+# Trinity Large Thinking: 399B text MoE (AfmoeForCausalLM), 797 GB bf16, 512k context. The bf16 weights
+# exceed one 4x GB200 node, so each of two pipeline stages runs TP4 with expert parallelism; each stage
+# loads half the weights, so host memory is set below the launcher's full-checkpoint estimate. Parsers
+# follow the model card. The template has no thinking switch, so the model always reasons.
+name: trinity-large-thinking
+location: arcee-ai/Trinity-Large-Thinking
+revision: 6d0ca02131d134c9a94d8964ed57b6d088e9e655
+apply_chat_template: true
+resource_hint:
+  gpu:
+    GB200: 4
+  memory: 768g
+serve:
+  tensor_parallel_size: 4
+  pipeline_parallel_size: 2
+  max_model_len: 73728
+  reasoning_parser: deepseek_r1
+  tool_call_parser: qwen3_coder
+  vllm_extra_args:
+  - --enable-prefix-caching
+  - --enable-expert-parallel
+  # The card recommends temperature 0.45-0.6, top_p 0.95, top_k 50; the checkpoint's generation_config.json sets
+  # 0.8/0.8, which vLLM would otherwise apply to requests that leave sampling unset.
+  - --override-generation-config
+  - '{"temperature":0.6,"top_p":0.95,"top_k":50}'
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
+    # The card: agent loops must pass reasoning_content back; dropping it degrades multi-step performance.
+    interleaved_thinking: true

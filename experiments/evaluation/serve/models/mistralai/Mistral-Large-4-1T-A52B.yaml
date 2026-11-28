@@ -1,0 +1,41 @@
+# Mistral Large 4 1T-A52B: multimodal MoE in its FP8 release (1,061 GB), 1M context, served text-only.
+# Marin's vLLM fork does not register Mistral Large 4, so this serves upstream vLLM 0.34.0. The weights
+# use Mistral's consolidated format, which vLLM loads only from local disk, so each of two 4x GB200
+# pipeline stages stages its own copy. Layers share KV caches across the default even split, so the
+# stages hold the vLLM recipe's 35 and 37 layers. Requests carry chat_template_kwargs, which vLLM's
+# mistral tokenizer mode rejects, so the repo's HF tokenizer and chat template render prompts. The
+# template takes reasoning_effort low, medium or high (the default), so thinking-off benchmarks use low.
+name: mistral-large-4-1t-a52b
+location: mistralai/Mistral-Large-4-1T-A52B
+revision: 6c0166e17ab8a3d504ff1553804abec9fb0993dc
+apply_chat_template: true
+generation:
+  thinking_off_template_kwargs:
+    reasoning_effort: low
+resource_hint:
+  gpu:
+    GB200: 4
+  memory: 768g
+  disk: 1400g
+serve:
+  tensor_parallel_size: 4
+  pipeline_parallel_size: 2
+  pipeline_layer_partition: [35, 37]
+  max_model_len: 73728
+  limit_mm_per_prompt: '{"image":0}'
+  reasoning_parser: mistral
+  tool_call_parser: mistral
+  vllm_source: upstream
+  vllm_version: 0.34.0
+  object_store_load_mode: stage_local
+  vllm_extra_args:
+  - --enable-prefix-caching
+  - --tokenizer-mode
+  - hf
+  - --config-format
+  - mistral
+  - --load-format
+  - mistral
+agent:
+  agent_kwargs:
+    thinking_format: chat-template

@@ -1,0 +1,33 @@
+# Beam 1.0 501B-A23B: text MoE, 1,003 GB bf16, 1M context. Marin's vLLM fork does not register
+# BeamForCausalLM, so this serves upstream vLLM 0.34.0. The bf16 weights exceed one 4x GB200 node, so
+# each of two pipeline stages runs TP4 with expert parallelism; each stage loads half the weights, so
+# host memory is set below the launcher's full-checkpoint estimate. The template cannot disable
+# reasoning; reasoning_effort runs from minimal to max (the default), so thinking-off benchmarks use
+# minimal. Reflection's evaluation guide requires prior assistant turns to keep their reasoning, so
+# Terminus resends it.
+name: beam-1.0-501b-a23b
+location: reflection/Beam-1.0-501B-A23B
+revision: 877a5d6973c6ae6a55335483002c06717662d23c
+apply_chat_template: true
+generation:
+  thinking_off_template_kwargs:
+    reasoning_effort: minimal
+resource_hint:
+  gpu:
+    GB200: 4
+  memory: 768g
+serve:
+  tensor_parallel_size: 4
+  pipeline_parallel_size: 2
+  max_model_len: 73728
+  reasoning_parser: beam
+  tool_call_parser: beam
+  vllm_source: upstream
+  vllm_version: 0.34.0
+  vllm_extra_args:
+  - --enable-prefix-caching
+  - --enable-expert-parallel
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
+    interleaved_thinking: true

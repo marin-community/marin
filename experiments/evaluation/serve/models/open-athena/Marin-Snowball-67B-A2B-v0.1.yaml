@@ -1,0 +1,30 @@
+# Marin Snowball v0.1: the 67B-A2B Grug MoE (256 experts), 134 GB bf16, 262k context, with its own tokenizer
+# and chat template. Served data- and expert-parallel with tensor_parallel_size 1, streaming shards across the
+# ranks. The grug reasoning parser splits <|start_think|>...<|end_think|> from the answer; the TPU stack lacks
+# it, so this entry serves on H100s. The template defaults to /think and maps enable_thinking=false to /nothink,
+# which the model often ignores.
+name: marin-snowball-67b-a2b-v0.1
+location: open-athena/Marin-Snowball-67B-A2B-v0.1
+revision: adc0078a19a4383bc998fcdb43867b3360baf5f3
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 4
+  memory: 256g
+serve:
+  hf_hub_disable_xet: true
+  tensor_parallel_size: 1
+  data_parallel_size: 4
+  max_model_len: 73728
+  max_num_batched_tokens: 7168
+  max_num_seqs: 32
+  tool_call_parser: hermes
+  reasoning_parser: grug
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+agent:
+  agent_kwargs:
+    thinking_format: chat-template

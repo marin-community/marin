@@ -1,0 +1,31 @@
+# GLM-5.3-Flash: 320B-A18B multimodal MoE with native FP8 weights (328 GB), 1M context, served
+# text-only with the vLLM recipe's 4x GB200 command on upstream vLLM 0.34.0: TP4, the glm5_next
+# tokenizer mode and an FP8 KV cache. On Marin's vLLM fork, which lacks that tokenizer mode, the model
+# misreads its prompts. The template cannot disable reasoning; it takes reasoning_effort low, high or max
+# (the default), so thinking-off benchmarks use low.
+name: glm-5.3-flash
+location: zai-org/GLM-5.3-Flash
+revision: 46a050bec13002ad29ee795c16e61cf4fa3c4a9c
+apply_chat_template: true
+generation:
+  thinking_off_template_kwargs:
+    reasoning_effort: low
+resource_hint:
+  gpu:
+    GB200: 4
+serve:
+  tensor_parallel_size: 4
+  max_model_len: 73728
+  limit_mm_per_prompt: '{"image":0,"video":0}'
+  reasoning_parser: glm47
+  tool_call_parser: glm47
+  vllm_source: upstream
+  vllm_version: 0.34.0
+  vllm_extra_args:
+  - --tokenizer-mode
+  - glm5_next
+  - --kv-cache-dtype
+  - fp8
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
