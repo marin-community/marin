@@ -111,6 +111,8 @@ def build_trial(
         tokenizer=f"hf://{HF_MODEL}@{HF_REVISION}",
         version=CONVERSION_VERSION,
         resources=ResourceConfig.with_cpu(cpu=64, ram="512g", disk="256g"),
+        # Keep the lossy capacity these runs used; moving them to dropless needs an H100 smoke run.
+        model_overrides={"moe_capacity_factor": 1.0},
     )
     spec = SFTSpec(
         name=user_owned_name(f"checkpoints/curriculum-sft/{name}"),

@@ -41,7 +41,9 @@ def snowball_mesh(nodes: int) -> MeshConfig:
 
 _BASE_MODEL = HFModel(
     model_ref=f"{HF_MODEL}@{HF_REVISION}",
-    model=SnowballConfig(),
+    # Keep the lossy capacity these presets were smoke-tested at; dropless grows each expert shard's dispatch
+    # buffer to every assignment and needs an H100 smoke run first.
+    model=SnowballConfig(moe_capacity_factor=1.0),
     eos_token_ids=(128001, 128009),
 )
 
