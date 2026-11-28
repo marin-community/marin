@@ -47,6 +47,7 @@ from pydantic import ValidationError
 from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import copy
 from rigging.secrets import require_secret
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 from shellbox.machine import UnsupportedMachineSpec
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.grading_result import GradingFailure
@@ -86,6 +87,8 @@ MISSING_PREPARED_IMAGE_REASON = difficulty_gap_reason(DifficultyGap.ENVIRONMENT_
 UNSUPPORTED_COMPOSE_DOCUMENT_REASON = difficulty_gap_reason(DifficultyGap.UNSUPPORTED_COMPOSE_DOCUMENT)
 NETWORK_POLICY_REASON = difficulty_gap_reason(DifficultyGap.NETWORK_POLICY_VIOLATION)
 MATH_DEADLINE_LIMIT = 3
+REGISTRY_LOOKUP_ATTEMPTS = 3
+REGISTRY_LOOKUP_TIMEOUT_SEC = 30
 
 
 def task_required_provider_secrets(task_dirs: Iterable[Path]) -> frozenset[str]:
@@ -190,6 +193,14 @@ def task_spec_actor_image(task: PreparedTask) -> str | None:
     return ((spec.get("environment_requirements") or {}).get("docker_image")) or None
 
 
+def _registry_lookup_retryable(error: Exception) -> bool:
+    if isinstance(error, subprocess.TimeoutExpired):
+        return True
+    return isinstance(error, subprocess.CalledProcessError) and bool(
+        re.search(r"HTTP status: (?:429|5\d\d)\b", error.stderr or error.stdout or "")
+    )
+
+
 @cache
 def pinned_registry_reference(reference: str, authfile: str | None = None) -> str:
     """Resolve a registry tag to its immutable digest reference.
@@ -207,14 +218,33 @@ def pinned_registry_reference(reference: str, authfile: str | None = None) -> st
     # The wave's skopeo rejects a bare registry reference as an unknown
     # transport; the explicit docker:// transport parses everywhere.
     command.append(f"docker://{reference}")
-    completed = subprocess.run(command, check=False, capture_output=True, text=True)
-    digest = completed.stdout.strip()
-    if completed.returncode != 0 or not digest.startswith("sha256:"):
-        raise ValueError(
-            f"Registry digest lookup failed for {reference} (rc={completed.returncode}): "
-            f"{(completed.stderr or completed.stdout).strip()[:400]}"
+
+    def lookup() -> str:
+        completed = subprocess.run(
+            command, check=False, capture_output=True, text=True, timeout=REGISTRY_LOOKUP_TIMEOUT_SEC
         )
-    return f"{reference}@{digest}"
+        if completed.returncode != 0:
+            raise subprocess.CalledProcessError(completed.returncode, command, completed.stdout, completed.stderr)
+        digest = completed.stdout.strip()
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+            raise ValueError(f"Registry digest lookup returned a malformed digest for {reference}: {digest[:400]}")
+        return f"{reference}@{digest}"
+
+    try:
+        return retry_with_backoff(
+            lookup,
+            retryable=_registry_lookup_retryable,
+            max_attempts=REGISTRY_LOOKUP_ATTEMPTS,
+            backoff=ExponentialBackoff(initial=1, maximum=2, factor=2, jitter=0),
+            operation=f"Registry digest lookup for {reference}",
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ValueError(f"Registry digest lookup timed out for {reference}") from error
+    except subprocess.CalledProcessError as error:
+        diagnostic = (error.stderr or error.stdout or "").strip()
+        raise ValueError(
+            f"Registry digest lookup failed for {reference} (rc={error.returncode}): {diagnostic[:400]}"
+        ) from error
 
 
 def actor_phase_gap_reason(task: PreparedTask, result) -> str | None:
