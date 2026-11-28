@@ -34,9 +34,9 @@ from rigging.task_errors import (
     retry_disposition_from_record,
     retry_delay,
 )
-from shellbox.backends.daytona.errors import daytona_error_identity, daytona_error_diagnostics
-from shellbox.backends.daytona.machine import SandboxCapacityError
+from shellbox.backends.daytona.errors import SandboxCapacityError, daytona_error_diagnostics, daytona_error_identity
 from shellbox.machine import MachineFactory
+from shellbox.task_errors import SANDBOX_CAPACITY_ERROR
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import NoGrader, ReasoningMarkupPolicy
 from verifyit.modes.grade_judge import JudgeConnection
@@ -238,7 +238,7 @@ def _failure_diagnostics(
     elif isinstance(error, TemplateError):
         exception_type = TEMPLATE_ERROR
     elif isinstance(error, TaskMachineError):
-        exception_type = "SandboxCapacityError" if isinstance(error.__cause__, SandboxCapacityError) else TASK_MACHINE_ERROR
+        exception_type = SANDBOX_CAPACITY_ERROR if isinstance(error.__cause__, SandboxCapacityError) else TASK_MACHINE_ERROR
     elif isinstance(error, ContextWindowExceeded):
         exception_type = CONTEXT_LENGTH_EXCEEDED_ERROR
         diagnostics["error_category"] = "context_overflow"

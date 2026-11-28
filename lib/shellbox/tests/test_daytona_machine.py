@@ -87,6 +87,8 @@ from shellbox.machine import (
 )
 from yarl import URL
 
+CPU_CAPACITY_RESPONSE = "Total CPU limit exceeded. Maximum allowed: 2500."
+
 
 def sandbox_json(sandbox_id: str, state: str, toolbox_url: str) -> dict:
     """A Daytona API sandbox record named ``fixture``."""
@@ -233,7 +235,7 @@ def test_daytona_creation_retries_cpu_capacity_with_fake_client(monkeypatch):
         async def create(self, params, *, timeout):
             self.attempts += 1
             if self.attempts < 3:
-                raise DaytonaValidationError("Total CPU limit exceeded. Maximum allowed: 2500.", status_code=400)
+                raise DaytonaValidationError(CPU_CAPACITY_RESPONSE, status_code=400)
             return self.sandbox
 
     async def scenario():
@@ -265,7 +267,7 @@ def test_daytona_creation_reports_capacity_when_deadline_expires(monkeypatch, de
             if deadline_phase == "during_create" and self.attempts == 2:
                 self.deadline.reschedule(asyncio.get_running_loop().time())
                 await asyncio.Future()
-            raise DaytonaValidationError("Total CPU limit exceeded. Maximum allowed: 2500.", status_code=400)
+            raise DaytonaValidationError(CPU_CAPACITY_RESPONSE, status_code=400)
 
     async def scenario():
         async def wait(delay):

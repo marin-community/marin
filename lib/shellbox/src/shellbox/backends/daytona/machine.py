@@ -41,7 +41,12 @@ from daytona import (
 from rigging.task_errors import RetryDisposition
 from rigging.timing import ExponentialBackoff
 
-from shellbox.backends.daytona.errors import DAYTONA_DELETE_OPERATION, daytona_error_identity
+from shellbox.backends.daytona.errors import (
+    DAYTONA_DELETE_OPERATION,
+    SANDBOX_CAPACITY_MESSAGE,
+    SandboxCapacityError,
+    daytona_error_identity,
+)
 from shellbox.backends.daytona.process import DaytonaProcessSession
 from shellbox.backends.daytona.snapshot import (
     daytona_image,
@@ -111,17 +116,13 @@ def _control_command(script: str) -> str:
     )
 
 
-class SandboxCapacityError(DaytonaError):
-    """The account could not admit a sandbox before its creation deadline."""
-
-
 async def _create_sandbox(
     client: AsyncDaytona,
     params: CreateSandboxFromSnapshotParams | CreateSandboxFromImageParams,
     timeout: float,
     deadline: asyncio.Timeout,
 ) -> AsyncSandbox:
-    """Retry transient creation failures using the caller-owned sandbox name.
+    """Retry Daytona rate limits and account CPU caps using the caller-owned name.
 
     Raises:
         MachineUnavailable: Daytona removed the sandbox before it started.
@@ -162,15 +163,13 @@ async def _create_sandbox(
                 last_capacity_error = error
                 delay = backoff.next_interval()
                 if asyncio.get_running_loop().time() + delay >= deadline_at:
-                    raise SandboxCapacityError(
-                        "Daytona sandbox capacity exhausted", status_code=error.status_code
-                    ) from error
+                    raise SandboxCapacityError(SANDBOX_CAPACITY_MESSAGE, status_code=error.status_code) from error
                 logger.warning("Retrying Daytona creation after account CPU cap: delay=%.3f", delay)
                 await sleep(delay)
     except asyncio.CancelledError:
         if last_capacity_error is not None and deadline.expired():
             raise SandboxCapacityError(
-                "Daytona sandbox capacity exhausted", status_code=last_capacity_error.status_code
+                SANDBOX_CAPACITY_MESSAGE, status_code=last_capacity_error.status_code
             ) from last_capacity_error
         raise
 
