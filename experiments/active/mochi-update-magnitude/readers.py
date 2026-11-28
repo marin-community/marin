@@ -80,7 +80,7 @@ class LevanterReader:
     fetch. Slices may span chunk boundaries; covered chunks are concatenated.
     """
 
-    CHUNK_CACHE_BYTES: ClassVar[int] = 8 * 2**30
+    CHUNK_CACHE_BYTES: ClassVar[int] = 20 * 2**30
 
     def __init__(self, checkpoint: Checkpoint):
         self.checkpoint = checkpoint

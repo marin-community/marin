@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import argparse
 import copy
+import gc
 import json
 import logging
 import posixpath
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import fsspec
@@ -73,7 +75,7 @@ class SliceStats:
     rel_sample: np.ndarray  # strided subsample of |delta| / (|W| + eps)
 
 
-def slice_stats(a: np.ndarray, b: np.ndarray, lands: str, max_sample: int = 400_000) -> SliceStats:
+def slice_stats(a: np.ndarray, b: np.ndarray, lands: str, max_sample: int = 100_000) -> SliceStats:
     a = np.ascontiguousarray(a, dtype=np.float32).ravel()
     b = np.ascontiguousarray(b, dtype=np.float32).ravel()
     if a.shape != b.shape:
@@ -182,14 +184,8 @@ def simple_requests(sample: Sample) -> list[SliceRequest]:
             add(tensor, "norm_scales", "gated_norm_projections")
     for layer in sample.router_layers:
         add("stacked_blocks/stacked/mlp/router", "router", "router", layer=layer, slices=(layer,), hf_slices=())
-        add(
-            "stacked_blocks/stacked/mlp/router_bias",
-            "router",
-            "router_bias",
-            layer=layer,
-            slices=(layer,),
-            hf_slices=(),
-        )
+        # router_bias is frozen in every measured run (grug_query_bias_update_mode:
+        # frozen), so it carries no update signal and is excluded.
     for layer in sample.layers:
         add(
             "stacked_blocks/stacked/attn/w_q",
@@ -330,7 +326,8 @@ class HFSide:
         self.checkpoint = checkpoint
         self.reader = SafetensorsReader(checkpoint)
         self.sample = sample
-        self._cache: dict[tuple, np.ndarray] = {}
+        self._hf_cache: OrderedDict[tuple, np.ndarray] = OrderedDict()
+        self._hf_cache_bytes = 0
 
     def _hf_name(self, tensor: str, layer: int | None) -> str:
         template, _ = HF_MAP[tensor]
@@ -352,9 +349,9 @@ class HFSide:
         if expert is not None:
             name = name.replace("{E}", str(expert))
         key = (name, hf_slices)
-        if key not in self._cache:
-            self._cache[key] = self.reader.read_f32(name, hf_slices)
-        arr = self._cache[key]
+        if key not in self._hf_cache:
+            self._cache_put(key, self.reader.read_f32(name, hf_slices))
+        arr = self._hf_cache[key]
         if expected is None and layer is not None:
             stacked = self._expected_stacked_shape(tensor)
             if stacked is not None and len(stacked) > 1:
@@ -883,6 +880,7 @@ def main() -> None:
         rows, summary = measure_pair(pair, SAMPLE, mapping_a, mapping_b, args.limit_tensors)
         all_rows.extend(rows)
         all_summary.extend(summary)
+        gc.collect()
         logger.info("pair %s done in %.1fs (%d rows)", pair.id, time.monotonic() - started, len(rows))
 
     stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
