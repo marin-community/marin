@@ -1645,6 +1645,59 @@ async fn a_non_log_table_is_registered_on_the_hub_and_stamped_with_its_origin() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_store_that_names_its_cluster_stamps_its_own_rows_and_still_forwards_them() {
+    // Once a store names its own cluster, every local row it stores carries that name,
+    // not an empty value. The forwarder must still see those rows as its own and ship
+    // them, while a row naming another cluster arrived by forwarding and stays put.
+    let fx = Fixture::new("named").await;
+    fx.source
+        .configure_local_cluster(SOURCE_CLUSTER.to_string())
+        .unwrap();
+
+    write_id_rows(&fx.source, "events", 2).await;
+    fx.forward_from_start("events").await;
+    fx.drain(PRIV_A, "events").await;
+
+    let own = vec![
+        Some(SOURCE_CLUSTER.to_string()),
+        Some(SOURCE_CLUSTER.to_string()),
+    ];
+    assert_eq!(hub_column(&fx.source, "events", "cluster").await, own);
+    assert_eq!(
+        hub_column(fx.target_store(), "events", "cluster").await,
+        own
+    );
+
+    fx.source_client
+        .push_logs(
+            PushLogsRequest {
+                entries: vec![LogEntry::default().with_data("relayed")],
+                ..Default::default()
+            }
+            .with_key("/user/job/t")
+            .with_cluster("some-other-cluster"),
+        )
+        .await
+        .unwrap();
+    push(&fx.source_client, "/user/job/t", &["local"]).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+    fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
+
+    assert_eq!(
+        hub_column(&fx.source, LOG_NAMESPACE_NAME, "cluster").await,
+        vec![
+            Some("some-other-cluster".to_string()),
+            Some(SOURCE_CLUSTER.to_string())
+        ],
+        "a local push that names no cluster is stored under the store's own name"
+    );
+    assert_eq!(
+        fx.hub_log_rows().await,
+        vec![("/user/job/t".to_string(), "local".to_string())]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_declared_cluster_column_forwards_own_and_unnamed_rows() {
     // The Iris controller's iris.controller_db__* rows declare `cluster`, so registration
     // keeps it as the origin column. A row named for the forwarding cluster, or left

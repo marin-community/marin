@@ -105,6 +105,14 @@ struct Args {
     #[arg(long = "auth-policy", env = "FINELOG_AUTH_POLICY", default_value = "")]
     auth_policy: String,
 
+    /// This server's own cluster name (env `FINELOG_CLUSTER`). When set, every row
+    /// written here that leaves the origin `cluster` column empty is stored with this
+    /// name, so `cluster` names the producing cluster on every server, not only on the
+    /// hub. Empty (the default) stores local rows with `cluster` empty. A forwarding
+    /// server must use the same name as `FINELOG_FORWARDING`'s `cluster`.
+    #[arg(long = "cluster", env = "FINELOG_CLUSTER", default_value = "")]
+    cluster: String,
+
     /// Relay this store's logs to a shared hub finelog, as JSON (env
     /// `FINELOG_FORWARDING`): `{"target":"https://<hub>","cluster":"<this-cluster>"}`.
     /// Empty (the default) forwards nothing. Requires `--signing-key`.
@@ -209,6 +217,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     store
         .configure_ack_durability(args.ack_durability)
         .map_err(|e| format!("invalid acknowledgement durability: {e}"))?;
+    if !args.cluster.is_empty() {
+        store
+            .configure_local_cluster(args.cluster.clone())
+            .map_err(|e| format!("invalid FINELOG_CLUSTER: {e}"))?;
+        tracing::info!(
+            cluster = %args.cluster,
+            "finelog-server: stamping local rows with this cluster"
+        );
+    }
     // Resolve the host role before maintenance starts. A forwarding deployment
     // is a relay: it keeps its schema contract but omits query-serving physical
     // work and retires only downstream-settled objects.
@@ -361,6 +378,15 @@ fn build_forwarder(args: &Args, store: Arc<Store>) -> Result<Option<Forwarder>, 
     }
     let config = ForwardingConfig::parse(&args.forwarding)
         .map_err(|e| format!("invalid FINELOG_FORWARDING: {e}"))?;
+    // The forwarder ships rows that carry its own name. A different local name would
+    // stamp local rows with a cluster the forwarder treats as foreign, so they would
+    // never reach the hub.
+    if !args.cluster.is_empty() && args.cluster != config.cluster {
+        return Err(format!(
+            "FINELOG_CLUSTER {:?} differs from the forwarding cluster {:?}",
+            args.cluster, config.cluster
+        ));
+    }
     tracing::info!(
         target = %config.target,
         cluster = %config.cluster,
@@ -477,6 +503,40 @@ mod tests {
         assert!(resolve_serve_mode(&parsed)
             .unwrap_err()
             .contains("--forwarding"));
+    }
+
+    #[test]
+    fn a_local_cluster_name_must_match_the_forwarding_cluster() {
+        let parsed = args(&[
+            "--log-dir",
+            "/tmp/x",
+            "--signing-key",
+            "unused",
+            "--forwarding",
+            r#"{"target":"https://hub","cluster":"cw-rno2a"}"#,
+            "--cluster",
+            "cw-us-east-02a",
+        ]);
+        let store = Arc::new(
+            Store::open(
+                None,
+                String::new(),
+                DEFAULT_INDEX_CACHE_MB,
+                ServeMode::Live,
+                TelemetryRootWriteMode::SemanticOnly,
+                None,
+                None,
+            )
+            .unwrap(),
+        );
+
+        let error = build_forwarder(&parsed, store)
+            .err()
+            .expect("mismatch refused");
+        assert!(
+            error.contains("differs from the forwarding cluster"),
+            "{error}"
+        );
     }
 
     #[test]

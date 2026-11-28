@@ -535,6 +535,25 @@ bytes.
 local cache. It is not a row-age retention guarantee and does not delete objects
 from the remote archive.
 
+## Naming a server's own cluster
+
+A server's top-level `cluster:` names the cluster it belongs to. With it set, the
+server stores every row whose writer leaves `cluster` empty under that name, so
+`cluster` names the producing cluster on every server, not only on the hub. A
+forwarding server must use the same name as `forwarding.cluster`; the config loader
+and the server both refuse a mismatch, because the forwarder ships only rows that
+carry its own name (or an empty `cluster`, from before the name was set).
+
+```yaml
+cluster: cw-rno2a
+```
+
+Rows written before the name was set keep an empty `cluster`; nothing backfills
+them. A reader that selects one cluster's own rows across that boundary must accept
+both, for example `COALESCE(NULLIF(cluster, ''), 'marin') = 'marin'` on the hub.
+Confirm the setting took effect with `/api/server`, whose `store.cluster` reports the
+configured name.
+
 ## Onboarding a cluster onto the forwarding hub
 
 `marin` is the hub: every other cluster's finelog forwards its rows there, so a
@@ -607,8 +626,9 @@ stay there and stay queryable, but they do not backfill into the hub.
 Confirm the hub is receiving. The hub overwrites the `cluster` column with the
 cluster bound to the verified JWT, so a row carrying the sender's name proves that
 sender's forwarding reached the hub. Bound the scan by time — an unbounded `GROUP BY` over
-the whole `log` namespace will time out. An empty `cluster` is the hub's own rows;
-a sender missing from this list is a sender whose rows are not arriving.
+the whole `log` namespace will time out. The hub's own rows show as `marin` once
+the hub config sets `cluster: marin`, and as an empty `cluster` before that; a
+sender missing from this list is a sender whose rows are not arriving.
 
 ```bash
 uv run finelog query marin --format table \
