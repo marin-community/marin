@@ -1,12 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-from pathlib import Path
-import subprocess
-import sys
-import textwrap
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -19,6 +13,7 @@ from levanter.grug.attention.fixed_schedule import (
     fixed_schedule_attention,
     materialize_contiguous_kv,
 )
+from levanter.testing.devices import use_test_devices
 
 
 def _require_four_tpu_devices() -> None:
@@ -55,6 +50,7 @@ def _dense_oracle(
 
 @pytest.mark.parametrize("position", [0, 127, 128, 255])
 @pytest.mark.parametrize("window", [None, 128])
+@pytest.mark.tpu
 def test_fixed_schedule_public_forward_matches_oracle_and_decode(position: int, window: int | None) -> None:
     _require_four_tpu_devices()
     spec = FixedScheduleSpec(sliding_window=window)
@@ -117,6 +113,7 @@ def test_fixed_schedule_public_forward_matches_oracle_and_decode(position: int, 
     assert jnp.array_equal(full, permuted)
 
 
+@pytest.mark.tpu
 def test_fixed_schedule_public_forward_isolates_data_sharded_neighbor_changes() -> None:
     _require_four_tpu_devices()
     spec = FixedScheduleSpec()
@@ -156,6 +153,7 @@ def test_fixed_schedule_public_forward_isolates_data_sharded_neighbor_changes() 
     assert before.sharding.spec == P("data", None, None, None)
 
 
+@pytest.mark.tpu
 def test_fixed_schedule_public_forward_normalizes_compound_explicit_input_shardings() -> None:
     _require_four_tpu_devices()
     spec = FixedScheduleSpec()
@@ -211,6 +209,7 @@ def test_fixed_schedule_public_forward_normalizes_compound_explicit_input_shardi
     assert compound.sharding.spec == P("data", None, None, None)
 
 
+@pytest.mark.tpu
 def test_fixed_schedule_public_forward_empty_neighbor_preserves_target() -> None:
     _require_four_tpu_devices()
     spec = FixedScheduleSpec()
@@ -272,70 +271,49 @@ def test_materialize_contiguous_kv_valid_adapter_map_writes_and_preserves_untouc
     assert jnp.array_equal(pages[2], jnp.zeros_like(pages[2]))
 
 
-def _run_explicit_data_sharding_case(dtype_name: str, jit: bool) -> None:
-    dtype = getattr(jnp, dtype_name)
-    spec = FixedScheduleSpec()
-    keys, values, _ = _fixture(spec)
-    keys = keys.astype(dtype)
-    values = values.astype(dtype)
-    expected_keys = keys.astype(jnp.bfloat16)
-    expected_values = values.astype(jnp.bfloat16)
-    page_indices = jnp.asarray([[1, 0], [3, 2], [5, 4], [7, 6]], dtype=jnp.int32)
-    devices = np.asarray(jax.devices()[:4]).reshape(1, 4, 1, 1)
-    mesh = Mesh(
-        devices,
-        ("replica_dcn", "data", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 4,
-    )
-    keys = jax.device_put(keys, NamedSharding(mesh, P("data", None, None, None)))
-    values = jax.device_put(values, NamedSharding(mesh, P("data", None, None, None)))
-    page_indices = jax.device_put(page_indices, NamedSharding(mesh, P()))
-    materialize = jax.jit(materialize_contiguous_kv, static_argnames=("spec",)) if jit else materialize_contiguous_kv
-
-    with jax.set_mesh(mesh):
-        pages = materialize(keys, values, page_indices, spec=spec)
-
-    assert pages.sharding.is_fully_replicated
-    assert jnp.array_equal(pages[1, :, 0, :], expected_keys[0, :128, 0, :])
-    assert jnp.array_equal(pages[0, :, 0, :], expected_keys[0, 128:, 0, :])
-    assert jnp.array_equal(pages[7, :, 1, :], expected_values[3, :128, 0, :])
-    assert jnp.array_equal(pages[6, :, 1, :], expected_values[3, 128:, 0, :])
-
-    poisoned = jax.device_put(
-        jnp.asarray([[1, 1], [3, 2], [5, 4], [7, 6]], dtype=jnp.int32),
-        NamedSharding(mesh, P()),
-    )
-    with jax.set_mesh(mesh):
-        poisoned_pages = materialize(keys, values, poisoned, spec=spec)
-    assert jnp.all(jnp.isnan(poisoned_pages))
-
-
 @pytest.mark.parametrize("dtype_name", ["float32", "bfloat16"])
 @pytest.mark.parametrize("jit", [False, True])
 def test_materialize_contiguous_kv_explicit_data_sharding_preserves_packing(dtype_name: str, jit: bool) -> None:
-    test_path = Path(__file__).resolve()
-    script = textwrap.dedent(
-        f"""
-        from runpy import run_path
+    with use_test_devices(4) as devices:
+        dtype = getattr(jnp, dtype_name)
+        spec = FixedScheduleSpec()
+        keys, values, _ = _fixture(spec)
+        keys = keys.astype(dtype)
+        values = values.astype(dtype)
+        expected_keys = keys.astype(jnp.bfloat16)
+        expected_values = values.astype(jnp.bfloat16)
+        page_indices = jnp.asarray([[1, 0], [3, 2], [5, 4], [7, 6]], dtype=jnp.int32)
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, 4, 1, 1),
+            ("replica_dcn", "data", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        keys = jax.device_put(keys, NamedSharding(mesh, P("data", None, None, None)))
+        values = jax.device_put(values, NamedSharding(mesh, P("data", None, None, None)))
+        page_indices = jax.device_put(page_indices, NamedSharding(mesh, P()))
+        materialize = (
+            jax.jit(materialize_contiguous_kv, static_argnames=("spec",)) if jit else materialize_contiguous_kv
+        )
 
-        test_globals = run_path({str(test_path)!r})
-        test_globals["_run_explicit_data_sharding_case"]({dtype_name!r}, {jit!r})
-        """
-    )
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["JAX_NUM_CPU_DEVICES"] = "4"
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=300,
-    )
-    assert result.returncode == 0, result.stderr
+        with jax.set_mesh(mesh):
+            pages = materialize(keys, values, page_indices, spec=spec)
+
+        assert pages.sharding.is_fully_replicated
+        assert jnp.array_equal(pages[1, :, 0, :], expected_keys[0, :128, 0, :])
+        assert jnp.array_equal(pages[0, :, 0, :], expected_keys[0, 128:, 0, :])
+        assert jnp.array_equal(pages[7, :, 1, :], expected_values[3, :128, 0, :])
+        assert jnp.array_equal(pages[6, :, 1, :], expected_values[3, 128:, 0, :])
+
+        poisoned = jax.device_put(
+            jnp.asarray([[1, 1], [3, 2], [5, 4], [7, 6]], dtype=jnp.int32),
+            NamedSharding(mesh, P()),
+        )
+        with jax.set_mesh(mesh):
+            poisoned_pages = materialize(keys, values, poisoned, spec=spec)
+        assert jnp.all(jnp.isnan(poisoned_pages))
 
 
+@pytest.mark.tpu
 def test_fixed_schedule_public_forward_poison_invalid_metadata() -> None:
     _require_four_tpu_devices()
     spec = FixedScheduleSpec()
