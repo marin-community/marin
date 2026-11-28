@@ -181,11 +181,12 @@ def response_logprobs(
     key: jax.Array | None = None,
     block_size: int = 1024,
 ) -> NamedArray:
-    """Score raw-policy response tokens without materializing full-vocab logits.
+    """Score raw-policy response tokens before applying the objective weights.
 
     Both scoring and training disable dropout. Padding forms a separate
-    attention segment, so valid queries cannot attend to padded keys. Returned
-    values include masked response positions; their objective weights are zero.
+    attention segment in standard scoring. Zero-KL scoring uses an unpacked,
+    right-padded causal layout. Returned scores at masked positions have no
+    effect on the objective.
     """
     Position = batch.tokens.resolve_axis("position")
     Response = batch.response_mask.resolve_axis("response")
@@ -194,9 +195,19 @@ def response_logprobs(
     if block_size < 1:
         raise ValueError("block_size must be positive")
     model = inference_mode(model, True)
-    segments = batch.segment_ids if batch.segment_ids is not None else batch.attention_mask.astype(jnp.int32)
-    mask = AttentionMask.causal().with_segment_ids(segments)
     replay = batch.route_replay
+    mask = AttentionMask.causal()
+    exact_model = (
+        model if isinstance(model, SnowballLMHeadModel) and model.config.replay_precision == "zero_kl" else None
+    )
+    if exact_model is not None:
+        if batch.segment_ids is not None or replay is None:
+            raise ValueError(
+                "Snowball zero-KL scoring requires unpacked, right-padded trajectories with captured routes"
+            )
+    else:
+        segments = batch.segment_ids if batch.segment_ids is not None else batch.attention_mask.astype(jnp.int32)
+        mask = mask.with_segment_ids(segments)
     if replay is None:
         activations, _ = split_activations(model.activations(batch.tokens, mask, pos_ids=batch.position_ids, key=key))
     else:
@@ -213,6 +224,8 @@ def response_logprobs(
     start = Position.size - Response.size
     predictions = activations[Position, hax.ds(start - 1, Response.size)].rename({Position.name: Response.name})
     targets = batch.tokens[Position, hax.ds(start, Response.size)].rename({Position.name: Response.name})
+    if exact_model is not None:
+        return exact_model.fixed_policy_logprobs(predictions, targets).rearrange(("batch", "response"))
     loss = fused_cross_entropy_loss_and_logsumexp_penalty(
         predictions.astype(jnp.float32),
         model.get_lm_head().astype(jnp.float32),

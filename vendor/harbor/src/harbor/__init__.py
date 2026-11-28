@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     from harbor.models.job.config import (
         DatasetConfig,
         JobConfig,
-        RetryConfig,
     )
     from harbor.models.job.result import AgentDatasetStats, JobResult, JobStats
 
@@ -176,7 +175,6 @@ _LAZY_IMPORTS = {
     "TrialQueue": ("harbor.trial.queue", "TrialQueue"),
     # Job models
     "JobConfig": ("harbor.models.job.config", "JobConfig"),
-    "RetryConfig": ("harbor.models.job.config", "RetryConfig"),
     "DatasetConfig": ("harbor.models.job.config", "DatasetConfig"),
     "LocalDatasetConfig": (
         "harbor.models.job.config",
@@ -258,7 +256,6 @@ __all__ = [
     "TrialQueue",
     # Job models
     "JobConfig",
-    "RetryConfig",
     "DatasetConfig",
     "LocalDatasetConfig",  # deprecated alias
     "RegistryDatasetConfig",  # deprecated alias

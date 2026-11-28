@@ -64,6 +64,8 @@ def prepare_rollout_policy_batch(
             position_ids[row, positions], np.arange(positions.size)
         ):
             raise ValueError("Rollout replay requires contiguous tokens with position IDs starting from zero")
+        if model.config.replay_precision == "zero_kl" and positions.size and positions[0] != 0:
+            raise ValueError("Snowball zero-KL replay requires right-padded trajectories")
         ids, route_valid = read_router_replay(result, rollout.choice, tokens[row, positions])
         if ids.shape != (model.config.num_layers, positions.size, model.config.num_experts_per_token):
             raise ValueError("Captured expert routes do not match the Snowball model dimensions")

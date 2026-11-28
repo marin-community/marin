@@ -5,10 +5,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.sharding import AxisType, Mesh
 
 import haliax as hax
+from levanter.kernels.logsumexp import batch_invariant_log_softmax
 from levanter.layers.sampler import LogprobMode, Sampler
-from levanter.models.loss import CrossEntropyNormalization, next_token_loss
 
 
 def test_sampler_top_p_keeps_only_the_nucleus_head():
@@ -62,21 +63,25 @@ def test_top_p_one_preserves_full_distribution_in_a_mixed_batch():
     assert float(logprobs.array[1]) == 0.0
 
 
-def test_policy_scores_match_unwarped_next_token_loss():
+@pytest.mark.tpu
+def test_policy_scores_match_unwarped_distribution():
     position, vocab = hax.Axis("position", 3), hax.Axis("vocab", 4)
     logits = hax.named(
-        jnp.array([[1.5, 0.0, -0.5, -1.0], [0.0, 1.75, 1.0, -0.5], [0.0, 0.0, 0.0, 0.0]]),
+        jnp.array([[9.0, -9.0, -9.0, -9.0], [0.0, 1.75, 1.0, -0.5], [0.0, 0.0, 0.0, 0.0]]),
         (position, vocab),
     )
-    kwargs = dict(top_ps=0.2, key=jax.random.PRNGKey(23))
-    behavior_tokens, behavior_scores = Sampler(vocab)(logits, 0.5, **kwargs)
-    policy_tokens, policy_scores = Sampler(vocab, logprob_mode=LogprobMode.POLICY)(logits, 0.5, **kwargs)
-    tokens = hax.named(jnp.array([0, policy_tokens.array[0], policy_tokens.array[1]]), position)
-    losses = next_token_loss(
-        position, vocab, logits, tokens, reduction=None, normalization=CrossEntropyNormalization.BATCH_INVARIANT
-    )
+    temperatures = hax.full(position, 0.5)
+    kwargs = dict(top_ps=hax.full(position, 0.2), key=jax.random.split(jax.random.key(23), position.size))
+    behavior = hax.vmap(Sampler(vocab), position)
+    policy = hax.vmap(Sampler(vocab, logprob_mode=LogprobMode.POLICY), position)
+    mesh = Mesh(np.array(jax.devices()[:1]), ("data",), axis_types=(AxisType.Explicit,))
+    with jax.set_mesh(mesh):
+        behavior_tokens, behavior_scores = jax.jit(behavior)(logits, temperatures, **kwargs)
+        policy_tokens, policy_scores = jax.jit(policy)(logits, temperatures, **kwargs)
+        distribution = jax.jit(batch_invariant_log_softmax)(logits.array)
 
+    expected_scores = np.asarray(distribution)[np.arange(position.size), np.asarray(policy_tokens.array)]
     np.testing.assert_array_equal(policy_tokens.array, behavior_tokens.array)
     np.testing.assert_array_equal(behavior_scores.array[:2], jnp.zeros(2))
-    np.testing.assert_array_equal(policy_scores.array[:2], -losses.array[:2])
-    assert jnp.all(policy_scores.array[:2] < 0)
+    np.testing.assert_array_equal(policy_scores.array, expected_scores)
+    assert jnp.all(policy_scores.array < 0)
