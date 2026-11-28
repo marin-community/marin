@@ -5,7 +5,7 @@
 
 from enum import StrEnum
 
-from rigging.port_lease import allocate_tcp_ports, configured_tcp_port
+from rigging.port_lease import allocate_tcp_port, configured_tcp_port
 
 
 class RayPort(StrEnum):
@@ -23,8 +23,8 @@ class RayPort(StrEnum):
 def resolve_ray_ports() -> dict[RayPort, int]:
     """Return the task's Ray endpoint ports and claim unassigned ports until exit."""
     ports = {port: configured_tcp_port(port) for port in RayPort}
-    pending = [port for port, value in ports.items() if not value]
-    if pending:
-        values = allocate_tcp_ports(len(pending), excluded=set(ports.values()))
-        ports.update(zip(pending, values, strict=True))
+    assigned = {port for port in ports.values() if port}
+    for port, value in ports.items():
+        if not value:
+            ports[port] = allocate_tcp_port(excluded=assigned)
     return ports

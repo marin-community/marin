@@ -173,8 +173,10 @@ whole engine gang with fresh rendezvous ports, within the existing
 
 Rigging claims DP rendezvous ports from 20000–23999 on the engine's target
 node. The same RPC and process-group ports are passed to every rank. Iris
-reserves this pool from automatic kernel assignment on GCP so outbound
-connections leave the claimed ports available to vLLM during startup.
+reserves this pool from automatic kernel assignment when GCP hosts run the
+updated bootstrap. On older hosts, an outbound connection can still take a
+port before vLLM binds it. A failed actor startup retries with fresh ports
+within the same deadline.
 
 `prepare` only validates the config. Submitting Hub models requires Iris job
 context; run the [experiment entry point](#experiment-entry-point) with `--run`

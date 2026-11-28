@@ -35,7 +35,7 @@ import socket
 import threading
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Iterator
-from contextlib import ExitStack, asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 
 import httpx
@@ -277,12 +277,14 @@ def bind_serving_socket(host: str, port: int = 0, *, name: str | None = None) ->
     """Bind a socket before starting the server, honoring a named allocation."""
     if name is not None:
         port = configured_tcp_port(name) or port
-    with ExitStack() as cleanup:
-        sock = cleanup.enter_context(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((host, port))
-        cleanup.pop_all()
-        return sock
+    except BaseException:
+        sock.close()
+        raise
+    return sock
 
 
 @dataclass(frozen=True)

@@ -1,22 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Process-scoped claims for TCP ports shared by host-network processes."""
+"""Allocate TCP ports before a server can bind them."""
 
 import errno
-import fcntl
 import os
 import socket
 import sys
-from collections.abc import Collection, Iterable, Iterator
+import tempfile
+from collections.abc import Callable, Collection, Iterator
 from contextlib import ExitStack, contextmanager
+from itertools import chain
 from pathlib import Path
-from random import Random
+from random import randrange
+
+from filelock import FileLock, Timeout
 
 DYNAMIC_TCP_PORTS = range(20_000, 24_000)
 PORT_ENV_PREFIX = "IRIS_PORT_"
 _MAX_TCP_PORT = 65_535
-_PROCESS_LEASES = ExitStack()
+_PROCESS_RELEASES: list[Callable[[], None]] = []
 
 
 def port_env_var(name: str) -> str:
@@ -34,8 +37,7 @@ def configured_tcp_port(name: str) -> int:
 
 
 def _probe_tcp_port(port: int) -> None:
-    # Wildcard binds detect conflicts on individual interfaces. The probe
-    # sockets close without listening.
+    # Detect conflicts on every interface. Neither socket calls listen().
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind(("", port))
     if socket.has_ipv6:
@@ -48,91 +50,84 @@ def _probe_tcp_port(port: int) -> None:
                 raise
 
 
-@contextmanager
-def claim_tcp_port(port: int) -> Iterator[None]:
-    """Claim a specific port, including a port already bound by an adopted task."""
+def claim_tcp_port(port: int) -> Callable[[], None]:
+    """Claim a port and return its release callback. The port may be bound."""
     if sys.platform == "linux":
         # Abstract names coordinate even when host-network pods have separate filesystems.
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as claim:
+        claim = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
             claim.bind(f"\0rigging-tcp-port-{port}")
-            yield
-        return
+        except BaseException:
+            claim.close()
+            raise
+        return claim.close
 
-    directory = Path("/tmp") / f"rigging-tcp-ports-{os.getuid()}"
+    directory = Path(tempfile.gettempdir()) / f"rigging-tcp-ports-{os.getuid()}"
     directory.mkdir(mode=0o700, exist_ok=True)
-    # Keep the file so every contender locks the same inode.
-    with (directory / str(port)).open("a") as claim:
-        fcntl.flock(claim, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        yield
+    lock = FileLock(directory / str(port), thread_local=False)
+    lock.acquire(timeout=0)
+    return lock.release
+
+
+def try_claim_free_tcp_port(port: int) -> Callable[[], None] | None:
+    """Claim an unbound port, returning its release callback if available."""
+    release = None
+    try:
+        release = claim_tcp_port(port)
+        _probe_tcp_port(port)
+    except Timeout:
+        return None
+    except BaseException as error:
+        if release is not None:
+            release()
+        if isinstance(error, OSError) and error.errno == errno.EADDRINUSE:
+            return None
+        raise
+    return release
+
+
+def _port_candidates(ports: range) -> Iterator[int]:
+    if ports:
+        first = randrange(ports.start, ports.stop)
+        yield from chain(range(first, ports.stop), range(ports.start, first))
+
+
+def _claim_dynamic_tcp_port(excluded: Collection[int]) -> tuple[int, Callable[[], None]]:
+    for port in _port_candidates(DYNAMIC_TCP_PORTS):
+        if port not in excluded and (release := try_claim_free_tcp_port(port)) is not None:
+            return port, release
+    raise RuntimeError(f"No free TCP ports in {DYNAMIC_TCP_PORTS.start}-{DYNAMIC_TCP_PORTS.stop - 1}")
 
 
 @contextmanager
-def lease_tcp_ports(
-    count: int = 1,
-    *,
-    excluded: Collection[int] = (),
-    candidates: Iterable[int] | None = None,
-) -> Iterator[list[int]]:
-    """Claim unbound host TCP ports until context exit or process death.
-
-    Dynamic leases use the shared 20000-23999 range and skip ports in use.
-    The TCP listener binds its own socket. Hosts whose ephemeral range
-    overlaps the lease range can reserve it from kernel assignment.
-    """
-    if count < 1:
-        raise ValueError("count must be positive")
-
-    if candidates is None:
-        shuffled = list(DYNAMIC_TCP_PORTS)
-        Random().shuffle(shuffled)
-        candidates = shuffled
-
-    with ExitStack() as leases:
-        selected: list[int] = []
-        for port in candidates:
-            if port in excluded:
-                continue
-            try:
-                with ExitStack() as attempt:
-                    attempt.enter_context(claim_tcp_port(port))
-                    _probe_tcp_port(port)
-                    leases.enter_context(attempt.pop_all())
-            except OSError as error:
-                if error.errno in (errno.EADDRINUSE, errno.EACCES, errno.EAGAIN):
-                    continue
-                raise
-            selected.append(port)
-            if len(selected) == count:
-                yield selected
-                return
-
-        raise RuntimeError(f"Could not lease {count} unbound TCP ports")
-
-
-@contextmanager
-def lease_tcp_port(port: int = 0, *, name: str | None = None, excluded: Collection[int] = ()) -> Iterator[int]:
-    """Use a named allocation, an explicit port, or a dynamic TCP lease.
-
-    A nonzero ``IRIS_PORT_<NAME>`` takes precedence over ``port``. Assigned and
-    explicitly specified ports are used as-is. Zero requests a lease.
-    """
-    if name is not None:
-        port = configured_tcp_port(name) or port
+def lease_tcp_port(port: int = 0, *, excluded: Collection[int] = ()) -> Iterator[int]:
+    """Use an explicit port or hold a dynamic claim until context exit."""
     if port:
         yield port
         return
-    with lease_tcp_ports(excluded=excluded) as ports:
-        yield ports[0]
+    port, release = _claim_dynamic_tcp_port(excluded)
+    try:
+        yield port
+    finally:
+        release()
 
 
 def allocate_tcp_port(port: int = 0, *, name: str | None = None, excluded: Collection[int] = ()) -> int:
-    """Resolve a port like `lease_tcp_port` and hold any claim until process exit."""
-    return _PROCESS_LEASES.enter_context(lease_tcp_port(port, name=name, excluded=excluded))
+    """Use a named or explicit port, or claim a dynamic port until process exit."""
+    if name is not None:
+        port = configured_tcp_port(name) or port
+    if port:
+        return port
+    port, release = _claim_dynamic_tcp_port(excluded)
+    _PROCESS_RELEASES.append(release)
+    return port
 
 
-def allocate_tcp_ports(count: int, *, excluded: Collection[int] = ()) -> list[int]:
-    """Allocate dynamic ports and hold their claims until process exit."""
-    return _PROCESS_LEASES.enter_context(lease_tcp_ports(count, excluded=excluded))
+@contextmanager
+def lease_tcp_ports(count: int, *, excluded: Collection[int] = ()) -> Iterator[list[int]]:
+    """Hold multiple dynamic claims until context exit."""
+    with ExitStack() as leases:
+        yield [leases.enter_context(lease_tcp_port(excluded=excluded)) for _ in range(count)]
 
 
 @contextmanager
@@ -140,15 +135,15 @@ def lease_tcp_port_block(count: int) -> Iterator[int]:
     """Lease a contiguous block and yield its first port."""
     if count < 1:
         raise ValueError("count must be positive")
-    bases = list(range(DYNAMIC_TCP_PORTS.start, DYNAMIC_TCP_PORTS.stop - count + 1))
-    Random().shuffle(bases)
-    with ExitStack() as leases:
-        for base in bases:
-            block = range(base, base + count)
-            try:
-                leases.enter_context(lease_tcp_ports(count, candidates=block))
-            except RuntimeError:
-                continue
-            yield base
-            return
+    bases = range(DYNAMIC_TCP_PORTS.start, DYNAMIC_TCP_PORTS.stop - count + 1)
+    for base in _port_candidates(bases):
+        with ExitStack() as leases:
+            for port in range(base, base + count):
+                release = try_claim_free_tcp_port(port)
+                if release is None:
+                    break
+                leases.callback(release)
+            else:
+                yield base
+                return
     raise RuntimeError(f"Could not lease a contiguous block of {count} TCP ports")
