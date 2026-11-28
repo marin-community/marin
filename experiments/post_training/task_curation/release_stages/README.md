@@ -537,3 +537,13 @@ rebindings preserve their exact statistics; reduced populations must have the
 new denominator and componentwise subset bounds. The loader checks each pinned
 identity mapping against the selected source's task count, unique old/new IDs,
 removal count and changed-ID count before accepting the scoped handoff.
+
+
+Re-cuts retain the curriculum selected when the plan was derived, as well as its
+served declarations and surveys. The exact `prior_curriculum_load_id` resolves
+through its SHA-bound confidence sidecar to the release and coverage; the mutable
+`latest` pointer is never used during recovery. Older sealed re-cut plans that
+still carry their original config's curriculum pins recover through that same
+frozen load ID. Composition seals in a new manifest namespace and refuses an
+inventory that would omit or add undeclared sources before starting heavy work.
+Completed fresh embeddings and catalog loads keep their artifact identities.

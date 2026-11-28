@@ -69,6 +69,7 @@ from experiments.post_training.task_curation.release_stages.graph import (
 )
 from experiments.post_training.task_curation.release_stages.history_staging import Query
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+from experiments.post_training.task_curation.release_stages.prior_curriculum import prior_curriculum_pins
 from experiments.post_training.task_curation.release_stages.qc_browse import changed_review_sources
 from experiments.post_training.task_curation.release_stages.release_config import (
     ReleaseConfig,
@@ -634,6 +635,7 @@ def derive_release_plan(
         prior_pins["declarations"] = ArtifactRef(**state_refs["declarations"])
         prior_pins["identity"] = ArtifactRef(**state_refs["identity"])
         prior_pins["backend"] = ArtifactRef(**state_refs["backend"])
+        prior_pins.update(prior_curriculum_pins(query, prior.curriculum_load_id))
 
     prior_curriculum = _verify_prior_pin(prior_pins["composed_release"], "prior_release.composed_release")
     prior_inventory = {canonical_source_id(row["id"]): row for row in prior_curriculum["inventory"]}

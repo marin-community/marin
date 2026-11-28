@@ -82,7 +82,7 @@ EXPECTED_NODES = (
 )
 
 # The two configuration-document nodes take dash-separated artifact names.
-DOC_NODE_DASH_NAMES = {"census_inputs": "census-inputs", "compose_manifest": "compose-manifest-frozen-contracts-v1"}
+DOC_NODE_DASH_NAMES = {"census_inputs": "census-inputs", "compose_manifest": "compose-manifest-served-prior-v2"}
 
 
 def _receipt_ref(tmp_path: Path, name: str, document: dict) -> dict:
@@ -338,15 +338,61 @@ def test_census_inputs_node_seals_one_row_per_declared_source(tmp_path):
         )
 
 
-@pytest.mark.parametrize("contract_state", ["fresh", "stale", "missing"])
-def test_compose_manifest_uses_frozen_contracts_and_preserves_legacy_output(tmp_path, contract_state):
+@pytest.mark.parametrize("contract_state", ["fresh", "stale", "missing", "served_prior", "missing_inventory"])
+def test_compose_manifest_uses_frozen_contracts_and_preserves_legacy_output(tmp_path, contract_state, monkeypatch):
     plan = fixture_plan(release_root=str(tmp_path / "release"))
+    prior = _receipt_ref(tmp_path, "prior-release.json", {"inventory": []})
+    plan = plan.model_copy(update={"pins": plan.pins.model_copy(update={"prior_release": ArtifactRef(**prior)})})
     built = release_graph(plan)
     prefix = str(tmp_path / "artifacts")
     source_id = plan.targets[0]
     binding = actor_census_input("fixture", "new-pin", "1", 3)
     declaration = {"id": source_id, "actor_census_input": binding.model_dump(mode="json")}
-    declarations = _receipt_ref(tmp_path, "declarations.json", {source_id: declaration})
+    declared = {source_id: declaration}
+    served_release = None
+    if contract_state in {"served_prior", "missing_inventory"}:
+        declared["Marin:retained"] = {"id": "Marin:retained"}
+    if contract_state == "served_prior":
+        served_release = _receipt_ref(
+            tmp_path,
+            "served-release.json",
+            {
+                "release_id": "served-release",
+                "curriculum_key": "fixture",
+                "task_count": 9,
+                "inventory": [{"id": "Marin:retained"}],
+            },
+        )
+        coverage = _receipt_ref(
+            tmp_path,
+            "served-coverage.json",
+            {
+                "coverage_id": "served-coverage",
+                "alignment_release_id": "served-release",
+                "curriculum_key": "fixture",
+                "task_count": 9,
+            },
+        )
+        confidence = _receipt_ref(tmp_path, "served-confidence.json", {"release": served_release, "coverage": coverage})
+        plan = plan.model_copy(update={"recut": True})
+        built = release_graph(plan)
+
+        def query(sql, parameters):
+            assert "FROM curriculum_loads WHERE load_id=:load" in sql
+            assert parameters == {"load": plan.prior_curriculum_load_id}
+            return {
+                "rows": [
+                    {
+                        "load_id": plan.prior_curriculum_load_id,
+                        "release_id": "served-coverage",
+                        "release_uri": served_release["uri"],
+                        "confidence": confidence,
+                    }
+                ]
+            }
+
+        monkeypatch.setattr(release_graph_module, "open_paced_query", lambda *args: query)
+    declarations = _receipt_ref(tmp_path, "declarations.json", declared)
     _declarations_dep(built, prefix, plan, declarations)
     aligned = _receipt_ref(tmp_path, "alignment.json", {"aligned": True})
     _write_dep(
@@ -391,13 +437,17 @@ def test_compose_manifest_uses_frozen_contracts_and_preserves_legacy_output(tmp_
     legacy.write_text('{"legacy":true}\n')
     handle = built.compose_manifest_handle
     inputs = _materialized_inputs(handle, prefix)
-    if contract_state != "fresh":
-        with pytest.raises(ValueError, match="composition contract does not bind"):
+    if contract_state in {"stale", "missing", "missing_inventory"}:
+        error = "does not conserve" if contract_state == "missing_inventory" else "composition contract does not bind"
+        with pytest.raises(ValueError, match=error):
             handle.run(inputs)
         assert list(legacy.parent.iterdir()) == [legacy]
         return
     result = handle.run(inputs)
     manifest = read_ref(ArtifactRef(uri=result.uri, sha256=result.sha256))
+    if served_release is not None:
+        assert manifest["old_release"] == served_release
+        assert manifest["old_release"] != prior
     sealed_contracts = read_ref(ArtifactRef(**manifest["target_contracts"]))
     assert sealed_contracts[source_id]["input"] == declaration["actor_census_input"]
     assert legacy.read_text() == '{"legacy":true}\n'

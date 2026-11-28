@@ -281,6 +281,43 @@ def _prior_pins(tmp_path: Path, declared: dict) -> PriorRelease:
     )
 
 
+def _served_curriculum_row(tmp_path: Path, declarations: dict[str, dict]) -> dict:
+    """A newer served curriculum with real digest-bound sidecar documents."""
+
+    def pin(name: str, document: dict) -> dict:
+        path = tmp_path / "served-curriculum" / f"{name}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(document, sort_keys=True))
+        return {"uri": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+    tasks = sum(row["task_count"] for row in declarations.values())
+    release = pin(
+        "release",
+        {
+            "release_id": "served-curriculum",
+            "curriculum_key": "fixture",
+            "task_count": tasks,
+            "inventory": list(declarations.values()),
+        },
+    )
+    coverage = pin(
+        "coverage",
+        {
+            "coverage_id": "served-coverage",
+            "alignment_release_id": "served-curriculum",
+            "curriculum_key": "fixture",
+            "task_count": tasks,
+        },
+    )
+    confidence = pin("confidence", {"release": release, "coverage": coverage})
+    return {
+        "load_id": PRIOR_CURRICULUM_LOAD_ID,
+        "release_id": "served-coverage",
+        "release_uri": release["uri"],
+        "confidence": confidence,
+    }
+
+
 def _applet_query(prior_load_id: str, curriculum_load_id: str, panels: list[str], available: list[str]):
     """The applet SQL the prior-state reads run, faked at the row level."""
 
@@ -468,6 +505,9 @@ def test_recut_retains_against_the_served_state(tmp_path, frozen_layer, deployme
             return {"rows": [{"load_id": PRIOR_LOAD_ID}]}
         if "FROM curriculum_current" in sql:
             return {"rows": [{"load_id": PRIOR_CURRICULUM_LOAD_ID}]}
+        if "FROM curriculum_loads" in sql:
+            assert parameters == {"load": PRIOR_CURRICULUM_LOAD_ID}
+            return {"rows": [_served_curriculum_row(tmp_path, served_declarations)]}
         if "FROM atlas_review_current" in sql:
             return {"rows": []}
         if "FROM atlas_sources" in sql:
@@ -517,6 +557,14 @@ def test_recut_retains_against_the_served_state(tmp_path, frozen_layer, deployme
     assert pins.prior_declarations.uri.endswith("prior-state/declarations.json")
     assert pins.prior_identity.uri.endswith("prior-state/identity.json")
     assert pins.prior_backend.uri.endswith("prior-state/backend.json")
+    # The config's older curriculum must not silently replace the served one.
+    assert pins.prior_release != prior.composed_release
+    assert pins.prior_coverage != prior.composed_coverage
+    served_release = plan_derivation._verify_prior_pin(pins.prior_release, "served release")
+    served_coverage = plan_derivation._verify_prior_pin(pins.prior_coverage, "served coverage")
+    assert served_release["release_id"] == "served-curriculum"
+    assert served_coverage["alignment_release_id"] == served_release["release_id"]
+    assert served_coverage["task_count"] == sum(row["task_count"] for row in served_declarations.values())
     deployment = region_deployment(CLUSTER)
     release_root = f"{deployment.region_prefix}preview-release/testrelease-{FREEZE_ARTIFACT_VERSION}"
     sealed = json.loads(StoragePath(f"{release_root}/prior-state/declarations.json").read_bytes())
@@ -915,6 +963,9 @@ def test_recut_census_is_incremental(tmp_path, frozen_layer, deployment, monkeyp
             return {"rows": [{"load_id": PRIOR_LOAD_ID}]}
         if "FROM curriculum_current" in sql:
             return {"rows": [{"load_id": PRIOR_CURRICULUM_LOAD_ID}]}
+        if "FROM curriculum_loads" in sql:
+            assert parameters == {"load": PRIOR_CURRICULUM_LOAD_ID}
+            return {"rows": [_served_curriculum_row(tmp_path, served_declarations)]}
         if "FROM atlas_review_current" in sql:
             return {"rows": []}
         if "FROM atlas_sources" in sql:
@@ -1035,7 +1086,7 @@ def test_recut_census_is_incremental(tmp_path, frozen_layer, deployment, monkeyp
     assert sorted(seen_census_inputs["populations"]) == [TARGET_ID]
 
 
-def _recut_query(served_declarations: dict[str, dict]):
+def _recut_query(tmp_path: Path, served_declarations: dict[str, dict]):
     """The applet SQL fakes for a re-cut derivation over the fixture survey documents."""
     survey = {
         "catalog_root": "s3://example/catalog",
@@ -1089,6 +1140,9 @@ def _recut_query(served_declarations: dict[str, dict]):
             return {"rows": [{"load_id": PRIOR_LOAD_ID}]}
         if "FROM curriculum_current" in sql:
             return {"rows": [{"load_id": PRIOR_CURRICULUM_LOAD_ID}]}
+        if "FROM curriculum_loads" in sql:
+            assert parameters == {"load": PRIOR_CURRICULUM_LOAD_ID}
+            return {"rows": [_served_curriculum_row(tmp_path, served_declarations)]}
         if "FROM atlas_review_current" in sql:
             return {"rows": []}
         if "FROM atlas_sources" in sql:
@@ -1132,7 +1186,7 @@ def test_deliberate_exclusion_is_not_a_target(tmp_path, frozen_layer, deployment
     derived = derive_release_plan(
         config,
         repo_root=REPO_ROOT,
-        query=_recut_query(served_declarations),
+        query=_recut_query(tmp_path, served_declarations),
         sources_fn=lambda: layer,
         prior_catalog_reader=lambda root, q: read_prior_catalog_state(
             root,
@@ -1237,7 +1291,7 @@ def test_recut_corpus_expects_the_scoped_census(tmp_path, frozen_layer, deployme
     derived = derive_release_plan(
         config,
         repo_root=REPO_ROOT,
-        query=_recut_query(served_declarations),
+        query=_recut_query(tmp_path, served_declarations),
         sources_fn=lambda: layer,
         prior_catalog_reader=lambda root, q: read_prior_catalog_state(
             root,
@@ -1291,7 +1345,7 @@ def test_recut_targets_against_the_served_state(tmp_path, frozen_layer, deployme
     derived = derive_release_plan(
         config,
         repo_root=REPO_ROOT,
-        query=_recut_query(served_declarations),
+        query=_recut_query(tmp_path, served_declarations),
         sources_fn=lambda: layer,
         prior_catalog_reader=lambda root, q: read_prior_catalog_state(
             root,
@@ -1335,7 +1389,7 @@ def test_recut_adopts_a_genuine_repin(tmp_path, frozen_layer, deployment, monkey
     derived = derive_release_plan(
         config,
         repo_root=REPO_ROOT,
-        query=_recut_query(served_declarations),
+        query=_recut_query(tmp_path, served_declarations),
         sources_fn=lambda: layer,
         prior_catalog_reader=lambda root, q: read_prior_catalog_state(
             root,

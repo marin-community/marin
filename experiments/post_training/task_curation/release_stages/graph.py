@@ -160,6 +160,7 @@ from experiments.post_training.task_curation.release_stages.paced_query import (
     RetryControl,
     open_paced_query,
 )
+from experiments.post_training.task_curation.release_stages.prior_curriculum import prior_curriculum_pins
 from experiments.post_training.task_curation.release_stages.sizing import (
     StageResources,
     census_sizing,
@@ -396,7 +397,7 @@ def plan_ref(release_root: str, relative: str, sha256: str | None = None) -> dic
 
 # The derived package inputs (oracle inventory, source counts) seal under this stage dir.
 PACKAGE_INPUTS_STAGE_DIR = "package-inputs"
-COMPOSE_MANIFEST_VERSION_SUFFIX = "frozen-contracts-v1"
+COMPOSE_MANIFEST_VERSION_SUFFIX = "served-prior-v2"
 
 
 def stage_output_root(plan: ReleasePlan, stage: str) -> str:
@@ -546,17 +547,28 @@ def _execute_census_inputs(config: dict) -> dict:
 
 def _execute_compose_manifest(config: dict) -> dict:
     contracts = sealed_contract_rows(read_ref(ArtifactRef(**config["contracts"])))
+    prior_release, prior_coverage = config["prior_release"], config["prior_coverage"]
+    if config.get("prior_curriculum"):
+        # Older sealed re-cut plans refreshed catalog metadata but kept the
+        # config's original curriculum. Recover from the load ID already frozen
+        # in that plan, never from today's selected pointer.
+        prior = config["prior_curriculum"]
+        query = open_paced_query(prior["service_url"], prior["applet_id"], RetryControl())
+        pins = prior_curriculum_pins(query, prior["load_id"])
+        prior_release = pins["composed_release"].model_dump(mode="json")
+        prior_coverage = pins["composed_coverage"].model_dump(mode="json")
     return _seal_compose_manifest(
         declarations=read_ref(ArtifactRef(**config["declarations"])),
         contract_receipts={row["source_id"]: DerivedContractReceipt.model_validate(row) for row in contracts},
         targets=tuple(config["targets"]),
-        prior_release=config["prior_release"],
-        prior_coverage=config["prior_coverage"],
+        prior_release=prior_release,
+        prior_coverage=prior_coverage,
         fresh_release=config["fresh_release"],
         fresh_coverage=config["fresh_coverage"],
         rebound_source=config["rebound_source"],
         rebound_tasks=config["rebound_tasks"],
         release_root=config["release_root"],
+        removed_sources=tuple(config.get("removed_sources", ())),
     )
 
 
@@ -859,11 +871,19 @@ def _seal_compose_manifest(
     rebound_source: str,
     rebound_tasks: int,
     release_root: str,
+    removed_sources: tuple[str, ...] = (),
 ) -> dict:
     """Seal the composition manifest: prior + fresh alignment pins and the target declarations."""
     missing = sorted(set(targets) - set(declarations))
     if missing:
         raise ValueError(f"compose targets missing from the sealed declarations: {missing[:5]}")
+    retained = read_ref(ArtifactRef.model_validate(prior_release))
+    inventory = ({row["id"] for row in retained["inventory"]} | set(targets)) - set(removed_sources)
+    if inventory != set(declarations):
+        raise ValueError(
+            "composition prior inventory does not conserve the frozen declarations:"
+            f" missing={sorted(set(declarations) - inventory)}, extra={sorted(inventory - set(declarations))}"
+        )
     for source_id in targets:
         receipt = contract_receipts.get(source_id)
         binding = declarations[source_id]["actor_census_input"]
@@ -954,6 +974,16 @@ def _compose_manifest_step(
         "targets": list(plan.targets),
         "prior_release": _ref_dict(plan.pins.prior_release),
         "prior_coverage": _ref_dict(plan.pins.prior_coverage),
+        "prior_curriculum": (
+            {
+                "load_id": plan.prior_curriculum_load_id,
+                "service_url": plan.service.service_url,
+                "applet_id": plan.service.applet_id,
+            }
+            if plan.recut
+            else None
+        ),
+        "removed_sources": list(plan.removed_sources),
         "rebound_source": plan.rebound_source,
         "rebound_tasks": plan.rebound_tasks,
         "release_root": plan.release_root,
