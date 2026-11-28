@@ -9,6 +9,8 @@ their original keys, and the read boundary joins them onto the renamed
 declaration.
 """
 
+from collections.abc import Mapping
+
 SOURCE_ID_ALIASES: dict[str, str] = {
     "MarinSkyRL:aime24": "HuggingFaceH4:aime24",
     "MarinSkyRL:aime_1983_2024": "di-zhang-fdu:aime_1983_2024",
@@ -566,3 +568,22 @@ SOURCE_ID_ALIASES: dict[str, str] = {
 def canonical_source_id(source_id: str) -> str:
     """Resolve a published historical ID to its generated catalog identity."""
     return SOURCE_ID_ALIASES.get(source_id, source_id)
+
+
+_ORIGINAL_SOURCE_IDS = {new: old for old, new in SOURCE_ID_ALIASES.items()}
+
+
+def original_source_id(source_id: str) -> str:
+    """Keep artifact identities, sampling seeds and ordering tied to the original ID."""
+    return _ORIGINAL_SOURCE_IDS.get(source_id, source_id)
+
+
+def canonical_source_map[T](records: Mapping[str, T]) -> dict[str, T]:
+    """Resolve source-keyed records without silently collapsing two historical entries."""
+    result = {}
+    for source_id, record in records.items():
+        key = canonical_source_id(source_id)
+        if key in result:
+            raise ValueError(f"Duplicate aliased source identity: {key}")
+        result[key] = record
+    return result
