@@ -13,15 +13,19 @@ import asyncio
 import collections
 import collections.abc
 import logging
+import math
 import queue
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import List, Optional, Union
 
+import grpc
 import haliax as hax
 import jax.numpy as jnp
+from jax.sharding import Mesh
 import jax.random as jrandom
 import numpy as np
 import uvicorn
@@ -37,13 +41,16 @@ from openai.types.chat.chat_completion_chunk import ChoiceLogprobs as ChunkChoic
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_choice import CompletionChoice, Logprobs
+from levanter.inference import inference_pb2, inference_pb2_grpc
 from levanter.inference.engine import (
+    GeneratedExpertRoutes,
     InferenceEngine,
     InferenceEngineConfig,
     Request,
     TokenSequenceLogprobs,
 )
 from levanter.inference.jit_scheduler import SeqDecodingParams
+from levanter.layers.sampler import LogprobMode
 from levanter.inference.openai_protocol import (
     ChatCompletionRequest,
     ChatMessage,
@@ -52,6 +59,8 @@ from levanter.inference.openai_protocol import (
     TokensRequest,
     TokensResponse,
 )
+from levanter.inference.router_replay import write_router_replay
+from levanter.inference.utils import INVALID
 from levanter.models.lm_model import LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.trainer import TrainerConfig
@@ -60,6 +69,7 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_MODEL_NAME = "levanter"
+MAX_POLICY_ID_LENGTH = 256
 RESERVED_CHAT_TEMPLATE_KWARGS = frozenset({"add_generation_prompt", "chat_template", "return_dict", "tokenize"})
 
 
@@ -75,6 +85,8 @@ class InferenceServerConfig:
 
     model_name: str = DEFAULT_MODEL_NAME
     """Model id this server advertises from ``/v1/models``."""
+    initial_policy_id: str | None = None
+    """Immutable weight identity supplied by the publisher."""
 
     # Default generation parameters for API
     temperature: float = 0.7
@@ -84,6 +96,8 @@ class InferenceServerConfig:
 
     host: str = "localhost"
     port: int = 0  # auto-assign port
+    grpc_port: int | None = None
+    """Optional exact-token gRPC listener on the same host. Use 0 for an ephemeral port."""
 
 
 @dataclass
@@ -95,11 +109,13 @@ class InferenceRequest:
     max_tokens: int
     temperature: float
     top_p: float | None
-    stop_tokens: List[int] | None
+    stop_tokens: List[List[int]] | None
     seed: int | None
     future: asyncio.Future
     n_generations: int = 1
     echo_logprobs_top_k: int | None = None
+    return_route_captures: bool = False
+    expected_policy_id: str | None = None
 
 
 @dataclass
@@ -114,6 +130,13 @@ class InferenceResponse:
     logprobs: Optional[List[float]] = None
     echo_token_ids: List[int] | None = None
     echo_logprobs: TokenSequenceLogprobs | None = None
+    expert_routes: GeneratedExpertRoutes | None = None
+    model_version: int = 0
+    policy_id: str | None = None
+
+
+class PolicyMismatchError(ValueError):
+    """A generate request was queued for a different immutable policy."""
 
 
 class InferenceBatch(list):
@@ -141,31 +164,38 @@ def _fetch_all_from_queue(q: queue.Queue, timeout: float) -> List:
     return items
 
 
-def _encode_stop_tokens(stop: Union[str, List[str], None], tokenizer: MarinTokenizer) -> Optional[List[int]]:
-    """Tokenize the OpenAI-style ``stop`` field into a flat list of token ids, or None if unset."""
+def _encode_stop_tokens(stop: Union[str, List[str], None], tokenizer: MarinTokenizer) -> List[List[int]] | None:
+    """Tokenize each stop string as a separate sequence."""
     if not stop:
         return None
     stop_list = [stop] if isinstance(stop, str) else stop
-    stop_tokens: List[int] = []
-    for s in stop_list:
-        stop_ids = tokenizer.encode(s, add_special_tokens=False)
-        if stop_ids:
-            stop_tokens.extend(stop_ids)
-    return stop_tokens
+    sequences = [tokenizer.encode(text, add_special_tokens=False) for text in stop_list]
+    return [seq for seq in sequences if seq] or None
 
 
 class InferenceContext:
     """Background thread that manages the InferenceEngine and processes requests"""
 
-    def __init__(self, model: LmHeadModel, tokenizer, engine: InferenceEngine, config: InferenceServerConfig):
+    def __init__(
+        self,
+        model: LmHeadModel,
+        tokenizer,
+        engine: InferenceEngine,
+        config: InferenceServerConfig,
+        *,
+        mesh: Mesh | None = None,
+    ):
         self.model = model
         self.tokenizer = tokenizer
         self.engine = engine
         self.config = config
+        self.mesh = config.trainer.device_mesh if mesh is None else mesh
         self.request_queue: queue.Queue[InferenceRequest] = queue.Queue()
         self.batch_queue: queue.Queue[InferenceBatch] = queue.Queue()
         self.shutdown_event = threading.Event()
         self.model_lock = threading.Lock()
+        self._model_version = 0
+        self._policy_id = config.initial_policy_id
         self.inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
         self.batch_thread = threading.Thread(target=self._batch_processing_loop, daemon=True)
         self._next_request_id = 0
@@ -192,32 +222,33 @@ class InferenceContext:
             self.engine = None  # type: ignore[assignment]
         logger.info("Inference model unloaded.")
 
-    def reload(self, weight_callback: WeightSource):
-        """Reload the inference model using the given weight callback.
-
-        If new weights are found, new requests are paused, existing requests are
-        allowed to complete, and the new weights are loaded.
-        """
-        logger.info("New weights available, waiting for model lock...")
-        lock_start_time = time.time()
+    def reload(
+        self, weight_callback: WeightSource, *, expected_version: int | None = None, policy_id: str | None = None
+    ) -> int:
+        """Install new weights and return the serving version after resetting the cache."""
         with self.model_lock:
-            lock_wait_time = time.time() - lock_start_time
-            logger.info(f"Acquired model lock after {lock_wait_time}, reloading weights...")
+            if expected_version is not None and expected_version != self._model_version:
+                raise ValueError(f"Expected model version {expected_version}, serving {self._model_version}")
+            if policy_id is not None and (
+                not 0 < len(policy_id) <= MAX_POLICY_ID_LENGTH or policy_id == self._policy_id
+            ):
+                raise ValueError("A weight update requires a new, nonempty policy ID")
 
-            start = time.time()
             with (
-                hax.partitioning.set_mesh(self.config.trainer.device_mesh),
+                hax.partitioning.set_mesh(self.mesh),
                 hax.axis_mapping(self.config.trainer.compute_axis_mapping),
             ):
-                self.model = weight_callback(self.model)
-                self.engine = InferenceEngine.from_model_with_config(
-                    model=self.model,
+                model = weight_callback(self.model)
+                engine = InferenceEngine.from_model_with_config(
+                    model=model,
                     tokenizer=self.tokenizer,
                     config=self.config.service,
                     axis_resources=self.config.trainer.compute_axis_mapping,
                 )
-                elapsed = time.time() - start
-            logger.info(f"Model reloaded in {elapsed:.2f}s")
+            self.model, self.engine = model, engine
+            self._model_version += 1
+            self._policy_id = policy_id
+            return self._model_version
 
     def submit_request(
         self,
@@ -225,11 +256,14 @@ class InferenceContext:
         max_tokens: int,
         temperature: float,
         top_p: float | None,
-        stop_tokens: Optional[List[int]],
+        stop_tokens: List[List[int]] | None,
         seed: int | None,
         future: asyncio.Future,
         n_generations: int = 1,
         echo_logprobs_top_k: int | None = None,
+        *,
+        return_route_captures: bool = False,
+        expected_policy_id: str | None = None,
     ) -> str:
         """Submit a request to the inference queue"""
         assert self.shutdown_event.is_set() is False, "InferenceContext is shut down"
@@ -247,6 +281,8 @@ class InferenceContext:
             future=future,
             n_generations=n_generations,
             echo_logprobs_top_k=echo_logprobs_top_k,
+            return_route_captures=return_route_captures,
+            expected_policy_id=expected_policy_id,
         )
 
         logger.info("Enqueuing request %s", request)
@@ -312,10 +348,12 @@ class InferenceContext:
                 batch = self.batch_queue.get(timeout=1)
                 with (
                     self.model_lock,
-                    hax.partitioning.set_mesh(self.config.trainer.device_mesh),
+                    hax.partitioning.set_mesh(self.mesh),
                     hax.axis_mapping(self.config.trainer.compute_axis_mapping),
                 ):
-                    self._execute_batch(batch)
+                    batch = self._filter_policy_requests(batch)
+                    if batch:
+                        self._execute_batch(batch)
             except queue.Empty:
                 continue
             except Exception as e:
@@ -329,6 +367,16 @@ class InferenceContext:
 
         logger.info("Batch processing thread shutting down")
 
+    def _filter_policy_requests(self, requests: InferenceBatch) -> InferenceBatch:
+        admitted = InferenceBatch()
+        for req in requests:
+            if req.expected_policy_id is not None and req.expected_policy_id != self._policy_id:
+                error = PolicyMismatchError("The requested policy is no longer active")
+                req.future.get_loop().call_soon_threadsafe(req.future.set_exception, error)
+            else:
+                admitted.append(req)
+        return admitted
+
     def _execute_batch(self, requests: InferenceBatch):
         """Execute a batch of inference requests"""
         service_requests = []
@@ -337,12 +385,11 @@ class InferenceContext:
             raise RuntimeError("Inference engine is not initialized.")
 
         for i, req in enumerate(requests):
-            # Create stop tokens if specified
             stop_ids = None
             if req.stop_tokens:
-                stop_ids = hax.named(jnp.asarray(req.stop_tokens, dtype=jnp.int32), axis="position").broadcast_axis(
-                    {"stop_seq": 1}
-                )
+                width = max(map(len, req.stop_tokens))
+                padded = [[INVALID] * (width - len(seq)) + seq for seq in req.stop_tokens]
+                stop_ids = hax.named(jnp.asarray(padded, dtype=jnp.int32), ("stop_seq", "position"))
 
             # dumb fallback seed if none provided
             if req.seed is None:
@@ -366,7 +413,8 @@ class InferenceContext:
 
         # Generate responses
         start_time = time.time()
-        result = self.engine.generate(service_requests)
+        capture_routes = any(request.return_route_captures for request in requests)
+        result = self.engine.generate(service_requests, capture_routes=capture_routes)
         duration = time.time() - start_time
         logger.info(f"Batch completed in {duration:.2f}s, generated {result.total_generated} tokens")
 
@@ -398,8 +446,15 @@ class InferenceContext:
                                 prompt_tokens=len(req.prompt_tokens),
                                 completion_tokens=len(generated_tokens),
                                 request_id=req.request_id,
+                                model_version=self._model_version,
+                                policy_id=self._policy_id,
                                 echo_token_ids=echo_token_ids,
                                 echo_logprobs=echo_logprobs,
+                                expert_routes=(
+                                    result.expert_routes[output_idx]
+                                    if req.return_route_captures and result.expert_routes is not None
+                                    else None
+                                ),
                             )
                         )
                         output_idx += 1
@@ -413,6 +468,8 @@ class InferenceContext:
                                 prompt_tokens=0,
                                 completion_tokens=0,
                                 request_id=req.request_id,
+                                model_version=self._model_version,
+                                policy_id=self._policy_id,
                             )
                         )
 
@@ -530,6 +587,20 @@ def _completion_logprobs(
     )
 
 
+def _generation_options_error(
+    config: InferenceEngineConfig, num_choices: int, stops: list[list[int]] | None, vocab_size: int
+) -> str | None:
+    if not 1 <= num_choices <= config.max_seqs:
+        return "Requested choices exceed the configured capacity"
+    if stops and (
+        len(stops) > config.max_stop_seqs
+        or any(not 0 < len(sequence) <= config.max_stop_tokens for sequence in stops)
+        or any(not 0 <= token < vocab_size for sequence in stops for token in sequence)
+    ):
+        return "Stop tokens exceed the configured capacity or vocabulary"
+    return None
+
+
 async def _create_completion(ctx: InferenceContext, request: CompletionRequest) -> Completion:
     """Create a text completion using OpenAI API format."""
     try:
@@ -539,6 +610,9 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
             prompts = request.prompt
 
         stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
+        num_choices = request.n or 1
+        if error := _generation_options_error(ctx.config.service, num_choices, stop_tokens, ctx.model.Vocab.size):
+            raise HTTPException(status_code=400, detail=error)
 
         # Create futures for all prompts
         futures = []
@@ -577,7 +651,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                 stop_tokens=stop_tokens,
                 seed=request.seed,
                 future=future,
-                n_generations=request.n or 1,
+                n_generations=num_choices,
                 echo_logprobs_top_k=echo_logprobs_top_k,
             )
 
@@ -726,6 +800,9 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
         )
 
         stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
+        num_choices = request.n or 1
+        if error := _generation_options_error(ctx.config.service, num_choices, stop_tokens, ctx.model.Vocab.size):
+            raise HTTPException(status_code=400, detail=error)
 
         # Create future and submit request
         future: asyncio.Future = asyncio.Future()
@@ -737,7 +814,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
             stop_tokens=stop_tokens,
             seed=request.seed,
             future=future,
-            n_generations=request.n or 1,
+            n_generations=num_choices,
         )
 
         # Wait for result
@@ -802,6 +879,104 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class _GrpcInference:
+    def __init__(self, inference_context: InferenceContext):
+        self._inference_context = inference_context
+
+    async def Generate(
+        self, request: inference_pb2.GenerateRequest, context: grpc.aio.ServicerContext
+    ) -> inference_pb2.GenerateResponse:
+        ctx = self._inference_context
+        prompt = list(request.prompt_token_ids)
+        max_tokens = request.max_new_tokens
+        temperature = request.temperature if request.HasField("temperature") else 1.0
+        top_p = request.top_p if request.HasField("top_p") else 1.0
+        seed = request.seed if request.HasField("seed") else None
+        num_choices = request.num_choices if request.HasField("num_choices") else 1
+        stops = [list(sequence.token_ids) for sequence in request.stop_sequences]
+
+        policy_id = request.expected_policy_id if request.HasField("expected_policy_id") else None
+        if policy_id is not None and not 0 < len(policy_id) <= MAX_POLICY_ID_LENGTH:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid expected policy ID")
+
+        capture_routes = request.capture_router_replay
+        if capture_routes and not ctx.engine.supports_route_capture:
+            await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "Router replay requires a Snowball model")
+
+        config = ctx.engine.config
+        score_mode = (
+            inference_pb2.LOGPROB_MODE_POLICY
+            if config.logprob_mode == LogprobMode.POLICY
+            else inference_pb2.LOGPROB_MODE_BEHAVIOR
+        )
+        if request.expected_logprob_mode not in (inference_pb2.LOGPROB_MODE_UNSPECIFIED, score_mode):
+            await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "The server uses a different logprob mode")
+        max_prefill_size = config.max_prefill_size or ctx.model.Pos.size
+        if (
+            not prompt
+            or not max_tokens
+            or len(prompt) + max_tokens > config.max_seq_len
+            or len(prompt) > max_prefill_size
+        ):
+            await context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT, "Prompt and generation must fit the configured context"
+            )
+        if not math.isfinite(temperature) or temperature < 0 or not 0 < top_p <= 1:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid temperature or top_p")
+        vocab_size = ctx.model.Vocab.size
+        if any(token >= vocab_size for token in prompt):
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Prompt contains an out-of-vocabulary token")
+        if error := _generation_options_error(config, num_choices, stops, vocab_size):
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, error)
+
+        future = asyncio.get_running_loop().create_future()
+        ctx.submit_request(
+            prompt,
+            max_tokens,
+            temperature,
+            top_p,
+            stops or None,
+            seed,
+            future,
+            n_generations=num_choices,
+            return_route_captures=capture_routes,
+            expected_policy_id=policy_id,
+        )
+        try:
+            # The inference thread completes the queue's future even when the caller disconnects.
+            outputs = await asyncio.shield(future)
+        except PolicyMismatchError as exc:
+            await context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+        except ValueError as exc:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+
+        if capture_routes:
+            if any(output.expert_routes is None for output in outputs):
+                await context.abort(grpc.StatusCode.INTERNAL, "Generation did not capture the requested routes")
+            return await asyncio.to_thread(_grpc_generate_response, prompt, outputs, score_mode)
+        return _grpc_generate_response(prompt, outputs, score_mode)
+
+
+def _grpc_generate_response(
+    prompt: list[int], outputs: list[InferenceResponse], score_mode: inference_pb2.LogprobMode
+) -> inference_pb2.GenerateResponse:
+    response = inference_pb2.GenerateResponse(prompt_token_ids=prompt, logprob_mode=score_mode)
+    for output in outputs:
+        choice = response.choices.add(
+            token_ids=output.tokens,
+            model_version=output.model_version,
+            policy_id=output.policy_id,
+        )
+        if output.logprobs is not None:
+            scores = (
+                choice.policy_logprobs if score_mode == inference_pb2.LOGPROB_MODE_POLICY else choice.behavior_logprobs
+            )
+            scores.extend(output.logprobs)
+        if output.expert_routes is not None:
+            write_router_replay(choice.router_replay, output.expert_routes.expert_ids, output.expert_routes.valid)
+    return response
+
+
 class InferenceServer:
     """Wraps a FastAPI server around the inference context.
 
@@ -824,21 +999,29 @@ class InferenceServer:
         self._server = None
 
     @staticmethod
-    def create(config: InferenceServerConfig, model: LmHeadModel, tokenizer: MarinTokenizer) -> "InferenceServer":
+    def create(
+        config: InferenceServerConfig,
+        model: LmHeadModel,
+        tokenizer: MarinTokenizer,
+        *,
+        mesh: Mesh | None = None,
+    ) -> "InferenceServer":
         """Create and initialize a new InferenceServer.
 
         This factory method loads the model, tokenizer, and creates all necessary
         components for the inference server.
         """
-        service = InferenceEngine.from_model_with_config(
-            model=model,
-            tokenizer=tokenizer,
-            config=config.service,
-            axis_resources=config.trainer.compute_axis_mapping,
-        )
+        mesh = config.trainer.device_mesh if mesh is None else mesh
+        with hax.partitioning.set_mesh(mesh):
+            service = InferenceEngine.from_model_with_config(
+                model=model,
+                tokenizer=tokenizer,
+                config=config.service,
+                axis_resources=config.trainer.compute_axis_mapping,
+            )
 
         # Create and start inference thread
-        inference_context = InferenceContext(model, tokenizer, service, config)
+        inference_context = InferenceContext(model, tokenizer, service, config, mesh=mesh)
         inference_context.start()
 
         # Create FastAPI app with initialized context
@@ -848,8 +1031,25 @@ class InferenceServer:
     @staticmethod
     def _create_app(inference_context: InferenceContext) -> FastAPI:
         """Create and configure the FastAPI application."""
-        app = FastAPI(title="Levanter Inference Service", version="1.0.0")
-        model_name = inference_context.config.model_name
+        config = inference_context.config
+
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
+            if config.grpc_port is None:
+                yield
+                return
+            server = grpc.aio.server()
+            inference_pb2_grpc.add_InferenceServicer_to_server(_GrpcInference(inference_context), server)
+            host = f"[{config.host}]" if ":" in config.host and not config.host.startswith("[") else config.host
+            app.state.grpc_port = server.add_insecure_port(f"{host}:{config.grpc_port}")
+            await server.start()
+            try:
+                yield
+            finally:
+                await server.stop(grace=0)
+
+        app = FastAPI(title="Levanter Inference Service", version="1.0.0", lifespan=lifespan)
+        model_name = config.model_name
 
         # Register routes with thin wrappers that call helper functions
         @app.get("/health")
@@ -892,13 +1092,11 @@ class InferenceServer:
         """Unload the inference model to free up resources."""
         self.inference_context.unload()
 
-    def reload(self, weight_callback: WeightSource):
-        """Reload the model weights using the provided callback.
-
-        Args:
-            weight_callback: Function that takes the current model and returns new model
-        """
-        self.inference_context.reload(weight_callback)
+    def reload(
+        self, weight_callback: WeightSource, *, expected_version: int | None = None, policy_id: str | None = None
+    ) -> int:
+        """Install weights and set or clear the immutable policy ID in one serving version."""
+        return self.inference_context.reload(weight_callback, expected_version=expected_version, policy_id=policy_id)
 
     def address(self):
         """Get the full address the server is running on."""

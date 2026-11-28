@@ -66,6 +66,7 @@ EXCLUDE_PATTERNS = [
     # grpc generated files
     "**/*_connect.py",
     "**/*_pb2.py",
+    "**/*_pb2_grpc.py",
     "**/*.gz",
     "**/*.zip",
     "**/*.pb",

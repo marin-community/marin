@@ -9,18 +9,26 @@ import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
+from levanter.grug.sharding import compact_grug_mesh
+from levanter.layers.sampler import LogprobMode
 from levanter.models.llama import LlamaLMHeadModel
+from levanter.models.lm_model import LmExample
+from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+from levanter.testing.devices import use_cpu_devices
 from levanter.testing.helpers import skip_if_no_torch
 from levanter.testing.model_configs import llama_test_config
 from levanter.trainer import TrainerConfig
 
 try:
+    import grpc
     from fastapi import HTTPException
     from fastapi.testclient import TestClient
     from openai.types import Completion
 
+    from levanter.inference import inference_pb2, inference_pb2_grpc
     from levanter.inference.engine import (
         InferenceEngineConfig,
         score_token_sequence_logprobs,
@@ -32,6 +40,7 @@ try:
         _compute_tokens,
     )
     from levanter.inference.openai_protocol import ChatMessage
+    from levanter.inference.router_replay import read_router_replay
 
 except ImportError:
     pytest.skip("Serving imports not installed, use --extra=serve", allow_module_level=True)
@@ -62,6 +71,8 @@ def inference_server_config():
             hbm_utilization=0.1,
         ),
         model_name=TEST_MODEL_NAME,
+        host="127.0.0.1",
+        grpc_port=0,
         temperature=0.7,
         seed=42,
     )
@@ -336,7 +347,7 @@ class _FakeCompletionContext:
         max_tokens: int,
         temperature: float,
         top_p: float | None,
-        stop_tokens: list[int] | None,
+        stop_tokens: list[list[int]] | None,
         seed: int | None,
         future,
         n_generations: int = 1,
@@ -612,3 +623,213 @@ def test_tokens_endpoint(test_client):
         assert all(isinstance(t, int) for t in token_list["tokens"])
 
     print(f"Tokenization results: {result['results']}")
+
+
+def test_grpc_generation_returns_exact_token_ids_and_scores(test_client):
+    _, server = test_client
+    prompt = [18, 7, 3, 18]
+    with grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel:
+        stub = inference_pb2_grpc.InferenceStub(channel)
+        result = stub.Generate(
+            inference_pb2.GenerateRequest(
+                prompt_token_ids=prompt, max_new_tokens=2, temperature=0, seed=17, num_choices=2
+            ),
+            timeout=30,
+        )
+        assert list(result.prompt_token_ids) == prompt
+        assert len(result.choices) == 2
+        for choice in result.choices:
+            assert len(choice.token_ids) == len(choice.behavior_logprobs) == 2
+            assert np.isfinite(choice.behavior_logprobs).all()
+
+        stop = result.choices[0].token_ids[0]
+        other = (stop + 1) % server.inference_context.model.Vocab.size
+        stopped = stub.Generate(
+            inference_pb2.GenerateRequest(
+                prompt_token_ids=prompt,
+                max_new_tokens=2,
+                temperature=0,
+                seed=17,
+                num_choices=2,
+                stop_sequences=[
+                    inference_pb2.TokenSequence(token_ids=[other, other]),
+                    inference_pb2.TokenSequence(token_ids=[stop]),
+                ],
+            ),
+            timeout=30,
+        )
+        assert [list(choice.token_ids) for choice in stopped.choices] == [[stop], [stop]]
+
+        with pytest.raises(grpc.RpcError) as invalid:
+            stub.Generate(
+                inference_pb2.GenerateRequest(prompt_token_ids=prompt, max_new_tokens=TEST_MAX_SEQ_LEN),
+                timeout=30,
+            )
+        assert invalid.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+        with pytest.raises(grpc.RpcError) as unsupported:
+            stub.Generate(
+                inference_pb2.GenerateRequest(prompt_token_ids=prompt, max_new_tokens=2, capture_router_replay=True),
+                timeout=30,
+            )
+        assert unsupported.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+
+
+def test_grpc_generation_returns_unwarped_policy_logprobs(inference_server_config, generated_model_and_tokenizer):
+    model, tokenizer = generated_model_and_tokenizer
+    config = dataclasses.replace(
+        inference_server_config,
+        service=dataclasses.replace(inference_server_config.service, logprob_mode=LogprobMode.POLICY),
+    )
+    model = jax.tree.map(jnp.zeros_like, model)
+    server = InferenceServer.create(config, model, tokenizer)
+    request = inference_pb2.GenerateRequest(
+        prompt_token_ids=[18, 7, 3, 18],
+        max_new_tokens=1,
+        temperature=0.7,
+        top_p=0.05,
+        seed=17,
+        expected_logprob_mode=inference_pb2.LOGPROB_MODE_POLICY,
+    )
+    try:
+        with (
+            TestClient(server.app),
+            grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel,
+        ):
+            stub = inference_pb2_grpc.InferenceStub(channel)
+            response = stub.Generate(request, timeout=30)
+            assert response.logprob_mode == inference_pb2.LOGPROB_MODE_POLICY
+            assert not response.choices[0].behavior_logprobs
+            np.testing.assert_allclose(
+                response.choices[0].policy_logprobs, [-np.log(model.Vocab.size)], atol=1e-5, rtol=0
+            )
+
+            request.expected_logprob_mode = inference_pb2.LOGPROB_MODE_BEHAVIOR
+            with pytest.raises(grpc.RpcError) as mismatch:
+                stub.Generate(request, timeout=30)
+            assert mismatch.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+    finally:
+        server.shutdown()
+
+
+def test_grpc_generation_fences_rollouts_by_installed_policy(inference_server_config, generated_model_and_tokenizer):
+    model, tokenizer = generated_model_and_tokenizer
+    server = InferenceServer.create(inference_server_config, model, tokenizer)
+    try:
+        with (
+            TestClient(server.app),
+            grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel,
+        ):
+            _assert_grpc_policy_fence(inference_pb2_grpc.InferenceStub(channel), server)
+    finally:
+        server.shutdown()
+
+
+def _assert_grpc_policy_fence(stub, server):
+    def generate(policy):
+        request = inference_pb2.GenerateRequest(
+            prompt_token_ids=[18, 7, 3], max_new_tokens=2, temperature=0, expected_policy_id=policy
+        )
+        return stub.Generate(request, timeout=30).choices[0]
+
+    assert server.reload(lambda model: model, expected_version=0, policy_id="policy-a") == 1
+    first = generate("policy-a")
+    assert (first.policy_id, first.model_version) == ("policy-a", 1)
+
+    def fail_load(model):
+        raise RuntimeError("invalid replacement")
+
+    with pytest.raises(RuntimeError):
+        server.reload(fail_load, expected_version=1, policy_id="policy-b")
+    assert generate("policy-a") == first
+
+    assert server.reload(lambda model: model, expected_version=1, policy_id="policy-b") == 2
+    with pytest.raises(ValueError):
+        server.reload(lambda model: model, expected_version=1, policy_id="policy-c")
+    with pytest.raises(grpc.RpcError) as stale:
+        generate("policy-a")
+    assert stale.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+    second = generate("policy-b")
+    assert (second.policy_id, second.model_version) == ("policy-b", 2)
+
+
+def test_grpc_snowball_generation_replays_exact_expert_routes(local_gpt2_tokenizer):
+    cfg = SnowballConfig(
+        vocab_size=48,
+        hidden_dim=16,
+        intermediate_dim=32,
+        shared_expert_intermediate_dim=24,
+        num_layers=2,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        max_seq_len=16,
+        sliding_window=4,
+        attention_implementation="reference",
+    )
+    server_config = InferenceServerConfig(
+        host="127.0.0.1",
+        grpc_port=0,
+        service=InferenceEngineConfig(
+            max_seq_len=16,
+            max_pages=16,
+            max_seqs=4,
+            max_seqs_in_prefill=4,
+            max_prefill_size=12,
+            max_queued_tokens=8,
+            max_rounds=2,
+            page_size=2,
+            compute_dtype=jnp.float32,
+        ),
+    )
+    prompt = np.array([2, 7, 4, 9, 6], dtype=np.int32)
+    with use_cpu_devices(1):
+        mesh = compact_grug_mesh()
+        with jax.set_mesh(mesh):
+            model = SnowballLMHeadModel.init(hax.Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(19))
+            server = InferenceServer.create(server_config, model, local_gpt2_tokenizer, mesh=mesh)
+            try:
+                with (
+                    TestClient(server.app),
+                    grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel,
+                ):
+                    stub = inference_pb2_grpc.InferenceStub(channel)
+                    request = inference_pb2.GenerateRequest(
+                        prompt_token_ids=prompt.tolist(), max_new_tokens=4, temperature=0, capture_router_replay=True
+                    )
+                    response = stub.Generate(request, timeout=60)
+                    request.capture_router_replay = False
+                    plain = stub.Generate(request, timeout=60)
+            finally:
+                server.inference_context.shutdown()
+
+            choice = response.choices[0]
+            assert list(choice.token_ids) == list(plain.choices[0].token_ids)
+            assert not plain.choices[0].HasField("router_replay")
+            inputs = np.concatenate((prompt, choice.token_ids)).astype(np.int32)
+            experts, valid = read_router_replay(response, 0, inputs)
+            assert valid[:-1].all()
+            tokens = hax.named(jnp.asarray(inputs[None]), ("batch", "position"))
+            replay = model.prepare_route_replay(jnp.asarray(experts[:, None]), hax.named(valid[None], tokens.axes))
+            learner_loss, _ = model.next_token_loss_and_metrics(
+                LmExample(tokens, hax.ones(tokens.axes)), route_replay=replay, reduction=None
+            )
+
+    np.testing.assert_allclose(
+        choice.behavior_logprobs, -learner_loss.array[0, len(prompt) - 1 : -1], atol=1e-5, rtol=0
+    )
+    wrong_inputs = inputs.copy()
+    wrong_inputs[0] += 1
+    with pytest.raises(ValueError):
+        read_router_replay(response, 0, wrong_inputs)
+
+
+def test_openai_rejects_stop_sequences_that_exceed_engine_capacity(test_client):
+    client, server = test_client
+    stops = ["A"] * (server.config.service.max_stop_seqs + 1)
+    response = client.post(
+        "/v1/completions",
+        json={"model": TEST_MODEL_NAME, "prompt": "A", "max_tokens": 1, "stop": stops},
+    )
+    assert response.status_code == 400

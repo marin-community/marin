@@ -5614,6 +5614,7 @@ rocm = [
 ]
 serve = [
     { name = "fastapi" },
+    { name = "grpcio" },
     { name = "openai" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -5682,6 +5683,7 @@ requires-dist = [
     { name = "einops" },
     { name = "equinox", specifier = ">=0.11.7,!=0.12.0" },
     { name = "fastapi", marker = "extra == 'serve'", specifier = ">=0.100.0" },
+    { name = "grpcio", marker = "extra == 'serve'", specifier = ">=1.76.0" },
     { name = "filelock", specifier = ">=4.2.1,<5" },
     { name = "flash-attn-4", extras = ["cu13"], marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=4.0.0b27,<4.1" },
     { name = "fsspec", extras = ["http"], specifier = ">=2024.2,<2027" },
@@ -5721,7 +5723,7 @@ requires-dist = [
     { name = "openai", marker = "extra == 'serve'", specifier = ">=1.0.0" },
     { name = "optax", specifier = ">=0.1.9,<0.2.7" },
     { name = "peft", marker = "extra == 'torch-test'", specifier = ">=0.12.0" },
-    { name = "protobuf", specifier = ">=6" },
+    { name = "protobuf", specifier = ">=6.31.1" },
     { name = "pyarrow", specifier = ">=23.0.0" },
     { name = "pydantic", specifier = "<3" },
     { name = "pytimeparse", specifier = ">=1.1.8" },

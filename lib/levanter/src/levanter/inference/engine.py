@@ -28,6 +28,7 @@ from levanter.inference.jit_scheduler import (
     DecodeState,
     SeqDecodingParams,
     TokenQueue,
+    _CapturedRoutes,
     _DecodeOutputs,
 )
 from levanter.inference.page_table import PageBatchInfo, PageTable
@@ -35,11 +36,14 @@ from levanter.inference.utils import INVALID, is_valid
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import PageCache
-from levanter.layers.sampler import Sampler
+from levanter.layers.sampler import LogprobMode, Sampler
 from levanter.models.lm_model import LmHeadModel
+from levanter.models.snowball import SnowballLMHeadModel
 from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_size
 
 logger = logging.getLogger(__name__)
+
+_release_finished_slots = jax.jit(DecodeState.free_pages_for_finished, donate_argnums=0)
 
 
 @dataclass(frozen=True)
@@ -82,6 +86,9 @@ class InferenceEngineConfig:
 
     compute_dtype: jnp.dtype = jnp.bfloat16
     """KV cache dtype. Default bfloat16 for performance/accuracy balance."""
+
+    logprob_mode: LogprobMode = LogprobMode.BEHAVIOR
+    """Distribution used to score generated tokens."""
 
     max_queued_tokens: int = 512
     """Capacity of the token queue used between sampling and decode packing."""
@@ -407,6 +414,38 @@ def _gather_logits(logits: NamedArray, indices: NamedArray) -> NamedArray:
     return hax.named(values, (*indices.axes, *logits.axes[1:]))
 
 
+def _route_dtype(model: SnowballLMHeadModel) -> jnp.dtype:
+    return jnp.dtype(jnp.uint8 if model.config.num_experts <= 256 else jnp.int32)
+
+
+def _capture_buffer(model: LmHeadModel, capacity: int) -> _CapturedRoutes:
+    if not isinstance(model, SnowballLMHeadModel):
+        raise ValueError("Expert route capture requires a Snowball model")
+    config = model.config
+    return _CapturedRoutes.init(capacity, config.num_layers, config.num_experts_per_token, _route_dtype(model))
+
+
+def _decode_for_sampling(
+    model: LmHeadModel,
+    cache: PageCache,
+    binfo: PageBatchInfo,
+    tokens: NamedArray,
+    positions: NamedArray,
+    slots: NamedArray,
+    sample_indices: NamedArray,
+    routes: _CapturedRoutes | None,
+) -> tuple[NamedArray, PageCache, _CapturedRoutes | None]:
+    if routes is None:
+        logits, cache = model.decode(tokens, cache, binfo, positions)
+        return _gather_logits(logits, sample_indices), cache, None
+    if not isinstance(model, SnowballLMHeadModel):
+        raise ValueError("Expert route capture requires a Snowball model")
+    result = model.decode_with_routes(tokens, cache, binfo, positions, sample_indices=sample_indices)
+    assert result.routes is not None
+    routes = routes.append(result.routes.expert_ids, slots, positions, binfo.num_new_tokens)
+    return result.logits, result.cache, routes
+
+
 def _prefill_kernel(
     gen_state: GenState,
     model: LmHeadModel,
@@ -414,6 +453,7 @@ def _prefill_kernel(
     queue: TokenQueue,
     batch_info: PageBatchInfo,
     max_seqs_in_prefill: int,  # static
+    capture_routes: bool = False,
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run prefill using a fresh, local token queue. Newly sampled tokens are enqueued to the main decode queue via update_tokens."""
 
@@ -434,8 +474,10 @@ def _prefill_kernel(
     #     pos=pos_ids.array,
     #     lens=decode_state.seq_lens.array,
     # )
-    logits, cache = model.decode(tokens, gen_state.cache, batch_info, pos_ids)
-    logits_at_samples = _gather_logits(logits, sample_indices)
+    route_buffer = _capture_buffer(model, tokens.size) if capture_routes else None
+    logits_at_samples, cache, routes = _decode_for_sampling(
+        model, gen_state.cache, batch_info, tokens, pos_ids, slot_ids, sample_indices, route_buffer
+    )
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
     # jax.debug.print(
@@ -492,7 +534,7 @@ def _prefill_kernel(
     #     size=outputs.num_tokens,
     #     queued=gen_state.decode_state.num_queued_tokens,
     # )
-    return gen_state, outputs
+    return gen_state, dataclasses.replace(outputs, routes=routes)
 
 
 def _seq_params_from_work(work: PrefillWork, idx: int) -> SeqDecodingParams:
@@ -549,16 +591,17 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> tuple[GenStat
     return jax.lax.fori_loop(0, max_slots, clone, gen_state), batch_info
 
 
-@functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill",))
+@functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill", "capture_routes"))
 def _run_prefill(
     gen_state: GenState,
     model: LmHeadModel,
     sampler: Sampler,
     work: PrefillWork,
     max_seqs_in_prefill: int,
+    capture_routes: bool = False,
 ) -> tuple[GenState, _DecodeOutputs]:
     gen_state, batch_info = _apply_prefill_work(gen_state, work)
-    return _prefill_kernel(gen_state, model, sampler, work.queue, batch_info, max_seqs_in_prefill)
+    return _prefill_kernel(gen_state, model, sampler, work.queue, batch_info, max_seqs_in_prefill, capture_routes)
 
 
 def _handle_clones(
@@ -656,13 +699,14 @@ def _handle_clones(
     return gen_state, outputs
 
 
-@functools.partial(jax.jit, static_argnums=(3, 4), donate_argnames=("gen_state",))
+@functools.partial(jax.jit, static_argnums=(3, 4, 5), donate_argnames=("gen_state",))
 def _run_generation_loop(
     gen_state: GenState,
     model: LmHeadModel,
     sampler: Sampler,
     max_tokens_per_round: int,
     max_rounds: int,
+    capture_routes: bool = False,
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run autoregressive generation until all sequences finish or `max_rounds` reached."""
 
@@ -700,8 +744,10 @@ def _run_generation_loop(
         sample_indices = _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices)
 
         # Decode logits and sample new tokens
-        logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
-        logits_at_samples = _gather_logits(logits, sample_indices)
+        logits_at_samples, cache, routes = _decode_for_sampling(
+            model, gen_state.cache, binfo, tokens, pos_ids, slot_ids, sample_indices, outputs.routes
+        )
+        outputs = dataclasses.replace(outputs, routes=routes)
 
         num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
         new_slot_ids = slot_ids["position", sample_indices]
@@ -737,10 +783,18 @@ def _run_generation_loop(
         max_seqs=gen_state.decode_state.max_seqs,
         with_logprobs=True,
     )
+    if capture_routes:
+        outputs_buf = dataclasses.replace(outputs_buf, routes=_capture_buffer(model, outputs_buf.max_queued_tokens))
     init_state = (gen_state, outputs_buf, jnp.array(0, dtype=jnp.int32))
     final_gen_state, final_outputs, _ = jax.lax.while_loop(cond, body, init_state)
     # jax.debug.print("[gen] final outputs_size={size}", size=final_outputs.num_tokens)
     return final_gen_state, final_outputs
+
+
+@dataclass(frozen=True)
+class GeneratedExpertRoutes:
+    expert_ids: np.ndarray  # [layer, position, expert_slot]
+    valid: np.ndarray  # [position], terminal token may have no route yet
 
 
 @dataclass
@@ -748,6 +802,7 @@ class GenerationResult:
     tokens: list[list[int]]
     logprobs: list[list[float]] | None
     total_generated: int
+    expert_routes: list[GeneratedExpertRoutes] | None = None
 
 
 FIRST_TOKEN_LOGPROB = 0.0
@@ -886,7 +941,7 @@ class InferenceEngine:
             max_queued_tokens=config.max_queued_tokens,
         )
         vocab_axis = model.Vocab
-        sampler = Sampler(vocab_axis)
+        sampler = Sampler(vocab_axis, logprob_mode=config.logprob_mode)
         return cls(
             model=model,
             tokenizer=tokenizer,
@@ -911,7 +966,7 @@ class InferenceEngine:
         """Score a token sequence under this engine's model."""
         return score_token_sequence_logprobs(self.model, token_ids, top_k)
 
-    def _prefill_batch(self, batch: Sequence[Request]) -> _DecodeOutputs | None:
+    def _prefill_batch(self, batch: Sequence[Request], capture_routes: bool = False) -> _DecodeOutputs | None:
         """Admit a batch from the head of the queue that fits in free slots/pages.
 
         Returns the decode outputs for the admitted prefill batch, or None if no work was admitted.
@@ -921,7 +976,7 @@ class InferenceEngine:
         if prefill_work is None:
             return None
         new_state = _run_prefill(
-            self.gen_state, self.model, self.sampler, prefill_work, self.config.max_seqs_in_prefill
+            self.gen_state, self.model, self.sampler, prefill_work, self.config.max_seqs_in_prefill, capture_routes
         )
 
         # _run_prefill returns (GenState, _DecodeOutputs)
@@ -1086,20 +1141,22 @@ class InferenceEngine:
             ),
         )
 
-    def generate(self, requests: Sequence[Request], step_callback=None) -> GenerationResult:
-        """Generate tokens for a batch of Requests.
+    @property
+    def supports_route_capture(self) -> bool:
+        """Whether generation can retain this model's selected expert IDs."""
+        return isinstance(self.model, SnowballLMHeadModel)
 
-        Each Request provides prompt_tokens, decode_params, and n_generations (clones).
-        Returns (outputs_per_sequence, total_generated_tokens).
-
-        Args:
-            requests: Sequence of generation requests
-            step_callback: Optional callback function called at each decode iteration with iteration number
-        """
+    def _validate_generation_requests(self, requests: Sequence[Request]) -> None:
+        if len({request.request_id for request in requests}) != len(requests):
+            raise ValueError("Request IDs must be unique within a generation batch")
+        max_prefill = self.config.max_prefill_size or self.model.Pos.size
+        if any(not 0 < len(request.prompt_tokens) <= max_prefill for request in requests):
+            raise ValueError("Prompts must be nonempty and fit within max_prefill_size")
         if any(len(request.prompt_tokens) >= self.config.max_seq_len for request in requests):
             raise ValueError("Prompts must leave room for generation within max_seq_len")
+        if any(request.n_generations < 1 for request in requests):
+            raise ValueError("Every request must ask for at least one generation")
 
-        # validate we don't have any sequences with n_generations exceeding max_seqs
         max_needed = max(int(r.n_generations) for r in requests)
         if max_needed > int(self.gen_state.decode_state.page_table.max_seqs):
             raise ValueError(
@@ -1107,9 +1164,34 @@ class InferenceEngine:
                 "Decompose your request into smaller batches or increase max_seqs when building the service."
             )
 
+    def generate(
+        self, requests: Sequence[Request], step_callback=None, *, capture_routes: bool = False
+    ) -> GenerationResult:
+        """Generate tokens for a batch of Requests.
+
+        Each Request provides prompt_tokens, decode_params, and n_generations (clones).
+        Return tokens, log probabilities, and optional captured routes in choice order.
+
+        Args:
+            requests: Sequence of generation requests
+            step_callback: Optional callback function called at each decode iteration with iteration number.
+            capture_routes: Retain the expert IDs used to score each Snowball choice. Routes align with
+                the prompt followed by generated tokens. The unscheduled terminal row is invalid.
+        """
+        if not requests:
+            return GenerationResult(
+                tokens=[], logprobs=[], total_generated=0, expert_routes=[] if capture_routes else None
+            )
+        if capture_routes and not self.supports_route_capture:
+            raise ValueError("Expert route capture requires a Snowball model")
+        self._validate_generation_requests(requests)
+
         # for now, reset the engine state between each batch - the engine cannot be called with
         # parallel batches.
         self.reset()
+        route_chunks: dict[tuple[int, int], list[tuple[np.ndarray, np.ndarray]]] | None = (
+            {} if capture_routes else None
+        )
 
         # Track outputs and finished flags using self.results for only this call's requests
         call_rids = [int(r.request_id) for r in requests]
@@ -1147,11 +1229,6 @@ class InferenceEngine:
                 )
 
         time_in = time.time()
-        # Initial admission from queue and extract prompt tokens
-        decode_outputs = self._prefill_batch(requests)
-        self._extract_outputs(decode_outputs)
-        initial_prefill_out = time.time()
-        logger.info(f"Initial prefill and extraction took {initial_prefill_out - time_in:.3f}s")
 
         def _all_done() -> bool:
             for rid, n_kids in expected_children.items():
@@ -1162,8 +1239,16 @@ class InferenceEngine:
                         return False
             return True
 
+        pending = list(requests)
         decode_iteration = 0
         while not _all_done():
+            if pending and self.free_slots:
+                prefill_outputs = self._prefill_batch(pending, capture_routes)
+                if prefill_outputs is not None:
+                    self._extract_outputs(prefill_outputs, route_chunks)
+                    pending = [request for request in pending if request.request_id not in self.sequences]
+                    continue
+
             # Call step callback if provided
             if step_callback is not None:
                 step_callback(decode_iteration)
@@ -1177,6 +1262,7 @@ class InferenceEngine:
                 # TODO: tune max_tokens_per_round
                 self.config.imputed_max_tokens_per_round,
                 self.config.max_rounds,
+                capture_routes,
             )
             submit_done = time.time()
             # Time spent with device executing (and the host thread waiting)
@@ -1184,7 +1270,7 @@ class InferenceEngine:
             device_time = time.time() - submit_done
 
             extract_start = time.time()
-            new_tokens = self._extract_outputs(decode_outputs)
+            new_tokens = self._extract_outputs(decode_outputs, route_chunks)
             extract_time = time.time() - extract_start
 
             iter_end = time.time()
@@ -1204,12 +1290,12 @@ class InferenceEngine:
             decode_iteration += 1
 
             if new_tokens == 0:
-                logger.warning("No progress in decoding with unfinished requests")
-                break
+                raise RuntimeError("Inference made no progress with unfinished requests")
 
         # Assemble outputs in the order of the requests for this call
         outputs_list: list[list[int]] = []
         logprobs_list: list[list[float]] = []
+        expert_routes = [] if capture_routes else None
         total_prompt_tokens = 0
         for r in requests:
             rid = int(r.request_id)
@@ -1222,6 +1308,8 @@ class InferenceEngine:
                     # Ensure a placeholder exists to avoid KeyErrors
                     kid_map[k] = DecodeResult(id=rid, choice=k, token_list=[])
                     dr = kid_map[k]
+                if expert_routes is not None and route_chunks is not None:
+                    expert_routes.append(self._assemble_routes(route_chunks, r, k, len(dr.token_list)))
                 outputs_list.append(dr.token_list)
                 logprobs_list.append(dr.logprobs if dr.logprobs is not None else [])
             self.results[rid] = kid_map
@@ -1233,7 +1321,7 @@ class InferenceEngine:
         for rid in call_rids:
             if rid in self.results:
                 self.results.pop(rid, None)
-        return GenerationResult(tokens=outputs_list, logprobs=logprobs_list, total_generated=total_generated)
+        return GenerationResult(outputs_list, logprobs_list, total_generated, expert_routes)
 
     def write_kernel_jaxprs(self, path, log_artifacts: bool = True):
         """
@@ -1296,7 +1384,34 @@ class InferenceEngine:
         else:
             logger.info(f"Written trace info to {path}")
 
-    def _extract_outputs(self, pending_outputs: _DecodeOutputs | None) -> int:
+    def _assemble_routes(
+        self,
+        chunks: dict[tuple[int, int], list[tuple[np.ndarray, np.ndarray]]],
+        request: Request,
+        choice: int,
+        generated: int,
+    ) -> GeneratedExpertRoutes:
+        assert isinstance(self.model, SnowballLMHeadModel)
+        config = self.model.config
+        prompt_length = len(request.prompt_tokens)
+        length = prompt_length + generated
+        dtype = _route_dtype(self.model)
+        experts = np.zeros((length, config.num_layers, config.num_experts_per_token), dtype=dtype)
+        valid = np.zeros(length, dtype=bool)
+        for positions, ids in chunks.get((request.request_id, 0), ()):
+            prompt = positions < prompt_length
+            experts[positions[prompt]] = ids[prompt]
+            valid[positions[prompt]] = True
+        for positions, ids in chunks.get((request.request_id, choice), ()):
+            experts[positions] = ids
+            valid[positions] = True
+        return GeneratedExpertRoutes(experts.transpose(1, 0, 2), valid)
+
+    def _extract_outputs(
+        self,
+        pending_outputs: _DecodeOutputs | None,
+        route_chunks: dict[tuple[int, int], list[tuple[np.ndarray, np.ndarray]]] | None = None,
+    ) -> int:
         """Append newly available tokens into outputs per (request_id, child_id).
 
         Returns number of new tokens appended.
@@ -1306,6 +1421,15 @@ class InferenceEngine:
 
         # Pull the entire buffer in one host op
         pending_outputs = jax.device_get(pending_outputs)
+        if pending_outputs.routes is not None and route_chunks is not None:
+            routes = pending_outputs.routes
+            count = int(routes.count)
+            slots = routes.slots.array[:count]
+            for slot in np.unique(slots):
+                request = self.local_map[int(slot)]
+                take = slots == slot
+                chunk = (routes.positions.array[:count][take], routes.experts.array[:count][take])
+                route_chunks.setdefault(request, []).append(chunk)
         n = int(pending_outputs.num_tokens)
         fins = pending_outputs.finished.array
         toks_arr = pending_outputs.tokens.array
@@ -1328,7 +1452,8 @@ class InferenceEngine:
             dr.tokens_decoded += 1
             appended += 1
 
-        # Update done flags based on snapshot
+        # Finish outputs before releasing slots, so a new request can reuse them.
+        released_slots = []
         for local_slot, is_done in enumerate(fins):
             if not bool(is_done):
                 continue
@@ -1338,9 +1463,9 @@ class InferenceEngine:
             rid, cid = info
             dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
             dr.done = True
+            del self.local_map[local_slot]
+            released_slots.append(local_slot)
 
-            # Finished slots stay finished until they are released, so this runs on every drain: only
-            # detokenize the sequence when the debug log that consumes it is actually enabled.
             if logger.isEnabledFor(logging.DEBUG):
                 try:
                     full_text = self.tokenizer.decode(dr.token_list, skip_special_tokens=False)
@@ -1350,7 +1475,12 @@ class InferenceEngine:
                         f"[Request {rid}, Choice {cid}] FINAL ({dr.tokens_decoded} tokens): <decode_error: {e}>"
                     )
 
-        num_finished = int(fins.sum())
-        logger.debug(f"extract: appended={appended} (drained={n}) unmapped={unmapped} finished_count={num_finished}")
+        if released_slots:
+            decode_state = _release_finished_slots(self.gen_state.decode_state, jnp.asarray(fins))
+            self.gen_state = dataclasses.replace(self.gen_state, decode_state=decode_state)
+            self.free_slots.extend(released_slots)
+        logger.debug(
+            "extract: appended=%d (drained=%d) unmapped=%d finished=%d", appended, n, unmapped, len(released_slots)
+        )
 
         return appended
