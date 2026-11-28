@@ -20,7 +20,6 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from http import HTTPStatus
 from pathlib import Path, PurePosixPath
 
 from daytona import (
@@ -34,6 +33,7 @@ from daytona import (
     DaytonaNotFoundError,
     DaytonaRateLimitError,
     DaytonaTimeoutError,
+    DaytonaValidationError,
     ExecuteResponse,
     SandboxState,
 )
@@ -458,8 +458,9 @@ class DaytonaMachine:
 
     @asynccontextmanager
     async def _provider_failures(self) -> AsyncIterator[None]:
-        """Raise a lost provider connection, or a started sandbox its proxy cannot reach, as ``ConnectionError``,
-        and any failure of a sandbox that is no longer started as ``MachineTerminated``."""
+        """Raise a request the started sandbox's toolbox rejected as is, a lost provider connection or any other
+        failure of a started sandbox as ``ConnectionError``, and any failure of a sandbox that is no longer started
+        as ``MachineTerminated``."""
         try:
             yield
         except (DaytonaConnectionError, DaytonaTimeoutError) as error:
@@ -475,10 +476,13 @@ class DaytonaMachine:
                 ) from error
             if self.sandbox.state != SandboxState.STARTED:
                 raise MachineTerminated(f"Daytona sandbox {self.sandbox.id} is {self.sandbox.state}: {error}") from error
-            # The SDK reports a failed file transfer's HTTP response without its status code.
-            if error.status_code is None or error.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR:
-                raise ConnectionError(f"Daytona cannot reach sandbox {self.sandbox.id}: {error}") from error
-            raise
+            # The toolbox rejected this request, for example for a path that does not exist. The SDK reports a
+            # failed file transfer's HTTP response without its status code.
+            if isinstance(error, DaytonaValidationError | DaytonaNotFoundError) and error.status_code is not None:
+                raise
+            # Any other answer, such as a failed authentication or a page from a server that a task's network
+            # changes put in the toolbox's place, means the toolbox cannot serve the sandbox.
+            raise ConnectionError(f"Daytona cannot reach sandbox {self.sandbox.id}: {error}") from error
 
     async def open_process_scope(self) -> ProcessScope:
         raise UnsupportedMachineSpec("Daytona does not provide confirmed scoped descendant teardown")
