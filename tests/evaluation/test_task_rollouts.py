@@ -6,11 +6,12 @@ import json
 import threading
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import AsyncExitStack, contextmanager
 from dataclasses import dataclass, field
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import openai
@@ -47,7 +48,7 @@ from rolloutengine.likelihood import VllmLikelihood
 from rolloutengine.models import ModelRequest, ModelTurn, Prompt, RolloutLimits, TokenUsage
 from rolloutengine.test_support import machine_runtime
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import CommandOutputLost, MachineDiskFull, MachineSpec, NetworkPolicy, PackageSpec
+from shellbox.machine import Command, CommandOutputLost, MachineDiskFull, MachineSpec, NetworkPolicy, PackageSpec
 from taskcompendium.convert.answers import answer_task, exact_answer_task, source_evidence
 from taskcompendium.evaluation.corpus import chat_item, evaluation_cases, evaluation_protocol
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE
@@ -1624,6 +1625,66 @@ async def test_a_separate_grader_gets_the_task_s_resources_where_the_run_sets_no
         (512, NetworkPolicy.DENY),
         (grader_memory, config.verifier_machine.network),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error_type", "message", "status_code"),
+    [
+        ("DaytonaError", "Failed to execute command: <!doctype html><title>Example Domain</title>", 405),
+        ("DaytonaAuthenticationError", "Failed to execute command: ", 401),
+    ],
+    ids=["web-page", "unauthenticated"],
+)
+async def test_a_daytona_toolbox_lost_during_an_episode_fails_only_that_attempt(
+    tmp_path, run_config, error_type, message, status_code
+):
+    daytona = pytest.importorskip("daytona")
+    daytona_machine = pytest.importorskip("shellbox.backends.daytona.machine")
+    corpus = publish_episodes(tmp_path, ("episode/solve",), PiAgent())
+    toolbox_error = getattr(daytona, error_type)(message, status_code=status_code)
+
+    class Toolbox:
+        async def exec(self, command, **kwargs):
+            raise toolbox_error
+
+    async def refresh_data(request_timeout=None):
+        pass
+
+    class DaytonaFactory(ShellSimMachineFactory):
+        async def create(self, spec):
+            sandbox = SimpleNamespace(
+                id="sandbox", state=daytona.SandboxState.STARTED, process=Toolbox(), refresh_data=refresh_data
+            )
+            return daytona_machine.DaytonaMachine(sandbox, spec, AsyncExitStack())
+
+    episodes = []
+
+    async def run_pi(context, complete):
+        episodes.append(context.run_id)
+        if len(episodes) == 1:
+            # Like a terminal session, the agent's cleanup runs a command on the machine after the failure.
+            context.cleanup.push("agent_session", lambda: context.machine.run(Command(("tmux", "kill-server"))))
+            await context.machine.run(Command(("tmux", "send-keys", "ls")))
+        await complete(Prompt(({"role": "user", "content": "Solve."},), {}))
+
+    async def model(request):
+        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(5, 2))
+
+    config = run_config.model_copy(
+        update={"concurrency": 1, "source_limit": None, "task_machine": machine_runtime(backend="shellsim")}
+    )
+    arguments = {
+        "machine_factories": {"shellsim": DaytonaFactory()},
+        "harnesses": {"pi": lambda _agent, _budget: AgentHarness(run_pi)},
+    }
+    output = str(tmp_path / "results")
+    with pytest.raises(EvaluationInfrastructureError):
+        await run_evaluation((corpus,), output, config, model, **arguments)
+    await run_evaluation((corpus,), output, config, model, **arguments)
+
+    outcomes = [row["outcome"] for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert outcomes == ["infra_error", "graded"]
 
 
 class FullDiskFactory(ShellSimMachineFactory):

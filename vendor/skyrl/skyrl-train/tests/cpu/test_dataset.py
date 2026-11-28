@@ -1,4 +1,5 @@
 import errno
+import hashlib
 import json
 import os
 from dataclasses import replace
@@ -14,6 +15,7 @@ from omegaconf import OmegaConf
 from skyrl_train import task_inputs
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY
 from skyrl_train.config.utils import get_default_config
+from skyrl_train.dataset.dataset import read_prompt_files
 from skyrl_train.dataset.prepared_tasks import PROMPT_LENGTH_COLUMN
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, SourceTaskDataset, TaskDataset, source_row_task, write_tasks
 from skyrl_train.entrypoints.main_base import BasePPOExp
@@ -31,6 +33,44 @@ from tests.cpu.task_specs import NATIVE_ENVIRONMENT, text_task, write_selection_
 class _StubTokenizer:
     def apply_chat_template(self, messages, add_generation_prompt):
         return messages if isinstance(messages, str) else "".join(message["content"] for message in messages)
+
+
+@pytest.mark.parametrize("widths", [(False, True), (True, False), (False, False)])
+def test_prompt_files_preserve_tasks_and_metadata_across_arrow_text_widths(tmp_path, widths):
+    rows = []
+    paths = []
+    for index, wide in enumerate(widths):
+        task_json = text_task(f"unicode-λ-{index}").model_dump_json()
+        row = {
+            "task_spec": task_json,
+            "task_sha256": hashlib.sha256(task_json.encode()).hexdigest(),
+            "runtime": '{"backend":"local"}',
+            "teacher_route": f"route-{index}",
+            "optional": None,
+            "weight": 0.5,
+        }
+        arrow_text = pa.large_string() if wide else pa.string()
+        columns = {
+            name: pa.array([value], type=arrow_text) if isinstance(value, str) else pa.array([value])
+            for name, value in row.items()
+        }
+        path = tmp_path / f"source-{index}.parquet"
+        pq.write_table(pa.table(columns), path)
+        paths.append(str(path))
+        rows.append(row)
+    combined = read_prompt_files(paths)
+    assert combined.to_list() == rows
+    assert combined.features["task_sha256"].dtype == "large_string"
+
+
+def test_prompt_files_reject_incompatible_non_text_metadata(tmp_path):
+    paths = []
+    for index, value in enumerate((0.5, "not-a-weight")):
+        path = tmp_path / f"source-{index}.parquet"
+        pq.write_table(pa.table({"prompt": ["Question"], "weight": [value]}), path)
+        paths.append(str(path))
+    with pytest.raises(ValueError):
+        read_prompt_files(paths)
 
 
 @pytest.mark.parametrize("native", [False, True])

@@ -46,6 +46,7 @@ from daytona import (
 )
 from daytona._utils.errors import intercept_errors
 from daytona_api_client_async import SnapshotState
+from daytona_toolbox_api_client_async.exceptions import ApiException as ToolboxApiException
 from multidict import CIMultiDict, CIMultiDictProxy
 from rigging.task_errors import RetryDisposition
 from shellbox.backends.daytona.connection import DaytonaConnection
@@ -1261,6 +1262,64 @@ def test_daytona_provider_failures_report_a_lost_machine(provider_error, state, 
             assert caught.value is provider_error or caught.value.__cause__ is provider_error
         finally:
             await machine.close()
+
+    asyncio.run(scenario())
+
+
+def _toolbox_response_error(status: HTTPStatus, content_type: str, body: str) -> DaytonaError:
+    """The error the Daytona SDK raises when a toolbox request receives this HTTP response."""
+    response = SimpleNamespace(
+        status=status,
+        reason=status.phrase,
+        data=body.encode(),
+        headers=CIMultiDictProxy(CIMultiDict({"Content-Type": content_type})),
+    )
+    return _sdk_error(ToolboxApiException(http_resp=response))
+
+
+@pytest.mark.parametrize(
+    "provider_error,expected",
+    [
+        (
+            _toolbox_response_error(
+                HTTPStatus.METHOD_NOT_ALLOWED,
+                "text/html; charset=UTF-8",
+                "<!doctype html><html><head><title>Example Domain</title></head></html>",
+            ),
+            ConnectionError,
+        ),
+        (_toolbox_response_error(HTTPStatus.UNAUTHORIZED, "text/plain", ""), ConnectionError),
+        (
+            _toolbox_response_error(HTTPStatus.BAD_REQUEST, "application/json", '{"message": "invalid request"}'),
+            DaytonaValidationError,
+        ),
+        (
+            _toolbox_response_error(HTTPStatus.NOT_FOUND, "application/json", '{"message": "file not found"}'),
+            DaytonaNotFoundError,
+        ),
+    ],
+    ids=["web-page", "unauthenticated", "invalid-request", "missing-path"],
+)
+def test_daytona_started_sandbox_reports_failures_other_than_a_rejected_request_as_unreachable(provider_error, expected):
+    class Toolbox:
+        async def exec(self, command, **kwargs):
+            raise provider_error
+
+    async def refresh_data(request_timeout=None):
+        pass
+
+    sandbox = SimpleNamespace(
+        id="fixture", state=SandboxState.STARTED, process=Toolbox(), fs=LocalFiles(), refresh_data=refresh_data
+    )
+
+    async def scenario():
+        machine = DaytonaMachine(sandbox, MachineSpec(RegistryImage("ubuntu:24.04"), workdir=""), AsyncExitStack())
+        with pytest.raises(expected) as caught:
+            await machine.run(Command(("true",)))
+        assert caught.value is provider_error or caught.value.__cause__ is provider_error
+        # The failed command cleanup closed the machine, so later commands report it lost.
+        with pytest.raises(MachineTerminated):
+            await machine.run(Command(("true",)))
 
     asyncio.run(scenario())
 
