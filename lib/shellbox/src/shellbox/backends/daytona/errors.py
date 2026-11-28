@@ -11,11 +11,18 @@ from rigging.task_errors import ErrorIdentity, RetryDisposition, exception_ident
 from shellbox.task_errors import ERROR_CATEGORIES
 
 DAYTONA_DELETE_OPERATION = "delete"
+SANDBOX_CAPACITY_MESSAGE = "Daytona sandbox capacity exhausted"
+
+
+class SandboxCapacityError(DaytonaError):
+    """The account could not admit a sandbox before its creation deadline."""
 
 
 def daytona_error_identity(error: Exception, *, operation: str) -> ErrorIdentity:
     """Classify SDK failures and eligible deletion conflicts."""
     identity = exception_identity(error, operation=operation, categories=ERROR_CATEGORIES)
+    if isinstance(error, SandboxCapacityError):
+        return identity.model_copy(update={"retry_disposition": RetryDisposition.TRANSIENT})
     if identity.retry_disposition is RetryDisposition.PERMANENT:
         return identity
     if (isinstance(error, DaytonaConnectionError) and identity.provider_status_code is None) or (
