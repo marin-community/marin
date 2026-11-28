@@ -866,7 +866,7 @@ def test_pi_benchmarks_require_the_models_pi_thinking_format(agent_command, agen
         assert f"agent=pi@{EPISODE_HARNESS_REVISIONS['pi']}" in result.output
 
 
-def test_agent_backend_and_harness_revision_are_part_of_run_identity(tmp_path, agent_selection, monkeypatch):
+def test_agent_backend_harness_revision_and_concurrency_are_part_of_run_identity(tmp_path, agent_selection, monkeypatch):
     spec = LaunchSpec(
         evals=load_evaluations(agent_selection),
         model=_agent_model(),
@@ -884,7 +884,8 @@ def test_agent_backend_and_harness_revision_are_part_of_run_identity(tmp_path, a
         return prepare_evaluation_batch(launch).evaluations[0].identity.run_id
 
     original = run_id(spec)
-    assert run_id(replace(spec, model=replace(spec.model, evaluation_num_concurrent=8))) == original
+    # How many attempts an agent runs at once can change its results, so a lower model bound moves the run.
+    assert run_id(replace(spec, model=replace(spec.model, evaluation_num_concurrent=1))) != original
     assert run_id(replace(spec, task_machine_backend=TaskMachineBackend.DOCKER)) != original
     monkeypatch.setattr("experiments.evaluation.curated.EPISODE_HARNESS_REVISIONS", {"terminus-2": "changed"})
     assert run_id(spec) != original

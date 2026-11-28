@@ -3,6 +3,7 @@
 
 """Lower evaluation model policy into remote-inference configuration."""
 
+import hashlib
 import json
 import logging
 import math
@@ -33,6 +34,7 @@ from marin.inference.config import (
     VllmLauncherType,
     VllmSource,
 )
+from marin.inference.vllm_backend import vllm_launcher
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +86,6 @@ def _auto_serve_overrides_from_config(
     architectures = " ".join(config.get("architectures") or ()).lower()
     model_lower = model.lower()
     is_qwen_next = any(marker in model_lower for marker in _QWEN_NEXT_MODEL_MARKERS)
-    text_config = config.get("text_config")
-    if not isinstance(text_config, dict):
-        text_config = config
 
     derived: tuple[tuple[str, str], ...] = ()
     if (
@@ -107,10 +106,34 @@ def _auto_serve_overrides_from_config(
         if not has_vllm_option(existing_extra_args, option):
             merged.extend((option, value))
 
-    native_max_model_len = text_config.get(_MAX_POSITION_EMBEDDINGS_KEY) or config.get(_MAX_POSITION_EMBEDDINGS_KEY)
-    if max_model_len is not None and isinstance(native_max_model_len, int | float):
-        max_model_len = min(max_model_len, int(native_max_model_len))
+    native_max_model_len = _native_window(config)
+    if max_model_len is not None and native_max_model_len is not None:
+        max_model_len = min(max_model_len, native_max_model_len)
     return tuple(merged), max_model_len
+
+
+def _native_window(config: dict) -> int | None:
+    text_config = config.get("text_config")
+    if not isinstance(text_config, dict):
+        text_config = config
+    window = text_config.get(_MAX_POSITION_EMBEDDINGS_KEY) or config.get(_MAX_POSITION_EMBEDDINGS_KEY)
+    return int(window) if isinstance(window, int | float) else None
+
+
+def _checkpoint_config(model: str, revision: str | None) -> dict:
+    """The checkpoint's config.json, from object storage, a local directory or the Hugging Face Hub."""
+    if "://" in model:
+        config_path = StoragePath(model) / _HF_CONFIG_FILENAME
+    elif Path(model).is_dir():
+        config_path = StoragePath(str(Path(model) / _HF_CONFIG_FILENAME))
+    else:
+        config_path = StoragePath(hf_hub_download(model, _HF_CONFIG_FILENAME, revision=revision))
+    return json.loads(config_path.read_text())
+
+
+def native_context_window(model: str, revision: str | None = None) -> int | None:
+    """The context window the checkpoint's config declares, or None if it declares none."""
+    return _native_window(_checkpoint_config(model, revision))
 
 
 def auto_serve_overrides(
@@ -121,13 +144,7 @@ def auto_serve_overrides(
     revision: str | None = None,
 ) -> tuple[tuple[str, ...], int | None]:
     """Inspect a model's config.json and fill portable vLLM defaults."""
-    if "://" in model:
-        config_path = StoragePath(model) / _HF_CONFIG_FILENAME
-    elif Path(model).is_dir():
-        config_path = StoragePath(str(Path(model) / _HF_CONFIG_FILENAME))
-    else:
-        config_path = StoragePath(hf_hub_download(model, _HF_CONFIG_FILENAME, revision=revision))
-    config = json.loads(config_path.read_text())
+    config = _checkpoint_config(model, revision)
     return _auto_serve_overrides_from_config(model, config, max_model_len, existing_extra_args)
 
 
@@ -152,6 +169,28 @@ def _is_weight_file(name: str) -> bool:
     roughly double the measured size of the checkpoint.
     """
     return "/" not in name and name.endswith(_WEIGHT_FILE_SUFFIXES)
+
+
+_CHECKSUM_KEYS = ("ETag", "etag", "md5Hash", "crc32c", "checksum")
+
+
+def checkpoint_digest(location: str) -> str:
+    """A digest of an object-store checkpoint's files that changes when any of them is rewritten.
+
+    Reads every file's object checksum (its ETag, or the store's MD5 or CRC), subdirectories included, from a
+    listing, falling back to its size and modification time where the store reports none.
+    """
+    fs, path = filesystem_for(location)
+    root = PurePosixPath(fs._strip_protocol(path))
+    files = []
+    for name, entry in fs.find(path, detail=True).items():
+        checksum = next((str(entry[key]) for key in _CHECKSUM_KEYS if entry.get(key)), None)
+        if checksum is None:
+            checksum = f"{entry.get('size')}:{entry.get('mtime') or entry.get('LastModified') or entry.get('updated')}"
+        files.append((str(PurePosixPath(fs._strip_protocol(name)).relative_to(root)), checksum))
+    if not files:
+        raise ValueError(f"{location}: no checkpoint files to identify")
+    return "sha256:" + hashlib.sha256(json.dumps(sorted(files)).encode()).hexdigest()
 
 
 @cache
@@ -227,6 +266,13 @@ def _vllm_engine_config(
         extra_metric_families=_SPECULATIVE_METRIC_FAMILIES if serve.speculative is not None else frozenset(),
         speculative=serve.speculative,
     )
+
+
+def inference_build(serve: ServeConfig, platform: Platform) -> str:
+    """The server build a model's evaluations run on: its vLLM launcher with every pin, or its backend."""
+    if serve.backend is not ServeBackend.VLLM:
+        return serve.backend.value
+    return repr(vllm_launcher(_vllm_engine_config(serve, platform, ())))
 
 
 def _vllm_environment_variables(serve: ServeConfig, platform: Platform) -> dict[str, str]:
