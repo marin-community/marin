@@ -3,6 +3,7 @@ import { onMounted } from 'vue'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatRelativeAge, formatTimestamp } from '@/utils/formatting'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
 import type { Status } from '@/types/api'
 
 const { data, loading, error, refresh } = useApi<Status>(() => 'api/status')
@@ -14,10 +15,9 @@ onViewRefresh(refresh)
 <template>
   <section>
     <div class="mb-4">
-      <h2 class="text-lg font-semibold">Debug</h2>
+      <div class="flex items-center justify-between"><h1>Diagnostics</h1><RefreshButton /></div>
       <p class="text-xs text-text-muted mt-0.5">
-        Where records are scanned, the active data source, and any errors seen while ingesting. Use the
-        header Refresh to run an ingest pass now.
+        Where records are scanned, the active data source, and any ingestion errors.
       </p>
     </div>
 

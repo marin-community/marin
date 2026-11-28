@@ -6,6 +6,7 @@ const props = defineProps<{
   options: string[]
   modelValue: string
   placeholder?: string
+  maxOptions?: number
 }>()
 const emit = defineEmits<{ 'update:modelValue': [string] }>()
 const id = useId()
@@ -15,10 +16,11 @@ const open = ref(false)
 const query = ref('')
 const active = ref(-1)
 
-const matches = computed(() => {
+const matchingOptions = computed(() => {
   const terms = query.value.trim().toLowerCase().split(/\s+/).filter(Boolean)
   return props.options.filter((option) => terms.every((term) => option.toLowerCase().includes(term)))
 })
+const matches = computed(() => matchingOptions.value.slice(0, props.maxOptions))
 
 function startSearch() {
   query.value = ''
@@ -91,7 +93,7 @@ function toggle() {
         :value="open ? query : modelValue"
         :placeholder="placeholder ?? `Search ${label.toLowerCase()}…`"
         :title="modelValue || undefined"
-        class="w-full rounded border border-surface-border bg-surface pl-2 pr-16 py-1 text-sm"
+        class="w-full rounded border border-[var(--c-control-border)] bg-surface pl-2 pr-16 py-1 text-sm"
         @focus="startSearch"
         @click="!open && startSearch()"
         @input="search"
@@ -140,6 +142,9 @@ function toggle() {
       </li>
       <li v-if="!matches.length" role="presentation" class="px-3 py-3 text-sm text-text-muted">
         No matches. Try a shorter name.
+      </li>
+      <li v-else-if="matches.length < matchingOptions.length" role="presentation" class="border-t border-surface-border-subtle px-3 py-2 text-xs text-text-secondary">
+        {{ matches.length }} of {{ matchingOptions.length }} matches. Type to narrow.
       </li>
     </ul>
   </div>

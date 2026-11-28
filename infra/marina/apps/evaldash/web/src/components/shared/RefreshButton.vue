@@ -2,8 +2,6 @@
 import { useServerRefresh } from '@/composables/useRefresh'
 import { formatClock } from '@/utils/formatting'
 
-// Both the header and the status page mount this; the composable's shared state keeps them
-// in lockstep — one spinner, one "updated" stamp, one error.
 const { refreshing, lastRefreshAt, refreshError, refreshNow } = useServerRefresh()
 </script>
 

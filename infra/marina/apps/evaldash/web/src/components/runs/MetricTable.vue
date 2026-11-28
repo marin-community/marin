@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { formatScore } from '@/utils/formatting'
+import { formatScore, isPercentMetric } from '@/utils/formatting'
 import type { MetricRow } from '@/utils/runMetrics'
 
 defineProps<{ rows: MetricRow[]; keyPrefix?: string }>()
@@ -12,7 +12,6 @@ defineProps<{ rows: MetricRow[]; keyPrefix?: string }>()
         <th class="px-3 py-2 text-left">Task</th>
         <th class="px-3 py-2 text-left">Metric</th>
         <th class="px-3 py-2 text-right">Value</th>
-        <th class="px-3 py-2 text-right">Score</th>
       </tr>
     </thead>
     <tbody>
@@ -23,8 +22,7 @@ defineProps<{ rows: MetricRow[]; keyPrefix?: string }>()
       >
         <td class="px-3 py-2 font-mono text-[13px]">{{ m.task }}</td>
         <td class="px-3 py-2 font-mono text-[13px]">{{ m.metric }}</td>
-        <td class="px-3 py-2 text-right tabular-nums text-text-secondary">{{ m.value }}</td>
-        <td class="px-3 py-2 text-right tabular-nums">{{ formatScore(m.value) }}</td>
+        <td class="px-3 py-2 text-right tabular-nums">{{ isPercentMetric(m) ? formatScore(m) : m.value }}</td>
       </tr>
     </tbody>
   </table>

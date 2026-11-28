@@ -6,7 +6,7 @@ import { compareCells } from './ranking'
 export const ALL_COHORTS = 'all'
 export const UNVERSIONED_COHORT = 'unversioned'
 
-export function cohortWarning(cohort: string, meta: Meta): string | null {
+export function cohortWarning(cohort: string, meta: Pick<Meta, 'verified_cohorts'>): string | null {
   if (cohort === ALL_COHORTS) return 'All cohorts may mix evaluation settings. Check run configurations before comparing scores.'
   if (cohort === UNVERSIONED_COHORT) {
     return 'Runs launched without a version label have no settings contract and may mix settings. Check run configurations before comparing scores.'
@@ -18,15 +18,13 @@ export function cohortWarning(cohort: string, meta: Meta): string | null {
 }
 
 // The fleet best on one benchmark and the model that holds it — the rail caret and the panel column
-// marker. Ranked by the score, as the panel sorts; Compare is where an ordering claim is made and it
-// ranks on the interval instead.
-export interface BestCell {
-  value: number
+// marker. The panel sorts by the score. Compare orders by the interval lower bound.
+export interface BestCell extends Pick<PanelCell, 'value' | 'metric_kind'> {
   model: string
 }
 
 // Index panel rows by model name for O(1) cell lookup. Used wherever a page reads a specific model's
-// cells out of the fleet panel (panel page, model index, compare).
+// cells out of the fleet panel.
 export function cellsByModel(rows: PanelRow[]): Record<string, Record<string, PanelCell>> {
   const out: Record<string, Record<string, PanelCell>> = {}
   for (const row of rows) out[row.model] = row.cells
@@ -42,7 +40,7 @@ export function fleetBest(rows: PanelRow[], benchmarks: string[]): Record<string
       const cell = row.cells[benchmark]
       if (cell && (best === null || compareCells(cell, best.cell) < 0)) best = { cell, model: row.model }
     }
-    if (best) out[benchmark] = { value: best.cell.value, model: best.model }
+    if (best) out[benchmark] = { value: best.cell.value, metric_kind: best.cell.metric_kind, model: best.model }
   }
   return out
 }

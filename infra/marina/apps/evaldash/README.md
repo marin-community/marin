@@ -1,6 +1,6 @@
 # EvalDash
 
-A benchmark panel and browsable run log over every Marin eval run, served by the Marina kernel at
+A searchable catalog of Marin evaluation launches, runs, and benchmark results, served by the Marina kernel at
 `/evaldash/` on `marina.oa.dev`. The legacy `evaldash.oa.dev` hostname routes to
 the same Marina service.
 
@@ -51,7 +51,7 @@ Completed steps and older records are checked once per 24 hours after their firs
 across the first day. The record body is reread only when its version or step state changes. A missing
 object must be absent on two successful checks before its source is removed. A
 failed prefix listing leaves that prefix's last committed rows untouched, and an invalid rewrite keeps
-the last valid record while surfacing the error on the Debug page. Failures in a serving instance's
+the last valid record while surfacing the error under **Diagnostics**. Failures in a serving instance's
 generation check or the scheduled reconciliation pass remain visible there until a later check or
 pass succeeds.
 
@@ -84,13 +84,37 @@ cannot mutate the new commit-token state. Seeded serving rows are not pruned unt
 prefix has completed one successful inventory, and an unavailable higher-priority prefix cannot let a
 lower-priority duplicate replace a seeded row during that first inventory.
 
-The SPA has four views: the panel (one row per model, one column per benchmark, each cell a score
-with its 95% interval and coverage badge, plus a suite column tree, run-metadata filters, a cohort
-selector, an opt-in qualified aggregate, and archive controls), runs (a "by launch" grouped view
-expanding each serve group to its evals, plus a flat filterable table), run detail (grade with its
-interval and ungraded-item breakdown, metrics, version + description, live iris job/attempt status,
-live finelog logs, a per-sample browser, and group siblings), and status (per-prefix ingest probes).
-A Playground Reports tab lists the reports described below.
+## Reviewing evaluations
+
+**Runs** opens on a chronological feed of launches. Open a launch for its
+members, or use **All runs** to find individual records. Search accepts a run
+or launch ID, model, benchmark, user, or launch description. **Filters**
+offers exact matches across the catalog. Copy the URL to share a search or
+a filtered page.
+
+Open a run for its status, grade, interval, and metrics. **Samples** loads
+graded examples on demand. **Configuration** shows provenance, hardware,
+artifact locations, and sibling runs. **Diagnostics** opens the run's Iris jobs
+and Finelog output. The former Inspect directory links into the successful-run list.
+
+**Compare** accepts two to four models. The index lists settings scored by
+every selected model under **Shared only**. **All recorded** includes partial
+coverage and shows how many models contributed to each setting. The overview
+plots binary estimates on the same 0–100% scale across rows and lists
+continuous estimates in their recorded units. Each model keeps its symbol
+when you open a setting to read exact estimates and 95% intervals. **Fit to scores**
+expands the range around the intervals. **Full scale** restores the full range.
+Each measurement links to its source. On phones, scan the overview, open a setting, and use
+**Back to benchmarks** to return to the same list.
+
+**Benchmarks** lists recorded settings by suite. Search for a setting to
+see its scored models, intervals, cohorts, graded item counts and sources.
+Check two to four models to enter Compare on that exact setting. **Fleet
+coverage** opens the matrix with benchmark selection, rank, archives and
+optional aggregates. Saved root URLs with panel selections still open it.
+
+**Models** is a directory of evaluation activity. A model opens its history
+and recorded runs. **Reports** opens Playground reports from the serving dashboard. **Diagnostics** shows ingestion status and offers rescans.
 
 Playground reports are the model-feedback reports that the marin-serve dashboard's Report issue
 button saves, one immutable JSON object per report under `{prefix}/{YYYY-MM-DD}/{id}.json` in
@@ -103,16 +127,11 @@ read failure is logged and reported as a failed prefix, and the other reports ar
 The list shows the newest 1,000 reports and says when older ones were left out. The local store has
 no database for reports, so their endpoints return 503 there.
 
-Run filters search the full catalog before applying the result limit. Model and eval pickers
-search the catalog's names by case-insensitive word fragments and support arrow keys, Enter,
-and Escape. Filters, result limit, and launch/flat view are carried in the run-log URL.
-Runs span all cohorts; the cohort carried by the shell navigation applies to scored views.
-Filtering launches by eval retains all their sibling runs and the full launch's status.
-`/meta` returns `run_facets` over all records, including smoke runs, separately from panel facets.
-Its model, benchmark, cohort, and filter lists are computed when a catalog snapshot loads or refreshes.
-Requests reuse those lists and read current archive flags independently; archiving does not require a
-new catalog generation. Synchronous metadata work runs in a worker thread so database waits leave the
-async event loop available to other requests.
+Run filters apply before pagination. Filtering launches by benchmark retains
+their sibling counts and launch status. Run searches include smoke runs and all
+cohorts. Score views use their own cohort and admission rules. The catalog
+derives run and launch search fields from each committed snapshot. Scored views
+build their filter metadata on demand and read current archive flags separately.
 
 Model detail links record the selected cohort in `?cohort=`, including `all` and `unversioned`,
 so reopening a link restores the same runs and scores. Links without a cohort resolve to the
@@ -147,7 +166,14 @@ The kernel is the only access gate; there is no application auth. Handlers read 
 
 The kernel mounts these under `/evaldash/api/`.
 
+`/catalog` returns paged launch or run rows with the match count and effective page size. For a
+launch's individual runs, use `/catalog?view=runs&group=<group_id>`. The existing `/runs` and
+`/groups` collections return arrays. The `/groups` array includes each launch's members and their
+headline scores.
+
 ```
+GET  /catalog?view=launches|runs&q=&offset=&limit=&model=&eval=&user=&status=&version=&accelerator=&group=   paged summary rows and total matches
+GET  /catalog/facets    available run filters across the catalog
 GET  /runs?model=&eval=&user=&status=&version=&accelerator=&group=&limit=   filtered run rows
 GET  /groups?model=&eval=&user=&status=&version=&accelerator=&limit=   runs collapsed into launches (one row per group_id) with per-eval members
 GET  /runs/{run_id}     the full record.json for one run (404 if absent)
@@ -158,10 +184,12 @@ GET  /runs/{run_id}/samples?task=&offset=&limit=&correct=   paged sample rows
 GET  /runs/{run_id}/samples/artifact?uri=   one run-local sample artifact (the trajectory) as text
 POST /runs/{run_id}/samples/review   LLM failure-mode review of up to n sampled task rows ({task, filter, n})
 GET  /runs/{run_id}/group          sibling runs sharing the run's group_id
-GET  /models/{model}?cohort=   one model configuration's aggregated detail (identity, version cohorts, per-eval history, all runs; 404 if absent)
+GET  /models/{model}?cohort=    one model configuration's identity, cohorts, score history and runs (404 if absent)
+GET  /catalog/models?q=&cohort=&include_archived=&offset=&limit=   model directory ordered by latest activity
+GET  /comparison-models?benchmarks=&cohort=   eligible comparison models and cohort choices
 GET  /panel?benchmarks=&cohort=&complete=&min_coverage=&aggregate=&model=&<facet>=&include_archived=   the model x benchmark panel: per-cell measurements with intervals, explained gaps, the benchmark families its columns group into, and an optional qualified aggregate
 GET  /compare?models=a,b[,c,d]&<panel filters>   head-to-head: per-benchmark cells, each model's difference interval against that benchmark's leader, and each model's aggregate over the shared benchmarks
-GET  /history?model=&task=&cohort=   every admitted run's headline score for one cell, over time
+GET  /history?model=&task=&cohort=   admitted scores for one model and benchmark over time
 GET  /meta              distinct models / evals / suites / families / users / statuses / versions + filter facets + archived_models + current_user
 GET  /status            store info + per-prefix ingest probes (last probe/success/error)
 POST /refresh           queue the EvalDash Cloud Run rescan; returns 202 + operation + /status
@@ -205,7 +233,7 @@ and aggregation. `benchmarks` and `cells` retain every admitted variant under it
 The SPA stores its panel selection locally. The Compare route carries the selected variants in its
 URL, and `/meta` lists siblings omitted from a narrowed panel so the picker can restore them.
 
-The Panel and Models views order models by mean reciprocal rank (MRR) across their admitted results
+Fleet coverage orders models by mean reciprocal rank (MRR) across their admitted results
 on the selected benchmark columns. Each benchmark ranks its completed results by score, breaking score
 ties with the interval lower bound; identical results share a rank. A model's MRR is the mean of
 `1 / rank` over benchmarks it completed. Missing results do not enter its mean, so read the adjacent
@@ -221,13 +249,14 @@ their columns remain populated alongside native results.
 The scored `/panel` and `/compare` APIs default to `cohort=all`, the newest admissible run per
 benchmark across cohorts. Results from that default may mix evaluation settings; callers that need
 a verified cohort pass it explicitly, for example `cohort=eval-policy-2026-09-24-verified`.
-Policy violations exclude runs and appear in `policy_rejections` only when a named cohort is selected;
-the all-cohorts view can show their scores.
-Model detail and score history use the same policy admission rule. Model detail retains each run's
-`policy_violations` and shows a violating run without a headline when a named cohort is selected.
-Their timelines span cohorts so earlier scores remain visible; `cohort` controls policy admission.
-The home screen reads and writes `cohort` in the URL, including the resolved default. Navigation
-and model-detail links preserve it. Model rows, benchmark protocols, and missing-cell explanations
+The all-cohorts view includes otherwise valid scores from runs that violated their named policy.
+Selecting a verified cohort excludes scores that violated that cohort's policy and lists the rejected
+runs. Model detail and score history apply the selected policy to scores from its own cohort across
+their timelines. Model detail keeps the full list of recorded cohorts and each run's policy violations
+visible even when the selected policy excludes a score.
+
+Scored views retain the selected `cohort` in the URL and carry it into model detail and score history.
+Model rows, benchmark protocols, and missing-cell explanations
 belong to the selected cohort. Compare offers only models with at least one admitted non-zero score
 in the selected cohort and benchmarks. Compare's searchable Add model dropdown supports up to four
 selections, with controls to remove one model or clear the set. Model names wrap in the picker,
@@ -238,9 +267,7 @@ version label (`version: null`); the selector lists it whenever such runs exist.
 selects the newest admissible run per benchmark across cohorts. Panel and Compare accept it, so
 models whose newest runs sit in different cohorts can be compared, and each compared cell names its
 cohort and links its source run. Comparisons use the same admitted cells as the panel, including
-historical/native metric normalization and protocol checks. The UI marks
-all-cohort and unverified historical views with an asterisk because their settings are not verified
-as comparable. A named verified cohort admits only records with its approved
+historical/native metric normalization and protocol checks. The UI warns when the selected cohort can mix evaluation settings. A named verified cohort admits only records with its approved
 benchmark config, evaluator revision, and thinking mode. Results share a row by model name within
 the selected cohort, including benchmark-specific serving overrides. Each run retains its source
 configuration and digest.
@@ -251,8 +278,8 @@ of the benchmark the run set out to grade; a capped run whose benchmark size is 
 admitted. The corresponding rejection reasons report low benchmark coverage, an unreported benchmark
 size for a capped run, or a metric protocol mismatch. A cohort may contain only a subset of
 its benchmarks. A `(model, benchmark)` with no admitted cell is reported in `missing` with the reason
-and the offending run. Policy-rejected runs are reported separately with their model, benchmark,
-run ID, and reasons, scoped to the selected cohort and filters.
+and the offending run. For a named cohort, `policy_rejections` lists each rejected run's model,
+benchmark, run ID and reasons.
 `complete=1` keeps only models covering every selected benchmark. No cross-benchmark aggregate is
 produced unless `aggregate=` names a missing-data policy (`require_complete` or `bound`), and one that
 is produced carries its panel, per-benchmark metrics, and policy. An unusable query value (an unknown
@@ -363,8 +390,7 @@ EVALDASH_STORE=local RECORDS_PREFIXES="$preview_records" \
 # -> http://127.0.0.1:8080/evaldash/
 ```
 
-Click `Rescan` to load the records. The panel opens on `Newest per benchmark (all cohorts)*`,
-which shows every fixture cohort. To inspect real
+Open **Diagnostics → Rescan** to reload the records. **Runs** shows the fixture launches. To inspect real
 runs, point `RECORDS_PREFIXES` at a local copy of their run directories. Keep dev storage
 local to avoid production writes. After edits, stop the preview with Ctrl-C and
 rerun the `release --local` command to build and install the new package.

@@ -13,12 +13,30 @@ export function formatTimestamp(iso: string | null | undefined): string {
   })
 }
 
-export function formatScore(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '—'
-  // Accuracy-style metrics live in [0, 1]; show as a percentage. Anything else
-  // (already a percentage, a count) is shown with three significant decimals.
-  if (value >= 0 && value <= 1) return (value * 100).toFixed(1)
-  return value.toFixed(3)
+// Aggregates and undeclared metrics can lack a kind. Their scores stay in raw units.
+interface MetricUnits {
+  metric_kind?: string
+}
+
+export function isPercentMetric(cell: MetricUnits): boolean {
+  return cell.metric_kind === 'binary'
+}
+
+function formatMetricValue(value: number, cell: MetricUnits): string {
+  return isPercentMetric(cell) ? (100 * value).toFixed(1) : value.toFixed(3)
+}
+
+export function formatScore(cell: MetricUnits & { value: number }): string {
+  return formatMetricValue(cell.value, cell) + (isPercentMetric(cell) ? '%' : '')
+}
+
+export function formatInterval(cell: MetricUnits & { low: number; high: number }): string {
+  return `${formatMetricValue(cell.low, cell)}–${formatMetricValue(cell.high, cell)}${isPercentMetric(cell) ? '%' : ''}`
+}
+
+// Signed differences use percentage points for binary metrics and source units otherwise.
+export function formatDelta(value: number, cell: MetricUnits): string {
+  return (value > 0 ? '+' : '') + formatMetricValue(value, cell)
 }
 
 export function shortSha(sha: string | null | undefined): string {
@@ -38,6 +56,10 @@ export function githubCommitUrl(sha: string | null | undefined): string | null {
   return sha ? `https://github.com/marin-community/marin/commit/${sha}` : null
 }
 
+export function irisJobUrl(path: string): string {
+  return `https://iris.oa.dev/#/job/${encodeURIComponent(path)}`
+}
+
 export function formatRelativeAge(iso: string | null | undefined): string {
   if (!iso) return 'never'
   const then = new Date(iso).getTime()
@@ -55,27 +77,11 @@ export function formatClock(d: Date): string {
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
-// A 95% interval in the same percentage units as formatScore, e.g. '48.2–69.1'. Every displayed
-// score carries one: a point estimate alone hides both sampling error and any items a run never
-// graded.
-export function formatInterval(low: number, high: number): string {
-  return `${formatScore(low)}\u2013${formatScore(high)}`
-}
-
 // The share of attempted items a run graded, e.g. '92.5% graded', or '' when it reports no attempted
 // count at all (in which case completeness is unknown, not complete).
 export function formatCoverage(coverage: number | null | undefined): string {
   if (coverage === null || coverage === undefined || Number.isNaN(coverage)) return ''
   return `${(coverage * 100).toFixed(1)}% graded`
-}
-
-// A signed delta against a reference score (e.g. the fleet best on a benchmark), in the same
-// percentage-point scale formatScore displays, e.g. '-3.1'. Empty string when there is
-// nothing to compare (no value, or the value is the reference itself).
-export function formatDelta(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return ''
-  const scaled = value * 100
-  return `${scaled > 0 ? '+' : ''}${scaled.toFixed(1)}`
 }
 
 // Epoch-milliseconds timestamp (iris/finelog) -> short local time, or '—'.

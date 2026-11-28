@@ -140,9 +140,9 @@ def test_metadata_database_wait_does_not_block_other_requests(engine, catalog):
                 metadata = asyncio.create_task(client.get("/meta"))
                 try:
                     assert await asyncio.to_thread(metadata_query.wait, 5)
-                    runs = await client.get("/runs?limit=1")
+                    runs = await client.get("/catalog", params={"view": "runs", "limit": 1})
                     assert runs.status_code == 200
-                    assert runs.json()[0]["run_id"] in {record.run_id for record in catalog.records}
+                    assert runs.json()["rows"][0]["run_id"] in {record.run_id for record in catalog.records}
                     assert not metadata.done()
                 finally:
                     writer.rollback()
@@ -160,6 +160,7 @@ def test_metadata_database_wait_does_not_block_other_requests(engine, catalog):
 def test_metadata_refreshes_with_catalog_and_archive_updates_without_a_new_generation(engine, catalog, records):
     store = evaldash_app.PgRecordStore(engine)
     assert "added-model" not in store.meta()["models"]
+    assert "added-model" not in store.catalog_facets()["run_facets"]["model"]
     added = catalog.records[0].model_copy(
         update={
             "run_id": "metadata-added-run",
@@ -180,6 +181,7 @@ def test_metadata_refreshes_with_catalog_and_archive_updates_without_a_new_gener
     assert "added-model" in updated["models"]
     assert "added-user" in updated["facets"]["user"]
     assert "added-cohort" in updated["run_facets"]["version"]
+    assert "added-model" in store.catalog_facets()["run_facets"]["model"]
     generation = store.store_info().catalog_generation
     assert generation > catalog.generation
 
@@ -285,7 +287,7 @@ def test_the_mounted_api_serves_what_the_reconciler_committed(engine, records, d
 
     api = evaldash_app.create_api(services)
     with TestClient(api.app) as client:
-        assert client.get("/runs").json() == []
+        assert client.get("/catalog", params={"view": "runs"}).json()["rows"] == []
         config = evaldash_app.EvaldashConfig.from_env({"RECORDS_PREFIXES": records})
         ingestor = evaldash_app.PostgresIngestor(
             engine, config.prefixes, config.ingest_interval, config.revalidate_after
@@ -296,7 +298,7 @@ def test_the_mounted_api_serves_what_the_reconciler_committed(engine, records, d
         assert response.json()["store"]["backend"] == "postgres"
         assert triggered == ["projects/hai-gcp-models/locations/us-central1/jobs/marina-evaldash"]
 
-        runs = client.get("/runs?limit=100").json()
+        runs = client.get("/catalog", params={"view": "runs", "limit": 100}).json()["rows"]
         assert len(runs) == 21
         assert client.get("/runs/snowball-2026.07.20-mmlu").json()["status"] == "succeeded"
         assert client.get("/status").json()["store"]["catalog_generation"] > 0

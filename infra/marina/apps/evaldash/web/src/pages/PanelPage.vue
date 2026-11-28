@@ -9,14 +9,15 @@
  * by the same rule. The interval under each score stays visible, and Compare ranks on it.
  */
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { formatDelta, formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
+import { formatDelta, formatInterval, formatScore, formatTimestamp, isPercentMetric } from '@/utils/formatting'
+import { lastPageIndex } from '@/utils/pagination'
 import { scoreTint } from '@/utils/score'
 import { ALL_COHORTS, UNVERSIONED_COHORT, cellCoverageLabel, cellsByModel, cohortWarning, fleetBest, isPartialCoverage, scoredItemsLabel, withVariant } from '@/utils/panel'
 import { compareCells, meanReciprocalRanks } from '@/utils/ranking'
-import { MAX_COMPARE, isSmokeEval } from '@/constants'
+import { MAX_COMPARE, PANEL_ENDPOINT, isSmokeEval } from '@/constants'
 import {
   FLAG_NOTES,
   INTERVAL_KIND,
@@ -28,8 +29,9 @@ import {
   type PanelRow,
 } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
+import CohortNotice from '@/components/shared/CohortNotice.vue'
 import PolicyRejections from '@/components/shared/PolicyRejections.vue'
-import EvalRail from '@/components/charts/EvalRail.vue'
+import SearchSelect from '@/components/shared/SearchSelect.vue'
 import HistoryModal from '@/components/charts/HistoryModal.vue'
 
 const router = useRouter()
@@ -43,7 +45,7 @@ const completeOnly = ref(false)
 const cohort = computed({
   get: () => {
     const raw = route.query.cohort
-    return (Array.isArray(raw) ? raw[0] : raw) || meta.value?.default_cohort || ''
+    return (Array.isArray(raw) ? raw[0] : raw) || meta.value?.default_cohort || ALL_COHORTS
   },
   set: (value: string) => {
     void router.replace({ query: { ...route.query, cohort: value || meta.value?.default_cohort } })
@@ -79,7 +81,7 @@ const query = computed(() => {
   if (modelQuery.value.trim()) params.set('model', modelQuery.value.trim())
   if (aggregatePolicy.value) params.set('aggregate', aggregatePolicy.value)
   const suffix = params.toString()
-  return suffix ? `api/panel?${suffix}` : 'api/panel'
+  return suffix ? `${PANEL_ENDPOINT}?${suffix}` : PANEL_ENDPOINT
 })
 
 const { data, loading, error, refresh } = useApi<Panel>(() => query.value)
@@ -267,7 +269,6 @@ function toggleEval(name: string) {
 }
 const visibleTasks = computed(() => data.value?.panel ?? [])
 
-// --- Fleet best per benchmark (the rail caret and the column marker) ---
 const best = computed(() => fleetBest(data.value?.rows ?? [], visibleTasks.value))
 
 // --- Ordering. Benchmark columns use compareCells: the score, then the lower bound. ---
@@ -351,11 +352,15 @@ const knownVariants = computed<Record<string, string[]>>(() => {
 
 const columns = computed<FamilyColumn[]>(() => {
   const shown = new Set(visibleTasks.value)
+  const coverage = new Map<string, number>()
+  for (const row of data.value?.rows ?? []) {
+    for (const name of Object.keys(row.cells)) coverage.set(name, (coverage.get(name) ?? 0) + 1)
+  }
   return (data.value?.families ?? []).map((entry) => ({
     family: entry.family,
     task: entry.variants.find((name) => shown.has(name)) ?? entry.default,
     variants: knownVariants.value[entry.family] ?? entry.variants,
-  }))
+  })).sort((a, b) => (coverage.get(b.task) ?? 0) - (coverage.get(a.task) ?? 0) || a.family.localeCompare(b.family))
 })
 
 function pickVariant(column: FamilyColumn, variant: string) {
@@ -368,24 +373,31 @@ function pickVariant(column: FamilyColumn, variant: string) {
 
 // Δ best is per benchmark, where a difference between two measurements of the same thing is defined.
 // There is no cross-benchmark Δ.
-function deltaBest(row: PanelRow, task: string): number | null {
+function deltaBest(row: PanelRow, task: string): string | null {
   const cell = row.cells[task]
   const leader = best.value[task]
   if (!cell || !leader || leader.model === row.model) return null
-  return cell.value - leader.value
+  return formatDelta(cell.value - leader.value, cell) + (isPercentMetric(cell) ? ' pp' : '')
 }
 
-const readout = computed(() => {
-  const panelRows = data.value?.rows ?? []
-  const tasks = visibleTasks.value
-  const covered = panelRows.reduce((n, row) => n + tasks.filter((t) => row.cells[t]).length, 0)
-  const cells = panelRows.length * tasks.length
-  return {
-    models: panelRows.length,
-    benchmarks: tasks.length,
-    coverage: cells ? Math.round((covered / cells) * 100) : 0,
-  }
+const MODEL_PAGE_SIZE = 20
+const BENCHMARK_PAGE_SIZE = 6
+const modelPage = ref(0)
+const benchmarkPage = ref(0)
+const pageRows = computed(() => rows.value.slice(modelPage.value * MODEL_PAGE_SIZE, (modelPage.value + 1) * MODEL_PAGE_SIZE))
+const pageColumns = computed(() => columns.value.slice(benchmarkPage.value * BENCHMARK_PAGE_SIZE, (benchmarkPage.value + 1) * BENCHMARK_PAGE_SIZE))
+watch([query, sortKey, sortDirection], () => { modelPage.value = 0 })
+watch(selection, () => { benchmarkPage.value = 0 })
+watch(() => rows.value.length, (count) => {
+  modelPage.value = Math.min(modelPage.value, lastPageIndex(count, MODEL_PAGE_SIZE))
 })
+watch(() => columns.value.length, (count) => {
+  benchmarkPage.value = Math.min(benchmarkPage.value, lastPageIndex(count, BENCHMARK_PAGE_SIZE))
+})
+function jumpToFamily(family: string) {
+  const index = columns.value.findIndex(column => column.family === family)
+  if (index >= 0) benchmarkPage.value = Math.floor(index / BENCHMARK_PAGE_SIZE)
+}
 
 // Harness versions the shown aggregates span. More than one means the same benchmark name was
 // defined by more than one harness across the models being averaged, which is worth reading before
@@ -397,7 +409,7 @@ const aggregateRuntimes = computed(() => {
 })
 
 function heatStyle(cell: PanelCell): Record<string, string> {
-  return { backgroundColor: scoreTint(cell.value) }
+  return { backgroundColor: `color-mix(in srgb, ${scoreTint(cell.value)} 28%, var(--c-surface))` }
 }
 function isColumnBest(model: string, task: string): boolean {
   return best.value[task]?.model === model
@@ -431,7 +443,7 @@ function cellTitle(cell: PanelCell): string {
     ...(cell.repeat_aggregation?.coverage_basis === 'item_lower_bound'
       ? [`at least ${cell.n_scored} items scored`]
       : []),
-    `95% ${formatInterval(cell.low, cell.high)} · ${scope}`,
+    `95% ${formatInterval(cell)} · ${scope}`,
     ...cell.flags.filter((flag) => flag in FLAG_NOTES).map((flag) => FLAG_NOTES[flag]),
     `run ${cell.run_id} · ${formatTimestamp(cell.created_at)}`,
     `cohort ${cell.version ?? UNVERSIONED_COHORT}${cell.eval_runtime ? ` · ${cell.eval_runtime}` : ''}`,
@@ -459,44 +471,21 @@ function goToRun(runId: string) {
 function goToModel(model: string) {
   router.push({
     path: `/models/${encodeURIComponent(model)}`,
-    query: { cohort: cohort.value || data.value?.request.cohort_version },
+    query: { cohort: cohort.value },
   })
 }
 </script>
 
 <template>
-  <section>
+  <section class="panel">
     <div class="mb-4">
-      <h2 class="text-lg font-semibold">Panel{{ comparabilityWarning ? '*' : '' }}</h2>
-      <p class="text-xs text-text-muted mt-0.5">
-        One row per model, one column per benchmark, each cell the newest valid result. A score is the rate over the
-        items a run graded; its 95% interval covers sampling error and widens by whatever share of the attempted items
-        the run never graded. Models start sorted by mean reciprocal rank (MRR) across their completed, selected
-        benchmarks. A benchmark column sorts on the score; Compare ranks on the interval.
-      </p>
-      <p v-if="comparabilityWarning" class="text-xs text-status-warning mt-2">* {{ comparabilityWarning }}</p>
+      <RouterLink :to="{ path: '/benchmarks', query: { cohort } }" class="text-sm text-accent hover:underline">← Benchmarks</RouterLink>
+      <h1 class="mt-2">Fleet coverage</h1>
+      <p class="mt-1 text-sm text-text-secondary">Rank models across the selected benchmarks, or open one benchmark for its scores and source runs.</p>
+      <CohortNotice v-if="comparabilityWarning" class="mt-2" :message="comparabilityWarning" />
     </div>
 
-    <!-- Fleet readout -->
-    <div v-if="data && !loading && !error" class="flex rounded-lg border border-surface-border bg-surface overflow-hidden mb-5">
-      <div class="px-5 py-3 border-r border-surface-border-subtle">
-        <div class="font-mono text-[10px] uppercase tracking-widest text-text-muted">Models</div>
-        <div class="font-mono text-2xl font-semibold tabular-nums">{{ readout.models }}</div>
-      </div>
-      <div class="px-5 py-3 border-r border-surface-border-subtle">
-        <div class="font-mono text-[10px] uppercase tracking-widest text-text-muted">Benchmarks</div>
-        <div class="font-mono text-2xl font-semibold tabular-nums">{{ readout.benchmarks }}</div>
-      </div>
-      <div class="px-5 py-3">
-        <div class="font-mono text-[10px] uppercase tracking-widest text-text-muted">Panel coverage</div>
-        <div class="font-mono text-2xl font-semibold tabular-nums">
-          {{ readout.coverage }}<span class="text-sm text-text-muted">%</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Filters -->
-    <div class="flex flex-wrap items-end gap-3 mb-3">
+    <div class="panel-controls flex flex-wrap items-end gap-3 mb-3">
       <label class="flex flex-col text-xs text-text-secondary gap-1">
         Model
         <input
@@ -506,6 +495,21 @@ function goToModel(model: string) {
           class="rounded border border-surface-border bg-surface px-2 py-1 text-sm min-w-[11rem]"
         />
       </label>
+      <label class="flex flex-col text-xs text-text-secondary gap-1">
+        Cohort
+        <select v-model="cohort" class="rounded border border-surface-border bg-surface px-2 py-1 text-sm min-w-[9rem]">
+          <option :value="ALL_COHORTS">Newest per benchmark (all cohorts)*</option>
+          <option v-for="version in meta?.versions ?? []" :key="version" :value="version">
+            {{ version }}{{ meta?.verified_cohorts.includes(version) ? '' : '*' }}
+          </option>
+        </select>
+      </label>
+      <SearchSelect label="Find benchmark" placeholder="Search benchmarks…" :options="columns.map(column => column.family)" model-value="" class="w-64" @update:model-value="jumpToFamily" />
+    </div>
+
+    <details class="mb-4">
+      <summary class="text-sm cursor-pointer text-accent">Panel settings</summary>
+      <div class="flex flex-wrap items-end gap-3 my-3">
       <label
         v-for="(values, facet) in meta?.facets ?? {}"
         :key="facet"
@@ -518,15 +522,6 @@ function goToModel(model: string) {
         >
           <option value="">All</option>
           <option v-for="value in values" :key="value" :value="value">{{ value }}</option>
-        </select>
-      </label>
-      <label class="flex flex-col text-xs text-text-secondary gap-1">
-        Cohort
-        <select v-model="cohort" class="rounded border border-surface-border bg-surface px-2 py-1 text-sm min-w-[9rem]">
-          <option value="all">Newest per benchmark (all cohorts)*</option>
-          <option v-for="version in meta?.versions ?? []" :key="version" :value="version">
-            {{ version }}{{ meta?.verified_cohorts.includes(version) ? '' : '*' }}
-          </option>
         </select>
       </label>
       <label class="flex flex-col text-xs text-text-secondary gap-1">
@@ -605,6 +600,8 @@ function goToModel(model: string) {
       </div>
     </div>
 
+    </details>
+
     <div
       v-if="error"
       class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2 mb-4"
@@ -619,185 +616,47 @@ function goToModel(model: string) {
     <EmptyState v-else-if="data && data.rows.length === 0" icon="🏁" message="No models match these filters." />
 
     <div v-else-if="data && !error" class="space-y-6">
-      <!-- Models: the eval rail as each row's measurement profile, plus the opt-in aggregate -->
       <div>
-        <div class="flex items-baseline justify-between mb-2">
-          <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary">Models</h3>
-          <span class="text-xs text-text-muted">
-            Tick 2–{{ MAX_COMPARE }} to compare · one gauge per benchmark, height = score, whisker = 95% interval,
-            <span class="font-mono" style="color: var(--c-best)">▬</span> = fleet best
-          </span>
+        <div class="matrix-pages">
+          <div>
+            <button aria-label="Previous models" :disabled="modelPage === 0" @click="modelPage--">‹</button>
+            <span>Models {{ modelPage * MODEL_PAGE_SIZE + 1 }}–{{ modelPage * MODEL_PAGE_SIZE + pageRows.length }} of {{ rows.length }}</span>
+            <button aria-label="Next models" :disabled="(modelPage + 1) * MODEL_PAGE_SIZE >= rows.length" @click="modelPage++">›</button>
+          </div>
+          <div v-if="columns.length">
+            <button aria-label="Previous benchmarks" :disabled="benchmarkPage === 0" @click="benchmarkPage--">‹</button>
+            <span>Benchmarks {{ benchmarkPage * BENCHMARK_PAGE_SIZE + 1 }}–{{ benchmarkPage * BENCHMARK_PAGE_SIZE + pageColumns.length }} of {{ columns.length }}</span>
+            <button aria-label="Next benchmarks" :disabled="(benchmarkPage + 1) * BENCHMARK_PAGE_SIZE >= columns.length" @click="benchmarkPage++">›</button>
+          </div>
         </div>
         <div class="overflow-x-auto rounded-lg border border-surface-border">
-          <table class="w-full border-collapse text-sm">
-            <thead>
-              <tr
-                class="border-b border-surface-border bg-surface-raised text-xs font-semibold uppercase tracking-wider text-text-secondary"
-              >
-                <th class="px-3 py-2 text-left w-8"></th>
-                <th
-                  class="px-3 py-2 text-left cursor-pointer"
-                  :class="headerClass(MODEL_SORT)"
-                  title="Sort by model name"
-                  @click="sortBy(MODEL_SORT)"
-                >
-                  Model {{ sortGlyph(MODEL_SORT) }}
-                </th>
-                <th
-                  class="px-3 py-2 text-right cursor-pointer whitespace-nowrap"
-                  :class="headerClass(MRR_SORT)"
-                  title="Mean reciprocal rank across completed results on the selected benchmarks; missing results are omitted"
-                  @click="sortBy(MRR_SORT)"
-                >
-                  MRR {{ sortGlyph(MRR_SORT) }}
-                </th>
-                <th
-                  class="px-3 py-2 text-left cursor-pointer"
-                  :class="headerClass(COVERAGE_SORT)"
-                  title="Sort by panel coverage"
-                  @click="sortBy(COVERAGE_SORT)"
-                >
-                  Coverage {{ sortGlyph(COVERAGE_SORT) }}
-                </th>
-                <th v-if="aggregatePolicy" class="px-3 py-2 text-right">Panel aggregate</th>
-                <th class="px-3 py-2 text-left">Profile</th>
-                <th class="px-3 py-2 text-right"></th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="row in rows"
-                :key="row.model"
-                class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors cursor-pointer"
-                :class="{ 'opacity-50': row.archived }"
-                @click="goToModel(row.model)"
-              >
-                <td class="px-3 py-2" @click.stop>
-                  <input
-                    type="checkbox"
-                    class="align-middle accent-accent"
-                    :checked="selected.includes(row.model)"
-                    :disabled="!canSelect(row.model)"
-                    @change="toggleModel(row.model)"
-                  />
-                </td>
-                <td class="px-3 py-2 whitespace-nowrap">
-                  <span class="font-mono font-semibold text-[13px] text-accent">{{ row.model }}</span>
-                </td>
-                <td class="px-3 py-2 text-right font-mono text-xs tabular-nums" :title="`${row.covered} completed selected benchmarks`">
-                  {{ meanRanks.get(row.model)?.toFixed(3) ?? '—' }}
-                </td>
-                <td class="px-3 py-2">
-                  <div class="flex items-center gap-2">
-                    <span class="w-[52px] h-1.5 rounded-full bg-surface-sunken overflow-hidden">
-                      <span
-                        class="block h-full rounded-full bg-accent"
-                        :style="{ width: `${(row.covered / (visibleTasks.length || 1)) * 100}%` }"
-                      />
-                    </span>
-                    <span
-                      class="font-mono text-[11px] tabular-nums"
-                      :class="row.covered <= 1 ? 'text-status-warning' : 'text-text-secondary'"
-                      >{{ row.covered }}/{{ visibleTasks.length }}<span v-if="row.covered <= 1"> ⚠</span></span
-                    >
-                  </div>
-                </td>
-                <td v-if="aggregatePolicy" class="px-3 py-2 text-right whitespace-nowrap">
-                  <template v-if="row.aggregate">
-                    <span class="font-mono font-semibold tabular-nums">{{ formatScore(row.aggregate.value) }}</span>
-                    <span class="block font-mono text-[10px] text-text-muted tabular-nums leading-none">
-                      {{ formatInterval(row.aggregate.low, row.aggregate.high) }}
-                    </span>
-                  </template>
-                  <span
-                    v-else
-                    class="text-text-muted text-xs"
-                    title="This model is missing at least one benchmark on the panel, and the chosen policy does not aggregate over gaps."
-                    >incomplete</span
-                  >
-                </td>
-                <td class="px-3 py-2" @click.stop>
-                  <EvalRail
-                    :tasks="visibleTasks"
-                    :cells="row.cells"
-                    :missing="row.missing"
-                    :best="best"
-                    :model="row.model"
-                    size="sm"
-                    @pick="(task) => openHistory(row.model, task)"
-                  />
-                </td>
-                <td class="px-3 py-2 text-right" @click.stop>
-                  <button
-                    class="text-[11px] text-text-muted hover:text-accent whitespace-nowrap"
-                    :title="row.archived ? 'Unarchive model' : 'Archive model'"
-                    @click="toggleArchive(row.model, row.archived)"
-                  >
-                    {{ row.archived ? 'unarchive' : 'archive' }}
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <p v-if="aggregatePolicy" class="text-xs text-text-muted mt-2 leading-relaxed">
-          Aggregate: unweighted mean over {{ visibleTasks.length }} benchmarks ({{ visibleTasks.join(' · ') }}), each at
-          its own primary metric,
-          {{
-            aggregatePolicy === 'require_complete'
-              ? 'omitted for any model missing one of them'
-              : 'with a missing benchmark bounded to the full [0, 1] range it could have taken'
-          }}<template v-if="aggregateRuntimes.length">, over
-          <span class="font-mono">{{ aggregateRuntimes.join(', ') }}</span></template>. The interval covers item
-          sampling and ungraded items. It does not cover run-to-run variation, and it is marginal per model, so it
-          makes no simultaneous claim across the table.
-        </p>
-        <p v-else class="text-xs text-text-muted mt-2 leading-relaxed">
-          No cross-benchmark score mean is shown by default: it has no interpretation without a fixed benchmark panel, the
-          metric each benchmark contributes, and a rule for the benchmarks a model never ran. Pick an Aggregate policy
-          to choose that rule and see all three alongside the number.
-        </p>
-      </div>
-
-      <!-- Per-benchmark panel -->
-      <div>
-        <div class="flex items-baseline justify-between mb-2">
-          <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary">
-            Per-benchmark
-            <span class="font-normal normal-case text-text-muted">
-              ({{ rows.length }} models × {{ columns.length }} benchmark families · benchmarks sort on score · click a
-              cell for history)
-            </span>
-          </h3>
-        </div>
-        <div class="overflow-x-auto rounded-lg border border-surface-border">
-          <table class="w-full border-collapse text-sm">
+          <table aria-label="Per-benchmark results" class="matrix w-full border-collapse text-sm">
             <thead>
               <tr class="border-b border-surface-border bg-surface-raised">
                 <th
                   class="sticky left-0 z-10 bg-surface-raised px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer"
                   :class="headerClass(MODEL_SORT)"
                   title="Sort by model name"
-                  @click="sortBy(MODEL_SORT)"
                 >
-                  Model {{ sortGlyph(MODEL_SORT) }}
+                  <button class="column-name" @click="sortBy(MODEL_SORT)">Model {{ sortGlyph(MODEL_SORT) }}</button>
+                  <button class="block text-xs text-accent" @click="sortBy(COVERAGE_SORT)">Coverage {{ sortGlyph(COVERAGE_SORT) }}</button>
                 </th>
                 <th
                   class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider whitespace-nowrap cursor-pointer"
                   :class="headerClass(MRR_SORT)"
                   title="Mean reciprocal rank across completed results on the selected benchmarks; missing results are omitted"
-                  @click="sortBy(MRR_SORT)"
                 >
-                  MRR {{ sortGlyph(MRR_SORT) }}
+                  <button class="column-name" @click="sortBy(MRR_SORT)">MRR {{ sortGlyph(MRR_SORT) }}</button>
                 </th>
+                <th v-if="aggregatePolicy">Aggregate</th>
                 <th
-                  v-for="column in columns"
+                  v-for="column in pageColumns"
                   :key="column.family"
                   class="px-3 py-2 text-center text-xs font-semibold uppercase tracking-wider whitespace-nowrap cursor-pointer"
                   :class="headerClass(column.task)"
-                  @click="sortBy(column.task)"
                 >
-                  {{ column.family }} {{ sortGlyph(column.task) }}
+                  <button class="column-name" @click.stop="sortBy(column.task)">{{ column.family }} {{ sortGlyph(column.task) }}</button>
+                  <RouterLink class="block text-xs normal-case text-accent" :to="{ name: 'benchmarks', query: { benchmark: column.task, cohort } }" @click.stop>Open benchmark ↗</RouterLink>
                   <select
                     v-if="column.variants.length > 1"
                     class="block mx-auto mt-0.5 rounded border border-surface-border bg-surface px-1 py-0 font-mono text-[10px] font-normal normal-case text-text-secondary"
@@ -815,35 +674,42 @@ function goToModel(model: string) {
                     v-if="best[column.task]"
                     class="block font-normal normal-case font-mono text-[10px]"
                     style="color: var(--c-best)"
-                    >▲ {{ formatScore(best[column.task].value) }}</span
+                    >▲ {{ formatScore(best[column.task]) }}</span
                   >
                 </th>
                 <th
                   class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider whitespace-nowrap cursor-pointer"
                   :class="headerClass(UPDATED_SORT)"
                   title="Latest result included in this row"
-                  @click="sortBy(UPDATED_SORT)"
                 >
-                  Last updated {{ sortGlyph(UPDATED_SORT) }}
+                  <button class="column-name" @click="sortBy(UPDATED_SORT)">Last updated {{ sortGlyph(UPDATED_SORT) }}</button>
                 </th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="row in rows"
+                v-for="row in pageRows"
                 :key="row.model"
                 class="border-b border-surface-border-subtle"
                 :class="{ 'opacity-50': row.archived }"
               >
-                <td class="sticky left-0 z-10 bg-surface px-3 py-2 whitespace-nowrap">
+                <td class="model-column sticky left-0 z-10 bg-surface px-3 py-2">
+                  <input type="checkbox" :aria-label="'Compare ' + row.model" :checked="selected.includes(row.model)" :disabled="!canSelect(row.model)" @change="toggleModel(row.model)" />
                   <button class="font-mono text-[13px] text-accent hover:underline" @click="goToModel(row.model)">
                     {{ row.model }}
                   </button>
+                  <small class="block text-text-secondary">{{ row.covered }}/{{ visibleTasks.length }} benchmarks ·
+                    <button class="text-xs" @click="toggleArchive(row.model, row.archived)">{{ row.archived ? 'Unarchive' : 'Archive' }}</button>
+                  </small>
                 </td>
                 <td class="px-3 py-2 text-right font-mono text-xs tabular-nums" :title="`${row.covered} completed selected benchmarks`">
                   {{ meanRanks.get(row.model)?.toFixed(3) ?? '—' }}
                 </td>
-                <td v-for="{ task } in columns" :key="task" class="p-1 text-center align-middle">
+                <td v-if="aggregatePolicy" class="text-center">
+                  <template v-if="row.aggregate">{{ formatScore(row.aggregate) }}<small class="block">{{ formatInterval(row.aggregate) }}</small></template>
+                  <span v-else>Incomplete</span>
+                </td>
+                <td v-for="{ task } in pageColumns" :key="task" class="p-1 text-center align-middle">
                   <button
                     v-if="cellFor(row, task)"
                     class="w-full rounded px-2 py-1.5 leading-tight cursor-pointer hover:ring-1 hover:ring-accent-border"
@@ -856,11 +722,11 @@ function goToModel(model: string) {
                     @click="openHistory(row.model, task)"
                   >
                     <span class="tabular-nums font-mono font-medium">
-                      {{ formatScore(cellFor(row, task)!.value)
+                      {{ formatScore(cellFor(row, task)!)
                       }}<span v-if="isSuspect(cellFor(row, task)!)" class="text-status-warning">*</span>
                     </span>
                     <span class="block text-[10px] text-text-muted tabular-nums font-mono leading-none">
-                      {{ formatInterval(cellFor(row, task)!.low, cellFor(row, task)!.high) }}
+                      {{ formatInterval(cellFor(row, task)!) }}
                     </span>
                     <span
                       v-if="isPartialCoverage(cellFor(row, task)!)"
@@ -870,7 +736,7 @@ function goToModel(model: string) {
                     <span
                       v-else-if="deltaBest(row, task) !== null"
                       class="block text-[9px] font-mono leading-none text-text-muted"
-                      >{{ formatDelta(deltaBest(row, task)) }}</span
+                      >{{ deltaBest(row, task) }}</span
                     >
                   </button>
                   <button
@@ -893,19 +759,19 @@ function goToModel(model: string) {
             </tbody>
           </table>
         </div>
-        <p class="text-xs text-text-muted mt-2 leading-relaxed">
-          An empty cell says which: <span class="text-status-warning">under-covered</span> or
-          <span class="text-status-warning">no result</span> links the run that failed the panel's admission rule, and
-          — means the model never ran that benchmark. A result the engine flags as suspect is held out of the
-          panel as <span class="text-status-warning">flagged</span> rather than standing as a model's newest score;
-          "Show flagged results" admits it, marked with a <span class="text-status-warning">*</span>. Last updated is
-          the maximum timestamp among the row's displayed cells. Each cell's timestamp appears in its tooltip.
+        <p v-if="aggregatePolicy" class="text-xs text-text-muted mt-2 leading-relaxed">
+          Aggregate: unweighted mean over {{ visibleTasks.length }} benchmarks ({{ visibleTasks.join(' · ') }}), each at
+          its own primary metric,
+          {{
+            aggregatePolicy === 'require_complete'
+              ? 'omitted for any model missing one of them'
+              : 'with a missing benchmark bounded to the full [0, 1] range it could have taken'
+          }}<template v-if="aggregateRuntimes.length">, over
+          <span class="font-mono">{{ aggregateRuntimes.join(', ') }}</span></template>. The interval covers item
+          sampling and ungraded items. It does not cover run-to-run variation, and it is marginal per model, so it
+          makes no simultaneous claim across the table.
         </p>
-        <p class="text-xs text-text-muted mt-1 leading-relaxed">
-          A benchmark run under more than one setting takes one column, opened on whichever setting has results for the
-          most models here. The picker under the name switches it, and every cell, tooltip, history and comparison
-          stays on the exact eval it names.
-        </p>
+        <p class="mt-2 text-xs text-text-secondary">MRR is the mean reciprocal rank over a model’s scored benchmarks. Select a score for its history or an excluded result for its source run.</p>
       </div>
     </div>
 
@@ -923,7 +789,7 @@ function goToModel(model: string) {
       >
       <span class="text-xs text-text-muted">
         shared benchmarks:
-        <span class="font-mono text-text-secondary">{{ sharedTasks.length ? sharedTasks.join(' · ') : 'none' }}</span>
+        <span class="font-mono text-text-secondary">{{ sharedTasks.length }}</span>
       </span>
       <div class="flex-1"></div>
       <button
@@ -938,8 +804,21 @@ function goToModel(model: string) {
       v-if="historyTarget"
       :model="historyTarget.model"
       :task="historyTarget.task"
-      :cohort="cohort || ALL_COHORTS"
+      :cohort="cohort"
       @close="historyTarget = null"
     />
   </section>
 </template>
+
+<style scoped>
+.panel-controls > *, .panel label { min-width: 0; max-width: 100%; }
+.panel select { max-width: 100%; }
+.matrix-pages, .matrix-pages > div { display: flex; flex-wrap: wrap; align-items: center; gap: .55rem; }
+.matrix-pages { justify-content: space-between; margin: .8rem 0; font-size: .85rem; }
+.matrix-pages button { padding: .1rem .6rem; }
+.column-name { display: block; max-width: 14rem; margin: 0 auto; overflow-wrap: anywhere; white-space: normal; font-weight: 600; }
+.matrix select { max-width: 12rem; }
+.model-column { min-width: 9rem; max-width: 15rem; overflow-wrap: anywhere; }
+.model-column button, .column-name { background: none; border: 0; padding: .2rem; text-align: inherit; }
+@media (max-width: 40rem) { .panel-controls > * { width: 100%; } .model-column { max-width: 8rem; min-width: 6rem; } }
+</style>

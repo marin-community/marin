@@ -57,9 +57,9 @@ test('declared protocol metrics lead the table while the raw bucket rows stay fo
   const view = metricView(nupaRecord())
 
   assert.deepEqual(view.rows, [
-    { task: 'NUPA5K-Loose', metric: 'accuracy', value: 0 },
-    { task: 'NUPA5K-Loose', metric: 'digit_match', value: 0.0030796088040486408 },
-    { task: 'NUPA5K-Loose', metric: 'format_valid_rate', value: 0.0046 },
+    { task: 'NUPA5K-Loose', metric: 'accuracy', value: 0, metric_kind: 'binary' },
+    { task: 'NUPA5K-Loose', metric: 'digit_match', value: 0.0030796088040486408, metric_kind: 'continuous' },
+    { task: 'NUPA5K-Loose', metric: 'format_valid_rate', value: 0.0046, metric_kind: 'continuous' },
   ])
   assert.equal(view.hasDeclared, true)
   assert.ok(view.raw.some((row) => row.metric === 'task:add_Integer_Integer/bucket:S/exact_match'))

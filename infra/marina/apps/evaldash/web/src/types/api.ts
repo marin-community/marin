@@ -8,6 +8,8 @@ export const RUN_STATUS = {
   INFRA_FAILED: 'infra_failed',
 } as const
 
+export const MIXED_LAUNCH_STATUS = 'mixed'
+
 export type RunStatus = (typeof RUN_STATUS)[keyof typeof RUN_STATUS]
 
 export interface RunRow {
@@ -634,18 +636,8 @@ export interface ReviewResponse {
   summary: ReviewSummary | null
 }
 
-// One eval within a launch (a serve group), with its headline score.
-export interface GroupMember {
-  run_id: string
-  eval_name: string
-  status: string
-  step_status: string | null
-  created_at: string
-  headline: PanelCell | null
-}
-
-// A launch: all evals run against one model by one serve group, newest first (/api/groups).
-export interface LaunchGroup {
+// One serve group's summary from the paged catalog.
+export interface LaunchRow {
   group_id: string
   model_name: string
   version: string | null
@@ -653,10 +645,25 @@ export interface LaunchGroup {
   user_name: string
   accelerator: string | null
   created_at: string
-  status: RunStatus | 'mixed' | 'running' | 'step_failed'
+  status: RunStatus | typeof MIXED_LAUNCH_STATUS | 'running' | 'step_failed'
   n_evals: number
   n_succeeded: number
-  evals: GroupMember[]
+}
+
+export interface CatalogPage<Row = LaunchRow | RunRow> {
+  rows: Row[]
+  total: number
+  limit: number
+}
+
+export type CatalogFacets = Pick<Meta, 'run_facets'>
+
+export interface ModelCatalogRow {
+  model: string
+  archived: boolean
+  run_count: number
+  benchmark_count: number
+  latest_run: Pick<RunRow, 'run_id' | 'eval_name' | 'status' | 'created_at' | 'version'>
 }
 
 // Playground reports: model feedback saved by the marin-serve dashboard's Report issue button.

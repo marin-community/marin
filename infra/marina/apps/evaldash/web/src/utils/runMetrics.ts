@@ -1,9 +1,10 @@
-import type { EvalRecord } from '@/types/api'
+import type { BenchmarkMetric, EvalRecord } from '@/types/api'
 
 export interface MetricRow {
   task: string
   metric: string
   value: number
+  metric_kind?: BenchmarkMetric['kind']
 }
 
 export function rawMetricRows(record: EvalRecord): MetricRow[] {
@@ -22,6 +23,11 @@ export function rawMetricRows(record: EvalRecord): MetricRow[] {
  */
 export function metricView(record: EvalRecord): { rows: MetricRow[]; raw: MetricRow[]; hasDeclared: boolean } {
   const raw = rawMetricRows(record)
-  const rows = record.metric_rows.map(({ task, metric, value }) => ({ task, metric, value }))
+  const rows = record.metric_rows.map(({ task, metric, value, declared }) => {
+    if (!declared) return { task, metric, value }
+    const benchmark = record.eval.tasks.find(({ name }) => name === task)?.benchmark
+    const kind = benchmark?.metrics.find(({ name }) => name === metric)?.kind
+    return kind ? { task, metric, value, metric_kind: kind } : { task, metric, value }
+  })
   return { rows, raw, hasDeclared: record.metric_rows.some((row) => row.declared) }
 }

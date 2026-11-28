@@ -8,6 +8,7 @@ aggregates, and head-to-head difference intervals."""
 import pytest
 from evaldash import app as evaldash_app
 from evaldash.app import MemoryRecordStore
+from evaldash.catalog import CatalogFilters
 from evaldash.metrics import (
     ALL_COHORTS,
     build_comparison,
@@ -18,7 +19,7 @@ from evaldash.metrics import (
     panel_request,
 )
 from evalrecords.eval_policy import EVALCHEMY_COMMIT
-from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS, SEPTEMBER_24_VERSION
+from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS, SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
 from evalrecords.eval_stats import Completeness, MissingPolicy
 from evalrecords.model_identity import model_config_digest
 from evalrecords.records import (
@@ -740,6 +741,71 @@ def test_comparison_scores_models_on_their_shared_benchmarks_only():
     assert comparison["aggregates"]["a"]["value"] == pytest.approx(0.60)
 
 
+def test_comparison_model_picker_uses_selected_cohort_and_effective_family_panel():
+    first = "2026-01-01T00:00:00+00:00"
+    latest = "2026-02-01T00:00:00+00:00"
+    records = [
+        _record("archived", "mmlu", "v1", first, 0.56),
+        _record("archived", "mmlu", "v2", latest, 0.60),
+        _record("archived", "gsm8k", "v2", latest, 0.00, family="gsm8k"),
+        _record("complete", "mmlu", "v2", latest, 0.70),
+        _record("complete", "gsm8k", "v2", latest, 0.80, family="gsm8k"),
+        _record("other-setting", "mmlu", "v2", latest, 0.72),
+        _record("other-setting", "gsm8k-0shot", "v2", latest, 0.65, family="gsm8k"),
+        _record("older-positive", "mmlu", "v1", first, 0.80),
+        _record("older-positive", "mmlu", "v2", latest, 0.00),
+        _record("older-positive", "gsm8k", "v2", latest, 0.00, family="gsm8k"),
+        _record("smoke-only", "mmlu-smoke", "v2", latest, 0.99),
+    ]
+    store = MemoryRecordStore()
+    store.refresh(records)
+    store.set_model_archived("archived", True, None)
+    complete = panel_request(
+        cohort="v2",
+        benchmarks=("mmlu", "gsm8k", "gsm8k-0shot"),
+        completeness=Completeness.COMPLETE_PANEL,
+    )
+
+    assert store.comparison_models(complete)["models"] == ["archived", "complete"]
+    assert store.comparison_models(panel_request(cohort="v1"))["models"] == ["archived", "older-positive"]
+    assert store.comparison_models(panel_request())["models"] == ["archived", "complete", "other-setting"]
+
+    request = panel_request(cohort="v2", benchmarks=("mmlu", "gsm8k"))
+    assert store.comparison_models(request)["models"] == ["archived", "complete", "other-setting"]
+    result = store.comparison(request, ("archived", "complete"))
+    gsm8k = next(row for row in result["rows"] if row["benchmark"] == "gsm8k")
+    assert gsm8k["cells"]["archived"]["value"] == 0.0
+
+    store.refresh([_record("new-generation", "mmlu", "v2", latest, 0.9)])
+    assert store.comparison_models(request)["models"] == ["new-generation"]
+
+
+def test_comparison_model_picker_does_not_choose_a_protocol_from_filtered_models():
+    timestamp = "2026-02-01T00:00:00+00:00"
+    store = MemoryRecordStore()
+    store.refresh(
+        [
+            _record(
+                "declared",
+                "mmlu",
+                "v2",
+                timestamp,
+                0.8,
+                primary_metric="accuracy",
+                metric_kind=MetricKind.BINARY,
+                accelerator="h100",
+            ),
+            _record("admitted", "mmlu", "v2", timestamp, 0.7),
+            _record("other-metric", "mmlu", "v2", timestamp, 0.82, metric="acc_norm,none"),
+        ]
+    )
+    request = panel_request(cohort="v2", filters={"accelerator": "v6e-8"})
+    assert store.comparison_models(request)["models"] == ["admitted"]
+    result = store.comparison(request, ("admitted", "other-metric"))
+    assert result["shared"] == []
+    assert list(result["rows"][0]["cells"]) == ["admitted"]
+
+
 def test_comparison_reports_a_difference_interval_against_each_benchmark_leader():
     """A ten-point gap over a thousand items each is a real ordering; the interval says so without a
     reader having to compare two error bars by eye."""
@@ -869,42 +935,56 @@ def test_policy_violations_only_exclude_runs_in_a_named_cohort():
     newest = {record.model.name: record.run_id for record in violating}
 
     panel = build_panel(records, panel_request())
-    comparison = build_comparison(records, panel_request(), ("a", "b"))
-
     assert {row["model"]: row["cells"]["math500"]["run_id"] for row in panel["rows"]} == newest
     assert panel["policy_rejections"] == []
-    assert {model: cell["run_id"] for model, cell in comparison["rows"][0]["cells"].items()} == newest
-    assert comparison["policy_rejections"] == []
     assert "math500" in build_meta(violating)["evals"]
 
     named_panel = build_panel(records, panel_request(cohort=policy))
-    named_comparison = build_comparison(records, panel_request(cohort=policy), ("a", "b"))
-
     assert named_panel["rows"] == []
     assert {item["run_id"] for item in named_panel["policy_rejections"]} == set(newest.values())
-    assert named_comparison["rows"] == []
-    assert {item["run_id"] for item in named_comparison["policy_rejections"]} == set(newest.values())
 
     store = MemoryRecordStore()
-    store.refresh(records)
+    policy_only = _record("policy-only", "math500", policy, "2026-09-25T00:00:00+00:00", 0.6)
+    older_policy_run = _record("a", "math500", SEPTEMBER_16_VERSION, "2026-09-23T00:00:00+00:00", 0.3)
+    store.refresh([*records, policy_only, older_policy_run])
     config = evaldash_app.EvaldashConfig.from_env({"EVALDASH_STORE": "local", "RECORDS_PREFIXES": " "})
     api = evaldash_app.build_api(store, evaldash_app.NullClusterGateway(), config)
     with TestClient(api.app) as client:
+        comparison = client.get("/compare", params={"models": "a,b", "cohort": ALL_COHORTS}).json()
+        assert {model: cell["run_id"] for model, cell in comparison["rows"][0]["cells"].items()} == newest
+        assert comparison["policy_rejections"] == []
+
+        named_comparison = client.get("/compare", params={"models": "a,b", "cohort": policy}).json()
+        assert named_comparison["rows"] == []
+        assert {item["run_id"] for item in named_comparison["policy_rejections"]} == set(newest.values())
+
+        candidates = []
+        for cohort in (ALL_COHORTS, policy, ALL_COHORTS):
+            response = client.get("/comparison-models", params={"cohort": cohort})
+            assert response.status_code == 200
+            candidates.append(response.json()["models"])
+        assert candidates == [["a", "b", "policy-only"], [], ["a", "b", "policy-only"]]
+
         panel_rows = client.get("/panel", params={"cohort": ALL_COHORTS}).json()["rows"]
         panel_cell = next(row for row in panel_rows if row["model"] == "a")["cells"]["math500"]
-        detail = client.get("/models/a", params={"cohort": ALL_COHORTS}).json()
-        history = client.get("/history", params={"model": "a", "task": "math500", "cohort": ALL_COHORTS}).json()
-
         assert panel_cell["run_id"] == newest["a"]
-        assert next(run for run in detail["runs"] if run["run_id"] == newest["a"])["headline"]["value"] == 0.6
-        assert detail["history"]["math500"][-1]["run_id"] == newest["a"]
-        assert history["points"][-1]["run_id"] == newest["a"]
+
+        for cohort in (ALL_COHORTS, "v1", "unversioned"):
+            detail = client.get("/models/a", params={"cohort": cohort}).json()
+            history = client.get("/history", params={"model": "a", "task": "math500", "cohort": cohort}).json()
+            assert [cohort["version"] for cohort in detail["cohorts"]] == [policy, "v1", SEPTEMBER_16_VERSION]
+            assert next(run for run in detail["runs"] if run["run_id"] == newest["a"])["headline"]["value"] == 0.6
+            assert detail["history"]["math500"][-1]["run_id"] == newest["a"]
+            assert history["points"][-1]["run_id"] == newest["a"]
 
         named_detail = client.get("/models/a", params={"cohort": policy}).json()
         named_history = client.get("/history", params={"model": "a", "task": "math500", "cohort": policy}).json()
+        assert [cohort["version"] for cohort in named_detail["cohorts"]] == [policy, "v1", SEPTEMBER_16_VERSION]
+        assert named_detail["current_version"] == policy
         rejected = next(run for run in named_detail["runs"] if run["run_id"] == newest["a"])
         assert rejected["headline"] is None
         assert rejected["policy_violations"]
+        assert named_history["points"][0]["run_id"] == older_policy_run.run_id
         assert newest["a"] not in {point["run_id"] for point in named_history["points"]}
 
 
@@ -955,7 +1035,8 @@ def test_panel_groups_tau_context_override_with_other_evals_despite_archived_con
     assert len(panel["rows"]) == 1
     assert panel["rows"][0]["model"] == "grug"
     assert set(panel["rows"][0]["cells"]) == {"math500", "tau3-pi"}
-    assert {row["eval_name"] for row in store.fetch_runs(model="grug")} == {"math500", "tau3-pi"}
+    runs = store.catalog_runs(CatalogFilters(model="grug"), offset=0, limit=10).rows
+    assert {row["eval_name"] for row in runs} == {"math500", "tau3-pi"}
     saved = store.get_record(records[1].run_id)
     assert saved is not None
     assert saved["model"]["config"]["serve"]["max_model_len"] == 131072
@@ -1045,6 +1126,11 @@ def test_comparison_keeps_protocol_variants_and_matches_historical_shots():
     detail = build_model_detail(records, "old", panel_request())
     assert detail is not None
     assert set(detail["history"]) == set(rows)
+    store = MemoryRecordStore()
+    store.refresh(records)
+    for model in ("old", "new"):
+        points = store.history(model, selected, panel_request())
+        assert [point["run_id"] for point in points] == [rows[selected]["cells"][model]["run_id"]]
 
 
 def test_historical_harbor_and_curated_agent_scores_share_a_family_and_the_reward_metric():

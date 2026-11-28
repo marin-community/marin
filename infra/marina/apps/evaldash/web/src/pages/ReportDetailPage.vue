@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { formatTimestamp } from '@/utils/formatting'
 import type { ReportDetail } from '@/types/api'
 import PlaygroundTranscript from '@/components/reports/PlaygroundTranscript.vue'
 
+const route = useRoute()
 const props = defineProps<{ reportId: string }>()
 
 const FILER_URL = 'https://filer.marina.oa.dev/#'
@@ -25,7 +26,7 @@ const servingRows = computed(() =>
 
 <template>
   <section class="space-y-4">
-    <RouterLink to="/reports" class="text-sm text-accent hover:text-accent-hover hover:underline">← All reports</RouterLink>
+    <RouterLink :to="{ name: 'reports', query: route.query }" class="text-sm text-accent hover:text-accent-hover hover:underline">← All reports</RouterLink>
 
     <div v-if="error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2">
       {{ error }}
@@ -34,7 +35,7 @@ const servingRows = computed(() =>
 
     <template v-if="data">
       <div class="flex flex-wrap items-baseline gap-3">
-        <h2 class="text-lg font-semibold font-mono">{{ data.report.model }}</h2>
+        <h1>{{ data.report.model }}</h1>
         <span class="text-sm text-text-secondary">
           {{ formatTimestamp(data.created_at) }} · {{ data.report.reporter || 'anonymous' }}
         </span>
@@ -42,12 +43,12 @@ const servingRows = computed(() =>
 
       <div class="grid gap-4 lg:grid-cols-[2fr_1fr]">
         <div class="space-y-4">
-          <div class="rounded-lg border border-surface-border p-4">
+          <div class="rounded-lg border border-surface-border bg-surface p-4">
             <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">What went wrong</h3>
             <p class="text-sm whitespace-pre-wrap">{{ data.report.description }}</p>
           </div>
 
-          <div class="rounded-lg border border-surface-border p-4">
+          <div class="rounded-lg border border-surface-border bg-surface p-4">
             <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
               Conversation<template v-if="data.report.conversation?.title"> · {{ data.report.conversation.title }}</template>
             </h3>
@@ -57,7 +58,7 @@ const servingRows = computed(() =>
         </div>
 
         <div class="space-y-4">
-          <div class="rounded-lg border border-surface-border p-4 space-y-2 text-sm">
+          <div class="rounded-lg border border-surface-border bg-surface p-4 space-y-2 text-sm">
             <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary">Serving</h3>
             <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
               <template v-for="[key, value] in servingRows" :key="key">

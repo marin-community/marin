@@ -288,6 +288,36 @@ from protocol metadata. Dataset snapshot identities and the summary revision kee
 different protocols distinct in dashboard comparisons. See
 [evaluation tasks](../references/evaluation-tasks.md) for the raw contract.
 
+### Review a launch in EvalDash
+
+Open [EvalDash](https://marina.oa.dev/evaldash/) and paste the launch ID into
+**Search runs**. **Launches** groups evaluations that share a launch ID.
+Open a launch title to see its evaluations and their status. To find failures
+across launches, open **All runs**, clear any launch or search filter, and set
+**Filters → Status** to `failed`. Copy the URL to share that search.
+
+![Recent evaluation launches with their completion counts](../images/evaldash-launches.png)
+
+Open a run to see its score, interval, and any ungraded items. **Samples**
+opens its recorded examples. Choose **Incorrect** and **Open viewer** to
+inspect a prediction alongside the reference answer and the grader's evidence.
+
+![A graded MMLU sample with the predicted and target choices marked](../images/evaldash-sample.png)
+
+For a head-to-head review, open **Compare**, choose two to four models and
+select a benchmark. **Shared only** lists settings scored by every model.
+**All recorded** includes settings with partial coverage and shows the model count beside each. For
+a review starting from one specific setting, find it in **Benchmarks**, then
+check the models and choose **Compare**.
+
+The example below uses a reproducible catalog of 100 models and 50 benchmark
+settings. Follow one model’s symbol down the overview to scan its scores.
+Choose a benchmark and **Fit to scores** to inspect small
+differences and their intervals. **Full scale** restores the full percentage
+axis for binary metrics. Open a source link to inspect the run behind an estimate.
+
+![Four model estimates on one axis beside the benchmark settings index](../images/evaldash-comparison.png)
+
 ## Use the shared launcher in a pipeline
 
 ```python

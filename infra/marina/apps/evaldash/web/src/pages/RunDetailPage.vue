@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { RL_PROGRESS_APPLET_ID } from '@/constants'
@@ -15,7 +15,7 @@ import {
 } from '@/utils/formatting'
 import { UNVERSIONED_COHORT, isPartialCoverage, scoredItemsLabel } from '@/utils/panel'
 import { metricView, type MetricRow } from '@/utils/runMetrics'
-import { FLAG_NOTES, INTERVAL_KIND, type EvalRecord } from '@/types/api'
+import { FLAG_NOTES, INTERVAL_KIND, RUN_STATUS, type EvalRecord } from '@/types/api'
 import StatusChip from '@/components/shared/StatusChip.vue'
 import JobsPanel from '@/components/runs/JobsPanel.vue'
 import LogsPanel from '@/components/runs/LogsPanel.vue'
@@ -23,6 +23,9 @@ import MetricTable from '@/components/runs/MetricTable.vue'
 import SamplesPanel from '@/components/runs/SamplesPanel.vue'
 import GroupLinks from '@/components/runs/GroupLinks.vue'
 
+const sections = ['Results', 'Samples', 'Configuration', 'Diagnostics'] as const
+const route = useRoute()
+const activeSection = computed(() => sections.find(label => label.toLowerCase() === route.query.section) ?? 'Results')
 const props = defineProps<{ runId: string }>()
 
 const { data, loading, error, refresh } = useApi<EvalRecord>(() => `api/runs/${props.runId}`)
@@ -123,7 +126,7 @@ async function copyPath() {
 
 <template>
   <section>
-    <RouterLink to="/runs" class="text-xs text-accent hover:text-accent-hover hover:underline">← All runs</RouterLink>
+    <RouterLink :to="{ name: 'runs', query: { view: 'runs' } }" class="text-xs text-accent hover:text-accent-hover hover:underline">← All runs</RouterLink>
 
     <div v-if="error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2 my-4">
       {{ error }}
@@ -132,14 +135,13 @@ async function copyPath() {
     <div v-if="loading && !data" class="text-sm text-text-muted py-12 text-center">Loading…</div>
 
     <div v-else-if="data" class="mt-3 space-y-5">
-      <!-- Identity: what this run is, at a glance -->
       <div class="space-y-1.5">
         <div class="flex items-center gap-3 flex-wrap">
-          <h2 class="text-lg font-semibold font-mono">{{ data.run_id }}</h2>
+          <h1 class="text-2xl font-semibold tracking-tight break-all">{{ data.run_id }}</h1>
           <span class="text-xs text-text-muted">Eval</span><StatusChip :status="data.status" />
           <template v-if="data.step_status">
             <span class="text-xs text-text-muted">Step</span>
-            <StatusChip :status="data.step_status === 'SUCCESS' ? 'succeeded' : data.step_status.toLowerCase()" />
+            <StatusChip :status="data.step_status === 'SUCCESS' ? RUN_STATUS.SUCCEEDED : data.step_status.toLowerCase()" />
           </template>
           <span
             v-if="data.version"
@@ -173,209 +175,221 @@ async function copyPath() {
         Excluded from cohort comparisons: {{ data.policy_violations.join('; ') }}
       </div>
 
-      <!-- Result: the grade is the hero; duration and finish time sit beside it in one strip -->
-      <div class="flex flex-wrap items-center gap-x-10 gap-y-3 rounded-lg border border-surface-border bg-surface px-5 py-4">
-        <div>
-          <div class="text-[11px] font-semibold uppercase tracking-wider text-text-muted">Grade</div>
-          <template v-if="data.headline">
-            <div class="text-3xl font-semibold tabular-nums leading-none mt-1">
-              {{ formatScore(data.headline.value) }}<span class="text-lg text-text-muted">%</span>
-            </div>
-            <div class="text-xs font-mono text-text-muted mt-1">
-              95% {{ formatInterval(data.headline.low, data.headline.high) }}
-            </div>
-            <div class="text-xs font-mono text-text-muted truncate max-w-[16rem]" :title="data.headline.metric">
-              {{ data.headline.metric }} · {{ scoredItemsLabel(data.headline) }}
-            </div>
-            <div v-if="data.headline.repeat_aggregation" class="text-xs text-text-muted mt-0.5">
-              <template v-if="data.headline.repeat_aggregation.n_scored_trials === null">
-                {{ data.headline.repeat_aggregation.n_trials }} planned trials
-              </template>
-              <template v-else>
-                {{ data.headline.repeat_aggregation.n_scored_trials }} of {{ data.headline.repeat_aggregation.n_trials }} trials scored
-              </template>
-              · item-based standard error
-            </div>
-            <div class="text-xs font-mono mt-0.5" :class="gradedNote.warn ? 'text-status-warning' : 'text-text-muted'">
-              {{ gradedNote.label }}
-            </div>
-          </template>
-          <div v-else class="text-3xl font-semibold text-text-muted leading-none mt-1">—</div>
-        </div>
-        <div>
-          <div class="text-[11px] font-semibold uppercase tracking-wider text-text-muted">Duration</div>
-          <div class="text-lg font-semibold tabular-nums leading-none mt-1.5">{{ durationLabel ?? '—' }}</div>
-        </div>
-        <div>
-          <div class="text-[11px] font-semibold uppercase tracking-wider text-text-muted">Finished</div>
-          <div class="text-sm font-medium mt-1.5">{{ formatTimestamp(finishedAt) }}</div>
-        </div>
-      </div>
-
-      <!-- What the engine noticed about this grade: stated as the observation, not as a verdict -->
-      <div v-if="flagNotes.length" class="rounded-lg border border-status-warning-border bg-status-warning-bg p-3">
-        <h3 class="text-xs font-semibold uppercase tracking-wider text-status-warning mb-1">Worth checking</h3>
-        <ul class="text-sm leading-relaxed list-disc pl-5">
-          <li v-for="note in flagNotes" :key="note">{{ note }}</li>
-        </ul>
-      </div>
-
-      <!-- Attrition: the items this run attempted and never graded, by cause -->
-      <div v-if="attritionRows.length">
-        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
-          Ungraded items
-          <span class="font-normal normal-case text-text-muted"
-            >— attempted but never scored; the grade's interval widens to cover them</span
-          >
-        </h3>
-        <div class="overflow-x-auto rounded-lg border border-surface-border">
-          <table class="w-full border-collapse text-sm">
-            <thead>
-              <tr
-                class="border-b border-surface-border bg-surface-raised text-xs font-semibold uppercase tracking-wider text-text-secondary"
-              >
-                <th class="px-3 py-2 text-left">Cause</th>
-                <th class="px-3 py-2 text-right">Items</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in attritionRows" :key="row.error" class="border-b border-surface-border-subtle">
-                <td class="px-3 py-2 font-mono text-[13px]">{{ row.error }}</td>
-                <td class="px-3 py-2 text-right tabular-nums">{{ row.count }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div>
-        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Metrics</h3>
-        <div v-if="metricRows.length" class="overflow-x-auto rounded-lg border border-surface-border">
-          <MetricTable :rows="metricRows" />
-        </div>
-        <p v-else class="text-sm text-text-muted">No metrics recorded.</p>
-        <details v-if="showRawMetrics" class="mt-2">
-          <summary class="cursor-pointer text-xs font-semibold uppercase tracking-wider text-text-secondary">
-            All raw metrics ({{ rawRows.length }})
-          </summary>
-          <div class="mt-2 overflow-x-auto rounded-lg border border-surface-border">
-            <MetricTable :rows="rawRows" key-prefix="raw:" />
+      <nav aria-label="Run sections" class="run-sections">
+        <RouterLink v-for="section in sections" :key="section"
+          :to="{ query: { ...route.query, section: section === 'Results' ? undefined : section.toLowerCase() } }"
+          :aria-current="activeSection === section ? 'page' : undefined"
+          :class="{ selected: activeSection === section }">{{ section }}</RouterLink>
+      </nav>
+      <template v-if="activeSection === 'Results'">
+        <div class="flex flex-wrap items-center gap-x-10 gap-y-3 rounded-lg border border-surface-border bg-surface px-5 py-4">
+          <div>
+            <div class="text-[11px] font-semibold uppercase tracking-wider text-text-muted">Grade</div>
+            <template v-if="data.headline">
+              <div class="text-3xl font-semibold tabular-nums leading-none mt-1">
+                {{ formatScore(data.headline) }}
+              </div>
+              <div class="text-xs font-mono text-text-muted mt-1">
+                95% {{ formatInterval(data.headline) }}
+              </div>
+              <div class="text-xs font-mono text-text-muted truncate max-w-[16rem]" :title="data.headline.metric">
+                {{ data.headline.metric }} · {{ scoredItemsLabel(data.headline) }}
+              </div>
+              <div v-if="data.headline.repeat_aggregation" class="text-xs text-text-muted mt-0.5">
+                <template v-if="data.headline.repeat_aggregation.n_scored_trials === null">
+                  {{ data.headline.repeat_aggregation.n_trials }} planned trials
+                </template>
+                <template v-else>
+                  {{ data.headline.repeat_aggregation.n_scored_trials }} of {{ data.headline.repeat_aggregation.n_trials }} trials scored
+                </template>
+                · item-based standard error
+              </div>
+              <div class="text-xs font-mono mt-0.5" :class="gradedNote.warn ? 'text-status-warning' : 'text-text-muted'">
+                {{ gradedNote.label }}
+              </div>
+            </template>
+            <div v-else class="text-3xl font-semibold text-text-muted leading-none mt-1">—</div>
           </div>
-        </details>
-      </div>
+          <div>
+            <div class="text-[11px] font-semibold uppercase tracking-wider text-text-muted">Duration</div>
+            <div class="text-lg font-semibold tabular-nums leading-none mt-1.5">{{ durationLabel ?? '—' }}</div>
+          </div>
+          <div>
+            <div class="text-[11px] font-semibold uppercase tracking-wider text-text-muted">Finished</div>
+            <div class="text-sm font-medium mt-1.5">{{ formatTimestamp(finishedAt) }}</div>
+          </div>
+        </div>
+
+        <!-- What the engine noticed about this grade: stated as the observation, not as a verdict -->
+        <div v-if="flagNotes.length" class="rounded-lg border border-status-warning-border bg-status-warning-bg p-3">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-status-warning mb-1">Worth checking</h3>
+          <ul class="text-sm leading-relaxed list-disc pl-5">
+            <li v-for="note in flagNotes" :key="note">{{ note }}</li>
+          </ul>
+        </div>
+
+        <div v-if="attritionRows.length">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
+            Ungraded items
+            <span class="font-normal normal-case text-text-muted"
+              >— attempted but never scored; the grade's interval widens to cover them</span
+            >
+          </h3>
+          <div class="overflow-x-auto rounded-lg border border-surface-border">
+            <table class="w-full border-collapse text-sm">
+              <thead>
+                <tr
+                  class="border-b border-surface-border bg-surface-raised text-xs font-semibold uppercase tracking-wider text-text-secondary"
+                >
+                  <th class="px-3 py-2 text-left">Cause</th>
+                  <th class="px-3 py-2 text-right">Items</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in attritionRows" :key="row.error" class="border-b border-surface-border-subtle">
+                  <td class="px-3 py-2 font-mono text-[13px]">{{ row.error }}</td>
+                  <td class="px-3 py-2 text-right tabular-nums">{{ row.count }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div>
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Metrics</h3>
+          <div v-if="metricRows.length" class="overflow-x-auto rounded-lg border border-surface-border">
+            <MetricTable :rows="metricRows" />
+          </div>
+          <p v-else class="text-sm text-text-muted">No metrics recorded.</p>
+          <details v-if="showRawMetrics" class="mt-2">
+            <summary class="cursor-pointer text-xs font-semibold uppercase tracking-wider text-text-secondary">
+              All raw metrics ({{ rawRows.length }})
+            </summary>
+            <div class="mt-2 overflow-x-auto rounded-lg border border-surface-border">
+              <MetricTable :rows="rawRows" key-prefix="raw:" />
+            </div>
+          </details>
+        </div>
+
+      </template>
 
       <!-- Per-question samples, when the run exported any. Rendered for every status: a failed eval
            can still have graded some questions, and the panel degrades gracefully when none exist. -->
-      <SamplesPanel :key="props.runId" :run-id="data.run_id" />
+      <SamplesPanel v-if="activeSection === 'Samples'" :key="props.runId" :run-id="data.run_id" />
 
-      <!-- Reference detail below the results: how to reach sibling evals, the run's configuration,
-           where its artifacts live, and its live job/log state. -->
-      <GroupLinks :run-id="data.run_id" />
+      <template v-if="activeSection === 'Configuration'">
+        <GroupLinks :run-id="data.run_id" />
 
-      <!-- Run details: static configuration, serving params, provenance, and the artifact path in
-           one reference card below the results -->
-      <div class="rounded-lg border border-surface-border bg-surface p-4">
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-4">
-          <div>
-            <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1.5">Model</h3>
-            <dl class="text-sm space-y-1">
-              <div class="flex gap-2"><dt class="text-text-muted w-24">name</dt><dd class="font-mono break-all">{{ data.model.name }}</dd></div>
+        <div class="rounded-lg border border-surface-border bg-surface p-4">
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-4">
+            <div>
+              <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1.5">Model</h3>
+              <dl class="text-sm space-y-1">
+                <div class="flex gap-2"><dt class="text-text-muted w-24">name</dt><dd class="font-mono break-all">{{ data.model.name }}</dd></div>
+                <div class="flex gap-2">
+                  <dt class="text-text-muted w-24">location</dt>
+                  <dd class="font-mono break-all">
+                    <a
+                      v-if="objectStoreUrl(data.model.location)"
+                      :href="objectStoreUrl(data.model.location)!"
+                      target="_blank"
+                      rel="noopener"
+                      class="text-accent hover:text-accent-hover hover:underline"
+                    >{{ data.model.location }} ↗</a>
+                    <span v-else>{{ data.model.location }}</span>
+                  </dd>
+                </div>
+                <div class="flex gap-2"><dt class="text-text-muted w-24">backend</dt><dd>{{ data.model.backend }}</dd></div>
+              </dl>
+            </div>
+            <div>
+              <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1.5">Eval</h3>
+              <dl class="text-sm space-y-1">
+                <div class="flex gap-2"><dt class="text-text-muted w-24">name</dt><dd>{{ data.eval.name }}</dd></div>
+                <div class="flex gap-2"><dt class="text-text-muted w-24">mechanism</dt><dd>{{ data.eval.mechanism }}</dd></div>
+                <div class="flex gap-2">
+                  <dt class="text-text-muted w-24">tasks</dt>
+                  <dd>
+                    <span v-for="t in data.eval.tasks" :key="t.name" class="inline-block mr-2 font-mono text-[13px]">
+                      {{ t.name }}<span v-if="t.num_fewshot != null" class="text-text-muted">/{{ t.num_fewshot }}shot</span>
+                    </span>
+                  </dd>
+                </div>
+              </dl>
+            </div>
+            <div>
+              <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1.5">Hardware</h3>
+              <dl class="text-sm space-y-1">
+                <div class="flex gap-2"><dt class="text-text-muted w-24">platform</dt><dd>{{ data.hardware.platform }}</dd></div>
+                <div class="flex gap-2"><dt class="text-text-muted w-24">accelerator</dt><dd class="font-mono">{{ data.hardware.accelerator }}</dd></div>
+                <div class="flex gap-2"><dt class="text-text-muted w-24">region</dt><dd>{{ data.hardware.region_or_cluster }}</dd></div>
+                <div class="flex gap-2"><dt class="text-text-muted w-24">user</dt><dd>{{ data.user }}</dd></div>
+              </dl>
+            </div>
+          </div>
+          <div v-if="servingRows.length" class="mt-4 pt-4 border-t border-surface-border-subtle">
+            <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Serving</h3>
+            <dl class="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1 text-sm">
+              <div v-for="serving in servingRows" :key="serving.label" class="flex gap-2 min-w-0">
+                <dt class="text-text-muted whitespace-nowrap">{{ serving.label }}</dt>
+                <dd class="font-mono truncate" :title="serving.value">{{ serving.value }}</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="mt-4 pt-4 border-t border-surface-border-subtle">
+            <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Provenance</h3>
+            <dl class="text-sm grid grid-cols-1 md:grid-cols-3 gap-2">
               <div class="flex gap-2">
-                <dt class="text-text-muted w-24">location</dt>
-                <dd class="font-mono break-all">
+                <dt class="text-text-muted w-28">git sha</dt>
+                <dd class="font-mono" :title="data.provenance.git_sha">
                   <a
-                    v-if="objectStoreUrl(data.model.location)"
-                    :href="objectStoreUrl(data.model.location)!"
+                    :href="githubCommitUrl(data.provenance.git_sha)!"
                     target="_blank"
                     rel="noopener"
                     class="text-accent hover:text-accent-hover hover:underline"
-                  >{{ data.model.location }} ↗</a>
-                  <span v-else>{{ data.model.location }}</span>
+                  >{{ shortSha(data.provenance.git_sha) }} ↗</a>
                 </dd>
               </div>
-              <div class="flex gap-2"><dt class="text-text-muted w-24">backend</dt><dd>{{ data.model.backend }}</dd></div>
+              <div v-if="data.provenance.eval_runtime" class="flex gap-2"><dt class="text-text-muted w-28">eval runtime</dt><dd class="font-mono break-all">{{ data.provenance.eval_runtime }}</dd></div>
+              <div class="flex gap-2"><dt class="text-text-muted w-28">launch host</dt><dd class="font-mono break-all">{{ data.provenance.launch_host }}</dd></div>
             </dl>
           </div>
-          <div>
-            <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1.5">Eval</h3>
-            <dl class="text-sm space-y-1">
-              <div class="flex gap-2"><dt class="text-text-muted w-24">name</dt><dd>{{ data.eval.name }}</dd></div>
-              <div class="flex gap-2"><dt class="text-text-muted w-24">mechanism</dt><dd>{{ data.eval.mechanism }}</dd></div>
-              <div class="flex gap-2">
-                <dt class="text-text-muted w-24">tasks</dt>
-                <dd>
-                  <span v-for="t in data.eval.tasks" :key="t.name" class="inline-block mr-2 font-mono text-[13px]">
-                    {{ t.name }}<span v-if="t.num_fewshot != null" class="text-text-muted">/{{ t.num_fewshot }}shot</span>
-                  </span>
-                </dd>
-              </div>
-            </dl>
-          </div>
-          <div>
-            <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1.5">Hardware</h3>
-            <dl class="text-sm space-y-1">
-              <div class="flex gap-2"><dt class="text-text-muted w-24">platform</dt><dd>{{ data.hardware.platform }}</dd></div>
-              <div class="flex gap-2"><dt class="text-text-muted w-24">accelerator</dt><dd class="font-mono">{{ data.hardware.accelerator }}</dd></div>
-              <div class="flex gap-2"><dt class="text-text-muted w-24">region</dt><dd>{{ data.hardware.region_or_cluster }}</dd></div>
-              <div class="flex gap-2"><dt class="text-text-muted w-24">user</dt><dd>{{ data.user }}</dd></div>
-            </dl>
-          </div>
-        </div>
-        <div v-if="servingRows.length" class="mt-4 pt-4 border-t border-surface-border-subtle">
-          <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Serving</h3>
-          <dl class="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1 text-sm">
-            <div v-for="serving in servingRows" :key="serving.label" class="flex gap-2 min-w-0">
-              <dt class="text-text-muted whitespace-nowrap">{{ serving.label }}</dt>
-              <dd class="font-mono truncate" :title="serving.value">{{ serving.value }}</dd>
+
+          <div class="mt-4 pt-4 border-t border-surface-border-subtle">
+            <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Results path</h3>
+            <div class="flex items-center gap-2">
+              <code class="flex-1 rounded border border-surface-border bg-surface-sunken px-3 py-2 text-[13px] font-mono break-all select-all">{{ data.results_path }}</code>
+              <a
+                v-if="objectStoreUrl(data.results_path)"
+                :href="objectStoreUrl(data.results_path)!"
+                target="_blank"
+                rel="noopener"
+                class="text-xs px-2 py-2 rounded border border-surface-border hover:bg-surface-raised whitespace-nowrap text-accent"
+              >Open ↗</a>
+              <button
+                class="text-xs px-2 py-2 rounded border border-surface-border hover:bg-surface-raised whitespace-nowrap"
+                @click="copyPath"
+              >
+                {{ copied ? 'Copied' : 'Copy' }}
+              </button>
             </div>
-          </dl>
-        </div>
-
-        <div class="mt-4 pt-4 border-t border-surface-border-subtle">
-          <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Provenance</h3>
-          <dl class="text-sm grid grid-cols-1 md:grid-cols-3 gap-2">
-            <div class="flex gap-2">
-              <dt class="text-text-muted w-28">git sha</dt>
-              <dd class="font-mono" :title="data.provenance.git_sha">
-                <a
-                  :href="githubCommitUrl(data.provenance.git_sha)!"
-                  target="_blank"
-                  rel="noopener"
-                  class="text-accent hover:text-accent-hover hover:underline"
-                >{{ shortSha(data.provenance.git_sha) }} ↗</a>
-              </dd>
-            </div>
-            <div v-if="data.provenance.eval_runtime" class="flex gap-2"><dt class="text-text-muted w-28">eval runtime</dt><dd class="font-mono break-all">{{ data.provenance.eval_runtime }}</dd></div>
-            <div class="flex gap-2"><dt class="text-text-muted w-28">launch host</dt><dd class="font-mono break-all">{{ data.provenance.launch_host }}</dd></div>
-          </dl>
-        </div>
-
-        <div class="mt-4 pt-4 border-t border-surface-border-subtle">
-          <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Results path</h3>
-          <div class="flex items-center gap-2">
-            <code class="flex-1 rounded border border-surface-border bg-surface-sunken px-3 py-2 text-[13px] font-mono break-all select-all">{{ data.results_path }}</code>
-            <a
-              v-if="objectStoreUrl(data.results_path)"
-              :href="objectStoreUrl(data.results_path)!"
-              target="_blank"
-              rel="noopener"
-              class="text-xs px-2 py-2 rounded border border-surface-border hover:bg-surface-raised whitespace-nowrap text-accent"
-            >Open ↗</a>
-            <button
-              class="text-xs px-2 py-2 rounded border border-surface-border hover:bg-surface-raised whitespace-nowrap"
-              @click="copyPath"
-            >
-              {{ copied ? 'Copied' : 'Copy' }}
-            </button>
           </div>
         </div>
-      </div>
 
-      <!-- Live iris job + attempt status for every role -->
-      <JobsPanel :key="props.runId" :run-id="data.run_id" />
+      </template>
 
-      <!-- Live finelog logs (collapsed), with the recorded log tails as fallback -->
-      <LogsPanel :key="props.runId" :run-id="data.run_id" :roles="jobRoles" :log-tails="data.log_tails ?? {}" />
+      <template v-if="activeSection === 'Diagnostics'">
+        <JobsPanel :key="props.runId" :run-id="data.run_id" />
+
+        <LogsPanel :key="props.runId" :run-id="data.run_id" :roles="jobRoles" :log-tails="data.log_tails ?? {}" />
+      </template>
     </div>
   </section>
 </template>
+
+<style scoped>
+.run-sections { display: flex; gap: 1.25rem; border-bottom: 1px solid var(--c-surface-border); overflow-x: auto; }
+.run-sections a { padding: .6rem 0; font-size: .9rem; color: var(--c-text-secondary); }
+.run-sections .selected { color: var(--c-accent); box-shadow: inset 0 -2px currentColor; font-weight: 600; }
+</style>
