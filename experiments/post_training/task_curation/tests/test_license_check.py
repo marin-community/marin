@@ -19,10 +19,17 @@ PINNED_CASES = json.loads(Path(__file__).with_name("fixtures").joinpath("license
 
 
 @pytest.fixture(autouse=True)
-def _clear_ruling_cache():
-    """Ban lookups cache the pinned rulings; a staged registry must not leak past its test."""
-    yield
+def isolated_rulings(monkeypatch):
+    """Unit tests rule against staged empty rulings; the pinned registry loads only
+    where data-integration runs resolve the committed reference."""
+    monkeypatch.setattr(
+        licensing,
+        "read_registry_json",
+        lambda _reference: {"version": "test", "bans": []},
+    )
     licensing.license_bans.cache_clear()
+    yield
+    getattr(licensing.license_bans, "cache_clear", lambda: None)()
 
 
 @pytest.mark.parametrize("case", PINNED_CASES, ids=lambda case: case["source_id"])

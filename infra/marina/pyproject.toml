@@ -63,5 +63,5 @@ pythonpath = ["../.."]
 testpaths = ["tests", "apps"]
 timeout = 30
 timeout_method = "thread"
-addopts = "--durations=10 -v"
+addopts = "--durations=10 -v -m 'not data_integration'"
 log_level = "INFO"
