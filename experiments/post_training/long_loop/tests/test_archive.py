@@ -622,3 +622,140 @@ def test_best_rl_checkpoint_assertion(permanent_path):
         assert_best_rl_checkpoint(str(tmp_path / "archive4"), hollow)
     with pytest.raises(ValueError, match="final RL checkpoint"):
         assert_best_rl_checkpoint(str(tmp_path / "archive5"), {"selected": str(best)})
+
+
+def _externally_stopped_sft_fixture(tmp_path, *, consumed_config, selection, rl_telemetry):
+    """Build the minimal archive inputs for an externally stopped SFT stage.
+
+    The SFT selection carries no native completion receipt (the stage was stopped before
+    its own selection step ran), and the adopted artifact preserves the launcher's
+    submitted request config instead of an SFTSpec consumed config.
+    """
+
+    def document(path, value):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value))
+        return str(path)
+
+    settings = yaml.safe_load(Path("experiments/post_training/long_loop/specs/archive.yaml").read_text())
+    roots = {stage: str(tmp_path / stage) for stage in settings["stage_files"]}
+    trained = roots["rl"]
+    run = SkyRLRun(
+        hf_model_uri=str(tmp_path / "checkpoints" / "global_step_5" / "policy"),
+        global_step=5,
+        tokenizer_uri="test",
+        tokenizer_revision="a" * 40,
+        checkpoint_root=str(tmp_path / "checkpoints"),
+        draft_checkpoint_root=None,
+        terminal_manifest_uri="test",
+        iris_job_id="test",
+    )
+    write_artifact(run.result_payload(), trained)
+    write_native_selection(Path(run.checkpoint_root))
+    record = json.loads((Path(trained) / RECORD_FILENAME).read_text())
+    document(Path(trained) / RECORD_FILENAME, {**record, "version": "2026.11.10"})
+    for stage, entries in settings["stage_files"].items():
+        for entry in entries:
+            document(Path(roots[stage]) / entry["path"], {})
+    document(Path(roots["sft"]) / "selected.json", selection)
+    document(Path(roots["sft"]) / "consumed-config.json", consumed_config)
+    document(Path(trained) / "terminal.json", {"result": {"state": "succeeded", "failure": None}})
+    rl_trainer = {"export_path": str(tmp_path / "exports-rl"), "project_name": "test"}
+    if rl_telemetry:
+        rl_trainer["native_telemetry_root"] = str(tmp_path / "rl-telemetry")
+    for stage in ("rl", "eval"):
+        retention = tmp_path / ("retention-" + stage)
+        document(retention / "_retention_ledger.json", {"archives": {"trace.zip": {"bytes": 3}}, "records": {"id": {}}})
+        (retention / "trace.zip").write_bytes(b"zip")
+        document(
+            Path(roots[stage]) / "resolved-launch.yaml",
+            {
+                "config": {
+                    "skyrl": {
+                        "generator": {"trajectory_retention": {"output_path": str(retention)}},
+                        "trainer": (
+                            rl_trainer
+                            if stage == "rl"
+                            else {"export_path": str(tmp_path / "exports-eval"), "project_name": "test"}
+                        ),
+                    },
+                }
+            },
+        )
+    document(Path(roots["eval"]) / "exports/dumped_evals/eval_only/bench.jsonl", {"uid": "id"})
+    document(Path(roots["report"]) / "timing-sources.json", [])
+    document(
+        Path(roots["report"]) / "evaluation.json",
+        {
+            "all_verified": True,
+            "result_uri": roots["eval"],
+            "expected_rollouts": 44,
+            "completed_rollouts": 44,
+            "verified_rollouts": 44,
+            "source_coverage_matches": True,
+            "identity_coverage_matches": True,
+            "unscored_attempts": [],
+            "accepted_unscored_attempts": [],
+        },
+    )
+    spec = {
+        "marin_revision": "a" * 40,
+        "name": "test",
+        "datasets": {"rows": "pinned"},
+        "rl": {"execution": {}},
+        "runtime_source": {"schema": 1, "marin_revision": "a" * 40, "files": []},
+    }
+    return settings, roots, trained, spec
+
+
+LAUNCHER_REQUEST_CONSUMED_CONFIG = {
+    "train_config": {"trainer": {"tracker": {"entity": None, "project": "test", "id": None}}},
+    "resources": {"replicas": 2},
+}
+EXTERNALLY_STOPPED_SELECTION = {"checkpoint": "s3://bucket/sft-final", "step": 12}
+
+
+def test_archive_records_launcher_request_consumed_config(tmp_path):
+    """An externally stopped SFT preserves the launcher's request config; record the shape."""
+    settings, roots, trained, spec = _externally_stopped_sft_fixture(
+        tmp_path,
+        consumed_config=LAUNCHER_REQUEST_CONSUMED_CONFIG,
+        selection=EXTERNALLY_STOPPED_SELECTION,
+        rl_telemetry=False,
+    )
+    plan = derive_archive_plan(
+        output=str(tmp_path / "archive"),
+        settings=settings,
+        resolved_spec=spec,
+        artifacts=roots,
+        trained=trained,
+        evaluated=roots["eval"],
+        completed_report=roots["report"],
+    )
+    assert plan["provenance"]["sft_consumed_config_shape"] == "launcher-request"
+    assert plan["provenance"]["sft_externally_stopped"] is True
+    assert "metric_history" in plan["provenance"]["missing_evidence"]
+    assert plan["provenance"]["final_sft_checkpoint"] == {"uri": "s3://bucket/sft-final", "step": 12}
+
+
+def test_archive_falls_back_for_externally_stopped_sft_telemetry(tmp_path):
+    """Telemetry on the RL side alone no longer fails when the SFT was stopped externally."""
+    settings, roots, trained, spec = _externally_stopped_sft_fixture(
+        tmp_path,
+        consumed_config=LAUNCHER_REQUEST_CONSUMED_CONFIG,
+        selection=EXTERNALLY_STOPPED_SELECTION,
+        rl_telemetry=True,
+    )
+    plan = derive_archive_plan(
+        output=str(tmp_path / "archive"),
+        settings=settings,
+        resolved_spec=spec,
+        artifacts=roots,
+        trained=trained,
+        evaluated=roots["eval"],
+        completed_report=roots["report"],
+    )
+    assert plan["provenance"]["sft_consumed_config_shape"] == "launcher-request"
+    assert plan["provenance"]["sft_externally_stopped"] is True
+    assert "metric_history" in plan["provenance"]["missing_evidence"]
+    assert any("externally stopped" in limitation for limitation in plan["provenance"]["limitations"])

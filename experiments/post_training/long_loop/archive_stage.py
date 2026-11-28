@@ -616,8 +616,24 @@ def derive_archive_plan(
         raise ValueError("The SFT selection must name its final checkpoint and step")
     final_sft_checkpoint = {"uri": selection["checkpoint"], "step": selection["step"]}
     full_sft = documents[("sft", "consumed-config.json")]
-    shared_sft = full_sft.get("format") == "SFTSpec"
-    sft = full_sft["train_config"]["trainer"] if shared_sft else full_sft["trainer"]["trainer"]
+    if full_sft.get("format") == "SFTSpec":
+        shared_sft = True
+        consumed_config_shape = "SFTSpec"
+        sft = full_sft["train_config"]["trainer"]
+    elif "train_config" in full_sft:
+        # An externally stopped SFT never writes its trainer-side consumed config; the adopted
+        # artifact preserves the launcher's submitted request config instead. Read its trainer
+        # section and record the shape rather than failing or fabricating an SFTSpec document.
+        shared_sft = False
+        consumed_config_shape = "launcher-request"
+        sft = full_sft["train_config"]["trainer"]
+    else:
+        shared_sft = False
+        consumed_config_shape = "legacy"
+        sft = full_sft["trainer"]["trainer"]
+    native_replica_count = full_sft["resources"]["replicas"] * (
+        1 if shared_sft or consumed_config_shape == "launcher-request" else full_sft["processes_per_task"]
+    )
     tracker = sft["tracker"]
     refs = [
         {
@@ -649,17 +665,27 @@ def derive_archive_plan(
             refs = [entry for entry in refs if entry["stage"] != ref["stage"]] + [ref]
     sft_telemetry = sft.get("native_telemetry_root")
     rl_telemetry = trainer.get("native_telemetry_root")
+    externally_stopped_sft = "training_completion" not in selection
     missing = {}
     timing_coverage = {}
     if (sft_telemetry is None) != (rl_telemetry is None):
-        raise ValueError("Native training telemetry must be present for both SFT and RL")
+        if sft_telemetry is None and externally_stopped_sft:
+            # A telemetry-less SFT stopped externally (no native completion receipt) takes the
+            # metric-history-blocker fallback below instead of failing the archive; nothing is
+            # fabricated and the asymmetry is recorded in the provenance.
+            limitations.append(
+                "SFT was externally stopped before writing native telemetry or a completion receipt; "
+                "the archive records the metric-history blocker rather than fabricated telemetry."
+            )
+        else:
+            raise ValueError("Native training telemetry must be present for both SFT and RL")
     if sft_telemetry is not None and rl_telemetry is not None:
         if shared_sft and sft.get("training_budget") is not None:
             inputs.append(time_limited_sft_input(roots["sft"], sft))
         native_inputs, timing_coverage = native_training_inputs(
             sft_telemetry,
             rl_telemetry,
-            full_sft["resources"]["replicas"] * (1 if shared_sft else full_sft["processes_per_task"]),
+            native_replica_count,
             run.global_step,
             settings.get("accepted_missing_native_phases"),
         )
@@ -682,9 +708,7 @@ def derive_archive_plan(
         record("wandb-status.json", {"exporter": settings["wandb"]["package"], "runs": wandb_status}, "provenance")
         expected_timing = {
             "native-sft-attempt-archive": full_sft["resources"]["replicas"],
-            "native-sft-journal": (
-                full_sft["resources"]["replicas"] * (1 if shared_sft else full_sft["processes_per_task"])
-            ),
+            "native-sft-journal": native_replica_count,
         }
         timing_coverage = {
             kind: {"expected": count, "observed": len({item["source"] for item in extra if item.get("kind") == kind})}
@@ -760,6 +784,8 @@ def derive_archive_plan(
             "experimental_controls": resolved_spec.get("experimental_controls"),
             "rl_terminal": documents[("rl", "terminal.json")]["result"],
             "final_sft_checkpoint": final_sft_checkpoint,
+            "sft_consumed_config_shape": consumed_config_shape,
+            "sft_externally_stopped": externally_stopped_sft,
             "evaluation_complete": evaluation["all_verified"],
             "wandb_runs": wandb_status,
             "missing_evidence": missing,
