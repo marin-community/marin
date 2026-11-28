@@ -19,6 +19,7 @@ src/dashboard_stitch.py  resolves dashboards/*.json panelRef markers into full p
 provisioning/          datasources (finelog, iris, github, k8s), dashboards, alerting
 dashboards/            dashboard JSON source — reviewed like code; see "Adding a dashboard"
 dashboards/panels/     panel bodies shared across dashboards, referenced by panelRef
+dashboards/<stem>/     one dashboard's single-use fragments, named by panel or section title
 marin-infra-panel/     internal React status page and its reusable dense views
 Dockerfile             Grafana + bridge venv + pinned Infinity and internal panel plugins
 entrypoint.sh          runs both; if either dies the container dies
@@ -345,6 +346,11 @@ provisioning exists for them as of Grafana 13.x. A `panelRef` fragment stays
 at build time rather than being editable through the Grafana UI.
 
 The stitcher also expands `panelGroupRef` into an ordered list of panels, so a
-large dashboard can keep its section layouts in bounded fragments. Picker SQL
-declares `sqlFragmentRefs` and uses `{{rl_producer_row_names}}`, expanded from
-the canonical SQL fragment at build time. Grafana receives only resolved JSON.
+large dashboard keeps its sections in bounded fragments. A dashboard's single-use
+fragments live in a directory named after the dashboard (`dashboards/rl_runs/`
+for `rl_runs.json`), with files named by panel or section title instead of
+numeric ids; bodies shared across dashboards stay in `dashboards/panels/`.
+Picker SQL uses the `{{rl_producer_row_names}}` token, which the stitcher
+expands from the Python-defined producer names in `_SHARED_SQL` and raises on
+any other `{{token}}` — Grafana's own `{{from}}`/`{{to}}` macros pass through.
+Grafana receives only resolved JSON.

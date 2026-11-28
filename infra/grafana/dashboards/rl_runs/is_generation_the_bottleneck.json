@@ -1,14 +1,17 @@
 {
   "panels": [
     {
+      "type": "row",
+      "title": "Is generation the bottleneck?",
+      "collapsed": false,
+      "panels": [],
       "id": 203,
       "gridPos": {
         "x": 0,
         "y": 51,
         "w": 24,
         "h": 1
-      },
-      "panelRef": "rl-runs-panel-203"
+      }
     },
     {
       "id": 7,
@@ -18,7 +21,7 @@
         "w": 8,
         "h": 8
       },
-      "panelRef": "rl-runs-panel-7"
+      "panelRef": "generation_worker_await_duration"
     },
     {
       "id": 8,
@@ -28,7 +31,7 @@
         "w": 8,
         "h": 8
       },
-      "panelRef": "rl-runs-panel-8"
+      "panelRef": "completed_buffer_depth_and_capacity"
     },
     {
       "id": 10,
@@ -38,7 +41,7 @@
         "w": 8,
         "h": 8
       },
-      "panelRef": "rl-runs-panel-10"
+      "panelRef": "buffer_dwell_of_trained_groups"
     },
     {
       "id": 12,
@@ -48,7 +51,7 @@
         "w": 8,
         "h": 8
       },
-      "panelRef": "rl-runs-panel-12"
+      "panelRef": "successful_rollout_call_latency"
     },
     {
       "id": 11,
@@ -58,7 +61,7 @@
         "w": 8,
         "h": 8
       },
-      "panelRef": "rl-runs-panel-11"
+      "panelRef": "policy_staleness_at_training"
     },
     {
       "id": 113,
@@ -68,7 +71,7 @@
         "w": 8,
         "h": 8
       },
-      "panelRef": "rl-runs-panel-113"
+      "panelRef": "straggler_proxy_rollout_wait_p99_p50"
     },
     {
       "id": 19,
@@ -78,7 +81,7 @@
         "w": 6,
         "h": 8
       },
-      "panelRef": "rl-runs-panel-19"
+      "panelRef": "group_dispositions_bucket"
     },
     {
       "id": 20,
@@ -88,7 +91,7 @@
         "w": 6,
         "h": 8
       },
-      "panelRef": "rl-runs-panel-20"
+      "panelRef": "tokens_by_group_disposition_bucket"
     },
     {
       "id": 18,
@@ -98,7 +101,7 @@
         "w": 6,
         "h": 8
       },
-      "panelRef": "rl-runs-panel-18"
+      "panelRef": "rollouts_completing_during_policy_training"
     },
     {
       "id": 42,
@@ -108,7 +111,7 @@
         "w": 6,
         "h": 8
       },
-      "panelRef": "rl-runs-panel-42"
+      "panelRef": "inference_sampled_throughput_by_learner_phase"
     }
   ]
 }

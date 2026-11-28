@@ -26,7 +26,9 @@ from rl_run_fixtures import (
 
 
 def test_the_engine_panels_select_by_metric_name_alone(rl_run_store) -> None:
-    # No other MarinSkyRL producer emits these names, so the name identifies the engine path.
+    # The engine path is the metric_source: the fixture's embedded-engine rows publish
+    # under service='marinskyrl' with metric_source='vllm', and other producers' rows
+    # are filtered out before the window rather than after bucketing.
     throughput = rl_run_store.execute(_panel_sql("vLLM token throughput")).fetchall()
     # A rate over a CUMULATIVE counter: the panel takes the delta between consecutive samples,
     # so a fixture growing by 1024 per bucket per engine yields a constant rate -- and the first

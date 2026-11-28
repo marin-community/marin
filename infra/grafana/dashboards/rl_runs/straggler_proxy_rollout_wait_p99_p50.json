@@ -1,7 +1,7 @@
 {
   "type": "timeseries",
-  "title": "Why vLLM requests finished",
-  "description": "Completed engine requests by finish reason per bucket. A growing length-limited share can explain changes in reward or response coverage. Finish reasons depend on the engine version and one rollout can create several requests; requires engine telemetry. Run-wide: this panel ignores the Job and Execution pickers.",
+  "title": "Straggler proxy: rollout wait p99 \u00f7 p50",
+  "description": "Rollout-wait p99 divided by its median in each 30-minute bucket. A ratio near one means similar waits; a large ratio identifies unusually slow steps. This measures step-to-step spread across the run\u2019s executions, and partial buckets use only observations inside the selected window. Run-wide: this panel ignores the Job and Execution pickers.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"
@@ -11,17 +11,13 @@
       "custom": {
         "drawStyle": "line",
         "lineWidth": 1,
-        "fillOpacity": 60,
+        "fillOpacity": 8,
         "showPoints": "never",
         "spanNulls": false,
-        "stacking": {
-          "mode": "normal",
-          "group": "A"
-        },
-        "axisLabel": "finished requests per time bucket"
+        "axisLabel": "p99 \u00f7 p50"
       },
       "min": 0,
-      "unit": "short",
+      "unit": "none",
       "displayName": "${__field.labels.series}"
     },
     "overrides": []
@@ -44,9 +40,9 @@
       "format": "timeseries",
       "url": "/v1/rl/overview",
       "targetRef": "rl_run",
-      "view": "engine_finish"
+      "view": "straggler"
     }
   ],
-  "interval": "1m",
-  "maxDataPoints": 360
+  "maxDataPoints": 360,
+  "interval": "1m"
 }

@@ -7,6 +7,7 @@ import json
 
 import pytest
 from dashboard_stitch import load_panel_fragments, stitch_all, stitch_dashboard
+from rl_producer_policy import RL_PRODUCER_ROW_NAMES_SQL
 
 FRAGMENT = {"type": "table", "title": "Shared panel", "targets": [{"refId": "A"}]}
 
@@ -140,3 +141,53 @@ def test_stitch_all_processes_every_dashboard_in_a_directory(tmp_path):
     assert set(dashboards) == {"a.json", "b.json"}
     assert dashboards["a.json"]["panels"][0]["title"] == "Shared panel"
     assert dashboards["b.json"]["panels"] == []
+
+
+def test_stitch_dashboard_expands_shared_sql_tokens_and_leaves_grafana_macros():
+    source = {
+        "panels": [],
+        "templating": {
+            "list": [
+                {"name": "run", "query": {"sql": "name IN ({{rl_producer_row_names}}) AND t >= {{from}} AND t < {{to}}"}}
+            ]
+        },
+    }
+
+    sql = stitch_dashboard(source, {})["templating"]["list"][0]["query"]["sql"]
+
+    assert f"name IN ({RL_PRODUCER_ROW_NAMES_SQL})" in sql
+    assert "{{from}}" in sql and "{{to}}" in sql
+
+
+def test_stitch_dashboard_rejects_an_unresolved_sql_token():
+    source = {"panels": [], "templating": {"list": [{"name": "run", "query": {"sql": "name IN ({{typo_names}})"}}]}}
+
+    with pytest.raises(ValueError, match="typo_names"):
+        stitch_dashboard(source, {})
+
+
+def test_stitch_all_resolves_dashboard_local_fragments(tmp_path):
+    panels_dir = tmp_path / "panels"
+    panels_dir.mkdir()
+    (panels_dir / "shared.json").write_text(json.dumps({"type": "table", "title": "Shared"}))
+    local = tmp_path / "a"
+    local.mkdir()
+    (local / "is_it_moving.json").write_text(json.dumps({"type": "row", "title": "Is it moving?"}))
+    (tmp_path / "a.json").write_text(json.dumps({"panels": [{"id": 1, "gridPos": {}, "panelRef": "is_it_moving"}]}))
+
+    (panel,) = stitch_all(tmp_path, panels_dir)["a.json"]["panels"]
+
+    assert panel == {"type": "row", "title": "Is it moving?", "id": 1, "gridPos": {}}
+
+
+def test_stitch_all_rejects_a_fragment_name_shared_and_local(tmp_path):
+    panels_dir = tmp_path / "panels"
+    panels_dir.mkdir()
+    (panels_dir / "shared.json").write_text(json.dumps(FRAGMENT))
+    local = tmp_path / "a"
+    local.mkdir()
+    (local / "shared.json").write_text(json.dumps({"type": "table", "title": "Local double"}))
+    (tmp_path / "a.json").write_text(json.dumps({"panels": [{"id": 1, "gridPos": {}, "panelRef": "shared"}]}))
+
+    with pytest.raises(KeyError, match="shared"):
+        stitch_all(tmp_path, panels_dir)

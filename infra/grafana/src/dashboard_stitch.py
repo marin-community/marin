@@ -17,9 +17,12 @@ Dashboard links use ``{"linkRef": "<fragment-name>"}`` markers resolved from
 ``SHARED_LINKS`` for the same reason.
 
 A ``panelGroupRef`` expands an ordered array from a fragment's ``panels`` field,
-including groups inside collapsed rows. Templating SQL expands fragments declared by
-``sqlFragmentRefs`` at build time, leaving Grafana macros intact. Fragment paths
-are relative to the bridge source directory.
+including groups inside collapsed rows. Shared dashboard fragments live in
+``panels/``; a dashboard's single-use fragments live in a directory named after
+the dashboard (``dashboards/<stem>/``). Templating SQL expands the tokens in
+``_SHARED_SQL`` at build time and raises on any other ``{{token}}`` so an
+undeclared name cannot ship literally to Grafana; Grafana's own ``{{from}}`` and
+``{{to}}`` macros pass through.
 
 Targets with ``targetRef`` share endpoint parameters. Time-series targets default to
 time/series/value columns; each target specifies its view, format and other columns.
@@ -27,13 +30,20 @@ time/series/value columns; each target specifies its view, format and other colu
 
 import argparse
 import json
+import re
 from pathlib import Path
+
+from rl_producer_policy import RL_PRODUCER_ROW_NAMES_SQL
 
 PANEL_REF_KEY = "panelRef"
 LINK_REF_KEY = "linkRef"
 TARGET_REF_KEY = "targetRef"
 PANEL_GROUP_REF_KEY = "panelGroupRef"
-SQL_FRAGMENT_REFS_KEY = "sqlFragmentRefs"
+
+_SQL_TOKEN = re.compile(r"\{\{(\w+)\}\}")
+# Grafana's own dashboard macros inside templating SQL pass through untouched.
+GRAFANA_TEMPLATE_MACROS = frozenset({"from", "to"})
+_SHARED_SQL = {"{{rl_producer_row_names}}": RL_PRODUCER_ROW_NAMES_SQL}
 
 _TIMESERIES_COLUMNS = [
     {"selector": "t", "text": "time", "type": "timestamp_epoch"},
@@ -171,6 +181,9 @@ def _stitch_sql_fragments(value, fragments: dict[str, str]):
     if isinstance(value, str):
         for token, replacement in fragments.items():
             value = value.replace(token, replacement)
+        unresolved = {name for name in _SQL_TOKEN.findall(value) if name not in GRAFANA_TEMPLATE_MACROS}
+        if unresolved:
+            raise ValueError(f"unresolved templating SQL token(s) {sorted(unresolved)}; declare them in _SHARED_SQL")
         return value
     if isinstance(value, list):
         return [_stitch_sql_fragments(item, fragments) for item in value]
@@ -184,24 +197,36 @@ def stitch_dashboard(source: dict, fragments: dict[str, dict]) -> dict:
 
     Raises:
         KeyError: A panel, link or target references an unknown fragment.
+        ValueError: Templating SQL contains a token outside _SHARED_SQL and
+            Grafana's template macros.
     """
-    dashboard = {key: value for key, value in source.items() if key != SQL_FRAGMENT_REFS_KEY}
+    dashboard = dict(source)
     dashboard["panels"] = _stitch_panels(source["panels"], fragments)
     if "templating" in source:
-        sql_fragments = {
-            "{{" + name + "}}": (Path(__file__).parent / filename).read_text().strip()
-            for name, filename in source.get(SQL_FRAGMENT_REFS_KEY, {}).items()
-        }
-        dashboard["templating"] = _stitch_sql_fragments(source["templating"], sql_fragments)
+        dashboard["templating"] = _stitch_sql_fragments(source["templating"], _SHARED_SQL)
     if "links" in source:
         dashboard["links"] = _stitch_links(source["links"])
     return dashboard
 
 
 def stitch_all(src_dir: Path, panels_dir: Path) -> dict[str, dict]:
-    """Stitch every dashboard JSON file in src_dir, keyed by filename."""
-    fragments = load_panel_fragments(panels_dir)
-    return {path.name: stitch_dashboard(json.loads(path.read_text()), fragments) for path in src_dir.glob("*.json")}
+    """Stitch every dashboard JSON file in src_dir, keyed by filename.
+
+    Each dashboard also resolves fragments from its dashboard-local directory
+    ``<src_dir>/<stem>/``; a name in both directories is an error.
+    """
+    shared = load_panel_fragments(panels_dir)
+    stitched = {}
+    for path in src_dir.glob("*.json"):
+        fragments = dict(shared)
+        local_dir = src_dir / path.stem
+        if local_dir.is_dir():
+            for name, fragment in load_panel_fragments(local_dir).items():
+                if name in fragments:
+                    raise KeyError(f"fragment {name!r} exists in both {panels_dir} and {local_dir}")
+                fragments[name] = fragment
+        stitched[path.name] = stitch_dashboard(json.loads(path.read_text()), fragments)
+    return stitched
 
 
 def main() -> None:

@@ -11,7 +11,8 @@ def rl_engine_query(bucket: str, clusters_sql: str, run_sql: str, start_ms: int,
 WITH engine_rows AS (
     SELECT * FROM "telemetry_v1.vllm" WHERE service = 'vllm'
     UNION ALL
-    SELECT * FROM "telemetry_v1.marinskyrl" WHERE service = 'marinskyrl'
+    SELECT * FROM "telemetry_v1.marinskyrl"
+    WHERE service = 'marinskyrl' AND json_get(attributes_json, 'metric_source') = 'vllm'
 ), filtered AS (
     -- Filter metric names before JSON extraction and retain narrow hashed label
     -- keys for the window, while keeping each actor's series independent.
@@ -19,9 +20,7 @@ WITH engine_rows AS (
            service, execution_uid, node_name, process_index, name, timestamp_ms, seq, value,
            md5(resource_attributes_json) AS resource_key,
            md5(attributes_json) AS attribute_key,
-           json_get(attributes_json, 'finished_reason') AS finished_reason,
-           CASE WHEN service = 'vllm' OR json_get(attributes_json, 'metric_source') = 'vllm'
-                THEN 1 ELSE 0 END AS is_engine
+           json_get(attributes_json, 'finished_reason') AS finished_reason
     FROM engine_rows
     WHERE run_id = {run_sql}
       AND {origin_cluster} IN ({clusters_sql})
@@ -45,7 +44,6 @@ SELECT {bucket} AS t, name,
        SUM(CASE WHEN delta IS NULL THEN NULL ELSE GREATEST(delta, 0) END) AS delta_sum
 FROM deltas
 GROUP BY 1, 2, 3
-HAVING MIN(is_engine) = 1
 ORDER BY t, name, finished_reason
 LIMIT {max_rows + 1}
 """.strip()

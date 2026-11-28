@@ -8,7 +8,7 @@
         "w": 6,
         "h": 4
       },
-      "panelRef": "rl-runs-panel-150"
+      "panelRef": "current_step"
     },
     {
       "id": 151,
@@ -18,7 +18,7 @@
         "w": 6,
         "h": 4
       },
-      "panelRef": "rl-runs-panel-151"
+      "panelRef": "steps_hour"
     },
     {
       "id": 152,
@@ -28,7 +28,7 @@
         "w": 6,
         "h": 4
       },
-      "panelRef": "rl-runs-panel-152"
+      "panelRef": "latest_raw_reward"
     },
     {
       "id": 153,
@@ -38,7 +38,7 @@
         "w": 6,
         "h": 4
       },
-      "panelRef": "rl-runs-panel-153"
+      "panelRef": "generated_tokens_s"
     },
     {
       "id": 154,
@@ -48,7 +48,7 @@
         "w": 6,
         "h": 4
       },
-      "panelRef": "rl-runs-panel-154"
+      "panelRef": "since_last_step"
     },
     {
       "id": 155,
@@ -58,7 +58,7 @@
         "w": 6,
         "h": 4
       },
-      "panelRef": "rl-runs-panel-155"
+      "panelRef": "since_last_record"
     },
     {
       "id": 156,
@@ -68,7 +68,7 @@
         "w": 6,
         "h": 4
       },
-      "panelRef": "rl-runs-panel-156"
+      "panelRef": "services_reporting_run_wide"
     },
     {
       "id": 157,
@@ -78,7 +78,7 @@
         "w": 6,
         "h": 4
       },
-      "panelRef": "rl-runs-panel-157"
+      "panelRef": "staleness_p95"
     }
   ]
 }

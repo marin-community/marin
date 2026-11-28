@@ -1,254 +1,25 @@
 {
-  "type": "row",
-  "title": "Do trainer and vLLM logprobs agree?",
-  "collapsed": true,
   "panels": [
     {
-      "id": 30,
-      "type": "timeseries",
-      "title": "Pre-update model log-ratio drift",
-      "description": "Trainer-minus-generation logprob drift before the policy update. Values near zero mean the trainer reproduces rollout probabilities; growing magnitude suggests policy drift or a serving/training mismatch. Only finite loss tokens contribute; requires rollout logprobs and trainer.training_metrics.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
+      "type": "row",
+      "title": "Is it learning?",
+      "collapsed": false,
+      "panels": [],
+      "id": 207,
       "gridPos": {
         "x": 0,
-        "y": 97,
-        "w": 6,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 5,
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            }
-          },
-          "displayName": "${__field.labels.series}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "timeseries",
-          "url": "/v1/rl/execution",
-          "targetRef": "rl_execution",
-          "view": "drift"
-        }
-      ],
-      "interval": "30s",
-      "maxDataPoints": 360
+        "y": 17,
+        "w": 24,
+        "h": 1
+      }
     },
     {
-      "id": 31,
       "type": "timeseries",
-      "title": "Pre-update PPO-window pressure",
-      "description": "Fractions of finite loss tokens below and above the configured PPO ratio window before the update. Rising fractions mean more tokens encounter the clipping bounds; compare with staleness and logprob drift. These fractions measure pressure against the configured bounds; the correction panels show applied weights. Requires trainer.training_metrics.",
+      "title": "Training reward and informative groups",
+      "description": "Raw training reward, reward/avg_pass_at_{n} and the fraction of informative groups. Compare sustained reward changes with held-out evaluation; an informative-group fraction near zero means most groups provide little relative training signal. Reward scales depend on the task, and pass-at-n depends on group size; requires trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "x": 6,
-        "y": 97,
-        "w": 6,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 5,
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            }
-          },
-          "displayName": "${__field.labels.series}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "timeseries",
-          "url": "/v1/rl/execution",
-          "targetRef": "rl_execution",
-          "view": "clip_pressure"
-        }
-      ],
-      "interval": "30s",
-      "maxDataPoints": 360
-    },
-    {
-      "id": 32,
-      "type": "timeseries",
-      "title": "Drift coverage and token-weight concentration",
-      "description": "Finite logprob coverage, missing rollout logprobs and importance-weight ESS fraction. High finite coverage and ESS are desirable; missing behavior data or concentrated weights weaken the comparison. ESS describes concentration of eligible token weights; requires trainer.training_metrics.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 97,
-        "w": 6,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 5,
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            }
-          },
-          "displayName": "${__field.labels.series}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "timeseries",
-          "url": "/v1/rl/execution",
-          "targetRef": "rl_execution",
-          "view": "drift_coverage"
-        }
-      ],
-      "interval": "30s",
-      "maxDataPoints": 360
-    },
-    {
-      "id": 44,
-      "type": "timeseries",
-      "title": "Mean squared model log-ratio",
-      "description": "Mean squared trainer-minus-vLLM logprob difference before the update. A rising value means larger probability mismatch, even when signed drift averages near zero. Only finite loss tokens contribute; requires rollout logprobs and trainer.training_metrics.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "x": 18,
-        "y": 97,
-        "w": 6,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 5,
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            }
-          },
-          "displayName": "${__field.labels.series}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "timeseries",
-          "url": "/v1/rl/execution",
-          "targetRef": "rl_execution",
-          "view": "log_ratio_squared"
-        }
-      ],
-      "interval": "30s",
-      "maxDataPoints": 360
-    },
-    {
-      "id": 46,
-      "type": "timeseries",
-      "title": "Mean correction weight",
-      "description": "Mean off-policy correction weight over eligible tokens, including masked zeros. A falling mean means correction suppresses more of the batch’s effective contribution. Missing series mean correction is unconfigured or unobserved; requires trainer.training_metrics.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 105,
-        "w": 6,
-        "h": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -288,31 +59,90 @@
           "format": "timeseries",
           "url": "/v1/rl/execution",
           "targetRef": "rl_execution",
-          "view": "correction_weights"
+          "view": "reward"
         }
       ],
       "interval": "30s",
-      "maxDataPoints": 360
+      "maxDataPoints": 360,
+      "id": 22,
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 6,
+        "h": 8
+      }
     },
     {
-      "id": 59,
       "type": "timeseries",
-      "title": "Correction activity",
-      "description": "Fractions of eligible tokens masked or truncated by correction, alongside policy-loss clipping. Rising fractions mean more proposed update weight is suppressed; compare with ESS and mismatch. Correction series are absent when correction is unconfigured; requires trainer.training_metrics.",
+      "title": "Evaluation scores",
+      "description": "Held-out evaluation scores by metric and execution. Use repeated evaluations to check whether training reward improvements generalize. Evaluations are sparse and task scales differ; requires trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "evaluation"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360,
+      "id": 23,
       "gridPos": {
         "x": 6,
-        "y": 105,
+        "y": 18,
         "w": 6,
         "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Evaluation response length and stop coverage",
+      "description": "Mean/maximum evaluation response length and stop-class fractions. Rising length-stop fractions can explain score changes caused by truncation; compare fractions only at complete stop-reason coverage. Evaluations are sparse and incomplete fractions stay blank; requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
       },
       "fieldConfig": {
         "defaults": {
           "unit": "none",
-          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+          "noValue": "No supplemental evaluation observations",
           "custom": {
             "drawStyle": "line",
             "lineWidth": 1,
@@ -326,7 +156,36 @@
           },
           "displayName": "${__field.labels.series}"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*(fraction|coverage).*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 1
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Fraction"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -346,84 +205,144 @@
           "format": "timeseries",
           "url": "/v1/rl/execution",
           "targetRef": "rl_execution",
-          "view": "corrections"
+          "view": "evaluation_lengths"
         }
       ],
       "interval": "30s",
-      "maxDataPoints": 360
-    },
-    {
-      "id": 56,
-      "type": "timeseries",
-      "title": "Trainer logprob drift within the update",
-      "description": "Trainer logprob change within its own update, against probabilities recomputed at consumption. Growing tails or falling ESS show a larger update relative to that starting policy. This differs from rollout-time serving mismatch; requires trainer.training_metrics.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
+      "maxDataPoints": 360,
+      "id": 49,
       "gridPos": {
         "x": 12,
-        "y": 105,
+        "y": 18,
         "w": 6,
         "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 5,
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            }
-          },
-          "displayName": "${__field.labels.series}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "timeseries",
-          "url": "/v1/rl/execution",
-          "targetRef": "rl_execution",
-          "view": "learner_drift"
-        }
-      ],
-      "interval": "30s",
-      "maxDataPoints": 360
+      }
     },
     {
-      "id": 57,
       "type": "timeseries",
-      "title": "Position dependence of |log ρ|",
-      "description": "Absolute log-ratio drift near the first and last response tokens and in the middle. Larger errors late in responses can reveal position-dependent drift hidden by pooled averages. Serving mismatch and within-update drift have separate series and coverage; requires trainer.training_metrics.",
+      "title": "Evaluation score contributions by stop class",
+      "description": "Evaluation score contributions from length-stopped and completed responses, alongside the overall score. Each contribution is the sum of scores in its stop class divided by the total evaluated response count. Compare them to identify which class drives a score change. Contributions require complete stop-reason coverage; other stop classes can contribute to the overall score. Requires trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No supplemental evaluation observations",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "evaluation_contributions"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360,
+      "id": 50,
       "gridPos": {
         "x": 18,
-        "y": 105,
+        "y": 18,
         "w": 6,
         "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Length stops and coverage in trained groups",
+      "description": "Fraction of consumed responses stopped by a length limit, alongside stop-reason coverage. A rising fraction can mean truncation is discarding useful response tails. The fraction is blank unless coverage is complete; requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "max": 1,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "length_stops"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360,
+      "id": 40,
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Optimizer loss and KL",
+      "description": "Policy loss, final loss and policy KL by optimizer step. Sudden changes can reveal an unstable update; compare KL with the configured target and loss with its recent range. Each series uses the sign and scale of its objective; requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
       },
       "fieldConfig": {
         "defaults": {
@@ -462,11 +381,109 @@
           "format": "timeseries",
           "url": "/v1/rl/execution",
           "targetRef": "rl_execution",
-          "view": "position_dependence"
+          "view": "optimizer"
         }
       ],
       "interval": "30s",
-      "maxDataPoints": 360
+      "maxDataPoints": 360,
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "pattern": "/(^time$|policy\\/(policy_loss|final_loss|policy_kl))/"
+            }
+          }
+        }
+      ],
+      "id": 24,
+      "gridPos": {
+        "x": 8,
+        "y": 26,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Gradient norm and policy entropy",
+      "description": "Gradient norm and policy entropy by optimizer step. Sudden norm spikes can precede unstable updates; collapsing entropy can indicate reduced policy diversity. These quantities have different scales and separate axes; requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*policy_entropy.*"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "optimizer"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360,
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "pattern": "/(^time$|policy\\/(raw_grad_norm|policy_entropy))/"
+            }
+          }
+        }
+      ],
+      "id": 158,
+      "gridPos": {
+        "x": 16,
+        "y": 26,
+        "w": 8,
+        "h": 8
+      }
     }
   ]
 }

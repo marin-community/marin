@@ -1,14 +1,17 @@
 {
   "panels": [
     {
+      "type": "row",
+      "title": "Where does the step\u2019s wall clock go?",
+      "collapsed": false,
+      "panels": [],
       "id": 202,
       "gridPos": {
         "x": 0,
         "y": 34,
         "w": 24,
         "h": 1
-      },
-      "panelRef": "rl-runs-panel-202"
+      }
     },
     {
       "id": 102,
@@ -18,7 +21,7 @@
         "w": 6,
         "h": 8
       },
-      "panelRef": "rl-runs-panel-102"
+      "panelRef": "rollout_wait_vs_train_step_critical_path"
     },
     {
       "id": 108,
@@ -28,7 +31,7 @@
         "w": 6,
         "h": 8
       },
-      "panelRef": "rl-runs-panel-108"
+      "panelRef": "gpu_utilization_on_this_run_s_nodes"
     },
     {
       "id": 121,
@@ -38,7 +41,7 @@
         "w": 6,
         "h": 8
       },
-      "panelRef": "rl-runs-panel-121"
+      "panelRef": "step_composition_exclusive_seconds_per_span"
     },
     {
       "id": 6,
@@ -48,7 +51,7 @@
         "w": 6,
         "h": 8
       },
-      "panelRef": "rl-runs-panel-6"
+      "panelRef": "driver_step_preparation_and_policy_walls"
     },
     {
       "id": 14,
@@ -58,7 +61,7 @@
         "w": 6,
         "h": 8
       },
-      "panelRef": "rl-runs-panel-14"
+      "panelRef": "weight_sync_and_policy_offload_walls"
     },
     {
       "id": 53,
@@ -68,7 +71,7 @@
         "w": 6,
         "h": 8
       },
-      "panelRef": "rl-runs-panel-53"
+      "panelRef": "weight_sync_stages"
     },
     {
       "id": 34,
@@ -78,7 +81,7 @@
         "w": 6,
         "h": 8
       },
-      "panelRef": "rl-runs-panel-34"
+      "panelRef": "core_and_cycle_duration"
     },
     {
       "id": 36,
@@ -88,7 +91,7 @@
         "w": 6,
         "h": 8
       },
-      "panelRef": "rl-runs-panel-36"
+      "panelRef": "core_wall_fractions"
     }
   ]
 }

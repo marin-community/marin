@@ -19,7 +19,7 @@
       "min": 0,
       "unit": "percent",
       "max": 100,
-      "noValue": "No GPU data. Over 7h: zoom to 7h or less. Otherwise no node join: trainer rows carry no node_name, or the node agent is not reporting this cluster. This is never “GPUs idle”.",
+      "noValue": "No GPU data. Over 7h: zoom to 7h or less. Otherwise no node join: trainer rows carry no node_name, or the node agent is not reporting this cluster. This is never \u201cGPUs idle\u201d.",
       "displayName": "${__field.labels.series}"
     },
     "overrides": []
