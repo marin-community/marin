@@ -107,7 +107,7 @@ def convert_goedel(row: RawRow, context) -> TaskSpec | type:
     # never used as an oracle). The grader runs its own Lean kernel check.
     evidence = {"subset": subset, "source": "goedel-lean-rl-v2"}
 
-    contract = statement_contract(lean_code, require_passing_proof=False)
+    contract = statement_contract(lean_code, "", lean_code)
     if isinstance(contract, type):
         return contract
 
