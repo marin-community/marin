@@ -26,6 +26,21 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
     # 2026.11.27 release are Excluded with their typed reason, the clearing path and
     # their owner. They keep their measured receipts and return to intake when the
     # path clears.
+    "TaskTrove:GAIR__OpenSWE__openswe_oss": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_DEFECT,
+            evidence=_note(
+                "The taskspec-20261127a release's graders pass a no-op agent on a measured fraction of "
+                "tasks: the upstream eval_scripts apply the golden patch to /testbed before testing (the "
+                "corpus scan classified 1,975 of 21,137 rows as golden-applied graders, plus weak tests "
+                "that pass at base), so the graded state is the reference solution and an empty-diff agent "
+                "passes. Coordinator ruling 2026-11-27: a grader that passes a no-op agent is a broken "
+                "grader and graders fail closed. Clears when the repaired taskspec-20261127b release "
+                "admits on its full-corpus oracle qualification (only oracle-qualified rows); this claim "
+                "is removed at that admission."
+            ),
+        ),
+    ),
     "TaskTrove:laion__glaive-code-assistant-sandboxes-verified-v2": (
         ExclusionClaim(
             reason=ExclusionReason.GRADER_JUDGE_UNAVAILABLE,
