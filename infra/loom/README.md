@@ -159,15 +159,13 @@ and pull-request write access. The App key remains in `LOOM_DOTENV`; the profile
 does not store a GitHub token or grant Actions access. The GitHub Pulumi stack
 reads the mapping's profile from this stack's `githubFederationProfiles` output
 and publishes it as the workflow's `LOOM_FORK_FERRY_PROFILE` repository variable.
-The `agentic-lint` mapping authorizes the dedicated PR lint profile, and the
-`agent-prose-cleanup` mapping authorizes the low-effort `prose-cleanup` profile
+The `agent-prose-cleanup` mapping authorizes the low-effort `prose-cleanup` profile
 with a 16-session concurrency cap and a 40-turn budget, so description rewrites never
 consume the shared automation pool. The remaining GitHub agent workflows have
 individual federation mappings to the `github-automation` profile. Each mapping binds an exact workflow path on
 `main`; the shared profile does not make other workflows eligible. Deploy the
 Loom stack before the GitHub Pulumi stack so the latter can publish
-`LOOM_AGENTIC_LINT_PROFILE`, `LOOM_GITHUB_AUTOMATION_PROFILE`,
-`LOOM_PR_HOLISTIC_REVIEW_PROFILE`, and `LOOM_PROSE_CLEANUP_PROFILE`. Apply the
+`LOOM_GITHUB_AUTOMATION_PROFILE` and `LOOM_PROSE_CLEANUP_PROFILE`. Apply the
 Loom stack before the GitHub Pulumi stack whenever these federations or profile
 variables change.
 
@@ -306,28 +304,23 @@ these rules with the launch profiles and federations. Each rule lists its
 repository ID, actions, optional label filters, bot allowlist, and launch
 templates. A new rule can target a Loom profile directly. Loom checks that
 the current PR is open, ready for review, and from the same repository.
-Human authors need write access. The three review rules target federations
-to share run keys and the holistic channel with the Actions launchers.
+Human authors need write access. The three review rules reuse the identities
+of the retired workflows so earlier runs and the holistic review conversation
+remain addressable.
 
-1. Roll out this stack using a Loom build with pull request rule support.
-2. In the `loom-oa-dev` GitHub App settings, subscribe to **Pull request** events.
-   Confirm a delivery for an eligible PR receives HTTP 202 and that Loom records
-   the expected runs at the PR head and links them to the PR. During overlap,
-   verify both transports resolve to the same run for a shared key.
-3. Disable runner launches for the three workflows at the job condition:
+For the initial cutover, roll out and verify webhook delivery before the merge
+that removes the three Actions workflows.
 
-   ```sh
-   gh variable set LOOM_WEBHOOK_REVIEWS --repo marin-community/marin --body true
-   ```
-
-   Delete the variable to restore Actions launches. To disable webhook launches
-   as well, roll out an empty `githubPullRequestRules` list.
-4. With Actions launches disabled, verify the initial review launches, a
-   holistic review on a push, and agentic lint when its label is removed from
-   a head without an existing lint run. After those checks, the Loom rollout
-   operator removes the three Actions workflows, their overlap tests, and
-   the cutover variable. The rule targets keep the federation identities
-   used by existing runs.
+1. In the `loom-oa-dev` GitHub App settings, subscribe to **Pull request** events.
+2. From the reviewed Marin checkout, [roll out the Loom stack](#deploy) using a
+   Loom build with pull request rule support.
+3. Confirm that an eligible delivery receives HTTP 202 and Loom records the
+   expected runs at the PR head with a link to the PR. While Actions and the
+   webhook overlap, verify that both transports resolve to the same run.
+   Check a holistic re-review after a push and a lint launch after removing
+   the lint label from a head without a prior lint run.
+4. Merge the Marin change to retire the Actions workflows. Apply the GitHub
+   Pulumi stack afterward to remove the retired workflow profile variables.
 
 ## VM permissions
 

@@ -180,32 +180,6 @@ def test_fork_ferry_workflow_stays_within_loom_profile_capacity() -> None:
     assert len(units) <= max_concurrent
 
 
-def test_loom_pr_review_launcher_starts_one_bounded_review_session() -> None:
-    workflow_path = ROOT.parent.parent / ".github/workflows/ops-loom-review.yaml"
-    workflow = yaml.safe_load(workflow_path.read_text())
-    stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())
-    trigger = workflow.get("on", workflow.get(True))
-    job = workflow["jobs"]["review"]
-
-    assert set(trigger) == {"pull_request_target"}
-    assert job["permissions"] == {"contents": "read", "id-token": "write"}
-    checkout, author, launch = job["steps"]
-    assert checkout["uses"].startswith("actions/checkout@")
-    assert checkout["with"]["ref"] == "main"
-    assert set(checkout["with"]["sparse-checkout"].split()) == {
-        ".github/actions/launch-loom-run",
-        ".github/actions/check-write-access",
-    }
-    assert author["uses"] == "./.github/actions/check-write-access"
-    assert launch["if"] == "steps.author.outputs.allowed == 'true'"
-    assert launch["uses"] == "./.github/actions/launch-loom-run"
-    assert "head.repo.full_name == github.repository" in job["if"]
-    assert "strategy" not in job
-
-    review_profile = stack["config"]["marin-loom:profiles"]["pr-review"]
-    assert 0 < review_profile["idleArchiveSeconds"] <= 900
-
-
 def test_loom_launch_action_uses_registered_automation_endpoint() -> None:
     action_path = ROOT.parent.parent / ".github/actions/launch-loom-run/action.yaml"
     action = yaml.safe_load(action_path.read_text())
@@ -280,7 +254,7 @@ def test_deployment_manifest_preserves_unicode_profile_instructions() -> None:
     assert json.loads(manifest)["profiles"][0]["profile"]["instructions"] == "Prefix comments with 🤖"
 
 
-def test_deployed_pull_request_rules_share_run_keys_and_channels_with_actions(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_deployed_pull_request_rules_preserve_review_run_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())["config"]
     monkeypatch.setenv(
         "PULUMI_CONFIG",
@@ -290,29 +264,16 @@ def test_deployed_pull_request_rules_share_run_keys_and_channels_with_actions(mo
     config = DeploymentConfig.from_pulumi()
     manifest = json.loads(_deployment_manifest(config, _deployment_profiles(config.profiles), []))
     rules = json.loads(manifest["settings"]["github.pull_request_rules"])
-    workflow_paths = {
-        federation["name"]: federation["workflow_ref"].split("/", 2)[2].split("@", 1)[0]
-        for federation in manifest["federations"]
+    review_runs = {
+        rule["name"]: (rule["target"]["federation"], rule["run"]["idempotency_key"], rule["run"].get("channel"))
+        for rule in rules
     }
-    assert {rule["name"] for rule in rules} == {rule["name"] for rule in stack["marin-loom:githubPullRequestRules"]}
-    for rule in rules:
-        federation = rule["target"].get("federation")
-        if federation is None:
-            continue
-        workflow = yaml.safe_load((ROOT.parent.parent / workflow_paths[federation]).read_text())
-        launch = next(
-            step["with"]
-            for job in workflow["jobs"].values()
-            for step in job["steps"]
-            if step.get("uses") == "./.github/actions/launch-loom-run"
-        )
-        for field, action_field in (("idempotency_key", "idempotency-key"), ("channel", "channel")):
-            template = rule["run"].get(field)
-            if template is not None:
-                template = template.replace("{number}", "${{ github.event.pull_request.number }}").replace(
-                    "{head}", "${{ github.event.pull_request.head.sha }}"
-                )
-            assert template == launch.get(action_field), (rule["name"], field)
+
+    assert review_runs == {
+        "pr-review": ("pr-review", "pr-review:{number}", None),
+        "pr-holistic-review": ("pr-holistic-review", "pr-holistic:{number}:{head}", "pr-holistic:{number}"),
+        "agentic-lint": ("agentic-lint", "agentic-lint:{number}:{head}", None),
+    }
 
 
 def test_profile_instructions_reject_ambiguous_or_external_sources() -> None:
