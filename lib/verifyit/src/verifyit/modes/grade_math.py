@@ -6,8 +6,8 @@ r"""Grade mathematical answers, either symbolically or as a number with toleranc
 The default anchored profile takes the last ``\boxed{}`` expression, or the last non-empty line when the output has
 none. References parse as a whole LaTeX expression after removing a multiple-choice label, if present.
 Labelled references accept the matching label or value, and a reply that gives both must match both.
-When a choice value cannot be compared symbolically, the grader compares its text after removing
-outer math delimiters and a trailing period.
+When the reference's choice value has no defined symbolic parse, the grader compares its text
+after removing outer math delimiters and a trailing period.
 Candidates first use anchored LaTeX (``$...$``), then math-verify's own anchors (``the answer is ...``)
 if that yields nothing. Other profiles retain raw source extraction or require a boxed expression; their
 parser options remain task-controlled.
@@ -261,6 +261,11 @@ def _is_undefined(value: Any) -> bool:
     return isinstance(value, Basic) and value.has(S.NaN, S.ComplexInfinity)
 
 
+def _check_defined_reference(value: Any) -> None:
+    if _is_undefined(value):
+        raise InvalidTask(f"the reference parses to an undefined value: {value}")
+
+
 def _verify(expected: Any, candidate: Any, allow_set_relation_comp: bool = False) -> bool:
     """Whether any expected parse equals any candidate parse."""
     return any(
@@ -293,8 +298,7 @@ def _verify_pair(gold: Any, target: Any, allow_set_relation_comp: bool) -> bool:
         if not (isinstance(gold, Ne) and isinstance(target, Ne)):
             return False
         gold, target = Eq(gold.lhs, gold.rhs, evaluate=False), Eq(target.lhs, target.rhs, evaluate=False)
-    if _is_undefined(gold):
-        raise InvalidTask(f"the reference parses to an undefined value: {gold}")
+    _check_defined_reference(gold)
     if _is_undefined(target):
         # math-verify refuses to compare nan or zoo; a reference that is defined
         # cannot equal it.
@@ -641,8 +645,7 @@ def _parse_anchored_reference(spec: MathSpec, reference: str) -> list[tuple[list
             if not _is_expression(parsed):
                 raise InvalidTask(f"math-verify cannot parse expected {spec.expected!r}")
             for value in parsed:
-                if _is_undefined(value):
-                    raise InvalidTask(f"the reference parses to an undefined value: {value}")
+                _check_defined_reference(value)
     return references
 
 
@@ -651,18 +654,18 @@ def _grade_math_choice(spec: MathSpec, candidate: str, choice: tuple[str, str]) 
     try:
         references = _parse_anchored_reference(spec, reference)
     except InvalidTask:
-        # A single choice label still identifies an option with a prose or undefined value.
+        # The source label still identifies the option when the parser rejects its value.
         references = None
 
-    answer = strip_math_delimiters(_CHOICE_ANSWER_PREFIX.sub("", candidate.strip()).removesuffix("."))
+    answer = _choice_value_text(_CHOICE_ANSWER_PREFIX.sub("", candidate.strip()))
     selection = _split_choice(answer, _CHOICE_CANDIDATE)
     if selection:
         selected_label, answer = selection
         if selected_label != label or not answer:
             return scored(float(selected_label == label), extracted=candidate, expected=spec.expected)
+        answer = _choice_value_text(answer)
     if references is None:
-        value = _choice_value_text(answer)
-        match = bool(value) and value == reference
+        match = bool(answer) and answer == reference
         return scored(float(match), extracted=candidate, expected=spec.expected)
     return _grade_parsed_math(spec, answer, references, extracted=candidate)
 

@@ -107,7 +107,7 @@ def test_math_partial_reference_is_rejected_during_conversion(answer):
     assert (converted.kind, converted.reason) == (DEFECT, "invalid_reference")
 
 
-def test_math_choice_with_undefined_value_converts_and_grades_without_symbolic_comparison():
+def test_math_choice_with_clock_time_accepts_the_label_and_literal_value():
     answer = r"\textbf{(C)}\ 8:00\text{ p.m.}"
     task = math_answer_task(ROW, prompt="What time is it?", answer=answer)
 
