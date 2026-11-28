@@ -24,12 +24,9 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from pydantic import ValidationError
-from rigging.filesystem.storage_path import StoragePath
-
 from finestore.rl.curation import (
-    ActorCensusInput,
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
+    ActorCensusInput,
     DaytonaMeasurement,
     DaytonaUnsafeReason,
     GradingEnvironmentEvidence,
@@ -37,6 +34,9 @@ from finestore.rl.curation import (
     IntegrityContractGroup,
     IntegrityContractSummary,
 )
+from pydantic import ValidationError
+from rigging.filesystem.storage_path import StoragePath
+
 from taskcompendium.grading_environment import (
     assess_grading_environment,
     count_grading_environment,
@@ -65,13 +65,14 @@ CONTRACTS_JSON = "integrity-contracts.json"
 
 @dataclass(frozen=True)
 class TaskEnvelope:
-    """One converted task document, as the engine measures it."""
+    """One converted task document with its validated spec, as the engine measures it."""
 
     task_id: str
     task: dict[str, Any]
+    spec: TaskSpec | None
 
 
-@dataclass(frozen=True)
+@dataclass
 class RoleOutcome:
     """One role's measured machine demand on one backend."""
 
@@ -317,15 +318,16 @@ def measure_population(
         task_id, task_json = row["task_id"], row["task_json"]
         digests.append((task_id, task_json))
         task = json.loads(task_json)
-        envelopes.append(TaskEnvelope(task_id, task))
         try:
             spec = TaskSpec.model_validate(task)
         except ValidationError as error:
             unassessable[f"{type(error).__name__}: {error}"] += 1
-            continue
-        assessment = assess_grading_environment(spec)
-        contracts.observe(task, required_shared=assessment.required.value == "shared")
-        count_grading_environment(grading_counts, assessment.model_dump(mode="json"))
+            spec = None
+        else:
+            assessment = assess_grading_environment(spec)
+            contracts.observe(task, required_shared=assessment.required.value == "shared")
+            count_grading_environment(grading_counts, assessment.model_dump(mode="json"))
+        envelopes.append(TaskEnvelope(task_id, task, spec))
     if unassessable:
         logger.warning("%s: %d tasks are unassessable for the grading census", source_name, sum(unassessable.values()))
 
@@ -339,22 +341,25 @@ def measure_population(
         f"actor on Daytona, package-lock grader on LOCAL; snapshot identity through the production "
         f"naming path; no provider calls; recipe revision {converter_revision}"
     )
-    return CensusEvidence(
-        input=CensusInput(
-            dataset_id=dataset_id,
-            dataset_revision=dataset_revision,
-            converter_version=converter_revision,
-            converter_revision=converter_revision,
-            measured_tasks=measurement.converted,
-            task_specs_sha256=digest,
-            evidence_url=evidence_url,
+    return (
+        CensusEvidence(
+            input=CensusInput(
+                dataset_id=dataset_id,
+                dataset_revision=dataset_revision,
+                converter_version=converter_revision,
+                converter_revision=converter_revision,
+                measured_tasks=measurement.converted,
+                task_specs_sha256=digest,
+                evidence_url=evidence_url,
+            ),
+            measurement=_daytona_measurement(measurement, dataset_id, dataset_revision, basis),
+            grading_environment=GradingEnvironmentEvidence(
+                **grading_environment_census(grading_counts),
+                missing_artifact_counts={},
+                evidence_url=evidence_url,
+            ),
+            integrity_contracts=contract_summary(contracts, evidence_url, dataset_id, dataset_revision, digest),
+            rejections=dict(rejections),
         ),
-        measurement=_daytona_measurement(measurement, dataset_id, dataset_revision, basis),
-        grading_environment=GradingEnvironmentEvidence(
-            **grading_environment_census(grading_counts),
-            missing_artifact_counts={},
-            evidence_url=evidence_url,
-        ),
-        integrity_contracts=contract_summary(contracts, evidence_url, dataset_id, dataset_revision, digest),
-        rejections=dict(rejections),
-    ), contracts
+        contracts,
+    )

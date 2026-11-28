@@ -9,9 +9,9 @@ from typing import Any
 
 import pyarrow.parquet as pq
 import pytest
+from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT, DaytonaUnsafeReason
 from zephyr.context import ZephyrContext
 
-from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT, DaytonaUnsafeReason
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.census import (
     EnvelopeMeasurement,

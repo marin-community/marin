@@ -81,6 +81,7 @@ from zephyr.runners import SubprocessRunner
 
 from experiments.post_training.glm import GLM_REQUEST_ATTEMPTS, GLM_REQUEST_TIMEOUT, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
+from experiments.post_training.task_curation.census_engine import DaytonaCensusEngine
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.environment import Environment, Placement, placement
 from experiments.post_training.task_curation.harbor_hub import REGISTRY_HOST, acquire_release
@@ -464,6 +465,7 @@ def _pipeline_config(
         filter_policy=FilterPolicy(),
         normalized_shards=normalized_shards,
         machines=machines,
+        census=DaytonaCensusEngine(),
     )
 
 
@@ -550,9 +552,14 @@ def _pipeline_result(result: ConversionResult | SourcePipelineResult) -> Pipelin
     if any(phase["phase"] == "verification" for phase in telemetry["phases"]):
         stages.append("verify")
     stages.append("final")
+    if manifest.get("census") is not None:
+        stages.append("census")
+    outputs = {"normalize": result.normalize_path, "final": result.final_path}
+    if result.census_path is not None:
+        outputs["census"] = result.census_path
     return PipelineResult(
         result.status,
-        {"normalize": result.normalize_path, "final": result.final_path},
+        outputs,
         {
             "download": result.download_path,
             "review": result.review_path,

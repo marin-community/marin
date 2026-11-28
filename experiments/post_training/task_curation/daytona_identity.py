@@ -148,7 +148,7 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, LoweredSpec]]) -> S
         mapping_errors: list[str] = []
         execution_errors: list[str] = []
         for role, declared, shape in slots:
-            measured = _declared_identity(role, declared, shape, factory)
+            measured = declared_identity(role, declared, shape, factory)
             if measured.name is not None:
                 sizes[measured.name] += 1
             if measured.mapping_error is not None:
@@ -218,11 +218,13 @@ def declared_machine(
     )
 
 
-def _declared_identity(
+def declared_identity(
     role: str,
     declared: EnvironmentRequirements | None,
     shape: MachineShape | None,
     factory: DaytonaMachineFactory,
+    *,
+    network: NetworkPolicy = NetworkPolicy.ALLOW,
 ) -> _DeclaredIdentity:
     """Measure one declared agent or grader machine through the production identity."""
     if declared is None or shape is None:
@@ -232,7 +234,7 @@ def _declared_identity(
             machine = declared_machine(
                 declared,
                 Path(tmp),
-                network=NetworkPolicy.ALLOW,
+                network=network,
                 cpus=shape.cpus,
                 memory_mb=shape.memory_mb,
                 storage_mb=shape.storage_mb,
