@@ -113,6 +113,7 @@ def runtime_config(
         pi_thinking_format=pi_thinking_format(model),
         mini_swe_model_format=mini_swe_model_format(model),
         terminus_interleaved_thinking=terminus_interleaved_thinking(model),
+        chat_template=model.serve.chat_template,
         concurrency=settings.concurrency,
         source_limit=settings.source_limit,
         seed=settings.seed,
