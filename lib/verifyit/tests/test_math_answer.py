@@ -54,6 +54,33 @@ def test_math_scalar_answers_are_compared_symbolically(tmp_path, expected, text,
     assert grade_math.grade(MathSpec(expected=expected), tmp_path, tmp_path).reward == reward
 
 
+@pytest.mark.parametrize(
+    "expected,text,reward",
+    [
+        (r"\sqrt{2}", r"The answer is \sqrt{2}.", 1.0),
+        (r"\frac{\pi}{4}", r"After simplifying, the result equals \frac{\pi}{4}.", 1.0),
+        ("(2,3)", "That gives the coordinates. Answer: (2,3).", 1.0),
+        ("C", "Answer: C", 1.0),
+        ("C", "C.", 1.0),
+        (r"\$5", r"The answer is \$5.", 1.0),
+        ("0.25", r"The answer is $\dfrac{1}{4}$.", 1.0),
+        ("0.2", "The answer is 20%.", 1.0),
+        ("20", "The answer is 20%.", 0.0),
+        ("3.14", "The answer is 3.14.", 1.0),
+        ("6", "The answer is 3!.", 1.0),
+        ("2", r"The answer is 2\sqrt{3}.", 0.0),
+        ("-8", "The answer is -8i.", 0.0),
+        ("2", "The answer is 2 or 3.", 0.0),
+        ("2", "Answer: $2$ or $3$.", 0.0),
+        ("2", "I tried 2 but could not solve it.", 0.0),
+        ("2", "First I calculated 2.\nThe answer is ...", 0.0),
+    ],
+)
+def test_unboxed_math_grades_the_whole_final_answer(expected, text, reward):
+    result = grade_math.grade_math_text_candidate(MathSpec(expected=expected), text)
+    assert (result.status, result.reward) == (Status.SCORED, reward)
+
+
 @pytest.mark.parametrize("power", [(19, 9), (17, 6), (5, 4)])
 def test_math_positive_symbols_accept_equivalent_ratio_powers(power):
     numerator, denominator = power
@@ -382,7 +409,7 @@ def test_parser_failure_cannot_trigger_fallback_or_positive_reward(monkeypatch, 
     monkeypatch.setattr(math_verify, "parse", parser_failure)
     spec_path = tmp_path / "verifier.toml"
     spec_path.write_text(f'mode="math"\nexpected="2"\nprofile="{profile}"\n')
-    _answer(tmp_path, "2")
+    _answer(tmp_path, r"\boxed{2}")
     result = run(spec_path, tmp_path)
     assert (result.status, result.reward) == (Status.INFRA_ERROR, 0.0)
 
@@ -391,7 +418,7 @@ def test_parser_failure_cannot_trigger_fallback_or_positive_reward(monkeypatch, 
 def test_backend_timeout_removes_prior_positive_reward(monkeypatch, tmp_path, operation):
     spec_path = tmp_path / "verifier.toml"
     spec_path.write_text('mode="math"\nexpected="2"\n')
-    _answer(tmp_path, "2")
+    _answer(tmp_path, "The answer is 1+1.")
     logs = tmp_path / "logs"
     positive = run(spec_path, tmp_path)
     assert (positive.status, positive.reward) == (Status.SCORED, 1.0)
@@ -400,7 +427,17 @@ def test_backend_timeout_removes_prior_positive_reward(monkeypatch, tmp_path, op
     def expired(*args, **kwargs):
         raise TimeoutException("backend deadline exhausted")
 
-    monkeypatch.setattr(math_verify, operation, expired)
+    if operation == "parse":
+        original_parse = latex2sympy2_extended.latex2sympy
+
+        def candidate_deadline(text, **kwargs):
+            if text == "1+1":
+                raise TimeoutException("candidate deadline exhausted")
+            return original_parse(text, **kwargs)
+
+        monkeypatch.setattr(latex2sympy2_extended, "latex2sympy", candidate_deadline)
+    else:
+        monkeypatch.setattr(math_verify, "verify", expired)
     result = run(spec_path, tmp_path)
     assert (result.status, result.reward) == (Status.INFRA_ERROR, 0.0)
     assert result.detail["code"] == grade_math.MATH_VERIFIER_DEADLINE
