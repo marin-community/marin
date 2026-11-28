@@ -268,7 +268,7 @@ def simple_requests(sample: Sample) -> list[SliceRequest]:
             "stacked_blocks/stacked/sconv_attn/weight",
             "stacked_blocks/stacked/sconv_mlp/weight",
         ):
-            add(name, "attention_conv_gate", "conv_gate", layer=layer, slices=(layer,), hf_slices=(layer,))
+            add(name, "attention_conv_gate", "conv_gate", layer=layer, slices=(layer,), hf_slices=())
     for start, width in sample.embed_row_bands:
         add(
             "token_embed",
@@ -346,9 +346,15 @@ class HFSide:
         self._hf_cache_bytes += arr.nbytes
 
     def _hf_name(self, tensor: str, layer: int | None) -> str:
-        template, _ = HF_MAP[tensor]
+        template_key = tensor
+        for n in ("0", "1"):
+            template_key = template_key.replace(f"shared/{n}/", "shared/{N}/")
+        template, _ = HF_MAP[template_key]
         name = template.replace("{L}", str(layer if layer is not None else -1))
-        name = name.replace("{N}", "0")
+        index = "0"
+        if "/shared/1/" in tensor:
+            index = "1"
+        name = name.replace("{N}", index)
         return name
 
     def _expected_stacked_shape(self, tensor: str) -> tuple[int, ...] | None:
@@ -358,12 +364,16 @@ class HFSide:
         return None
 
     def _read_one(
-        self, tensor: str, layer: int | None, hf_slices, expected=None, expert: int | None = None
+        self, tensor: str, layer: int | None, lev_slices, expected=None, expert: int | None = None
     ) -> np.ndarray:
         _, transpose = HF_MAP[tensor]
         name = self._hf_name(tensor, layer)
         if expert is not None:
             name = name.replace("{E}", str(expert))
+        # ``lev_slices`` are Levanter-orientation per-layer slices; the HF tensor
+        # keeps the transposed orientation, so index it with the reversed tuple
+        # and transpose the result back.
+        hf_slices = tuple(reversed(lev_slices)) if transpose else tuple(lev_slices)
         key = (name, hf_slices)
         if key not in self._hf_cache:
             self._cache_put(key, self.reader.read_f32(name, hf_slices))
@@ -371,10 +381,10 @@ class HFSide:
         if expected is None and layer is not None:
             stacked = self._expected_stacked_shape(tensor)
             if stacked is not None and len(stacked) > 1:
-                # Narrow the full per-layer expectation to the requested HF slice.
+                # Narrow the full per-layer expectation to the requested slice.
                 narrowed = []
                 for dim, size in enumerate(stacked[1:]):
-                    spec = hf_slices[dim] if dim < len(hf_slices) else slice(None)
+                    spec = lev_slices[dim] if dim < len(lev_slices) else slice(None)
                     if isinstance(spec, int):
                         narrowed.append(1)
                     else:
@@ -401,11 +411,12 @@ class HFSide:
     def read(self, req: SliceRequest) -> np.ndarray:
         tensor = req.tensor
         stacked = self._expected_stacked_shape(tensor)
+        per_layer_slices = tuple(s for s in req.slices if not isinstance(s, int)) or ()
         if req.layer is None and stacked is not None and len(stacked) > 1 and stacked[0] == 48:
             # Stacked tensor read whole: concatenate the per-layer HF tensors.
-            per_layer = [self._read_one(tensor, layer, req.hf_slices) for layer in range(48)]
+            per_layer = [self._read_one(tensor, layer, per_layer_slices) for layer in range(48)]
             return np.ascontiguousarray(np.stack(per_layer))
-        return self._read_one(tensor, req.layer, req.hf_slices)
+        return self._read_one(tensor, req.layer, per_layer_slices)
 
     def read_experts(self, req: ExpertRequest) -> dict[tuple[int, int], np.ndarray]:
         d2, w2, d3, w3 = self.sample.expert_area
