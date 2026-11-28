@@ -70,14 +70,20 @@ handover, validate the catalog/FACET gate, or stop legacy jobs themselves.
 
 ## Grader runtime repairs
 
-TaskCompendium stages the producer's Verifyit source independently of the task's
-frozen environment and records `verifyit_runtime_sha256` in grading diagnostics.
-A released script can therefore require a newer scorer than an older controller
-bundle provides. For a missing scorer or constraint, compare the task's declared
-grader script and parameters against the maintained Verifyit implementation
-before retrying.
-Preserve the original unscored attempt and its runtime digest; deploy repaired
-source through a new controller bundle and keep the source panel pinned.
+Native Verifyit graders stage the producer's source independently of the task's
+frozen environment and record `verifyit_runtime_sha256` in grading diagnostics.
+Script graders that import Verifyit from a composed image use the image's baked
+copy instead. For a missing scorer or constraint, compare the task's declared
+grader script and parameters against the maintained Verifyit implementation.
+Preserve the original unscored attempt and its runtime or image identity.
+
+For composed images, a source repair changes the environment identity. Build the
+new identity with the maintained `task_curation.images` builder before controller
+cutover. For this TPU campaign, use an Iris CPU job in us-central2 and stage large
+inputs in us-central2 GCS. Verify the published image digest and the baked scorer
+module; a controller source update alone cannot replace that copy. Keep the
+frozen source revision and sampled task set unchanged, and preserve both runtime
+or image versions in attempt evidence.
 
 IFEval's harness language check requires the grader image's optional `langdetect`
 package. Resolve that dependency before entering the per-candidate check loop,
