@@ -84,6 +84,7 @@ CLAIMED_MARKER = "SHELLBOX_CLAIMED"
 CLIPPED_OUTPUT_SUFFIX = ".limited"
 PROVIDER_DIAGNOSTIC_CHAR_LIMIT = 4096
 DISK_FULL_MESSAGE = os.strerror(errno.ENOSPC)
+MISSING_CONTAINER_IP_MESSAGE = "no IP address found"
 # The exit trap records the command's status, so a request that lost its connection can still read it.
 RUN_COMMAND = (
     'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; '
@@ -240,6 +241,21 @@ class DaytonaNetworkPolicy:
         if self.value is not None:
             raise ValueError(f"{self.mode} does not accept an allow list")
         return {"network_block_all": mode == DaytonaNetworkMode.BLOCK_ALL}
+
+
+def _toolbox_rejection(error: DaytonaError) -> bool:
+    """Whether a started sandbox's toolbox refused the request itself, for example for a path that does not exist,
+    in its JSON error format."""
+    # The SDK reports a failed file transfer's HTTP response without its status code.
+    if not isinstance(error, DaytonaValidationError | DaytonaNotFoundError) or error.status_code is None:
+        return False
+    # Daytona's proxy answers 400 when it cannot resolve a started sandbox's container IP.
+    if MISSING_CONTAINER_IP_MESSAGE in str(error):
+        return False
+    content_type = next(
+        (str(value) for name, value in (error.headers or {}).items() if name.lower() == "content-type"), ""
+    )
+    return content_type.partition(";")[0].strip().lower() == "application/json"
 
 
 class DaytonaOutputUnavailable(ConnectionError):
@@ -476,9 +492,7 @@ class DaytonaMachine:
                 ) from error
             if self.sandbox.state != SandboxState.STARTED:
                 raise MachineTerminated(f"Daytona sandbox {self.sandbox.id} is {self.sandbox.state}: {error}") from error
-            # The toolbox rejected this request, for example for a path that does not exist. The SDK reports a
-            # failed file transfer's HTTP response without its status code.
-            if isinstance(error, DaytonaValidationError | DaytonaNotFoundError) and error.status_code is not None:
+            if _toolbox_rejection(error):
                 raise
             # Any other answer, such as a failed authentication or a page from a server that a task's network
             # changes put in the toolbox's place, means the toolbox cannot serve the sandbox.
