@@ -167,7 +167,6 @@ def sources() -> list[RlDataSource]:
                         GOEDEL_REVISION,
                         GOEDEL_FILES,
                         SourceFormat.PARQUET,
-                        select=lambda data, s=subset: data.get("subset") == s.subset,
                     ),
                     convert=convert_goedel,
                     version="1",
