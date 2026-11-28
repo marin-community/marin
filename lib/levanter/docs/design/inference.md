@@ -142,3 +142,9 @@ the cache clears every slot.
 The current history describes the processed prefix at one position. Reusing KV
 pages for an earlier prefix requires restoring the convolution history at that
 position, or recomputing it.
+
+## Strict Snowball policy replay
+
+Call `SnowballConfig.with_zero_kl_replay()` on the same model configuration for serving and learning. The qualified TPUv4 fixture uses a four-device explicit data mesh, four sequence slots of 256 positions, eight 128-token pages, FP32 weights and activations, BF16 serving KV, and highest native matmul precision. Set `InferenceEngineConfig.logprob_mode` to `LogprobMode.POLICY` and capture the served expert IDs for replay.
+
+With the same model snapshot and token history, the v4-8 regression requires each sampled-token log probability to match bitwise. This yields zero KL between the serving and replayed policies at that snapshot. The objective's KL penalty coefficient remains a separate setting. The 67B 64K serving configuration uses a different precision profile.
