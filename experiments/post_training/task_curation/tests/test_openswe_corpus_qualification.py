@@ -26,13 +26,18 @@ def control(control: str, reward: int) -> ControlRecord:
 
 
 def test_qualification_population_drops_unrepairable_and_sample_records():
-    clean = grader_row(instance_id="acme__clean-1", eval_script='#!/bin/bash\ncd /testbed\npytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n')
-    repairable = grader_row(instance_id="acme__golden-2", eval_script=(
-        "#!/bin/bash\ncd /testbed\n"
-        f"git apply -v --allow-empty - <<'EOF_114329324912'\n{GOLDEN}EOF_114329324912\n"
-        f"git apply -v --allow-empty - <<'EOF_114329324912'\n{TEST_PATCH}EOF_114329324912\n"
-        'pytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n'
-    ))
+    clean = grader_row(
+        instance_id="acme__clean-1", eval_script='#!/bin/bash\ncd /testbed\npytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n'
+    )
+    repairable = grader_row(
+        instance_id="acme__golden-2",
+        eval_script=(
+            "#!/bin/bash\ncd /testbed\n"
+            f"git apply -v --allow-empty - <<'EOF_114329324912'\n{GOLDEN}EOF_114329324912\n"
+            f"git apply -v --allow-empty - <<'EOF_114329324912'\n{TEST_PATCH}EOF_114329324912\n"
+            'pytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n'
+        ),
+    )
     stuck = grader_row(
         instance_id="acme__stuck-3",
         eval_script=(
@@ -44,11 +49,14 @@ def test_qualification_population_drops_unrepairable_and_sample_records():
             'pytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n'
         ),
     )
-    excluded = grader_row(instance_id="acme__gated-4", eval_script='#!/bin/bash\ncd /testbed\npytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n')
+    excluded = grader_row(
+        instance_id="acme__gated-4", eval_script='#!/bin/bash\ncd /testbed\npytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n'
+    )
     population, counts = corpus_qualification.qualification_population(
         [clean, repairable, stuck, excluded],
         frozenset({"acme__gated-4", "acme__sampled-5"}),
     )
+    assert counts["converter_unrepairable"] == 1
     assert [row.instance_id for row in population] == ["acme__clean-1", "acme__golden-2"]
     assert counts == {"scanned": 4, "sample_records": 1, "converter_unrepairable": 1, "population": 2}
 
@@ -84,12 +92,15 @@ def test_decide_condensed_fails_closed_on_every_mismatch():
 
 
 def test_condensed_context_renders_the_repaired_package(tmp_path):
-    row = grader_row(instance_id="acme__golden-1", eval_script=(
-        "#!/bin/bash\ncd /testbed\n"
-        f"git apply -v --allow-empty - <<'EOF_114329324912'\n{GOLDEN}EOF_114329324912\n"
-        f"git apply -v --allow-empty - <<'EOF_114329324912'\n{TEST_PATCH}EOF_114329324912\n"
-        'pytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n'
-    ))
+    row = grader_row(
+        instance_id="acme__golden-1",
+        eval_script=(
+            "#!/bin/bash\ncd /testbed\n"
+            f"git apply -v --allow-empty - <<'EOF_114329324912'\n{GOLDEN}EOF_114329324912\n"
+            f"git apply -v --allow-empty - <<'EOF_114329324912'\n{TEST_PATCH}EOF_114329324912\n"
+            'pytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n'
+        ),
+    )
     context, workdir, staged = corpus_qualification.condensed_context(row, CONDENSED, tmp_path)
     emitted = (staged / "tests_eval_script.sh").read_text()
     assert GOLDEN not in emitted
@@ -105,25 +116,29 @@ def test_stub_run_qualifies_and_excludes_end_to_end(tmp_path, monkeypatch):
     report lands in the gate's shapes. A forged-golden row the classifier
     already excluded never reaches the stub."""
     rows = [
-        grader_row(instance_id="acme__golden-1", eval_script=(
-            "#!/bin/bash\ncd /testbed\n"
-            f"git apply -v --allow-empty - <<'EOF_114329324912'\n{GOLDEN}EOF_114329324912\n"
-            f"git apply -v --allow-empty - <<'EOF_114329324912'\n{TEST_PATCH}EOF_114329324912\n"
-            'pytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n'
-        )),
-        grader_row(instance_id="acme__golden-2", eval_script=(
-            "#!/bin/bash\ncd /testbed\n"
-            f"git apply -v --allow-empty - <<'EOF_114329324912'\n{GOLDEN}EOF_114329324912\n"
-            f"git apply -v --allow-empty - <<'EOF_114329324912'\n{TEST_PATCH}EOF_114329324912\n"
-            'pytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n'
-        )),
+        grader_row(
+            instance_id="acme__golden-1",
+            eval_script=(
+                "#!/bin/bash\ncd /testbed\n"
+                f"git apply -v --allow-empty - <<'EOF_114329324912'\n{GOLDEN}EOF_114329324912\n"
+                f"git apply -v --allow-empty - <<'EOF_114329324912'\n{TEST_PATCH}EOF_114329324912\n"
+                'pytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n'
+            ),
+        ),
+        grader_row(
+            instance_id="acme__golden-2",
+            eval_script=(
+                "#!/bin/bash\ncd /testbed\n"
+                f"git apply -v --allow-empty - <<'EOF_114329324912'\n{GOLDEN}EOF_114329324912\n"
+                f"git apply -v --allow-empty - <<'EOF_114329324912'\n{TEST_PATCH}EOF_114329324912\n"
+                'pytest -q\necho "OPENSWE_EXIT_CODE=$rc"\n'
+            ),
+        ),
     ]
     factory = corpus_qualification.StubMachineFactory()
-    population, counts = corpus_qualification.qualification_population(rows, frozenset())
+    population, _counts = corpus_qualification.qualification_population(rows, frozenset())
     shard = corpus_qualification.shard_population(population, 0, 1)
-    summary = asyncio.run(
-        corpus_qualification.run_shard(shard, CONDENSED, factory, report_dir=tmp_path, concurrency=2)
-    )
+    summary = asyncio.run(corpus_qualification.run_shard(shard, CONDENSED, factory, report_dir=tmp_path, concurrency=2))
     assert summary["sampled"] == 2
     assert summary["qualified"] == 2
     assert summary["state"] == "ok"
