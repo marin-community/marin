@@ -4,6 +4,7 @@
 """The task catalog: training and evaluation dataset declarations, keyed by name."""
 
 from dataclasses import replace
+from functools import lru_cache
 from pathlib import Path
 
 from finestore.rl.curation import OversightLevel
