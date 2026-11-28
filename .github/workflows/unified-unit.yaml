@@ -101,7 +101,11 @@ jobs:
         run: python3 scripts/rust_mode.py dev
 
       - env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          # Registry-pinned task_curation sources read the private atlas registry
+          # dataset at collection time; the default HF token lacks access there and
+          # GitHub answers with a masked 404, failing the whole leg. Use the
+          # dedicated registry token, as atlas-source-duplicates already does.
+          HF_TOKEN: ${{ secrets.ATLAS_REGISTRY_HF_TOKEN }}
         # pytest exits 5 when it collects no tests. The diff-based selector can hand a lane
         # only tests that its default marker filter deselects (integration, slow,
         # requires_cluster, ...) — e.g. a PR that touches just an integration test file —
