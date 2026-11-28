@@ -93,11 +93,21 @@ def test_required_backend_routes_actor_slots_off_daytona_and_off_the_snapshot_bu
         "grader": {"environment": {"docker_image": "actor@sha256:" + "a" * 64, "command_semantics": "linux_process"}},
     }
     measured = measure_envelopes([(task, {})])
-    assert measured.machine_slots == 1
+    assert measured.machine_slots == 0
     assert measured.roles["agent"]["local"]["machine_slots"] == 1
     assert "daytona" not in measured.roles["agent"]
     assert not measured.snapshot_sizes
     assert measured.execution_failure_tasks == 0
+    daytona_task = {
+        "id": "daytona-actor",
+        "environment_requirements": {
+            "docker_image": "actor@sha256:" + "a" * 64,
+            "command_semantics": "linux_process",
+        },
+        "grader": {"environment": None},
+    }
+    daytona_fit = measure_envelopes([(daytona_task, {})])
+    assert daytona_fit.machine_slots == 1
     routed = [{"id": f"routed-{index}", **task} for index in range(11)]
     off_budget = measure_envelopes((row, {}) for row in routed)
     assert set(daytona_unsafe_reasons(off_budget)) == set()

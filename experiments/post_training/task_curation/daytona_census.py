@@ -308,7 +308,9 @@ def measure_envelopes(documents: Iterable[tuple[dict, dict]]) -> EnvelopeCensus:
                 for _, detail in (*measurement.execution_failures, *measurement.failures)
             }
         )
-        machine_slots += runtime["task_machine"] is not None
+        machine_slots += (
+            runtime["task_machine"] is not None and (runtime["task_machine"].get("backend") or "daytona") == "daytona"
+        )
         sizes.update(measurement.sizes)
         failed_tasks += bool(measurement.execution_failures)
         failures.update(reason for _, reason in measurement.execution_failures)
