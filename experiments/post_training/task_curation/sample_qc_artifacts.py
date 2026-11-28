@@ -24,6 +24,7 @@ SAMPLE_REVIEWER_SHA256_BY_PAYLOAD_REVISION = {
 SAMPLE_REVIEWER_SHAS = {
     "v3": PINNED_REVIEWER_SHA256,
     "v4": PINNED_REVIEWER_V4_SHA256,
+    "v5": "2fb4ff7d1134d63db62b8a186fa2e841f284dca7dc60c38681a07c96c6333c64",
 }
 """The pinned reviewer identity per SAMPLE profile version."""
 
