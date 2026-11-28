@@ -697,6 +697,7 @@ def measure_pair(
         logger.warning("expert alignment failed for %s: %s", pair.id, error)
     side_a = side_a_probe
     side_b = side_b_probe if expert_remap is None else make_side(b_ckpt, sample, mapping_b, expert_remap)
+    alignment_note = "identity" if expert_remap is None else "remapped"
     lands_options = ("as-stored", "bf16")
 
     group_acc: dict[tuple[str, str], dict] = {}
@@ -720,6 +721,7 @@ def measure_pair(
                     "tensor": label,
                     "group": req_like.group,
                     "subgroup": req_like.subgroup,
+                    "expert_axis": alignment_note,
                     "layer": getattr(req_like, "layer", None),
                     "expert": getattr(req_like, "expert", None),
                     "elements": stats.elements,

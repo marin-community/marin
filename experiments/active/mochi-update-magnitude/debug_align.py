@@ -22,7 +22,6 @@ def emit(message: str) -> None:
     lines.append(message)
 
 
-
 a_ckpt = CHECKPOINTS["hero-base-393491"]
 b_ckpt = CHECKPOINTS["exp3-v5-native-2100"]
 side_a = measure.make_side(a_ckpt, SAMPLE, None)
