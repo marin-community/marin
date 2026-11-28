@@ -208,6 +208,8 @@ class EvaluationRunConfig(RunModel):
     """How mini-swe-agent formats the served model's history."""
     terminus_interleaved_thinking: bool = Field(default=False, exclude_if=lambda value: not value)
     """Whether Terminus keeps each reply's reasoning in the history it resends."""
+    chat_template: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    """The chat template the server renders with, when the model's catalog entry replaces the checkpoint's."""
     task_secrets: tuple[str, ...] = Field(default=(), exclude_if=lambda value: not value)
     """Worker variables that task machines may read through ``${NAME}`` templates; the run supplies their values."""
     task_evidence: TaskEvidenceSetting = TaskEvidence.EMBEDDED

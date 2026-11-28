@@ -159,6 +159,19 @@ def test_runs_take_terminus_reasoning_replay_from_the_models_catalog_entry(
     assert ("terminus_interleaved_thinking" in config.model_dump(mode="json")) is interleaved
 
 
+@pytest.mark.parametrize("serve", ["{}", "{chat_template: '{{ messages[0].content }}'}"])
+def test_runs_take_the_served_chat_template_from_the_models_catalog_entry(created, tmp_path, serve):
+    entry = tmp_path / "model.yaml"
+    entry.write_text(f"name: solver\nlocation: example/solver\nserve: {serve}\n")
+    model = replace(load_model_config(entry), revision="pinned", tokenizer_revision="tokenizer-pin")
+
+    config = runtime_config(model, CuratedSettings(), SESSION)
+
+    assert config.chat_template == model.serve.chat_template
+    # Runs of models served with their checkpoint's template keep their identity.
+    assert ("chat_template" in config.model_dump(mode="json")) is (model.serve.chat_template is not None)
+
+
 @pytest.mark.parametrize("backend", list(TaskMachineBackend))
 def test_agent_worker_runs_planned_task_machines_with_daytona_credentials_only_for_daytona(created, submitted, backend):
     model = replace(MODEL, serve=ServeConfig(max_model_len=SERVED_CONTEXT))

@@ -247,6 +247,9 @@ async def execute(
     configure_coreweave_s3()
     config = execution_config(config)
     tokenizer = load_tokenizer(config.model.tokenizer, revision=config.model.tokenizer_revision, trust_remote_code=False)
+    if config.chat_template is not None:
+        # Context admission renders prompts as the server does.
+        tokenizer.chat_template = config.chat_template
     prefix = tokenizer.bos_token_id if tokenizer.bos_token_id is not None else tokenizer.eos_token_id
     if prefix is None:
         raise ValueError("Likelihood scoring needs a tokenizer BOS or EOS prefix token")
