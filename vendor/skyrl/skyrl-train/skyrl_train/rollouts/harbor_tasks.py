@@ -152,6 +152,12 @@ class HarborTaskSettings:
             value *= self.timeout_multiplier
             return value if ceiling is None else min(value, ceiling)
 
+        def declared_deadline() -> float | None:
+            # The task's own declared agent deadline, honoring declared execution
+            # requirements: launch-time lowering must not drop a declared deadline to None.
+            requirements = spec.task.execution_requirements
+            return None if requirements is None else requirements.agent_timeout_sec
+
         limits = spec.limits.model_copy(
             update={
                 "max_turns": spec.limits.max_turns if self.max_turns is None else self.max_turns,
@@ -159,7 +165,8 @@ class HarborTaskSettings:
                     spec.limits.total_turn_timeout,
                     self.eval_timeout if phase == "eval" else self.agent_timeout,
                     self.max_agent_timeout,
-                ),
+                )
+                or declared_deadline(),
                 "verifier_timeout": timeout(
                     spec.limits.verifier_timeout,
                     self.verifier.override_timeout_sec,
