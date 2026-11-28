@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f5f5ef">
+    <title>Review queue · Marin</title>
+    <link rel="stylesheet" href="./style.css">
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <div class="brand"><span class="brand-mark" aria-hidden="true">M</span><span>MARIN <span class="brand-light">/ COLLABORATION</span></span></div>
+        <a class="repo-link" href="https://github.com/marin-community/marin/pulls" target="_blank" rel="noopener noreferrer">GitHub pull requests ↗</a>
+      </header>
+
+      <section class="intro" aria-labelledby="page-title">
+        <div class="intro-copy">
+          <h1 id="page-title">Review queue<span class="title-period">.</span></h1>
+          <p class="lede">See who is reviewing open PRs before asking for another.</p>
+        </div>
+        <div class="controls">
+          <div class="sync-status">
+            <span id="sync-count">Loading PRs…</span>
+            <progress id="sync-progress" value="0" max="1" aria-label="PR metadata synced" hidden></progress>
+            <span id="updated" class="updated" aria-live="polite"></span>
+          </div>
+          <button id="refresh" type="button">Refresh</button>
+        </div>
+      </section>
+
+      <section class="queue" aria-labelledby="queue-title">
+        <div class="section-heading">
+          <div><h2 id="queue-title">Reviewers</h2><p id="history-window" class="window-note"></p></div>
+          <div class="filters">
+            <label class="filter-label">Find or star a handle <input id="search" type="search" placeholder="Search reviewers" autocomplete="off"></label>
+            <label class="filter-label mobile-sort">Sort by
+              <select id="sort"></select>
+            </label>
+            <button class="mobile-sort" id="sort-direction" type="button" aria-label="Reverse sort order">↑</button>
+          </div>
+        </div>
+        <div id="favorite-suggestion" class="favorite-suggestion" hidden></div>
+        <div id="sort-headings" class="column-headings" role="group" aria-label="Sort reviewer rows"></div>
+        <div id="reviewers" class="reviewers" aria-live="polite"><p class="empty">Loading reviewer requests…</p></div>
+        <details class="data-note">
+          <summary>How these numbers are calculated</summary>
+          <p>Pending lines count additions plus deletions. A plus sign means some PR sizes are still loading. Multiple reviewers can receive the same PR.</p>
+          <p>Open PRs stay with their reviewers after a review is submitted. Avg response measures time from request to submission. Reviewer load sums additions and deletions once per PR reviewed in the displayed period.</p>
+          <p>In a reviewer's queue, badges show whether a PR needs its first review or received feedback or approval from someone else. Drafts, author replies, and bot activity are excluded.</p>
+          <p>Sync covers open PRs and all PRs updated in that period. Reviewer assignments, diff sizes, and review history fill in as PR details are synced.</p>
+        </details>
+      </section>
+
+      <section class="other-queues" aria-label="Other open pull requests">
+        <details id="team-section" hidden><summary>Team requests <span id="team-count">—</span></summary><div id="teams" class="other-list"></div></details>
+        <details id="unassigned-section"><summary>Open PRs without a known reviewer <span id="unassigned-count">—</span></summary><p class="data-note">Additional reviewers may appear as PR details are synced.</p><div id="unassigned" class="other-list"></div></details>
+      </section>
+
+      <footer>Source: GitHub. Marina shares the cached queue across viewers and fills in missing review data while the page is open.</footer>
+    </main>
+  </body>
+</html>
