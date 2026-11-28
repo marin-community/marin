@@ -9,7 +9,9 @@ members (unchanged public content), replaced slots, and members needing a fresh 
 """
 
 import json
+from pathlib import Path
 
+from finestore.rl.curation import ContentEvidenceReference
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
@@ -19,6 +21,7 @@ from experiments.post_training.task_curation.datasets.oracle_admitted_releases i
 )
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.review_carry_forward import (
+    earlier_panel_evidence,
     plan_review_carry_forward,
     population_identities,
 )
@@ -50,14 +53,26 @@ def main() -> None:
         current_population = SourceTextPopulation.raw_load(current_path)
         earlier_identities = population_identities(earlier_population)
         current_identities = population_identities(current_population)
+        pointer = json.loads(
+            Path(
+                "experiments/post_training/task_curation/datasets/oracle_admitted_release_receipts/part-000.json"
+            ).read_text()
+        )
+        earlier = earlier_panel_evidence(
+            receipt.sample,
+            ContentEvidenceReference(
+                uri=f"https://huggingface.co/datasets/{pointer['repo']}/tree/{pointer['revision']}/{pointer['path']}",
+                sha256=pointer["sha256"],
+            ),
+        )
         plan = plan_review_carry_forward(
             source_id,
-            receipt.sample,
+            earlier,
             earlier_population,
             current_population,
             earlier_identities,
             current_identities,
-            reviewer=None,
+            reviewer=receipt.sample.reviewer,
         )
         document = plan.model_dump(mode="json")
         summary = {
