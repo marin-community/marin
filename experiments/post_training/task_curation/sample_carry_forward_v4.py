@@ -9,6 +9,7 @@ members (unchanged public content), replaced slots, and members needing a fresh 
 """
 
 import json
+import os
 from pathlib import Path
 
 from finestore.rl.curation import ContentEvidenceReference
@@ -72,7 +73,7 @@ def main() -> None:
             current_population,
             earlier_identities,
             current_identities,
-            reviewer=receipt.sample.reviewer,
+            reviewer=receipt.sample.review.reviewer,
         )
         document = plan.model_dump(mode="json")
         summary = {
@@ -93,7 +94,13 @@ def main() -> None:
             "replaced_slots": document.get("replaced_slots", document.get("replaced", 0)),
             "fresh_reviews": len(document.get("fresh_review_members", document.get("fresh", []))),
         }
-        out = StoragePath(result_uri.rsplit("/", 1)[0] + f"/{source_id.split(':')[0].lower()}-sample-carry-plan.json")
+        slug = source_id.split(":")[0].lower()
+        scratch = os.environ.get("CARRY_OUTPUT_OVERRIDE")
+        out = StoragePath(
+            (scratch.rstrip("/") + f"/{slug}-sample-carry-plan.json")
+            if scratch
+            else result_uri.rsplit("/", 1)[0] + f"/{slug}-sample-carry-plan.json"
+        )
         out.write_text(json.dumps(document, indent=1, sort_keys=True) + "\n")
         print("CARRY-PLAN " + json.dumps(summary), flush=True)
 
