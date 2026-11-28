@@ -15,7 +15,7 @@ import yaml
 
 from iris.cluster.config import IrisClusterConfig, assert_no_inlined_secrets, config_to_dict
 from iris.cluster.platforms.gcp.worker_bootstrap import render_template
-from iris.cluster.runtime.docker import EPHEMERAL_PORT_RANGE
+from iris.cluster.runtime.docker import EPHEMERAL_PORT_RANGE, RESERVED_HOST_PORTS
 
 # Docker name the bootstrap script gives the controller container. The lifecycle
 # helpers in platforms/vm_lifecycle.py address the container by this name.
@@ -80,10 +80,10 @@ if command -v snap &> /dev/null; then
 fi
 export PATH="$PATH:/snap/bin"
 
-# Tune network stack for high-connection workloads (#3066). The ephemeral floor
-# stays above iris' fixed controller/worker RPC ports (10000/10001) so a
-# high-fan-out connection is never handed one of them.
+# Widen the ephemeral range for high-connection workloads (#3066) and keep
+# server ports out of automatic assignment.
 sudo sysctl -w net.ipv4.ip_local_port_range="{{ port_range }}"
+sudo sysctl -w net.ipv4.ip_local_reserved_ports="{{ reserved_ports }}"
 sudo sysctl -w net.ipv4.tcp_tw_reuse=1
 
 echo "[iris-controller] [3/5] Pulling image: {{ docker_image }}"
@@ -251,6 +251,7 @@ def build_controller_bootstrap_script(
         config_flag=config_flag,
         fresh_flag="--fresh" if fresh else "",
         port_range=EPHEMERAL_PORT_RANGE,
+        reserved_ports=",".join(RESERVED_HOST_PORTS),
     )
 
 

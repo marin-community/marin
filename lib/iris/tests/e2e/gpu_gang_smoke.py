@@ -83,10 +83,11 @@ from iris.cluster.platforms.k8s.rbac_manifests import (
 )
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.k8s.types import parse_k8s_cpu
-from iris.cluster.platforms.types import Labels, find_free_port
+from iris.cluster.platforms.types import Labels
 from iris.cluster.types import AcceleratorType, CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
 from iris.resources.state import JobState
 from iris.rpc import job_pb2
+from rigging.port_lease import lease_tcp_port
 from rigging.timing import Duration, ExponentialBackoff
 
 # install_kueue is a sibling ops script under lib/iris/scripts/ (not part of the
@@ -306,19 +307,18 @@ class ControllerTarget:
         # "localhost" resolves to the OTHER listener — the smoke then submits
         # its gang to that cluster. --address makes a genuine conflict fail
         # loudly instead.
-        if local_port == 0:
-            local_port = find_free_port()
-        self._tunnel = subprocess.Popen(
-            self._kc(
-                "port-forward", "--address", "127.0.0.1", "-n", self.namespace, f"svc/{svc}", f"{local_port}:{port}"
-            ),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        _wait_port("127.0.0.1", local_port, timeout=60)
-        url = f"http://127.0.0.1:{local_port}"
-        logger.info("controller tunnel open: %s", url)
-        return url
+        with lease_tcp_port(local_port) as local_port:
+            self._tunnel = subprocess.Popen(
+                self._kc(
+                    "port-forward", "--address", "127.0.0.1", "-n", self.namespace, f"svc/{svc}", f"{local_port}:{port}"
+                ),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            _wait_port("127.0.0.1", local_port, timeout=60)
+            url = f"http://127.0.0.1:{local_port}"
+            logger.info("controller tunnel open: %s", url)
+            return url
 
     def close_tunnel(self) -> None:
         if self._tunnel is not None:

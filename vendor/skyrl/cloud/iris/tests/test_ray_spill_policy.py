@@ -1,18 +1,17 @@
 import re
-import socket
 import sys
-from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
 from ray._private.parameter import RayParams
+from rigging.port_lease import DYNAMIC_TCP_PORTS, port_env_var
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from cloud.iris import task_runtime as runtime  # noqa: E402
-from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports  # noqa: E402
+from cloud.iris.ray_ports import RayPort, resolve_ray_ports  # noqa: E402
 from cloud.iris.ray_storage import (  # noqa: E402
     DEFAULT_RAY_SPILL_DIR,
     LocalRaySpillTarget,
@@ -21,50 +20,45 @@ from cloud.iris.ray_storage import (  # noqa: E402
     resolve_ray_spill_target,
 )
 
-pytestmark = pytest.mark.usefixtures("iris_ray_ports")
-
 
 @pytest.mark.parametrize("first_ports", [(12000, 12100), (0, 0)], ids=["worker", "kubernetes"])
 def test_concurrent_ray_heads_use_disjoint_ports(tmp_path, monkeypatch, first_ports):
     commands = []
     monkeypatch.setattr(runtime.subprocess, "run", lambda command, **_kwargs: commands.append(command))
     endpoints = []
-    with ExitStack() as listeners:
-        for first_port in first_ports:
-            requested = {port: first_port + index if first_port else 0 for index, port in enumerate(RayPort)}
-            for port, value in requested.items():
-                monkeypatch.setenv(f"IRIS_PORT_{port.value.upper()}", str(value))
-            resolve_ray_ports()
-            allocated = {port: allocated_ray_port(port) for port in RayPort}
-            if not first_port:
-                # Hold the real kernel-selected ports while resolving the next task.
-                for value in allocated.values():
-                    listener = listeners.enter_context(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
-                    listener.bind(("", value))
-            runtime.ray_start_head("127.0.0.1", LocalRaySpillTarget(str(tmp_path / str(first_port))))
-            flags = dict(argument.split("=", 1) for argument in commands[-1] if "=" in argument)
-            ports = {
-                "gcs_server_port": int(flags["--port"]),
-                "dashboard_port": int(flags["--dashboard-port"]),
-                "ray_client_server_port": int(flags["--ray-client-server-port"]),
-                "metrics_export_port": int(flags["--metrics-export-port"]),
-                "runtime_env_agent_port": int(flags["--runtime-env-agent-port"]),
-                "metrics_agent_port": int(flags["--dashboard-agent-grpc-port"]),
-                "dashboard_agent_listen_port": int(flags["--dashboard-agent-listen-port"]),
-                "node_manager_port": int(flags["--node-manager-port"]),
-                "object_manager_port": int(flags["--object-manager-port"]),
-            }
-            # Iris allocates in Ray's old default worker range. Validate the actual
-            # pinned Ray parameters so agents cannot conflict with worker ports.
-            parameters = RayParams(
-                **ports,
-                min_worker_port=int(flags["--min-worker-port"]),
-                max_worker_port=int(flags["--max-worker-port"]),
-            )
-            parameters.update_pre_selected_port()
-            assert ports["gcs_server_port"] == allocated[RayPort.HEAD]
-            assert set(ports.values()) == set(allocated.values())
-            endpoints.append(set(ports.values()))
+    for first_port in first_ports:
+        requested = {port: first_port + index if first_port else 0 for index, port in enumerate(RayPort)}
+        for port, value in requested.items():
+            monkeypatch.setenv(port_env_var(port), str(value))
+        allocated = resolve_ray_ports()
+        if first_port:
+            assert allocated == requested
+        else:
+            assert len(set(allocated.values())) == len(RayPort)
+            assert all(value in DYNAMIC_TCP_PORTS for value in allocated.values())
+        runtime.ray_start_head("127.0.0.1", LocalRaySpillTarget(str(tmp_path / str(first_port))), ports=allocated)
+        flags = dict(argument.split("=", 1) for argument in commands[-1] if "=" in argument)
+        ports = {
+            "gcs_server_port": int(flags["--port"]),
+            "dashboard_port": int(flags["--dashboard-port"]),
+            "ray_client_server_port": int(flags["--ray-client-server-port"]),
+            "metrics_export_port": int(flags["--metrics-export-port"]),
+            "runtime_env_agent_port": int(flags["--runtime-env-agent-port"]),
+            "metrics_agent_port": int(flags["--dashboard-agent-grpc-port"]),
+            "dashboard_agent_listen_port": int(flags["--dashboard-agent-listen-port"]),
+            "node_manager_port": int(flags["--node-manager-port"]),
+            "object_manager_port": int(flags["--object-manager-port"]),
+        }
+        # Ray checks the command-line ports for collisions with worker ports.
+        parameters = RayParams(
+            **ports,
+            min_worker_port=int(flags["--min-worker-port"]),
+            max_worker_port=int(flags["--max-worker-port"]),
+        )
+        parameters.update_pre_selected_port()
+        assert ports["gcs_server_port"] == allocated[RayPort.HEAD]
+        assert set(ports.values()) == set(allocated.values())
+        endpoints.append(set(ports.values()))
     assert endpoints[0].isdisjoint(endpoints[1])
 
 
@@ -100,7 +94,7 @@ def test_remote_spilling_fails_when_backend_dependency_is_missing(monkeypatch):
 
 @pytest.mark.parametrize("role", ["head", "worker"])
 @pytest.mark.parametrize("preexisting", [False, True])
-def test_local_spill_directory_exists_before_ray_start(tmp_path, monkeypatch, role, preexisting):
+def test_local_spill_directory_exists_before_ray_start(tmp_path, monkeypatch, role, preexisting, iris_ray_ports):
     spill_dir = tmp_path / "node-scratch" / "ray-spill"
     if preexisting:
         spill_dir.mkdir(parents=True)
@@ -113,14 +107,14 @@ def test_local_spill_directory_exists_before_ray_start(tmp_path, monkeypatch, ro
     target = LocalRaySpillTarget(str(spill_dir))
 
     if role == "head":
-        runtime.ray_start_head("10.0.0.1", target)
+        runtime.ray_start_head("10.0.0.1", target, ports=iris_ray_ports)
     else:
-        runtime.ray_start_worker("10.0.0.1", 6379, "10.0.0.2", target)
+        runtime.ray_start_worker("10.0.0.1", 6379, "10.0.0.2", target, ports=iris_ray_ports)
 
     assert directory_state_at_start == [True]
 
 
-def test_local_spill_directory_creation_failure_names_configured_path(tmp_path, monkeypatch):
+def test_local_spill_directory_creation_failure_names_configured_path(tmp_path, monkeypatch, iris_ray_ports):
     blocked_parent = tmp_path / "not-a-directory"
     blocked_parent.write_text("file blocks directory creation")
     spill_dir = blocked_parent / "ray-spill"
@@ -136,4 +130,5 @@ def test_local_spill_directory_creation_failure_names_configured_path(tmp_path, 
             6379,
             "10.0.0.2",
             LocalRaySpillTarget(str(spill_dir)),
+            ports=iris_ray_ports,
         )

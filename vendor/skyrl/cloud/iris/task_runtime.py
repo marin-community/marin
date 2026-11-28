@@ -26,6 +26,7 @@ local path — opened via ``fsspec``.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 import contextlib
 from dataclasses import asdict, dataclass, field, fields
 from enum import StrEnum
@@ -101,7 +102,7 @@ from marinskyrl.process_diagnostics import (
     write_process_outcome,
 )
 from cloud.iris.paths import resolve_repo_path
-from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
+from cloud.iris.ray_ports import RAY_WORKER_PORTS, RayPort, resolve_ray_ports
 from cloud.iris.role_topology import RoleTopology, audit_role_nodes, node_physical_labels, probe_fabric_info
 from cloud.iris.ray_storage import (
     RaySpillBackend,
@@ -1115,16 +1116,15 @@ def clear_rendezvous(rendezvous_dir: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _ray_port_flags() -> list[str]:
-    # Iris tasks share host networking. Named endpoints must use scheduler allocations;
-    # worker processes ask the kernel for ports outside Iris's reserved allocation range.
+def _ray_port_flags(ports: Mapping[RayPort, int]) -> list[str]:
+    # The launcher resolves the named endpoints. Ray assigns ports to its worker processes.
     return [
-        f"--metrics-export-port={allocated_ray_port(RayPort.METRICS)}",
-        f"--runtime-env-agent-port={allocated_ray_port(RayPort.RUNTIME_ENV_AGENT)}",
-        f"--dashboard-agent-grpc-port={allocated_ray_port(RayPort.DASHBOARD_AGENT_GRPC)}",
-        f"--dashboard-agent-listen-port={allocated_ray_port(RayPort.DASHBOARD_AGENT_LISTEN)}",
-        f"--node-manager-port={allocated_ray_port(RayPort.NODE_MANAGER)}",
-        f"--object-manager-port={allocated_ray_port(RayPort.OBJECT_MANAGER)}",
+        f"--metrics-export-port={ports[RayPort.METRICS]}",
+        f"--runtime-env-agent-port={ports[RayPort.RUNTIME_ENV_AGENT]}",
+        f"--dashboard-agent-grpc-port={ports[RayPort.DASHBOARD_AGENT_GRPC]}",
+        f"--dashboard-agent-listen-port={ports[RayPort.DASHBOARD_AGENT_LISTEN]}",
+        f"--node-manager-port={ports[RayPort.NODE_MANAGER]}",
+        f"--object-manager-port={ports[RayPort.OBJECT_MANAGER]}",
         "--min-worker-port=0",
         "--max-worker-port=0",
     ]
@@ -1201,6 +1201,7 @@ def ray_start_head(
     head_ip: str,
     spill_target: RaySpillTarget,
     *,
+    ports: Mapping[RayPort, int],
     labels: dict[str, str] | None = None,
 ) -> None:
     spill_target.prepare_node()
@@ -1209,11 +1210,11 @@ def ray_start_head(
         "start",
         "--head",
         f"--node-ip-address={head_ip}",
-        f"--port={allocated_ray_port(RayPort.HEAD)}",
-        f"--dashboard-port={allocated_ray_port(RayPort.DASHBOARD)}",
-        f"--ray-client-server-port={allocated_ray_port(RayPort.CLIENT)}",
+        f"--port={ports[RayPort.HEAD]}",
+        f"--dashboard-port={ports[RayPort.DASHBOARD]}",
+        f"--ray-client-server-port={ports[RayPort.CLIENT]}",
         "--dashboard-host=0.0.0.0",
-        *_ray_port_flags(),
+        *_ray_port_flags(ports),
         *_ray_mem_flags(),
         *spill_target.head_flags(),
         *([f"--labels={','.join(f'{key}={value}' for key, value in labels.items())}"] if labels else []),
@@ -1231,6 +1232,7 @@ def ray_start_worker(
     node_ip: str,
     spill_target: RaySpillTarget,
     *,
+    ports: Mapping[RayPort, int],
     labels: dict[str, str] | None = None,
 ) -> None:
     spill_target.prepare_node()
@@ -1239,7 +1241,7 @@ def ray_start_worker(
         "start",
         f"--address={head_ip}:{ray_port}",
         f"--node-ip-address={node_ip}",
-        *_ray_port_flags(),
+        *_ray_port_flags(ports),
         *_ray_mem_flags(),
         *spill_target.worker_flags(),
         *([f"--labels={','.join(f'{key}={value}' for key, value in labels.items())}"] if labels else []),
@@ -1894,13 +1896,14 @@ def run_head(
     config_path: Path,
     derived_gloo_ifname: str | None = None,
     *,
+    ports: Mapping[RayPort, int],
     debug_mode: DebugMode = DebugMode.LIGHT,
 ) -> int:
     ensure_task_debug_artifact_directory(debug_mode)
     num_tasks = _num_tasks()
     gang_epoch = uuid.uuid4().hex
     head_ip = _own_ip()
-    ray_port = allocated_ray_port(RayPort.HEAD)
+    ray_port = ports[RayPort.HEAD]
     ray_address = f"{head_ip}:{ray_port}"
     node_id = f"rank0-{socket.gethostname()}"
     _log(f"ROLE=head rank=0/{num_tasks} head_ip={head_ip} ray_port={ray_port}")
@@ -1952,6 +1955,7 @@ def run_head(
     ray_start_head(
         head_ip,
         resolve_ray_spill_target(args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir),
+        ports=ports,
         labels=args.ray_labels,
     )
     _log("Ray head bootstrap complete; entering rendezvous / cluster-join phase.")
@@ -1981,7 +1985,7 @@ def run_head(
     if args.role_topology is not None:
         verify_role_placement(ray_address, args.role_topology, Path(os.environ[IRIS_OUTPUT_DIR_ENV]))
 
-    with ray_metrics_telemetry(head_ip, allocated_ray_port(RayPort.METRICS), CONTROLLER_ROLE):
+    with ray_metrics_telemetry(head_ip, ports[RayPort.METRICS], CONTROLLER_ROLE):
         env = training_driver_env(derived_gloo_ifname)
         env["RAY_ADDRESS"] = ray_address  # skyrl-train's bare ray.init() attaches here
         env["PYTHONUNBUFFERED"] = "1"
@@ -2047,7 +2051,7 @@ def run_head(
     return exit_code
 
 
-def run_worker(args: argparse.Namespace, *, debug_mode: DebugMode = DebugMode.LIGHT) -> int:
+def run_worker(args: argparse.Namespace, *, ports: Mapping[RayPort, int], debug_mode: DebugMode = DebugMode.LIGHT) -> int:
     ensure_task_debug_artifact_directory(debug_mode)
     worker_start = time.time()
     rank = _rank()
@@ -2079,6 +2083,7 @@ def run_worker(args: argparse.Namespace, *, debug_mode: DebugMode = DebugMode.LI
         ray_port,
         node_ip,
         resolve_ray_spill_target(args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir),
+        ports=ports,
         labels=args.ray_labels,
     )
     wait_for_nodes(ray_address, num_tasks, args.cluster_join_timeout)
@@ -2110,7 +2115,7 @@ def run_worker(args: argparse.Namespace, *, debug_mode: DebugMode = DebugMode.LI
     # A signal without that result tears down Ray but remains a non-successful
     # task outcome so Iris cannot mistake a bounced gang peer for completed work.
     head_completed = False
-    with ray_metrics_telemetry(node_ip, allocated_ray_port(RayPort.METRICS), WORKER_ROLE):
+    with ray_metrics_telemetry(node_ip, ports[RayPort.METRICS], WORKER_ROLE):
         while True:
             if head_succeeded(args.rendezvous_dir, payload.gang_epoch):
                 head_completed = True
@@ -2346,7 +2351,6 @@ def main() -> None:
             else policy_local_path or policy_chat_template_model(args.prestage_model, args.model_local_path)
         )
         apply_policy_chat_template(model_path, args.policy_chat_template)
-    resolve_ray_ports()
     rank = _rank()
     trainer = launch_config.skyrl.get("trainer", {})
     debug_mode = DebugMode(str(trainer.get("debug_mode", DebugMode.LIGHT.value)))
@@ -2357,9 +2361,11 @@ def main() -> None:
             policy_tokenizer=policy_tokenizer,
             draft_model=draft_model,
         )
-        exit_code = run_head(args, final_config_path, derived_gloo_ifname, debug_mode=debug_mode)
+        exit_code = run_head(
+            args, final_config_path, derived_gloo_ifname, ports=resolve_ray_ports(), debug_mode=debug_mode
+        )
     else:
-        exit_code = run_worker(args, debug_mode=debug_mode)
+        exit_code = run_worker(args, ports=resolve_ray_ports(RAY_WORKER_PORTS), debug_mode=debug_mode)
     if exit_code != 0:
         sys.exit(exit_code)
 

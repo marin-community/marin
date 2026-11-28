@@ -171,15 +171,12 @@ staged local weights and S3 streaming. An actor startup failure recreates the
 whole engine gang with fresh rendezvous ports, within the existing
 `generator.engine_init_timeout_seconds` deadline.
 
-DP rendezvous ports are bound and held on the engine's target node, excluding
-that node's `/proc/sys/net/ipv4/ip_local_port_range`, kernel-reserved service
-ports, and Iris's default named-port range. Kernel reservations also cover
-deployment-specific named-port ranges published by Iris's worker bootstrap.
-The same reserved RPC and process-group port vector is passed explicitly to
-every rank. Rank zero releases the sockets immediately before vLLM binds them;
-excluding the kernel's ephemeral range prevents outbound connections from
-taking those ports during the handoff. The former fixed 20000–29999 pool
-overlapped Iris's widened ephemeral range.
+Rigging claims DP rendezvous ports from 20000–23999 on the engine's target
+node. The same RPC and process-group ports are passed to every rank. Iris
+reserves this pool from automatic kernel assignment when GCP hosts run the
+updated bootstrap. On older hosts, an outbound connection can still take a
+port before vLLM binds it. A failed actor startup retries with fresh ports
+within the same deadline.
 
 `prepare` only validates the config. Submitting Hub models requires Iris job
 context; run the [experiment entry point](#experiment-entry-point) with `--run`

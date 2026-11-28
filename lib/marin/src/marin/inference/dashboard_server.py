@@ -272,17 +272,15 @@ def build_dashboard_app(
     return app
 
 
-def bind_serving_socket(host: str, port: int) -> socket.socket:
-    """Bind a listening socket up front so the port is claimed before serving.
-
-    Iris allocates the task's named port from a range (default 12000-13999)
-    kept below the kernel ephemeral floor so no other socket can be assigned
-    it (marin-community/marin#7392). Binding before the backend starts claims
-    the port ahead of any listener the backend might open.
-    """
+def bind_serving_socket(host: str, port: int = 0) -> socket.socket:
+    """Bind a socket before starting the server."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind((host, port))
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((host, port))
+    except BaseException:
+        sock.close()
+        raise
     return sock
 
 
@@ -303,6 +301,7 @@ def serve_app_background(
     *,
     name: str = "serve-dashboard",
     start_timeout_seconds: float = 30.0,
+    log_level: str = "info",
 ) -> Iterator[BackgroundServer]:
     """Run ``app`` under uvicorn on an already-bound ``sock`` in a daemon thread.
 
@@ -310,7 +309,7 @@ def serve_app_background(
     be claimed before any competing socket in the process can take the port.
     """
     host, port = sock.getsockname()[:2]
-    config = uvicorn.Config(app, log_level="info", log_config=None, workers=1)
+    config = uvicorn.Config(app, log_level=log_level, log_config=None, workers=1)
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, name=name, daemon=True)
     logger.info("Starting %s on %s:%d", name, host, port)

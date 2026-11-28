@@ -21,6 +21,7 @@ from pathlib import Path
 
 from finelog.client import LogClient, Table
 from finelog.rpc import logging_pb2
+from rigging.port_lease import port_env_var
 from rigging.secrets import SECRETS_DIR, SECRETS_DIR_ENV, secret_file_environment, validate_secret_name
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
@@ -230,7 +231,7 @@ def build_iris_env(
 
     # Override port placeholders with real allocated values
     for name, port in task.ports.items():
-        env[f"IRIS_PORT_{name.upper()}"] = str(port)
+        env[port_env_var(name)] = str(port)
 
     return env
 

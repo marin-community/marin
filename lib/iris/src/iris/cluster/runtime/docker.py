@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from rigging.port_lease import DYNAMIC_TCP_PORTS
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.bundle import BundleStore
@@ -168,32 +169,18 @@ def _resolve_profiler_bin(container_id: str, venv_bin: str, fallback: str) -> st
     return venv_bin if probe.returncode == 0 else fallback
 
 
-# Widened ephemeral port range for high-connection workloads: the controller and
-# workers fan out to thousands of peers and would otherwise exhaust the default
-# ~28k-port pool. The floor is deliberately above every port the cluster
-# statically allocates — the TPU/JAX runtime (8081, 8431, 8470-8482), iris'
-# controller/worker RPC (10000/10001), and the task named-port range (default
-# 12000-13999, `WorkerConfig.port_range`). An earlier floor of 1024 pulled the
-# fixed service ports into the kernel's random ephemeral pool, so a co-tenant's
-# outbound connection could be handed e.g. 8431 and block the TPU trainer from
-# binding it, crash-looping with "[::]:8431 ... Address already in use". Task
-# named ports had the same failure while they lived at 30000-40000, inside both
-# this range and the kernel *default* range (32768-60999): a task binds its
-# allocated port only after container setup, and an outbound socket handed that
-# exact port in the window killed the bind with EADDRINUSE (#7392). Keeping the
-# task range below both floors makes allocated ports safe even on hosts where
-# these sysctls never ran. 14000-65535 still leaves ~51k ephemeral ports.
+# Iris widens the ephemeral range for workloads with thousands of connections.
+# The kernel skips reserved ports when it assigns a source port (#7392).
 EPHEMERAL_PORT_RANGE = "14000 65535"
 
-# Belt-and-suspenders for the statically allocated ports that sit below the
-# floor: reserve them so they stay out of automatic ephemeral assignment even
-# if the floor is ever lowered again. An explicit bind() is unaffected.
-# libtpu's Runtime Metric Service is 8431; 8470-8482 is the Cloud TPU
-# runtime/SliceBuilder block (incl. the JAX coordinator 8482 and marin's
-# default 8476); 8081 is levanter megascale. The worker bootstrap appends the
-# worker's configured task named-port range, which also covers clusters that
-# override `port_range` back into the ephemeral span.
-RESERVED_HOST_PORTS = "8081,8431,8470-8482"
+# Reserve TPU runtime, Megascale, Iris RPC, and the shared TCP lease pool.
+RESERVED_HOST_PORTS = (
+    "8081",
+    "8431",
+    "8470-8482",
+    "10000-10001",
+    f"{DYNAMIC_TCP_PORTS.start}-{DYNAMIC_TCP_PORTS.stop - 1}",
+)
 
 # Network sysctl tuning for containers with their own network namespace (#3066).
 # Host-network containers inherit host settings (configured at VM bootstrap).
@@ -211,7 +198,7 @@ EGRESS_DNS_SERVERS: tuple[str, ...] = ("8.8.8.8", "1.1.1.1")
 
 _NETWORK_SYSCTLS: dict[str, str] = {
     "net.ipv4.ip_local_port_range": EPHEMERAL_PORT_RANGE,
-    "net.ipv4.ip_local_reserved_ports": RESERVED_HOST_PORTS,
+    "net.ipv4.ip_local_reserved_ports": ",".join(RESERVED_HOST_PORTS),
     "net.ipv4.tcp_tw_reuse": "1",
 }
 

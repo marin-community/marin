@@ -13,7 +13,6 @@ errors and failed API calls that ``finish`` asserts on. Specs live in
 import contextlib
 import logging
 import re
-import socket
 import threading
 import time
 from collections.abc import Iterator
@@ -57,18 +56,12 @@ _OFFERS_SCRIPT = """
 """
 
 
-def free_port() -> int:
-    with socket.socket() as s:
-        s.bind((LOOPBACK, 0))
-        return s.getsockname()[1]
-
-
 @dataclass
 class Kernel:
     """A kernel serving ``config`` on a loopback port from a background thread."""
 
     config: MarinaConfig
-    port: int = field(default_factory=free_port)
+    port: int = 0
     _server: uvicorn.Server | None = None
     _thread: threading.Thread | None = None
 
@@ -82,6 +75,13 @@ class Kernel:
         self._thread = threading.Thread(target=self._server.run, name="marina-kernel", daemon=True)
         self._thread.start()
         deadline = time.monotonic() + KERNEL_START_TIMEOUT
+        while time.monotonic() < deadline:
+            if self._server.started:
+                self.port = self._server.servers[0].sockets[0].getsockname()[1]
+                break
+            time.sleep(0.05)
+        else:
+            raise RuntimeError("kernel did not start")
         while time.monotonic() < deadline:
             with contextlib.suppress(httpx.HTTPError):
                 if httpx.get(f"{self.origin}/healthz", timeout=1).status_code == 200:

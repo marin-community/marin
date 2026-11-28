@@ -469,9 +469,6 @@ def _register_dashboard(
     if job_info is None:
         raise RuntimeError("Iris service must run inside an Iris job")
     ctx = iris_ctx()
-    port = ctx.get_port(service.port_name) if service.port_name is not None else 0
-    serving_socket = bind_serving_socket(job_info.advertise_host, port)
-    serving_port = serving_socket.getsockname()[1]
     has_chat_template = service.model.chat_template_content is not None or _detect_chat_support(model)
     info = ServingInfo(
         model=model.endpoint.model,
@@ -493,8 +490,9 @@ def _register_dashboard(
         web_search=parallel_web_search_from_secret(),
         feedback_prefix=model_feedback_prefix(),
     )
-    with serve_app_background(app, serving_socket):
-        address = f"http://{job_info.advertise_host}:{serving_port}"
+    port = job_info.ports.get(service.port_name.lower(), 0) if service.port_name is not None else 0
+    with bind_serving_socket(job_info.advertise_host, port) as serving_socket, serve_app_background(app, serving_socket):
+        address = f"http://{job_info.advertise_host}:{serving_socket.getsockname()[1]}"
         metadata = _endpoint_metadata(
             model=model.endpoint.model,
             backend=backend_name,

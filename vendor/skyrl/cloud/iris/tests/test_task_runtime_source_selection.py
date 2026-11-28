@@ -8,13 +8,8 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from cloud.iris import task_runtime
 from marinskyrl.environment_contract import DEBUG_ARTIFACT_DIR_ENV
-
-pytestmark = pytest.mark.usefixtures("iris_ray_ports")
-
 
 def test_training_driver_starts_from_the_immutable_runtime_checkout(monkeypatch) -> None:
     observed: dict[str, object] = {}
@@ -42,7 +37,7 @@ def test_training_driver_starts_from_the_immutable_runtime_checkout(monkeypatch)
     }
 
 
-def test_head_returns_driver_abort_when_failure_artifact_upload_blocks(tmp_path, monkeypatch) -> None:
+def test_head_returns_driver_abort_when_failure_artifact_upload_blocks(tmp_path, monkeypatch, iris_ray_ports) -> None:
     upload_started = threading.Event()
     release_upload = threading.Event()
 
@@ -70,7 +65,7 @@ def test_head_returns_driver_abort_when_failure_artifact_upload_blocks(tmp_path,
     result = []
 
     def run_head():
-        result.append(_run_head_driver(args, "abort", monkeypatch))
+        result.append(_run_head_driver(args, "abort", monkeypatch, iris_ray_ports))
 
     runtime_thread = threading.Thread(target=run_head)
     runtime_thread.start()
@@ -121,7 +116,7 @@ def _isolate_head_runtime(tmp_path: Path, monkeypatch) -> None:
     )
 
 
-def _run_head_driver(args: SimpleNamespace, behavior: str, monkeypatch) -> int:
+def _run_head_driver(args: SimpleNamespace, behavior: str, monkeypatch, ports) -> int:
     def launch(_config_path, environment):
         # run_head starts the liveness clock when launch returns. Hold the return until the
         # child interpreter has started so its startup time, which is unbounded on a loaded
@@ -143,15 +138,18 @@ def _run_head_driver(args: SimpleNamespace, behavior: str, monkeypatch) -> int:
         return process
 
     monkeypatch.setattr(task_runtime, "launch_training_driver", launch)
-    return task_runtime.run_head(args, Path("/tmp/unused-launch-config.yaml"))
+    return task_runtime.run_head(args, Path("/tmp/unused-launch-config.yaml"), ports=ports)
 
 
-def test_head_kills_a_silent_driver_and_records_the_stall_reason(tmp_path, monkeypatch) -> None:
+def test_head_kills_a_silent_driver_and_records_the_stall_reason(tmp_path, monkeypatch, iris_ray_ports) -> None:
     _isolate_head_runtime(tmp_path, monkeypatch)
     rendezvous_dir = tmp_path / "rendezvous"
     (rendezvous_dir / "term_artifacts").mkdir(parents=True)
     exit_code = _run_head_driver(
-        _runtime_args(tmp_path, liveness_timeout=0.1, rendezvous_dir=str(rendezvous_dir)), "stall", monkeypatch
+        _runtime_args(tmp_path, liveness_timeout=0.1, rendezvous_dir=str(rendezvous_dir)),
+        "stall",
+        monkeypatch,
+        iris_ray_ports,
     )
 
     artifacts = list((rendezvous_dir / "term_artifacts").glob("*.txt"))
@@ -160,16 +158,16 @@ def test_head_kills_a_silent_driver_and_records_the_stall_reason(tmp_path, monke
     assert "driver stalled" in artifacts[0].read_text()
 
 
-def test_head_keeps_a_driver_alive_while_it_emits_progress(tmp_path, monkeypatch) -> None:
+def test_head_keeps_a_driver_alive_while_it_emits_progress(tmp_path, monkeypatch, iris_ray_ports) -> None:
     _isolate_head_runtime(tmp_path, monkeypatch)
     # The driver runs well past the liveness window, but no single silence exceeds it.
-    exit_code = _run_head_driver(_runtime_args(tmp_path, liveness_timeout=0.2), "progress", monkeypatch)
+    exit_code = _run_head_driver(_runtime_args(tmp_path, liveness_timeout=0.2), "progress", monkeypatch, iris_ray_ports)
 
     assert exit_code == 0
 
 
-def test_head_allows_a_silent_driver_when_the_watchdog_is_disabled(tmp_path, monkeypatch) -> None:
+def test_head_allows_a_silent_driver_when_the_watchdog_is_disabled(tmp_path, monkeypatch, iris_ray_ports) -> None:
     _isolate_head_runtime(tmp_path, monkeypatch)
-    exit_code = _run_head_driver(_runtime_args(tmp_path, liveness_timeout=0), "silent", monkeypatch)
+    exit_code = _run_head_driver(_runtime_args(tmp_path, liveness_timeout=0), "silent", monkeypatch, iris_ray_ports)
 
     assert exit_code == 0

@@ -539,8 +539,8 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
 
 W&B uses the `WANDB_PROJECT` environment variable, or project `marin_moe` when it is unset, with
 group `moe-hero-ep` and the supplied run ID. The run output includes the durable W&B metrics
-artifact. Give each concurrent gang its own `IRIS_PORT_JAX`: rank 0 binds and registers that port
-for the JAX coordinator, and the default 8476 is shared by every run on the cluster.
+artifact. Use a distinct `IRIS_PORT_JAX` for each gang when pinning coordinator
+ports. Rank 0 leases a port automatically when no port is assigned.
 
 Submit a rack-local XProf trace through the Marin Iris controller:
 

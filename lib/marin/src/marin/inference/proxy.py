@@ -5,7 +5,6 @@ import asyncio
 import html
 import json
 import logging
-import socket
 import threading
 import time
 import uuid
@@ -17,8 +16,7 @@ from dataclasses import dataclass, replace
 
 import anyio
 import httpx
-import uvicorn
-from rigging.timing import Duration, ExponentialBackoff
+from rigging.timing import ExponentialBackoff
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
@@ -26,6 +24,7 @@ from starlette.routing import Route
 from starlette.types import Receive, Scope, Send
 
 from marin.inference.auxiliary import auxiliary_response, is_auxiliary_request
+from marin.inference.dashboard_server import bind_serving_socket, serve_app_background
 from marin.inference.http_proxy import forwardable_request_headers
 from marin.inference.types import (
     STREAM_BUFFER_BYTES,
@@ -595,7 +594,6 @@ def serve_inference_proxy(
     ignored_request_fields: Sequence[str] = (),
     backoff: ExponentialBackoff | None = None,
 ) -> Iterator[RunningModel]:
-    actual_port = _reserve_port(host, port)
     proxy = InferenceProxy(
         broker=broker,
         model=model,
@@ -606,32 +604,16 @@ def serve_inference_proxy(
         ignored_request_fields=ignored_request_fields,
         backoff=backoff,
     )
-    config = uvicorn.Config(proxy.app, host=host, port=actual_port, log_level="error", log_config=None)
-    server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, name="inference-proxy")
-    logger.info("Starting InferenceProxy server url=http://%s:%d/v1 model=%s", host, actual_port, model)
-    with proxy:
-        thread.start()
-        started = ExponentialBackoff(initial=0.01, maximum=1, jitter=0).wait_until(
-            lambda: server.started or not thread.is_alive(),
-            timeout=Duration.from_seconds(server_start_timeout_seconds),
-        )
-        if not started or not server.started:
-            server.should_exit = True
-            thread.join()
-            raise RuntimeError("Inference proxy failed to start")
-        try:
+    with bind_serving_socket(host, port) as sock:
+        actual_port = sock.getsockname()[1]
+        with (
+            proxy,
+            serve_app_background(
+                proxy.app,
+                sock,
+                name="inference-proxy",
+                start_timeout_seconds=server_start_timeout_seconds,
+                log_level="error",
+            ),
+        ):
             yield RunningModel(endpoint=OpenAIEndpoint(base_url=f"http://{host}:{actual_port}/v1", model=model))
-        finally:
-            logger.info("Stopping InferenceProxy server url=http://%s:%d/v1", host, actual_port)
-            server.should_exit = True
-            thread.join()
-
-
-def _reserve_port(host: str, port: int) -> int:
-    if port != 0:
-        return port
-    # Mirrors the existing Iris embedded-server pattern: reserve a port before uvicorn starts.
-    with socket.socket() as sock:
-        sock.bind((host, 0))
-        return int(sock.getsockname()[1])

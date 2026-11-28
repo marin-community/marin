@@ -27,7 +27,7 @@ from huggingface_hub.utils import LocalEntryNotFoundError
 from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax import Axis
 from haliax.state_dict import ModuleWithStateDictSerialization, to_torch_compatible_state_dict
-from iris.cluster.platforms.types import find_free_port
+from rigging.port_lease import allocate_tcp_port
 from iris.cluster.types import Entrypoint
 from iris.jax.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV, MultiGpuHook
 from jax.experimental import multihost_utils
@@ -433,9 +433,8 @@ def _export_on_cpu_rank(coordinator, destination, expected):
 
 def test_hf_shard_writer_failure_keeps_two_cpu_ranks_matched(tmp_path):
     expected = np.arange(24, dtype=np.float32).reshape(4, 3, 2)
-    entrypoint = Entrypoint.from_callable(
-        _export_on_cpu_rank, f"127.0.0.1:{find_free_port()}", str(tmp_path), expected
-    )
+    port = allocate_tcp_port()
+    entrypoint = Entrypoint.from_callable(_export_on_cpu_rank, f"127.0.0.1:{port}", str(tmp_path), expected)
     for name, contents in entrypoint.workdir_files.items():
         (tmp_path / name).write_bytes(contents)
     env = {

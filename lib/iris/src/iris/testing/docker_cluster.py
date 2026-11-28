@@ -37,7 +37,6 @@ from iris.cluster.controller.backend import BackendDescriptor, BackendKind
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.local_cluster import LocalCluster
-from iris.cluster.platforms.types import find_free_port
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
@@ -155,7 +154,6 @@ class E2ECluster:
             return self
 
         # Docker path: manual Controller + Worker setup
-        self._controller_port = find_free_port()
         self._temp_dir = tempfile.TemporaryDirectory(prefix="test_cluster_")
         temp_path = Path(self._temp_dir.name)
         bundle_dir = temp_path / "bundles"
@@ -165,7 +163,7 @@ class E2ECluster:
 
         controller_config = ControllerConfig(
             host="127.0.0.1",
-            port=self._controller_port,
+            port=0,
             remote_state_dir=f"file://{bundle_dir}",
             local_state_dir=temp_path / "local",
             cluster_id="docker-test",
@@ -187,6 +185,7 @@ class E2ECluster:
         self._controller = Controller(config=controller_config, log_stack=log_stack)
         self._controller.register_backend(backend)
         self._controller.start()
+        self._controller_port = self._controller.port
 
         self._controller_client = ControllerServiceClientSync(
             address=f"http://127.0.0.1:{self._controller_port}",
@@ -207,10 +206,9 @@ class E2ECluster:
 
         for i in range(self._num_workers):
             worker_id = f"worker-{i}-{uuid.uuid4().hex[:8]}"
-            worker_port = find_free_port()
             worker_config = WorkerConfig(
                 host="127.0.0.1",
-                port=worker_port,
+                port=0,
                 cache_dir=cache_path,
                 controller_address=f"http://127.0.0.1:{self._controller_port}",
                 worker_id=worker_id,
@@ -229,7 +227,7 @@ class E2ECluster:
             worker.start()
             self._workers.append(worker)
             self._worker_ids.append(worker_id)
-            self._worker_ports.append(worker_port)
+            self._worker_ports.append(worker.port)
 
         self._wait_for_workers(timeout=10.0)
 

@@ -17,12 +17,12 @@ from collections.abc import Callable
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from rigging.port_lease import allocate_tcp_port, port_env_var
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import JobInfo, get_job_info
-from iris.cluster.platforms.types import find_free_port
 from iris.jax.compile_cache import configure_jax_compilation_cache
 from iris.jax.compile_guard import install_gpu_compile_guard
 from iris.jax.multigpu import (
@@ -46,32 +46,19 @@ _JAX_DIST_HEARTBEAT_TIMEOUT = 100
 # Rank 0 can spend up to 60 seconds in tracker teardown before joining peers.
 # Leave the same margin again while bounding a rank stuck below Python.
 _JAX_DIST_SHUTDOWN_TIMEOUT = 120
+_JAX_PORT_NAME = "jax"
 
 
 _JAX_ENV_KEYS = (
     "IRIS_TASK_ID",
     "IRIS_NUM_TASKS",
-    "IRIS_PORT_JAX",
+    port_env_var(_JAX_PORT_NAME),
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
     IRIS_MULTIGPU_PROCESS_INDEX_ENV,
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
     "JAX_COORDINATOR_ADDRESS",
     "JAX_COORDINATOR_BIND_ADDRESS",
 )
-
-
-def resolve_coordinator_port(job_info: JobInfo, explicit: int | None = None) -> int:
-    """Resolve the JAX coordinator port from Iris, the caller, or the kernel."""
-    allocated = job_info.ports.get("jax", 0)
-    if allocated:
-        logger.info("JAX coordinator port %d (assigned as IRIS_PORT_JAX)", allocated)
-        return allocated
-    if explicit is not None:
-        logger.info("JAX coordinator port %d (pinned by the caller)", explicit)
-        return explicit
-    port = find_free_port()
-    logger.info("JAX coordinator port %d (selected by the kernel)", port)
-    return port
 
 
 def _log_jax_bootstrap_inputs(job_info, *, port: int | None, endpoint_name: str) -> None:
@@ -166,9 +153,9 @@ def _coordinator_endpoint_name(job_info: JobInfo, endpoint_name: str) -> str:
     return _attempt_endpoint_name(endpoint_name, attempt_id)
 
 
-def _register_coordinator(job_info: JobInfo, port: int | None, endpoint_name: str) -> str:
-    """Choose and publish global process 0's coordinator address."""
-    coordinator = f"{job_info.advertise_host}:{resolve_coordinator_port(job_info, port)}"
+def _register_coordinator(job_info: JobInfo, port: int, endpoint_name: str) -> str:
+    """Publish global process 0's coordinator address."""
+    coordinator = f"{job_info.advertise_host}:{port}"
     ctx = iris_ctx()
     endpoint_id = ctx.registry.register(endpoint_name, coordinator)
     atexit.register(ctx.registry.unregister, endpoint_id)
@@ -211,7 +198,10 @@ def _initialize_supervised_jax(
         raise RuntimeError("multi-process JAX initialization requires an Iris job context")
 
     if proc_index == 0:
-        coordinator = _register_coordinator(job_info, port, _attempt_endpoint_name(endpoint_name, job_info.attempt_id))
+        resolved_port = allocate_tcp_port(port or 0, name=_JAX_PORT_NAME)
+        coordinator = _register_coordinator(
+            job_info, resolved_port, _attempt_endpoint_name(endpoint_name, job_info.attempt_id)
+        )
     else:
         ctx = iris_ctx()
         coordinator = _poll_for_coordinator(
@@ -259,9 +249,8 @@ def initialize_jax(
     multi-task jobs.
 
     Args:
-        port: Coordinator port. ``None`` (the default) prefers an
-            ``IRIS_PORT_JAX`` named port and otherwise asks the kernel to select
-            an available port. Pass a port only to pin it.
+        port: Coordinator port used when Iris has no named port. If neither
+            Iris nor the caller supplies a port, allocate one for the process.
         endpoint_name: Base name for coordinator discovery. Iris scopes the
             registered name to the coordinator task's current attempt.
         poll_timeout: Maximum seconds for non-coordinator tasks to wait for the
@@ -318,33 +307,21 @@ def initialize_jax(
     if job_info is None:
         return
 
+    task_index = job_info.task_index
     if job_info.num_tasks <= 1:
-        coordinator = f"{job_info.advertise_host}:{resolve_coordinator_port(job_info, port)}"
+        resolved_port = allocate_tcp_port(port or 0, name=_JAX_PORT_NAME)
         jax.distributed.initialize(
-            coordinator,
+            f"{job_info.advertise_host}:{resolved_port}",
             num_processes=1,
             process_id=0,
             shutdown_timeout_seconds=_JAX_DIST_SHUTDOWN_TIMEOUT,
         )
         return
 
-    task_index = job_info.task_index
-
     if task_index == 0:
-        coordinator = _register_coordinator(job_info, port, endpoint_name)
-        # Register the endpoint first so other tasks can discover the
-        # coordinator address. jax.distributed.initialize() blocks until
-        # all processes connect, so registering after would deadlock.
-        # JAX's internal gRPC retry handles the brief window between
-        # endpoint registration and the coordinator starting to listen.
-        jax.distributed.initialize(
-            coordinator,
-            job_info.num_tasks,
-            task_index,
-            initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
-            heartbeat_timeout_seconds=heartbeat_timeout,
-            shutdown_timeout_seconds=_JAX_DIST_SHUTDOWN_TIMEOUT,
-        )
+        resolved_port = allocate_tcp_port(port or 0, name=_JAX_PORT_NAME)
+        # Initialization blocks until peers connect, so publish the address first.
+        coordinator = _register_coordinator(job_info, resolved_port, endpoint_name)
     else:
         ctx = iris_ctx()
         coordinator = _poll_for_coordinator(
@@ -353,13 +330,13 @@ def initialize_jax(
             poll_timeout,
             poll_interval,
         )
-        jax.distributed.initialize(
-            coordinator,
-            job_info.num_tasks,
-            task_index,
-            initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
-            heartbeat_timeout_seconds=heartbeat_timeout,
-            shutdown_timeout_seconds=_JAX_DIST_SHUTDOWN_TIMEOUT,
-        )
+    jax.distributed.initialize(
+        coordinator,
+        job_info.num_tasks,
+        task_index,
+        initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+        heartbeat_timeout_seconds=heartbeat_timeout,
+        shutdown_timeout_seconds=_JAX_DIST_SHUTDOWN_TIMEOUT,
+    )
     if jax.distributed.is_initialized():
         install_gpu_compile_guard()

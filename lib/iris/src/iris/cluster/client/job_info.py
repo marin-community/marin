@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from google.protobuf import json_format
 from rigging.auth import StaticTokenProvider
 from rigging.credentials import ClientCredentials
+from rigging.port_lease import PORT_ENV_PREFIX
 from rigging.timing import Duration
 
 from iris.cluster.constraints import Constraint
@@ -197,7 +198,7 @@ def _parse_ports_from_env(env: dict[str, str] | None = None) -> dict[str, int]:
     source = env if env is not None else os.environ
     ports = {}
     for key, value in source.items():
-        if key.startswith("IRIS_PORT_"):
-            port_name = key[len("IRIS_PORT_") :].lower()
+        if key.startswith(PORT_ENV_PREFIX):
+            port_name = key.removeprefix(PORT_ENV_PREFIX).lower()
             ports[port_name] = int(value)
     return ports

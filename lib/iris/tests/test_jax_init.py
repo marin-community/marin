@@ -24,7 +24,7 @@ from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
 from iris.env_resources import _read_iris_resource_proto
 from iris.jax.compile_cache import configure_jax_compilation_cache
-from iris.jax.init import initialize_jax, resolve_coordinator_port
+from iris.jax.init import initialize_jax
 
 INITIAL_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-0"
 RETRY_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-3"
@@ -206,15 +206,15 @@ def test_initialize_jax_maps_supervised_global_rank_zero(
     exit_hooks: FakeExitHooks,
 ) -> None:
     info = _make_job_info(task_index=0, num_tasks=2, attempt_id=3)
-    info.ports = {"jax": 12345}
     mock_get_job_info.return_value = info
     fake_ctx = FakeContext()
     mock_iris_ctx.return_value = fake_ctx
     monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "16")
     monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "0")
     monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "0")
+    monkeypatch.setenv("IRIS_PORT_JAX", "12345")
 
-    initialize_jax()
+    initialize_jax(port=9999)
 
     assert fake_ctx.registry.registered == [(RETRY_ATTEMPT_ENDPOINT_NAME, "10.0.0.1:12345")]
     jax_args, jax_options = mock_jax_init.call_args
@@ -289,24 +289,6 @@ def test_initialize_jax_peer_tracks_coordinator_retry(
 
     assert mock_jax_init.call_args.args == ("10.0.0.9:8476", 2, 1)
     assert fake_clock.current > 0
-
-
-@pytest.mark.parametrize("assigned", [{}, {"jax": 0}], ids=["unassigned", "k8s-placeholder"])
-def test_resolve_coordinator_port_uses_kernel_fallback(assigned: dict[str, int]) -> None:
-    info = _make_job_info()
-    info.ports = assigned
-
-    with patch("iris.jax.init.find_free_port", return_value=45678) as find_port:
-        assert resolve_coordinator_port(info) == 45678
-    find_port.assert_called_once_with()
-
-
-def test_resolve_coordinator_port_prefers_assigned_port() -> None:
-    info = _make_job_info()
-    info.ports = {"jax": 12345}
-
-    assert resolve_coordinator_port(info, 9999) == 12345
-    assert resolve_coordinator_port(_make_job_info(), 9999) == 9999
 
 
 @contextmanager

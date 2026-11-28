@@ -41,7 +41,6 @@ from iris.cluster.platforms.types import (
     Labels,
     QuotaExhaustedError,
     SliceHandle,
-    find_free_port,
 )
 from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.service_mode import ServiceMode
@@ -460,7 +459,6 @@ class InMemoryGcpService:
                 controller_address=self._controller_address,
             )
             container_runtime = ProcessRuntime(cache_dir=self._cache_path / worker_id)
-            worker_port = find_free_port()
 
             extra_attrs: dict[str, str] = {}
             sg_name = config.labels.get(self._iris_labels.iris_scale_group, "")
@@ -509,7 +507,7 @@ class InMemoryGcpService:
 
             wc = WorkerConfig(
                 host="127.0.0.1",
-                port=worker_port,
+                port=0,
                 cache_dir=self._cache_path / worker_id,
                 controller_address=self._controller_address,
                 worker_id=worker_id,
@@ -537,7 +535,7 @@ class InMemoryGcpService:
             worker.start()
             workers.append(worker)
             vm_ids.append(worker_id)
-            addresses.append(f"127.0.0.1:{worker_port}")
+            addresses.append(f"127.0.0.1:{worker.port}")
 
         logger.info(
             "InMemoryGcpService(LOCAL) created slice %s with %d workers",

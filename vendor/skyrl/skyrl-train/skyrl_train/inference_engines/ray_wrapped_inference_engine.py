@@ -13,7 +13,6 @@ from ray.actor import ActorHandle, ActorMethod
 from ray.util.placement_group import PlacementGroupSchedulingStrategy, placement_group, remove_placement_group
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 from transformers import AutoConfig, PretrainedConfig
-from iris.cluster.worker.port_allocator import DEFAULT_TASK_PORT_RANGE
 
 from marinskyrl.inference_placement import COLOCATED_EXPERT_BLOCK_GPU_COUNT, InferenceReplicaPlacement
 from marinskyrl.inference_startup_diagnostics import capture_startup_timeout
@@ -199,7 +198,7 @@ def _reserve_engine_rendezvous(
         placement_group,
         bundle_index,
         port_count=1 + VLLM_DATA_PARALLEL_MASTER_PORT_COUNT,
-        excluded_ports=node_ports | set(range(*DEFAULT_TASK_PORT_RANGE)),
+        excluded_ports=node_ports,
     )
     assert rendezvous.address == address, "Rendezvous reservation moved away from its placement-group node"
     node_ports.update(rendezvous.ports)

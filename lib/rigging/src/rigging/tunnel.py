@@ -24,8 +24,8 @@ lifetime of the context. Callers that genuinely want one-shot semantics
 The module intentionally has no opinion on the service running over the
 tunnel — it composes the right ``gcloud``/``kubectl`` argv, waits for the
 local listener, and tears the child down on context exit. Callers like
-finelog's CLI translate their own config schema into a ``TunnelTarget``
-and use this directly; iris's k8s port-forward should migrate here too.
+Finelog's CLI translate their own config schema into a ``TunnelTarget``
+and use this directly.
 """
 
 import contextlib
@@ -39,6 +39,7 @@ import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
+from rigging.port_lease import lease_tcp_port
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -125,13 +126,6 @@ def describe_target(target: TunnelTarget) -> str:
     if isinstance(target, K8sPortForwardTarget):
         return f"k8s://{target.namespace}/{target.service}:{target.port}"
     raise TypeError(f"unsupported tunnel target: {type(target).__name__}")
-
-
-def _find_free_port() -> int:
-    """Bind a kernel-assigned port and release it — the slot stays free briefly."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 def _default_spawn(argv: list[str]) -> subprocess.Popen[str]:
@@ -253,83 +247,82 @@ def open_tunnel(
     ``spawn`` is injectable for tests; production callers should leave it
     at the default.
     """
-    if local_port is None:
-        local_port = _find_free_port()
-    argv = _build_argv(target, local_port)
-    label = describe_target(target)
+    with lease_tcp_port(local_port or 0) as local_port:
+        argv = _build_argv(target, local_port)
+        label = describe_target(target)
 
-    proc_lock = threading.Lock()
-    proc_ref: list[subprocess.Popen | None] = [None]
-    shutdown = threading.Event()
+        proc_lock = threading.Lock()
+        proc_ref: list[subprocess.Popen | None] = [None]
+        shutdown = threading.Event()
 
-    def _restart_locked() -> None:
-        proc = spawn(argv)
-        proc_ref[0] = proc
-        _pump_stderr_to_logger(proc, label)
+        def _restart_locked() -> None:
+            proc = spawn(argv)
+            proc_ref[0] = proc
+            _pump_stderr_to_logger(proc, label)
 
-    with proc_lock:
-        _restart_locked()
-
-    deadline = Deadline.from_now(Duration.from_seconds(timeout))
-    backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
-    ready = False
-    while not deadline.expired():
         with proc_lock:
-            current = proc_ref[0]
-        if current is None or current.poll() is not None:
-            logger.warning("Tunnel %s exited early (retrying)", label)
-            with proc_lock:
-                _restart_locked()
-            remaining = max(0.0, deadline.remaining_seconds())
-            shutdown.wait(timeout=min(backoff.next_interval(), remaining))
-            continue
-        try:
-            with socket.create_connection(("127.0.0.1", local_port), timeout=1):
-                ready = True
-                break
-        except OSError:
-            shutdown.wait(timeout=0.5)
+            _restart_locked()
 
-    if not ready:
-        with proc_lock:
-            current = proc_ref[0]
-        if current is not None:
-            terminate_process_group(current)
-        raise TimeoutError(f"tunnel {label} did not open local port {local_port} within {timeout:.0f}s")
-
-    logger.info("Tunnel ready: 127.0.0.1:%d -> %s", local_port, label)
-
-    def _watchdog_run() -> None:
-        wd_backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
-        while not shutdown.wait(timeout=1.0):
+        deadline = Deadline.from_now(Duration.from_seconds(timeout))
+        backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
+        ready = False
+        while not deadline.expired():
             with proc_lock:
                 current = proc_ref[0]
-            if current is None or current.poll() is None:
+            if current is None or current.poll() is not None:
+                logger.warning("Tunnel %s exited early (retrying)", label)
+                with proc_lock:
+                    _restart_locked()
+                remaining = max(0.0, deadline.remaining_seconds())
+                shutdown.wait(timeout=min(backoff.next_interval(), remaining))
                 continue
-            logger.warning("Tunnel %s died; respawning", label)
-            if shutdown.wait(timeout=min(wd_backoff.next_interval(), 5.0)):
-                return
+            try:
+                with socket.create_connection(("127.0.0.1", local_port), timeout=1):
+                    ready = True
+                    break
+            except OSError:
+                shutdown.wait(timeout=0.5)
+
+        if not ready:
             with proc_lock:
-                if shutdown.is_set():
+                current = proc_ref[0]
+            if current is not None:
+                terminate_process_group(current)
+            raise TimeoutError(f"tunnel {label} did not open local port {local_port} within {timeout:.0f}s")
+
+        logger.info("Tunnel ready: 127.0.0.1:%d -> %s", local_port, label)
+
+        def _watchdog_run() -> None:
+            wd_backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
+            while not shutdown.wait(timeout=1.0):
+                with proc_lock:
+                    current = proc_ref[0]
+                if current is None or current.poll() is None:
+                    continue
+                logger.warning("Tunnel %s died; respawning", label)
+                if shutdown.wait(timeout=min(wd_backoff.next_interval(), 5.0)):
                     return
-                _restart_locked()
+                with proc_lock:
+                    if shutdown.is_set():
+                        return
+                    _restart_locked()
 
-    wd_thread = None
-    if watchdog:
-        wd_thread = threading.Thread(
-            target=_watchdog_run,
-            name=f"tunnel-watchdog-{label}",
-            daemon=True,
-        )
-        wd_thread.start()
+        wd_thread = None
+        if watchdog:
+            wd_thread = threading.Thread(
+                target=_watchdog_run,
+                name=f"tunnel-watchdog-{label}",
+                daemon=True,
+            )
+            wd_thread.start()
 
-    try:
-        yield f"http://127.0.0.1:{local_port}"
-    finally:
-        shutdown.set()
-        if wd_thread is not None:
-            wd_thread.join(timeout=2)
-        with proc_lock:
-            current = proc_ref[0]
-        if current is not None:
-            terminate_process_group(current)
+        try:
+            yield f"http://127.0.0.1:{local_port}"
+        finally:
+            shutdown.set()
+            if wd_thread is not None:
+                wd_thread.join(timeout=2)
+            with proc_lock:
+                current = proc_ref[0]
+            if current is not None:
+                terminate_process_group(current)

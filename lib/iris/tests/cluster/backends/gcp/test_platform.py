@@ -249,13 +249,12 @@ def test_gcp_tunnel_prefers_ssh_impersonation_config():
 
     with (
         unittest.mock.patch("iris.cluster.platforms.gcp.controller._check_gcloud_ssh_key"),
-        unittest.mock.patch("iris.cluster.platforms.gcp.controller.find_free_port", return_value=10042),
         unittest.mock.patch("iris.cluster.platforms.gcp.controller.wait_for_port"),
         unittest.mock.patch(
             "iris.cluster.platforms.gcp.controller.subprocess.Popen", return_value=ssh_proc
         ) as popen_mock,
     ):
-        with controller.tunnel("http://10.0.0.7:10000") as tunneled:
+        with controller.tunnel("http://10.0.0.7:10000", local_port=10042) as tunneled:
             assert tunneled == "http://127.0.0.1:10042"
 
     ssh_cmd = popen_mock.call_args.args[0]
@@ -276,6 +275,7 @@ def test_gcp_tunnel_prefers_ssh_impersonation_config():
 )
 def test_gcp_tunnel_forwards_the_controller_port_from_the_address(address, expected_remote_port):
     """The SSH forward targets the port the controller actually listens on."""
+    local_port = 10042
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     _register_controller_vm(gcp_service, os_login=True)
 
@@ -289,17 +289,16 @@ def test_gcp_tunnel_forwards_the_controller_port_from_the_address(address, expec
 
     with (
         unittest.mock.patch("iris.cluster.platforms.gcp.controller._check_gcloud_ssh_key"),
-        unittest.mock.patch("iris.cluster.platforms.gcp.controller.find_free_port", return_value=10042),
         unittest.mock.patch("iris.cluster.platforms.gcp.controller.wait_for_port"),
         unittest.mock.patch(
             "iris.cluster.platforms.gcp.controller.subprocess.Popen", return_value=ssh_proc
         ) as popen_mock,
     ):
-        with controller.tunnel(address):
+        with controller.tunnel(address, local_port=local_port):
             pass
 
     ssh_cmd = popen_mock.call_args.args[0]
-    assert f"127.0.0.1:10042:localhost:{expected_remote_port}" in ssh_cmd
+    assert f"127.0.0.1:{local_port}:localhost:{expected_remote_port}" in ssh_cmd
 
 
 def test_gce_remote_exec_builds_optional_flags_inline():

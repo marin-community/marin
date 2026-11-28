@@ -1,19 +1,18 @@
-from collections.abc import Collection
-from dataclasses import dataclass
-from pathlib import Path
-import errno
-from typing import Dict, Any, Optional, Union
-import random
 import hashlib
-import socket
-from omegaconf import DictConfig, ListConfig
-from skyrl_train.inference_engines.inference_engine_client_http_endpoint import ErrorResponse, ErrorInfo
-from typing import List
+import random
+from collections.abc import Collection
+from contextlib import ExitStack
+from dataclasses import dataclass
 from http import HTTPStatus
-from typing import Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 import ray
+from omegaconf import DictConfig, ListConfig
 from ray.actor import ActorHandle
 from ray.util.placement_group import PlacementGroupSchedulingStrategy
+from rigging.port_lease import lease_tcp_ports
+
+from skyrl_train.inference_engines.inference_engine_client_http_endpoint import ErrorInfo, ErrorResponse
 
 VLLM_DATA_PARALLEL_MASTER_PORT_COUNT = 5
 
@@ -195,12 +194,6 @@ def aggregate_completion_usage_info(
     return usage_info
 
 
-_RENDEZVOUS_PORT_START = 10_002  # Iris controller and worker RPC use 10000/10001.
-_TCP_PORT_STOP = 65_536
-_EPHEMERAL_PORT_RANGE_PATH = Path("/proc/sys/net/ipv4/ip_local_port_range")
-_RESERVED_PORTS_PATH = Path("/proc/sys/net/ipv4/ip_local_reserved_ports")
-
-
 def get_pg_bundle_node_ips(placement_group, pg_indices: Collection[int]) -> List[str]:
     """Return the node IP assigned to each requested placement-group bundle."""
 
@@ -221,63 +214,20 @@ def get_pg_bundle_node_ips(placement_group, pg_indices: Collection[int]) -> List
     return list(ray.get(refs))
 
 
-def _reserve_available_rendezvous_ports(port_count: int, excluded_ports: Collection[int] = ()) -> list[socket.socket]:
-    """Return bound sockets outside kernel ephemeral, reserved, and excluded ports."""
-    ephemeral_start, ephemeral_end = map(int, _EPHEMERAL_PORT_RANGE_PATH.read_text().split())
-    excluded = set(excluded_ports)
-    for span in _RESERVED_PORTS_PATH.read_text().strip().split(","):
-        if not span:
-            continue
-        start, separator, end = span.partition("-")
-        excluded.update(range(int(start), int(end if separator else start) + 1))
-    # Outbound sockets must not take these ports during the vLLM handoff.
-    # Read the actual node range: Iris can lower Linux's default ephemeral floor.
-    candidates = [
-        port
-        for port in range(_RENDEZVOUS_PORT_START, _TCP_PORT_STOP)
-        if not ephemeral_start <= port <= ephemeral_end
-        and port not in excluded
-    ]
-    random.shuffle(candidates)
-    sockets: list[socket.socket] = []
-    try:
-        for port in candidates:
-            reserved = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            try:
-                reserved.bind(("", port))
-            except OSError as error:
-                reserved.close()
-                if error.errno != errno.EADDRINUSE:
-                    raise
-                continue
-            sockets.append(reserved)
-            if len(sockets) == port_count:
-                return sockets
-        raise RuntimeError(
-            f"Cannot reserve {port_count} rendezvous ports outside ephemeral range "
-            f"{ephemeral_start}–{ephemeral_end}, kernel reserved ports, and caller exclusions"
-        )
-    except Exception:
-        for reserved in sockets:
-            reserved.close()
-        raise
-
-
 @ray.remote(num_cpus=0, num_gpus=0)
 class RendezvousPortReservation:
-    """Hold node-local bound sockets until the vLLM coordinator starts."""
+    """Hold node-local port claims while the vLLM coordinator starts."""
 
     def __init__(self, port_count: int, excluded_ports: Collection[int]):
-        self._sockets = _reserve_available_rendezvous_ports(port_count, excluded_ports)
+        self._leases = ExitStack()
+        self._ports = self._leases.enter_context(lease_tcp_ports(port_count, excluded=excluded_ports))
 
     def details(self) -> Tuple[str, list[int]]:
         """Return the node IP address and held port numbers."""
-        return ray.util.get_node_ip_address(), [reserved.getsockname()[1] for reserved in self._sockets]
+        return ray.util.get_node_ip_address(), self._ports
 
     def release(self) -> None:
-        for reserved in self._sockets:
-            reserved.close()
-        self._sockets.clear()
+        self._leases.close()
 
 
 @dataclass(frozen=True)

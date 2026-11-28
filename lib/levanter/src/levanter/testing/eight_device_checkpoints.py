@@ -13,7 +13,6 @@ import contextlib
 import multiprocessing
 import os
 import pathlib
-import socket
 import threading
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
@@ -21,6 +20,7 @@ from tempfile import TemporaryDirectory
 from unittest import mock
 
 import jax
+from rigging.port_lease import allocate_tcp_port
 import jax.numpy as jnp
 import numpy as np
 import tensorstore as ts
@@ -108,9 +108,7 @@ def _distributed_process(process_id: int, coordinator: str):
 
 def _run_on_distributed_processes(scenario, *args) -> list:
     """Run ``scenario(process_id, coordinator, *args)`` in one spawned one-CPU-device process per rank."""
-    with socket.socket() as listener:
-        listener.bind((_LOOPBACK_ADDRESS, 0))
-        port = listener.getsockname()[1]
+    port = allocate_tcp_port()
     coordinator = f"{_LOOPBACK_ADDRESS}:{port}"
 
     with mock.patch.dict(os.environ, _cpu_device_environment(DISTRIBUTED_PROCESS_COUNT)):

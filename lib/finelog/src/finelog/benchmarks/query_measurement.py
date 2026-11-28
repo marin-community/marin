@@ -13,7 +13,6 @@ import json
 import math
 import os
 import re
-import socket
 import statistics
 import subprocess
 import sys
@@ -30,6 +29,7 @@ from typing import cast
 import httpx
 import pyarrow as pa
 import pyarrow.ipc as paipc
+from rigging.port_lease import lease_tcp_port
 
 from finelog.benchmarks.telemetry_workload_corpus import (
     DatasetSpec,
@@ -84,12 +84,6 @@ def nonnegative_int(raw: str) -> int:
     return value
 
 
-def unused_port() -> int:
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        return int(listener.getsockname()[1])
-
-
 @contextmanager
 def local_server(
     binary: Path,
@@ -103,45 +97,45 @@ def local_server(
     The log directory must be a disposable local copy: starting Finelog activates
     normal maintenance, including compaction, layout rewrites, and index backfill.
     """
-    port = unused_port()
-    address = f"http://127.0.0.1:{port}"
-    log_path = log_dir / "finelog-benchmark-server.log"
-    with log_path.open("a") as log_file:
-        process = subprocess.Popen(
-            [
-                str(binary),
-                "--port",
-                str(port),
-                "--log-dir",
-                str(log_dir),
-                "--log-level",
-                "warn",
-                *extra_args,
-            ],
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            env={**os.environ, "FINELOG_QUERY_TIMEOUT_MS": str(query_timeout_ms)},
-        )
-        try:
-            deadline = time.monotonic() + SERVER_STARTUP_TIMEOUT
-            while time.monotonic() < deadline:
-                if process.poll() is not None:
-                    raise RuntimeError(log_path.read_text())
-                try:
-                    if httpx.get(f"{address}/health", timeout=1).is_success:
-                        yield address
-                        return
-                except httpx.HTTPError:
-                    pass
-                time.sleep(0.05)
-            raise TimeoutError(f"Finelog did not become healthy; see {log_path}")
-        finally:
-            process.terminate()
+    with lease_tcp_port() as port:
+        address = f"http://127.0.0.1:{port}"
+        log_path = log_dir / "finelog-benchmark-server.log"
+        with log_path.open("a") as log_file:
+            process = subprocess.Popen(
+                [
+                    str(binary),
+                    "--port",
+                    str(port),
+                    "--log-dir",
+                    str(log_dir),
+                    "--log-level",
+                    "warn",
+                    *extra_args,
+                ],
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                env={**os.environ, "FINELOG_QUERY_TIMEOUT_MS": str(query_timeout_ms)},
+            )
             try:
-                process.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=10)
+                deadline = time.monotonic() + SERVER_STARTUP_TIMEOUT
+                while time.monotonic() < deadline:
+                    if process.poll() is not None:
+                        raise RuntimeError(log_path.read_text())
+                    try:
+                        if httpx.get(f"{address}/health", timeout=1).is_success:
+                            yield address
+                            return
+                    except httpx.HTTPError:
+                        pass
+                    time.sleep(0.05)
+                raise TimeoutError(f"Finelog did not become healthy; see {log_path}")
+            finally:
+                process.terminate()
+                try:
+                    process.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=10)
 
 
 def server_info(address: str) -> dict[str, object]:

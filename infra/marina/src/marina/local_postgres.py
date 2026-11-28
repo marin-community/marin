@@ -10,8 +10,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 import sqlalchemy
-
-from marina.journeys import free_port
+from rigging.port_lease import lease_tcp_port
 
 # Keep the Hub name so CI's Docker registry mirror can fall back on a cache miss.
 POSTGRES_IMAGE = "pgvector/pgvector:0.8.5-pg16-bookworm"
@@ -42,30 +41,30 @@ def _wait_ready(url: str) -> None:
 @contextmanager
 def docker_database() -> Iterator[str]:
     """Run disposable Postgres in Docker and yield its SQLAlchemy URL."""
-    port = free_port()
-    name = f"marina-postgres-{uuid.uuid4().hex[:8]}"
-    subprocess.run(
-        [
-            "docker",
-            "run",
-            "--detach",
-            "--rm",
-            "--name",
-            name,
-            "-e",
-            f"POSTGRES_PASSWORD={POSTGRES_PASSWORD}",
-            "-e",
-            "POSTGRES_DB=marina",
-            "-p",
-            f"127.0.0.1:{port}:5432",
-            POSTGRES_IMAGE,
-        ],
-        check=True,
-        capture_output=True,
-    )
-    url = f"postgresql+pg8000://postgres:{POSTGRES_PASSWORD}@127.0.0.1:{port}/marina"
-    try:
-        _wait_ready(url)
-        yield url
-    finally:
-        subprocess.run(["docker", "rm", "--force", name], check=False, capture_output=True)
+    with lease_tcp_port() as port:
+        name = f"marina-postgres-{uuid.uuid4().hex[:8]}"
+        subprocess.run(
+            [
+                "docker",
+                "run",
+                "--detach",
+                "--rm",
+                "--name",
+                name,
+                "-e",
+                f"POSTGRES_PASSWORD={POSTGRES_PASSWORD}",
+                "-e",
+                "POSTGRES_DB=marina",
+                "-p",
+                f"127.0.0.1:{port}:5432",
+                POSTGRES_IMAGE,
+            ],
+            check=True,
+            capture_output=True,
+        )
+        url = f"postgresql+pg8000://postgres:{POSTGRES_PASSWORD}@127.0.0.1:{port}/marina"
+        try:
+            _wait_ready(url)
+            yield url
+        finally:
+            subprocess.run(["docker", "rm", "--force", name], check=False, capture_output=True)

@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from google.protobuf import json_format
+from rigging.port_lease import port_env_var
 from rigging.timing import Duration
 
 from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
@@ -315,10 +316,10 @@ def build_common_iris_env(
             [json_format.MessageToDict(c, preserving_proto_field_name=True) for c in inheritable]
         )
 
-    # Ports: k8s sets "0" (kernel-assigned at runtime), worker path overrides
+    # Ports: k8s sets "0" (allocated at runtime), worker path overrides
     # with real allocated ports after calling this function.
     for port_name in ports:
-        env[f"IRIS_PORT_{port_name.upper()}"] = "0"
+        env[port_env_var(port_name)] = "0"
 
     # Device env vars (TPU/GPU platform selection)
     if resources is not None and resources.HasField("device"):

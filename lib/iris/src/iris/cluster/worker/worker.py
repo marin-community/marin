@@ -252,6 +252,8 @@ class Worker:
         # only reads it (log-server resolution), sharing the controller address.
         self._endpoint_client: EndpointServiceClientSync | None = None
 
+        self._port = config.port
+
         # Heartbeat tracking for timeout detection
         self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
 
@@ -335,10 +337,14 @@ class Worker:
             )
         )
         self._threads.spawn_server(self._server, name="worker-server")
-        ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
+        ExponentialBackoff(initial=0.05, maximum=0.5).wait_until_or_raise(
             lambda: self._server.started,
             timeout=Duration.from_seconds(5.0),
+            error_message="Worker RPC server did not start",
         )
+
+        if self._config.port == 0:
+            self._port = self._server.servers[0].sockets[0].getsockname()[1]
 
         if self._token_provider is not None:
             self._threads.spawn(target=self._token_provider.run, name="credential-renewal")
@@ -609,7 +615,7 @@ class Worker:
         if address_host == "0.0.0.0":
             address_host = metadata.ip_address
 
-        return f"{address_host}:{self._config.port}"
+        return f"{address_host}:{self._port}"
 
     def _serve(self, stop_event: threading.Event) -> None:
         """Wait for RPCs from controller. Returns when the controller-contact timeout expires.
@@ -1193,5 +1199,9 @@ class Worker:
         return attempt.exec_in_container(command, timeout_seconds)
 
     @property
+    def port(self) -> int:
+        return self._port
+
+    @property
     def url(self) -> str:
-        return f"http://{self._config.host}:{self._config.port}"
+        return f"http://{self._config.host}:{self._port}"
