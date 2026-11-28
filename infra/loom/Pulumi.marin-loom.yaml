@@ -190,28 +190,6 @@ config:
         - marin-community/xla
       allowedTools: []
       mcpAccess: *builtinMcpAccess
-    pr-review:
-      agent: claude
-      description: Find concrete defects in trusted Marin pull requests at the requested head
-      model: claude-opus-5-5
-      effort: xhigh
-      protocol: acp
-      mode: auto
-      class: automation
-      strict: true
-      envClear: true
-      ambientAllowlist: []
-      idleArchiveSeconds: 60
-      maxConcurrent: 16
-      turnBudget: 200
-      prelude: weaver
-      instructionsFile: profiles/pr-review/AGENTS.md
-      env: *claudeSessionEnv
-      restricted: false
-      githubRepositories:
-        - marin-community/marin
-      allowedTools: []
-      mcpAccess: *builtinMcpAccess
     pr-holistic-review:
       agent: claude
       description: Review each head of trusted, non-draft Marin pull requests as a whole change
@@ -460,7 +438,7 @@ config:
       serviceAccountId: marin-grafana
       createServiceAccount: false
   marin-loom:githubFederations:
-    # The three review rules use the retired workflow refs to preserve run
+    # The review rules use the retired workflow refs to preserve run
     # reservations and the holistic review conversation across cutover.
     - name: agentic-lint
       repositoryId: &marinRepositoryId 775839592
@@ -546,13 +524,6 @@ config:
       profile: *githubAutomationProfile
       serviceTag: *githubAutomationProfile
       ref: refs/heads/main
-    - name: pr-review
-      repositoryId: *marinRepositoryId
-      workflowRef: marin-community/marin/.github/workflows/ops-loom-review.yaml@refs/heads/main
-      profile: pr-review
-      serviceTag: pr-review
-      event: pull_request_target
-      ref: refs/heads/main
     - name: pr-holistic-review
       repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/ops-loom-holistic-review.yaml@refs/heads/main
@@ -567,28 +538,14 @@ config:
       serviceTag: codehealth-refinement
       ref: refs/heads/main
   marin-loom:githubPullRequestRules:
-    - name: pr-review
-      repository_id: *marinRepositoryId
-      target: {federation: pr-review}
-      events:
-        - actions: &reviewActions [opened, ready_for_review, reopened]
-      allowed_bots: &reviewBots
-        - &reviewBot "marin-ops-agent[bot]"
-      run:
-        idempotency_key: "pr-review:{number}"
-        title: "Correctness review for #{number}"
-        goal: >-
-          Review pull request #{number} at head {head}. Remain read-only except
-          for GitHub review comments. Run review-pr with --comment and publish
-          a typed result.
     - name: pr-holistic-review
       repository_id: *marinRepositoryId
       target: {federation: pr-holistic-review}
       events:
-        - actions: *reviewActions
+        - actions: &reviewActions [opened, ready_for_review, reopened]
         - actions: [synchronize]
       allowed_bots:
-        - *reviewBot
+        - &reviewBot "marin-ops-agent[bot]"
         - "loom-oa-dev[bot]"
       run:
         idempotency_key: "pr-holistic:{number}:{head}"
@@ -614,7 +571,7 @@ config:
         - actions: [unlabeled]
           label: agentic-lint
       excluded_labels: [agentic-lint]
-      allowed_bots: *reviewBots
+      allowed_bots: [*reviewBot]
       run:
         idempotency_key: "agentic-lint:{number}:{head}"
         title: "Agentic lint for #{number}"

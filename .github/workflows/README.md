@@ -46,12 +46,11 @@ the `marin-prose-cleanup` marker skips the launch entirely.
 
 ## Pull request reviews
 
-The GitHub App webhook starts Loom sessions for correctness review, holistic
-review, and agentic lint. The rules and rollout steps live in the
+The GitHub App webhook starts Loom sessions for holistic review and agentic
+lint. The rules and rollout steps live in the
 [Loom deployment guide](../../infra/loom/README.md#pull-request-webhook-rules).
 
-Correctness review runs once per eligible PR and posts inline comments for
-concrete findings. Agentic lint runs when a non-draft PR from this repository
+Agentic lint runs when a non-draft PR from this repository
 opens, reopens, or becomes ready for review without the `agentic-lint` label.
 The author needs write access or must be `marin-ops-agent[bot]`. Removing the
 label triggers review at the current head. The PR number and head SHA identify

@@ -113,9 +113,8 @@ Repository-owned task procedures live in `procedures/`:
   execution requires a Loom watch that names the procedure path. They retain
   the harness result footer but register no schedule.
 
-The `pr-review` and `pr-holistic-review` profiles both use `review-pr`, selecting
-its correctness and holistic reporting contracts respectively. Profile
-permissions and automation behavior remain specific to each pass.
+The `pr-holistic-review` profile uses the holistic reporting contract of
+`review-pr`. The `agentic-lint` profile applies Marin's lint catalog.
 
 Runtime profiles and workload federation mappings live in
 `Pulumi.marin-loom.yaml` and are applied through Loom's deployment API during
@@ -304,7 +303,7 @@ these rules with the launch profiles and federations. Each rule lists its
 repository ID, actions, optional label filters, bot allowlist, and launch
 templates. A new rule can target a Loom profile directly. Loom checks that
 the current PR is open, ready for review, and from the same repository.
-Human authors need write access. The three review rules reuse the identities
+Human authors need write access. The two review rules reuse the identities
 of the retired workflows so earlier runs and the holistic review conversation
 remain addressable.
 
