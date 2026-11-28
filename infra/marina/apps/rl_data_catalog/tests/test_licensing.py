@@ -109,23 +109,6 @@ def test_source_ban_follows_the_receipt_resolved_source(rulings):
     assert licensing.source_license_ban("Other:source", "example/test-dataset", typed) is not None
 
 
-def test_declaration_ban_reads_the_declared_receipt(rulings):
-    rulings(
-        {
-            "version": "fixture-1",
-            "bans": [ban("Banned:source", "example/test-dataset").model_dump(mode="json")],
-        }
-    )
-    declared = receipt("Banned:source", "example/test-dataset", None)
-    declaration = {
-        "id": "Banned:source",
-        "dataset_id": "example/test-dataset",
-        "license_receipt": declared.model_dump(mode="json"),
-    }
-    assert licensing.declaration_license_ban(declaration) is not None
-    assert licensing.declaration_license_ban({"id": "Banned:source", "dataset_id": "example/test-dataset"}) is not None
-
-
 def test_committed_reference_resolves_the_published_rulings():
     """The pinned revision still carries the published ruling bytes (network)."""
     document = licensing.license_bans()

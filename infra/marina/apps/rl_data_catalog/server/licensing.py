@@ -11,7 +11,6 @@ a data commit plus a reference bump; the loader never carries a second copy.
 
 from functools import cache
 from pathlib import Path
-from typing import Any
 
 from finestore.rl.licenses import LicenseBan, LicenseReceipt
 from finestore.rl.registry_reference import read_registry_json
@@ -45,9 +44,3 @@ def source_license_ban(
 def require_unbanned(source_id: str, dataset_id: str | None, receipt: LicenseReceipt | None = None) -> None:
     if ban := source_license_ban(source_id, dataset_id, receipt):
         raise ValueError(f"License banned: {source_id}: {ban.reason} ({ban.issue_url})")
-
-
-def declaration_license_ban(declaration: dict[str, Any]) -> LicenseBan | None:
-    raw = declaration.get("license_receipt")
-    receipt = LicenseReceipt.model_validate(raw) if raw is not None else None
-    return source_license_ban(declaration["id"], declaration.get("dataset_id"), receipt)

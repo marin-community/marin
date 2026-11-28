@@ -11,8 +11,6 @@ from typing import Any
 from huggingface_hub import hf_hub_download
 from pydantic import BaseModel, ConfigDict, Field
 
-REGISTRY_ISSUE_URL = "https://github.com/marin-community/marin/issues/"
-
 
 class RegistryReference(BaseModel):
     """A pinned document: one private registry revision, path and byte hash."""
