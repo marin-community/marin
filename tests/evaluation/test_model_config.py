@@ -22,6 +22,7 @@ from marin.evaluation.model_config import (
 from marin.evaluation.serving_config import _serve_host_memory, inference_config_for_model
 from marin.inference.config import BrokerConfig, LevanterEngineConfig, VllmSource
 from marin.inference.vllm_backend import vllm_launcher
+from transformers.utils.chat_template_utils import render_jinja_template
 
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
@@ -435,6 +436,21 @@ def test_model_registry_callers_cannot_mutate_the_cached_catalog():
     del registry[removed_name]
 
     assert removed_name in models()
+
+
+def test_k2_horizon_template_renders_history_without_thinking_as_empty_thinking():
+    template = models()["k2-horizon-375b-a23b"].serve.chat_template
+    history = {"role": "assistant", "content": "Prior answer"}
+    # vLLM passes a request's reasoning to the template as both reasoning and reasoning_content.
+    empty_thinking = {**history, "reasoning": "", "reasoning_content": ""}
+
+    def render(assistant: dict[str, str]) -> str:
+        conversation = [{"role": "user", "content": "Hi"}, assistant, {"role": "user", "content": "Next"}]
+        return render_jinja_template([conversation], chat_template=template, add_generation_prompt=True)[0][0]
+
+    rendered = render(history)
+    assert rendered == render(empty_thinking)
+    assert "<|ifm|im_start|>assistant\n<ifm|think>\n</ifm|think>Prior answer<|ifm|im_end|>" in rendered
 
 
 def test_gpu_required_model_rejects_tpu_override():
