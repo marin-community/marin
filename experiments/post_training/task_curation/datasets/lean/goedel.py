@@ -161,7 +161,7 @@ def sources() -> list[RlDataSource]:
                     ),
                 ),
                 config=CurationRecipe(
-                    name=f"goedel_{subset.name}",
+                    name=subset.name,
                     source=HfSource(
                         GOEDEL_REPO,
                         GOEDEL_REVISION,
