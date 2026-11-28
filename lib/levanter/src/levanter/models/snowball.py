@@ -64,6 +64,7 @@ from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache
 from levanter.metrics import Metric, ReductionType
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.sharding import partition_spec_of
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 
@@ -1301,6 +1302,14 @@ def snowball_final_from_state_dict(
     return m
 
 
+def _expert_import_spec(weight: jax.Array | jax.ShapeDtypeStruct, fallback: P) -> P:
+    # HF loading can supply a shape-only template with optional concrete placement.
+    if isinstance(weight, jax.ShapeDtypeStruct):
+        return weight.sharding.spec if isinstance(weight.sharding, NamedSharding) else fallback
+    spec = partition_spec_of(weight)
+    return fallback if spec is None else spec
+
+
 def snowball_block_from_state_dict(
     template: SnowballBlock, state_dict: StateDict, layer_index: int, prefix: Optional[str] = None
 ) -> SnowballBlock:
@@ -1340,17 +1349,26 @@ def snowball_block_from_state_dict(
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_gate,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), _EXPERT_GATE_UP_SPEC),
+        _reshard(
+            _T(g(f"{p}.mlp.experts.gate_proj.weight")),
+            _expert_import_spec(template.mlp.expert_mlp.w_gate, _EXPERT_GATE_UP_SPEC),
+        ),
     )
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_up,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), _EXPERT_GATE_UP_SPEC),
+        _reshard(
+            _T(g(f"{p}.mlp.experts.up_proj.weight")),
+            _expert_import_spec(template.mlp.expert_mlp.w_up, _EXPERT_GATE_UP_SPEC),
+        ),
     )
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_down,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), _EXPERT_DOWN_SPEC),
+        _reshard(
+            _T(g(f"{p}.mlp.experts.down_proj.weight")),
+            _expert_import_spec(template.mlp.expert_mlp.w_down, _EXPERT_DOWN_SPEC),
+        ),
     )
     m = eqx.tree_at(
         lambda t: t.shared.w_gate,

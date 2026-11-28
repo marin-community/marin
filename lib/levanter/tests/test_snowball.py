@@ -64,6 +64,8 @@ from levanter.models.snowball import (
     SnowballMoEMLP,
     SnowballTransformer,
     _activation_spec,
+    snowball_to_state_dict,
+    snowball_from_state_dict,
     validate_single_name_config,
 )
 from levanter.optim.config import AdamConfig
@@ -1271,3 +1273,60 @@ def test_snowball_init_preserves_weights_and_shardings_with_sharded_temporaries(
             assert weight.sharding == want, (name, weight.sharding, want)
 
         assert initialized.memory_analysis().temp_size_in_bytes < replicated.memory_analysis().temp_size_in_bytes / 3
+
+
+@pytest.mark.multidevice
+@pytest.mark.parametrize(
+    "is_abstract,has_placement",
+    [(False, True), (True, True), (True, False)],
+    ids=["concrete", "abstract-placed", "abstract-unplaced"],
+)
+def test_expert_weight_import_uses_template_placement_or_default(is_abstract, has_placement):
+    with use_test_devices(8) as devices:
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, 2, 1, 4, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        config = _tiny_config(hidden_dim=32, intermediate_dim=16, num_experts=8)
+        with jax.set_mesh(mesh):
+            model = SnowballLMHeadModel.init(Axis("vocab", config.vocab_size), config, key=random.key(31))
+            template = model.transformer
+            gate_up_spec = P("context", "data", "model")
+            for index in range(len(template.blocks)):
+                for field, spec in (
+                    ("w_gate", gate_up_spec),
+                    ("w_up", gate_up_spec),
+                    ("w_down", P("context", "model", "data")),
+                ):
+                    weight = getattr(template.blocks[index].mlp.expert_mlp, field)
+                    template = eqx.tree_at(
+                        lambda transformer: getattr(transformer.blocks[index].mlp.expert_mlp, field),
+                        template,
+                        jax.reshard(weight, spec),
+                    )
+            state_dict = snowball_to_state_dict(template)
+            import_template = template
+            if is_abstract:
+                import_template = jax.tree.map(
+                    lambda array: jax.ShapeDtypeStruct(
+                        array.shape,
+                        array.dtype,
+                        sharding=array.sharding if has_placement else None,
+                    ),
+                    template,
+                )
+            restored = snowball_from_state_dict(import_template, state_dict)
+            for original, loaded in zip(template.blocks, restored.blocks, strict=True):
+                for field in ("w_gate", "w_up", "w_down"):
+                    expected = getattr(original.mlp.expert_mlp, field)
+                    actual = getattr(loaded.mlp.expert_mlp, field)
+                    if has_placement:
+                        assert actual.sharding.spec == expected.sharding.spec
+                        assert actual.sharding.shard_shape(actual.shape) == expected.sharding.shard_shape(
+                            expected.shape
+                        )
+                    else:
+                        expected_shape = (8, 16, 4) if field == "w_down" else (8, 4, 16)
+                        assert actual.sharding.shard_shape(actual.shape) == expected_shape
+                    np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
