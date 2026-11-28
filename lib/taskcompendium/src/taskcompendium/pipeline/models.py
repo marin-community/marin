@@ -206,6 +206,16 @@ class Admission(StrEnum):
     UNVERIFIED = "unverified"
 
 
+class SourceVerificationStatus(StrEnum):
+    """The terminal status of one source's verification stage."""
+
+    PASSED = "passed"
+    VALIDATED = "validated"
+    SKIPPED = "skipped"
+    REJECTED = "rejected"
+    INCONCLUSIVE = "inconclusive"
+
+
 class MachineRole(StrEnum):
     """Which machine of a task a verdict describes."""
 

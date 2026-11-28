@@ -20,8 +20,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from shellbox.backends.qemu.bundle import IMAGE_METADATA_FILE
+from shellbox.backends.qemu.capabilities import QEMU_CAPABILITIES
 from shellbox.backends.qemu.image import QemuAssets, load_qemu_bundle, stage_qemu_image
-from shellbox.capabilities import MachineCapability
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage, process_image_cache
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
@@ -39,18 +39,6 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
-
-QEMU_CAPABILITIES = frozenset(
-    {
-        MachineCapability.SHELL,
-        MachineCapability.FILESYSTEM,
-        MachineCapability.PYTHON,
-        MachineCapability.PROCESS,
-        MachineCapability.NETWORK,
-        MachineCapability.GIT_REPOSITORY,
-    }
-)
-"""The QEMU backend's declared execution capabilities."""
 
 REQUEST_CHUNK_BYTES = 2048
 UPLOAD_CHUNK_BYTES = 16 * 1024

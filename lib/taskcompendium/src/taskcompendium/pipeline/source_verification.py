@@ -10,7 +10,6 @@ import time
 from collections.abc import Iterator, Mapping
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass
-from enum import StrEnum
 from functools import partial
 from importlib.metadata import distributions
 from typing import Any
@@ -31,20 +30,17 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry, execute_phase
 from taskcompendium.pipeline.fingerprints import callable_identity
-from taskcompendium.pipeline.machine_routes import (
-    RouteEvidence,
-    attach_route_evidence,
-    merge_route_evidence,
-)
+from taskcompendium.pipeline.machine_routes import merge_route_evidence
 from taskcompendium.pipeline.models import (
     REJECTING_CHECK_STATUSES,
     CheckResult,
     CheckStatus,
     CheckSuite,
-    GraderReadiness,
     MachineRole,
+    SourceVerificationStatus,
     VerificationReport,
 )
+from taskcompendium.pipeline.row_gate import gate_row_with_previous
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.pipeline.stages import (
     AUDIT_INPUT_PATTERN,
@@ -52,7 +48,6 @@ from taskcompendium.pipeline.stages import (
     write_filtered_shard,
 )
 from taskcompendium.pipeline.transforms import is_accepted
-from taskcompendium.pipeline.verification import grader_readiness
 from taskcompendium.pipeline.verification_trials import (
     HistoricalTrial,
     SampleResult,
@@ -83,14 +78,6 @@ class SourceVerificationPolicy:
             raise ValueError("Verification requires positive sample and attempt counts")
         if not 0 <= self.minimum_pass_fraction <= 1:
             raise ValueError("minimum_pass_fraction must be between zero and one")
-
-
-class SourceVerificationStatus(StrEnum):
-    PASSED = "passed"
-    VALIDATED = "validated"
-    SKIPPED = "skipped"
-    REJECTED = "rejected"
-    INCONCLUSIVE = "inconclusive"
 
 
 @dataclass(frozen=True)
@@ -217,19 +204,6 @@ def _saved_report_trials(
             tuple(previous for previous in result.previous_trials if previous.trial.attempt == item.attempt),
         )
     return reused
-
-
-def record_checks(row: dict[str, Any], checks: list[CheckResult]) -> dict[str, Any]:
-    """Attach check outcomes and reject rows with a failed control."""
-    row = {
-        **row,
-        "checks": [check.model_dump(mode="json") for check in checks],
-        "grader_readiness": grader_readiness(checks).value,
-    }
-    failed = {f"check:{check.check}" for check in checks if check.status in REJECTING_CHECK_STATUSES}
-    if failed:
-        row = {**row, "filter_status": "reject", "filter_reasons": [*row["filter_reasons"], *sorted(failed)]}
-    return row
 
 
 def _complete_trial(trial: VerificationTrial) -> bool:
@@ -452,48 +426,6 @@ def source_verification_report(
     )
 
 
-def gate_source_row(
-    row: dict[str, Any],
-    *,
-    status: SourceVerificationStatus,
-    results: dict[str, list[CheckResult]],
-    evidence_by_task: Mapping[str, RouteEvidence] | None = None,
-    source_evidence: RouteEvidence | None = None,
-) -> dict[str, Any]:
-    if row["task_id"] in results:
-        row = record_checks(row, results[row["task_id"]])
-    if is_accepted(row):
-        evidence = (evidence_by_task or {}).get(row["task_id"])
-        # A row the sample did not check inherits the passing sample's verdicts, so a backend
-        # whose sampled control failed cannot serve it either.
-        if evidence is None and status == SourceVerificationStatus.PASSED and row["task_id"] not in results:
-            evidence = source_evidence
-        row = attach_route_evidence(row, evidence or {})
-    if not is_accepted(row):
-        return row
-    if status == SourceVerificationStatus.VALIDATED:
-        if row["task_id"] not in results:
-            raise ValueError(f"Per-task validation omitted a kept row: {row['task_id']}")
-        if row["grader_readiness"] == GraderReadiness.READY:
-            return row
-        return {
-            **row,
-            "filter_status": "defer",
-            "filter_reasons": [*row["filter_reasons"], "task_validation:unavailable"],
-        }
-    if status == SourceVerificationStatus.PASSED:
-        if row["task_id"] not in results:
-            return {**row, "grader_readiness": GraderReadiness.SOURCE_SAMPLED.value}
-        return row
-    if status == SourceVerificationStatus.SKIPPED:
-        return {**row, "grader_readiness": GraderReadiness.UNVERIFIED.value}
-    return {
-        **row,
-        "filter_status": "defer" if status == SourceVerificationStatus.INCONCLUSIVE else "reject",
-        "filter_reasons": [*row["filter_reasons"], f"source_verification:{status.value}"],
-    }
-
-
 @dataclass(frozen=True)
 class _VerificationRun:
     """One verification of the audit shards below ``source``, written below ``output``."""
@@ -661,35 +593,6 @@ def _write_report(
     return report
 
 
-def _gate_with_previous(
-    row: dict[str, Any],
-    *,
-    status: SourceVerificationStatus,
-    results: dict[str, list[CheckResult]],
-    previous: dict[str, dict[str, list[CheckResult]]],
-    evidence_by_task: Mapping[str, RouteEvidence],
-    source_evidence: RouteEvidence | None,
-) -> dict[str, Any]:
-    if row["task_id"] not in results and row["task_id"] in previous and is_accepted(row):
-        digest = canonical_sha256(TaskSpec.model_validate_json(row["task_json"]).model_dump(mode="json"))
-        checks = previous[row["task_id"]].get(digest)
-        if checks is not None:
-            return gate_source_row(
-                row,
-                status=status,
-                results={row["task_id"]: checks},
-                evidence_by_task=evidence_by_task,
-                source_evidence=source_evidence,
-            )
-    return gate_source_row(
-        row,
-        status=status,
-        results=results,
-        evidence_by_task=evidence_by_task,
-        source_evidence=source_evidence,
-    )
-
-
 def _gate_rows(
     run: _VerificationRun,
     decision: SourceReport,
@@ -720,7 +623,7 @@ def _gate_rows(
         .load_parquet()
         .map(
             partial(
-                _gate_with_previous,
+                gate_row_with_previous,
                 status=decision.status,
                 results={result.task_id: sample_result_checks(result) for result in results},
                 previous=previous,

@@ -924,15 +924,13 @@ self-contained Python environment (a uv-managed CPython 3.12 and a venv) under
 `files.tar`; the sandbox mounts that directory, the system directories and each
 placed file at its declared path, runs graders with the declared `env`, and
 concurrent graders on one host build it once.
-Image grading runs on the first configured candidate that admits the grader's
-image: a digest-pinned image can verify through Local, while `--image-backend gvisor`
-or `--image-backend daytona` add sandbox or remote image candidates.
-The gvisor backend (Iris SANDBOX jobs) uses the enclosing Iris job's controller, or
-`--controller-url` outside a job, to create sandbox jobs. Daytona creates remote
-sandboxes through its API.
-Neither path requires a Docker daemon in the Zephyr worker. Without an image backend,
-controls can still use package locks through Local or explicit simulator requirements
-through ShellSim. Programmatic callers pass grading machines through `RecipeSettings.machines`.
+Image grading runs on the first configured candidate that admits the grader's image: a digest-pinned
+image verifies through Local, while `--image-backend gvisor` or `--image-backend daytona` add sandbox or
+remote image candidates. The gvisor backend (Iris SANDBOX jobs) uses the enclosing Iris job's controller,
+or `--controller-url` outside a job, to create sandbox jobs; Daytona creates remote sandboxes through its
+API. Neither path requires a Docker daemon in the Zephyr worker. Without an image backend, controls can
+still use package locks through Local or explicit simulator requirements through ShellSim. Programmatic
+callers pass grading machines through `RecipeSettings.machines`.
 Grading machines never have network access. Add `--run` to execute, with `GLM_BULK_TOKEN` in the driver environment;
 the review endpoint is resolved from the Iris GLM relay job (`--relay-job`) unless
 `--base-url` overrides it. `--mode sample` is a test run that

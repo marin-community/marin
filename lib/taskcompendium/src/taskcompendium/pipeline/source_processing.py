@@ -57,6 +57,7 @@ from taskcompendium.pipeline.models import (
     GraderReadiness,
     SourceRecipe,
     SourceStatus,
+    SourceVerificationStatus,
 )
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.pipeline.shard_outputs import ShardOutput, write_shard_outputs
@@ -72,7 +73,6 @@ from taskcompendium.pipeline.source_verification import (
     SOURCE_VERIFICATION_REVISION,
     VERIFICATION_REPORT_FILENAME,
     SourceVerificationPolicy,
-    SourceVerificationStatus,
     VerificationCounts,
     verify_source,
 )

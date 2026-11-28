@@ -26,7 +26,8 @@ from taskcompendium.pipeline.models import (
     ValidationVerdict,
     VerificationReport,
 )
-from taskcompendium.pipeline.source_verification import SourceVerificationStatus, gate_source_row, sample_result_checks
+from taskcompendium.pipeline.row_gate import gate_source_row
+from taskcompendium.pipeline.source_verification import SourceVerificationStatus, sample_result_checks
 from taskcompendium.pipeline.verification_trials import SampleResult, VerificationTrial, result_route_evidence
 
 ROW = RawRow("task", Source(dataset="fixture", revision="1", row="0", importer_revision="1"), {})
