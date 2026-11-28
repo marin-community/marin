@@ -225,9 +225,12 @@ Two adapters build cache behavior on this primitive:
   into a local directory and publishes newly created files in payload-bounded batches.
   Iris uses it for XLA's per-fusion autotune directory, replacing the ZIP mirror.
   A fetch preserves a regular local file when its bytes match the committed blob;
-  missing or different files are atomically replaced.
+  missing or different files are atomically replaced. `FileSetFetchLimits` lets callers
+  cap the number of files, logical bytes, and elapsed fetch time. A cap or deadline
+  raises a dedicated error; other fetch failures also reach the caller. A mirror
+  excludes every file present at construction from later uploads.
 
-Both adapters are caches: failures may be treated as misses by their callers. Cache
+Both adapters are caches: callers choose whether a failure is a miss or a startup error. Cache
 cleanup does not acknowledge persistence or return a commit token. Use
 `DataStore.transaction()` when a write must become visible before the caller continues.
 The core `DataStore` and `ReadView` APIs propagate storage and commit errors.

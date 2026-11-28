@@ -3,9 +3,17 @@
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
+import finestore.fileset as fileset_module
 import pytest
-from finestore.fileset import FineStoreDirectory, fetch_file_set
+from finestore.fileset import (
+    FileSetFetchDeadlineError,
+    FileSetFetchLimitError,
+    FileSetFetchLimits,
+    FineStoreDirectory,
+    fetch_file_set,
+)
 from finestore.layout import BlobColumns, BlobTables
 from finestore.reader import BlobCorruptionError, ReadView
 from finestore.store import OBJECT_PART_BYTES, DataStore
@@ -164,6 +172,50 @@ def test_file_set_does_not_republish_files_fetched_at_open(tmp_path):
     reloaded = tmp_path / "reloaded"
     fetch_file_set(root, str(reloaded))
     assert (reloaded / "a").read_bytes() == b"one"
+
+
+def test_file_set_mirror_excludes_preexisting_local_files(tmp_path):
+    root = str(tmp_path / "remote")
+    local = tmp_path / "local"
+    local.mkdir()
+    (local / "leftover").write_bytes(b"old")
+
+    mirror = FineStoreDirectory(root, str(local), flush_interval=3600)
+    (local / "fresh").write_bytes(b"new")
+    mirror.close()
+
+    assert fetch_file_set(root, str(tmp_path / "reloaded")) == {"fresh"}
+
+
+@pytest.mark.parametrize(
+    ("max_files", "max_bytes", "message"),
+    [(1, 100, "files"), (10, 4, "bytes")],
+)
+def test_file_set_fetch_rejects_oversized_snapshot(tmp_path, max_files, max_bytes, message):
+    root = str(tmp_path / "remote")
+    with DataStore.open(root) as store:
+        store.write_object("a", b"one")
+        store.write_object("b", b"two")
+        store.flush()
+
+    limits = FileSetFetchLimits(max_files=max_files, max_bytes=max_bytes, timeout=60)
+    with pytest.raises(FileSetFetchLimitError, match=message):
+        fetch_file_set(root, str(tmp_path / "local"), limits=limits)
+
+
+def test_file_set_fetch_deadline_and_progress_are_visible(tmp_path, monkeypatch, caplog):
+    root = str(tmp_path / "remote")
+    with DataStore.open(root) as store:
+        store.write_object("a", b"one")
+        store.write_object("b", b"two")
+        store.flush()
+
+    clock = iter([0.0, 0.0, 0.0, 0.3, 0.3, 1.1])
+    monkeypatch.setattr(fileset_module, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+    limits = FileSetFetchLimits(max_files=10, max_bytes=100, timeout=1, log_interval=0.1)
+    with caplog.at_level("INFO"), pytest.raises(FileSetFetchDeadlineError, match="deadline"):
+        fetch_file_set(root, str(tmp_path / "local"), limits=limits)
+    assert "File-set fetch progress" in caplog.text
 
 
 def test_file_set_rejects_unsafe_committed_paths(tmp_path):

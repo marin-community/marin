@@ -10,6 +10,8 @@ import logging
 import pathlib
 import stat
 import threading
+import time
+from dataclasses import dataclass
 
 from rigging.filesystem.atomic import atomic_rename
 
@@ -23,6 +25,25 @@ DEFAULT_SYNC_INTERVAL = 120.0
 DEFAULT_BATCH_DATA_BYTES = 100 * 1024 * 1024
 DEFAULT_BATCH_FILES = 65_536
 _EXIT_FLUSH_TIMEOUT = 10.0
+DEFAULT_FETCH_LOG_INTERVAL = 10.0
+
+
+class FileSetFetchLimitError(RuntimeError):
+    """A committed file set exceeded its file or byte budget."""
+
+
+class FileSetFetchDeadlineError(TimeoutError):
+    """A committed file-set fetch passed its startup deadline."""
+
+
+@dataclass(frozen=True)
+class FileSetFetchLimits:
+    """Bound a fetch by logical files, bytes, and elapsed seconds."""
+
+    max_files: int
+    max_bytes: int
+    timeout: float
+    log_interval: float = DEFAULT_FETCH_LOG_INTERVAL
 
 
 def _safe_relative(name: str) -> pathlib.PurePosixPath:
@@ -32,17 +53,37 @@ def _safe_relative(name: str) -> pathlib.PurePosixPath:
     return relative
 
 
-def fetch_file_set(root: str, local: str) -> set[str]:
-    """Materialize one pinned file set and return the relative paths fetched."""
+def fetch_file_set(root: str, local: str, *, limits: FileSetFetchLimits | None = None) -> set[str]:
+    """Materialize one pinned file set within optional descriptor and time limits."""
     destination = pathlib.Path(local)
     destination.mkdir(parents=True, exist_ok=True)
     fetched = set()
+    started = time.monotonic()
+    next_log = started + (limits.log_interval if limits else DEFAULT_FETCH_LOG_INTERVAL)
+    files_written = 0
+    files_skipped = 0
+    total_bytes = 0
+
+    def check_deadline() -> None:
+        if limits is not None and time.monotonic() - started >= limits.timeout:
+            raise FileSetFetchDeadlineError(
+                f"file-set fetch deadline of {limits.timeout}s exceeded at {len(fetched)} files"
+            )
+
     view = ReadView(root)
     for row in view.iter_rows(
         BlobTables.DESCRIPTORS,
         columns=BlobDescriptor.COLUMNS,
     ):
+        check_deadline()
         descriptor = BlobDescriptor.from_row(row)
+        if limits is not None:
+            if len(fetched) + 1 > limits.max_files:
+                raise FileSetFetchLimitError(f"file-set fetch exceeds {limits.max_files} files")
+            if descriptor.size is None:
+                raise FileSetFetchLimitError(f"file-set fetch cannot bound size of {descriptor.name!r}")
+            if total_bytes + descriptor.size > limits.max_bytes:
+                raise FileSetFetchLimitError(f"file-set fetch exceeds {limits.max_bytes} bytes")
         relative = _safe_relative(descriptor.name)
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -61,15 +102,46 @@ def fetch_file_set(root: str, local: str) -> set[str]:
                 current = None
             if current is not None:
                 with current:
-                    matches = all(current.read(len(part)) == part for part in view.blob_parts(descriptor))
+                    matches = True
+                    for part in view.blob_parts(descriptor):
+                        check_deadline()
+                        if current.read(len(part)) != part:
+                            matches = False
+                            break
                     if matches and not current.read(1):
                         fetched.add(relative.as_posix())
-                        continue
-        with atomic_rename(str(target)) as staged:
-            with pathlib.Path(staged).open("wb") as output:
-                for part in view.blob_parts(descriptor):
-                    output.write(part)
-        fetched.add(relative.as_posix())
+                        files_skipped += 1
+        if relative.as_posix() not in fetched:
+            with atomic_rename(str(target)) as staged:
+                with pathlib.Path(staged).open("wb") as output:
+                    for part in view.blob_parts(descriptor):
+                        check_deadline()
+                        output.write(part)
+            fetched.add(relative.as_posix())
+            files_written += 1
+        total_bytes += descriptor.size or 0
+        now = time.monotonic()
+        if now >= next_log:
+            elapsed = now - started
+            logger.info(
+                "File-set fetch progress: %d files (%d written, %d skipped), %d bytes in %.1fs (%.0f files/s)",
+                len(fetched),
+                files_written,
+                files_skipped,
+                total_bytes,
+                elapsed,
+                len(fetched) / elapsed,
+            )
+            next_log = now + (limits.log_interval if limits else DEFAULT_FETCH_LOG_INTERVAL)
+    check_deadline()
+    logger.info(
+        "File-set fetch complete: %d files (%d written, %d skipped), %d bytes in %.1fs",
+        len(fetched),
+        files_written,
+        files_skipped,
+        total_bytes,
+        time.monotonic() - started,
+    )
     return fetched
 
 
@@ -89,11 +161,13 @@ class FineStoreDirectory:
         flush_interval: float = DEFAULT_SYNC_INTERVAL,
         max_batch_data_bytes: int = DEFAULT_BATCH_DATA_BYTES,
         max_batch_files: int = DEFAULT_BATCH_FILES,
+        fetch_limits: FileSetFetchLimits | None = None,
     ) -> None:
         self._root = root
         self._local = pathlib.Path(local)
         self._local.mkdir(parents=True, exist_ok=True)
-        self._known = fetch_file_set(self._root, local)
+        fetch_file_set(self._root, local, limits=fetch_limits)
+        self._known = {path.relative_to(self._local).as_posix() for path in self._local.rglob("*") if path.is_file()}
         self._store = DataStore.open(self._root)
         self._flush_interval = flush_interval
         self._max_batch_data_bytes = max_batch_data_bytes

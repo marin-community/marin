@@ -7,7 +7,7 @@ import enum
 import logging
 import os
 
-from finestore.fileset import FineStoreDirectory, fetch_file_set
+from finestore.fileset import FileSetFetchLimits, FineStoreDirectory, fetch_file_set
 from rigging.filesystem.cluster_config import marin_prefix, marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
@@ -26,12 +26,25 @@ _XLA_AUTOTUNE_LEVEL_FLAG = "--xla_gpu_autotune_level"
 # Object-store home for the per-build FineStore file set.
 _XLA_AUTOTUNE_REMOTE_PREFIX = "xla-per-fusion-autotune"
 _XLA_AUTOTUNE_CACHE_TTL_DAYS = 30
+_XLA_AUTOTUNE_FETCH_LIMITS = FileSetFetchLimits(max_files=500_000, max_bytes=2 * 1024**3, timeout=300)
 
 
 class _AutotuneCacheRole(enum.StrEnum):
     UPLOADER = "uploader"
     FETCHER = "fetcher"
     NONE = "none"
+
+
+def _xla_flag_value(flags: str, name: str) -> str | None:
+    """Return the last XLA flag value in either supported argument form."""
+    tokens = flags.split()
+    value = None
+    for index, token in enumerate(tokens):
+        if token.startswith(f"{name}="):
+            value = token.partition("=")[2]
+        elif token == name:
+            value = tokens[index + 1] if index + 1 < len(tokens) and not tokens[index + 1].startswith("--") else ""
+    return value
 
 
 def configure_jax_compilation_cache() -> None:
@@ -86,7 +99,7 @@ def _enable_xla_autotune_cache() -> None:
         return
 
     xla_flags = os.environ.get("XLA_FLAGS", "")
-    if any(flag.partition("=")[0] == _XLA_AUTOTUNE_CACHE_DIR_FLAG for flag in xla_flags.split()):
+    if _xla_flag_value(xla_flags, _XLA_AUTOTUNE_CACHE_DIR_FLAG) is not None:
         return
 
     # A multigpu task runs one Python process per GPU on the same node-local mount. XLA moves
@@ -94,6 +107,8 @@ def _enable_xla_autotune_cache() -> None:
     # race and leave another process with NOT_FOUND for its temporary file. Isolate the writers;
     # repeating autotuning per process is cheaper than losing the distributed job.
     autotune_dir = f"{SCRATCH_CACHE_PATH}/{_XLA_AUTOTUNE_CACHE_SUBDIR}"
+    if os.environ.get(LAUNCH_PROVENANCE_ENV) and (tree_hash := launch_provenance().tree_hash):
+        autotune_dir = f"{autotune_dir}/{tree_hash}"
     process_index = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV)
     if process_index is not None:
         autotune_dir = f"{autotune_dir}/process-{process_index}"
@@ -111,13 +126,8 @@ def _enable_xla_autotune_cache() -> None:
     # Off a real launch the published provenance is absent and the cache stays local.
     if os.environ.get(LAUNCH_PROVENANCE_ENV):
         role = _autotune_cache_role()
-        autotune_level = None
-        for flag in xla_flags.split():
-            name, _, value = flag.partition("=")
-            if name == _XLA_AUTOTUNE_LEVEL_FLAG:
-                autotune_level = value
-        # Level 0 still reads cached entries; the uploader would also publish
-        # unrelated files left in this persistent directory by earlier jobs.
+        autotune_level = _xla_flag_value(xla_flags, _XLA_AUTOTUNE_LEVEL_FLAG)
+        # XLA looks up cached configs before choosing a fallback when tuning is disabled.
         if role is _AutotuneCacheRole.UPLOADER and autotune_level != "0":
             sync_file_set_cache(_XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)
         elif role is not _AutotuneCacheRole.NONE:
@@ -132,25 +142,18 @@ def _file_set_cache_root(prefix: str) -> str | None:
 
 
 def sync_file_set_cache(prefix: str, local: str) -> FineStoreDirectory | None:
-    """Start a file-set synchronizer, or return ``None`` when remote caching is unavailable."""
+    """Start a file-set synchronizer when a build hash is available."""
     root = _file_set_cache_root(prefix)
     if root is None:
         return None
-    try:
-        return FineStoreDirectory(root, local)
-    except OSError as exc:
-        logger.warning("XLA autotune cache is unavailable; continuing with the node-local cache: %s", exc)
-        return None
+    return FineStoreDirectory(root, local, fetch_limits=_XLA_AUTOTUNE_FETCH_LIMITS)
 
 
 def fetch_file_set_cache(prefix: str, local: str) -> None:
     """Fetch one build's committed file set without starting an uploader."""
     root = _file_set_cache_root(prefix)
     if root is not None:
-        try:
-            fetch_file_set(root, local)
-        except OSError as exc:
-            logger.warning("XLA autotune cache fetch failed; starting cold: %s", exc)
+        fetch_file_set(root, local, limits=_XLA_AUTOTUNE_FETCH_LIMITS)
 
 
 def _autotune_cache_role() -> _AutotuneCacheRole:

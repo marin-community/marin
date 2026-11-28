@@ -7,9 +7,11 @@ import os
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import finestore.fileset as fileset_module
 import numpy as np
 import pytest
 import rigging.timing as timing
@@ -317,7 +319,10 @@ def _isolated_jax_cache_config():
     original_enable_xla_caches = jax.config.jax_persistent_cache_enable_xla_caches
     jax.config.update("jax_compilation_cache_dir", None)
     try:
-        with patch.dict(os.environ, {}, clear=False):
+        with (
+            patch.dict(os.environ, {}, clear=False),
+            patch.object(jax_cache_module, "launch_provenance", return_value=SimpleNamespace(tree_hash="")),
+        ):
             os.environ.pop("JAX_COMPILATION_CACHE_DIR", None)
             os.environ.pop("JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES", None)
             os.environ.pop("XLA_FLAGS", None)
@@ -459,14 +464,18 @@ def test_remote_cache_skips_the_autotune_flag_when_the_mount_is_unusable(tmp_pat
         assert "XLA_FLAGS" not in os.environ
 
 
-def test_remote_cache_keeps_an_explicit_xla_autotune_dir(tmp_path) -> None:
+@pytest.mark.parametrize(
+    "xla_flags",
+    ["--xla_gpu_per_fusion_autotune_cache_dir=/mnt/elsewhere", "--xla_gpu_per_fusion_autotune_cache_dir /mnt/elsewhere"],
+)
+def test_remote_cache_keeps_an_explicit_xla_autotune_dir(tmp_path, xla_flags) -> None:
     """An operator-chosen autotune directory wins over the node mount."""
     with _isolated_jax_cache_config(), _gpu_task(tmp_path):
-        os.environ["XLA_FLAGS"] = "--xla_gpu_per_fusion_autotune_cache_dir=/mnt/elsewhere"
+        os.environ["XLA_FLAGS"] = xla_flags
         with patch("iris.jax.compile_cache.marin_prefix", return_value="s3://marin-eu/marin/"):
             configure_jax_compilation_cache()
 
-        assert os.environ["XLA_FLAGS"] == "--xla_gpu_per_fusion_autotune_cache_dir=/mnt/elsewhere"
+        assert os.environ["XLA_FLAGS"] == xla_flags
 
 
 def test_launch_provenance_mirrors_the_autotune_cache_to_object_storage(tmp_path) -> None:
@@ -486,7 +495,8 @@ def test_launch_provenance_mirrors_the_autotune_cache_to_object_storage(tmp_path
     assert calls == [(jax_cache_module._XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)]
 
 
-def test_disabled_autotuning_fetches_without_publishing_host_leftovers(tmp_path) -> None:
+@pytest.mark.parametrize("xla_flags", ["--xla_gpu_autotune_level=0", "--xla_gpu_autotune_level 0"])
+def test_disabled_autotuning_fetches_without_publishing_host_leftovers(tmp_path, xla_flags) -> None:
     root = str(tmp_path / "remote")
     seed = tmp_path / "seed"
     writer = FineStoreDirectory(root, str(seed))
@@ -502,7 +512,7 @@ def test_disabled_autotuning_fetches_without_publishing_host_leftovers(tmp_path)
 
     with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
         os.environ["MARIN_PROVENANCE"] = "{}"
-        os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
+        os.environ["XLA_FLAGS"] = xla_flags
         autotune_dir = scratch_cache_dir / "xla" / "per-fusion-autotune"
         autotune_dir.mkdir(parents=True)
         (autotune_dir / "leftover.textproto").write_bytes(b"old")
@@ -586,15 +596,33 @@ def test_autotune_cache_stays_node_local_without_a_launch_provenance(tmp_path) -
     assert calls == []
 
 
-def test_autotune_file_set_storage_failure_starts_cold(tmp_path) -> None:
-    """The shared file set is an optimization, so an object-store outage cannot abort JAX startup."""
-    with (
-        patch.object(jax_cache_module, "_file_set_cache_root", return_value="gs://cache/tree"),
-        patch.object(jax_cache_module, "FineStoreDirectory", side_effect=OSError("unavailable")),
-        patch.object(jax_cache_module, "fetch_file_set", side_effect=OSError("unavailable")),
-    ):
-        assert jax_cache_module.sync_file_set_cache("xla", str(tmp_path)) is None
-        jax_cache_module.fetch_file_set_cache("xla", str(tmp_path))
+def test_autotune_file_set_fetch_failure_aborts_startup(tmp_path) -> None:
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path):
+        os.environ["MARIN_PROVENANCE"] = "{}"
+        os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
+        with (
+            patch.object(jax_cache_module, "_file_set_cache_root", return_value="gs://cache/tree"),
+            patch.object(fileset_module, "ReadView", side_effect=OSError("unavailable")),
+            patch("iris.jax.compile_cache.marin_prefix", return_value="s3://marin-eu/marin/"),
+            pytest.raises(OSError, match="unavailable"),
+        ):
+            configure_jax_compilation_cache()
+
+
+def test_autotune_cache_local_directory_uses_build_tree_hash(tmp_path) -> None:
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
+        os.environ["MARIN_PROVENANCE"] = "{}"
+        os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
+        with (
+            patch.object(jax_cache_module, "launch_provenance", return_value=SimpleNamespace(tree_hash="build-a")),
+            patch.object(jax_cache_module, "_file_set_cache_root", return_value=str(tmp_path / "remote")),
+            patch("iris.jax.compile_cache.marin_prefix", return_value="s3://marin-eu/marin/"),
+        ):
+            configure_jax_compilation_cache()
+
+        local = scratch_cache_dir / "xla" / "per-fusion-autotune" / "build-a"
+        assert local.is_dir()
+        assert f"--xla_gpu_per_fusion_autotune_cache_dir={local}" in os.environ["XLA_FLAGS"].split()
 
 
 def test_explicit_remote_cache_dir_still_gets_the_xla_guard(tmp_path) -> None:
