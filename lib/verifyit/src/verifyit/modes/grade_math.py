@@ -3,11 +3,10 @@
 
 r"""Grade mathematical answers, either symbolically or as a number with tolerance.
 
-The default anchored profile takes the last ``\boxed{}`` expression, or the last non-empty line when the output has
-none. References parse as a whole LaTeX expression. Candidates first use
-anchored LaTeX (``$...$``), then math-verify's own anchors (``the answer is ...``) if that yields
-nothing. Other profiles retain raw source extraction or require a boxed expression; their parser
-options remain task-controlled.
+The default anchored profile takes the last ``\boxed{}`` expression or reads a final answer from
+the last non-empty line. References and unboxed final answers parse as whole LaTeX expressions.
+Boxed answers and already-extracted candidates use math-verify's anchored parser. Other profiles
+use task-controlled extraction and parser options.
 
 ``math_type`` selects the comparison. Set and interval answers allow math-verify's set/relation
 comparison, so an expected ``(2, \infty)`` accepts a candidate ``x > 2``. A list is an ordered
@@ -61,9 +60,13 @@ def _timeout() -> int:
 
 
 _DANGLING_OPERATOR = re.compile(r"(?:[<>=+\-*/^]|\\(?:leq?|geq?|lt|gt|neq?|cdot|times))\s*$")
+# Use the sentence and claim boundaries from the Polaris grader.
+FINAL_SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
+FINAL_CLAIM = re.compile(r"\b(?:is|equals)\s+|^answer:\s*", re.IGNORECASE)
+PERCENT_SUFFIX = re.compile(r"(?:\\?%|\s+percent)$", re.IGNORECASE)
 TEXT_CONNECTOR_CONTENT = r"\s*(?:and|or)\s*"
 TEXT_GROUP_COMMAND = r"\\(?:text|mbox|mathrm)"
-REFERENCE_TEXT_GROUP = re.compile(TEXT_GROUP_COMMAND + r"\{(?!" + TEXT_CONNECTOR_CONTENT + r"\})")
+NON_CONNECTOR_TEXT_GROUP = re.compile(TEXT_GROUP_COMMAND + r"\{(?!" + TEXT_CONNECTOR_CONTENT + r"\})")
 LEADING_LIST_CONNECTOR = re.compile(r"^\\text\{" + TEXT_CONNECTOR_CONTENT + r"\}\s*")
 # Unit normalization strips terminal text groups and their powers.
 TERMINAL_UNIT_POWER = r"\^(?:[+-]?[0-9]|\{\s*[+-]?[0-9]+\s*\})"
@@ -96,7 +99,7 @@ def _math_verify_parse(text: str, extraction_config: Sequence[object] | None = N
     return parse(text, extraction_config=unitless, **kwargs)
 
 
-def _parse(text: str, *, strip_units: bool = True) -> list:
+def _parse(text: str, strip_units: bool) -> list:
     """Parse a candidate as anchored LaTeX, else as written."""
     from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig  # noqa: PLC0415
 
@@ -113,26 +116,30 @@ def _parse(text: str, *, strip_units: bool = True) -> list:
     ) or _math_verify_parse(text, extraction_config=extraction_config, parsing_timeout=timeout, raise_on_error=True)
 
 
-def _parse_reference(text: str) -> tuple[list, bool]:
-    """Parse a whole reference and return whether candidates should strip units."""
+def _parse_whole_expression(text: str, *, strip_units: bool = True) -> tuple[list, bool]:
+    """Parse whole LaTeX and return whether unit stripping preserves the expression."""
+    from math_verify.utils import timeout  # noqa: PLC0415
+
+    return timeout(_timeout())(_parse_normalized_expression)(text, strip_units=strip_units)
+
+
+def _parse_normalized_expression(text: str, *, strip_units: bool) -> tuple[list, bool]:
     from latex2sympy2_extended import latex2sympy, normalize_latex  # noqa: PLC0415
     from math_verify.grader import should_treat_as_complex  # noqa: PLC0415
     from math_verify.parser import LatexExtractionConfig  # noqa: PLC0415
-    from math_verify.utils import timeout  # noqa: PLC0415
 
     # Normalization would otherwise leave a dangling exponent before an ordinal text group.
     value = ORDINAL_SUFFIX.sub(r"\1", strip_math_delimiters(text))
-    text_groups = list(REFERENCE_TEXT_GROUP.finditer(value))
-    strip_units = bool(text_groups)
+    text_groups = list(NON_CONNECTOR_TEXT_GROUP.finditer(value))
     symbolic_text_group = False
     if re.search(r"(?<!\\)\$", value) or any(delimiter in value for delimiter in (r"\(", r"\)", r"\[", r"\]")):
-        return [], strip_units
+        return [], False
     for text_group in text_groups:
         # Unit normalization removes a terminal text-group suffix. It can
         # also swallow any intervening expression up to the final closing brace.
         _, first_close = _scan_brackets(value[text_group.end() - 1 :])
         if first_close is None:
-            return [], strip_units
+            return [], False
         group_contents = value[text_group.end() : text_group.end() + first_close - 1]
         suffix = value[text_group.end() + first_close :].strip()
         terminal_unit_suffix = TERMINAL_UNIT_SUFFIX.fullmatch(suffix)
@@ -142,7 +149,7 @@ def _parse_reference(text: str) -> tuple[list, bool]:
             and not re.fullmatch(TERMINAL_UNIT_POWER, suffix)
             and not UNIT_GROUP_CONTENT.fullmatch(group_contents)
         ):
-            return [], strip_units
+            return [], False
         if suffix and not terminal_unit_suffix:
             prefix = value[: text_group.start()].rstrip()
             upright_symbol = text_group.group() == r"\mathrm{" and len(group_contents) == 1 and group_contents.isalpha()
@@ -150,42 +157,63 @@ def _parse_reference(text: str) -> tuple[list, bool]:
             if not re.fullmatch(r"[^\s~]+", group_contents) or (
                 prefix and prefix[-1] not in "([{=+-*/^" and not upright_symbol and not no_gap_before_group
             ):
-                return [], strip_units
+                return [], False
             # A text symbol starting a term or adjacent to one is part of the expression.
             symbolic_text_group = True
-            strip_units = False
         if text_group.start() == 0 and len(group_contents.split()) > 4:
-            return [], strip_units
+            return [], False
     latex = LatexExtractionConfig(boxed_match_priority=-1)
 
+    normalized = normalize_latex(value, config=latex.normalization_config)
+    use_stripped = strip_units and not symbolic_text_group and (bool(text_groups) or normalized == value)
+    if text_groups and _DANGLING_OPERATOR.search(normalized):
+        # A terminal text symbol can be the operand that unit normalization removed.
+        use_stripped = False
+    if not use_stripped:
+        # Other normalization changes, such as \dfrac -> \frac, do not imply a stripped unit.
+        unitless = normalize_latex(value, config=replace(latex.normalization_config, units=False))
+        use_stripped = strip_units and not symbolic_text_group and normalized == unitless
+        normalized = unitless
     # math-verify can match an inner math fragment or retry only the last equation.
-    @timeout(_timeout())
-    def parse_whole() -> tuple[object, bool]:
-        normalized = normalize_latex(value, config=latex.normalization_config)
-        candidate_strip_units = not symbolic_text_group and (strip_units or normalized == value)
-        if strip_units and _DANGLING_OPERATOR.search(normalized):
-            # A terminal text symbol can be the operand that unit normalization removed.
-            candidate_strip_units = False
-        if not candidate_strip_units:
-            # Other normalization changes, such as \dfrac -> \frac, do not imply a stripped unit.
-            unitless = normalize_latex(value, config=replace(latex.normalization_config, units=False))
-            candidate_strip_units = not symbolic_text_group and normalized == unitless
-            if not candidate_strip_units:
-                normalized = unitless
-        parsed = latex2sympy(
-            normalized,
-            is_real=not should_treat_as_complex(normalized),
-            convert_degrees=False,
-            normalization_config=None,
-        )
-        return parsed, candidate_strip_units
+    parsed = latex2sympy(
+        normalized,
+        is_real=not should_treat_as_complex(normalized),
+        convert_degrees=False,
+        normalization_config=None,
+    )
+    return ([parsed] if parsed is not None else []), use_stripped
 
+
+def _parse_reference(text: str) -> tuple[list, bool]:
     try:
-        parsed, strip_units = parse_whole()
+        return _parse_whole_expression(text)
     except Exception as error:
         # latex2sympy reports syntax errors as bare Exception.
         raise InvalidTask(f"math-verify cannot parse expected {text!r}") from error
-    return ([parsed] if parsed is not None else []), strip_units
+
+
+def _parse_final_expression(text: str, strip_units: bool) -> list:
+    value = strip_math_delimiters(text)
+    if not value:
+        return []
+    # Preserve whole numeric percentages across the supported ANTLR versions.
+    if suffix := PERCENT_SUFFIX.search(value):
+        try:
+            percentage = numeric_literal(value[: suffix.start()])
+        except ValueError:
+            pass
+        else:
+            from sympy import Rational  # noqa: PLC0415
+
+            return [Rational(percentage.numerator, percentage.denominator * 100)]
+    try:
+        parsed, _ = _parse_whole_expression(value, strip_units=strip_units)
+    except Exception as error:
+        # latex2sympy reports syntax errors as bare Exception.
+        if type(error) is not Exception:
+            raise
+        return []
+    return parsed
 
 
 def _as_list(value: Any) -> list:
@@ -464,11 +492,15 @@ def validate_math(spec: MathSpec) -> None:
 
 def grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
     """Score extracted math content; backend deadlines become infrastructure failures."""
+    return _grade_extracted_math(spec, candidate, _parse)
+
+
+def _grade_extracted_math(spec: MathSpec, candidate: str, parse_candidate: Callable[[str, bool], list]) -> Reward:
     validate_math(spec)
     from math_verify.errors import TimeoutException  # noqa: PLC0415
 
     try:
-        return _grade_math_candidate(spec, candidate)
+        return _grade_math_candidate(spec, candidate, parse_candidate)
     except TimeoutException as error:
         # This backend exception inherits BaseException, unlike Python's TimeoutError.
         # Phase-tagged deadlines are raised by _deadline_phase below; this catch is the
@@ -542,7 +574,7 @@ def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
     return scored(float(match), extracted=candidate, expected=spec.expected, parsed_candidate=chosen)
 
 
-def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
+def _grade_math_candidate(spec: MathSpec, candidate: str, parse_candidate: Callable[[str, bool], list]) -> Reward:
     if spec.profile is MathProfile.RAW:
         return _grade_raw_math(spec, candidate)
     if spec.profile is MathProfile.BOXED:
@@ -583,7 +615,7 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
     with _deadline_phase(MATH_DEADLINE_CANDIDATE_PARSE):
         parsed = _candidate_parse(
             lambda: [
-                _parse(member, strip_units=strip_units)
+                parse_candidate(member, strip_units)
                 for member, (_, strip_units) in zip(candidate_members, references, strict=True)
             ]
         )
@@ -603,12 +635,18 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
 
 
 def math_answer(spec: MathSpec, text: str) -> str:
-    """Keep raw responses whole; extract the last box or line for other profiles."""
+    """Extract the answer according to the task's math profile."""
     if spec.profile is MathProfile.RAW:
         return text
     if BOXED in text:
         return extract_boxed(text) or ""
-    return last_line(text) or ""
+    line = last_line(text) or ""
+    if spec.profile is MathProfile.ANCHORED:
+        sentence = FINAL_SENTENCE.split(line)[-1]
+        claims = list(FINAL_CLAIM.finditer(sentence))
+        line = sentence[claims[-1].end() :] if claims else sentence
+        line = line.strip().removesuffix(".").rstrip()
+    return line
 
 
 def _grade_symbolic(spec: MathSpec, workspace: Path) -> Reward:
@@ -622,7 +660,10 @@ def _grade_symbolic(spec: MathSpec, workspace: Path) -> Reward:
 
 def grade_math_text_candidate(spec: MathSpec, text: str) -> Reward:
     """Extract math under the task's parsing profile and grade the result."""
-    return grade_math_candidate(spec, math_answer(spec, text))
+    candidate = math_answer(spec, text)
+    if spec.profile is MathProfile.ANCHORED and BOXED not in text:
+        return _grade_extracted_math(spec, candidate, _parse_final_expression)
+    return grade_math_candidate(spec, candidate)
 
 
 def grade_numeric_candidate_float(expected: float, value: float | None, *, tolerance_abs: float) -> Reward:

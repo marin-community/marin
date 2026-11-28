@@ -65,9 +65,11 @@ When a box is present, its entire content must be a numeric literal, optionally 
 Thousands separators require groups of three digits. Multiple literals such as `12 or 13` or
 `2 + 2`, malformed numbers and nonfinite values are malformed submissions and receive reward `0.0`.
 
-Default math references must parse as one whole LaTeX expression. Each member of a LIST
-reference must parse separately. A partial parse makes the task invalid; TaskCompendium rejects
-such a row during conversion as `invalid_reference`.
+Default math grading reads the last sentence of an unboxed final line. It takes the text after
+`is`, `equals`, or an opening `Answer:` when present and removes a trailing period. An unboxed
+candidate must parse as a whole expression to earn credit. Each member of a LIST answer parses
+separately. A reference that fails whole-expression parsing makes the task invalid. TaskCompendium
+rejects such a row during conversion as `invalid_reference`.
 
 Scalar `MathSpec` contracts may set `positive_symbols = ["a_1", "a_2"]` when the public problem
 explicitly states those symbols are positive. If ordinary comparison fails, the grader checks
