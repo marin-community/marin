@@ -96,6 +96,7 @@ def test_uncommitted_code_cannot_submit_even_with_a_matching_landing_record(chec
     "literal",
     [
         'INPUT = "s3://fixture/raw-copy/tasks.parquet"',
+        'INPUT = "https://example.invalid/datasets/source/train.jsonl"',
         'SOURCE_REVISION = "0123456789abcdef0123456789abcdef01234567"',
         'SNAPSHOT = "r39-source-snapshot"',
         "CENSUS = dict(measured_tasks=47118)",

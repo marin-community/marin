@@ -28,7 +28,7 @@ from experiments.post_training.task_curation.release_stages.guard import (
 STAGE_DIRECTORY = Path("experiments/post_training/task_curation/ingest_stages")
 SOURCE_SUFFIXES = frozenset({".py", ".json", ".toml", ".yaml", ".yml", ".sh", ".lock", ".proto"})
 PIN_LITERAL = re.compile(r"(?<![0-9a-f])(?:[0-9a-f]{64}|[0-9a-f]{40}|[0-9a-f]{32})(?![0-9a-f])")
-LOCATION_LITERAL = re.compile(r"(?:s3|gs|hf|file)://[^\s/]+|/(?:Users|home|workspace|tmp)/\S+")
+LOCATION_LITERAL = re.compile(r"(?:s3|gs|hf|file|https?)://[^\s/]+|/(?:Users|home|workspace|tmp)/\S+")
 MEASURED_FIELDS = frozenset(
     {
         "task_count",
