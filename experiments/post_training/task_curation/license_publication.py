@@ -218,10 +218,11 @@ def publish_private_dataset(prepared: PreparedPrivateDataset) -> PublishedPrivat
             if getattr(entry, "path", None)
         }
         # The Hub creates .gitattributes on repo creation; platform boilerplate is not
-        # publication content. Anything else outside this publication fails the reuse.
+        # publication content, and a create-only attempt (the first upload died) leaves
+        # the repo empty — both adopt. Anything outside this publication fails the reuse.
         existing.discard(".gitattributes")
         expected = set(prepared.file_hashes)
-        if not existing <= expected or not any(existing):
+        if existing - expected:
             raise ValueError(f"Private publication repo already exists with other content: {prepared.repo}") from error
         existing_private = api.repo_info(prepared.repo, repo_type="dataset")
         if not existing_private.private:

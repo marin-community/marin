@@ -656,6 +656,45 @@ def test_private_publication_reuses_its_own_prior_attempt_repo(tmp_path, monkeyp
     assert writes == ["upload"] and result.revision == "d" * 40
 
 
+def test_private_publication_adopts_an_empty_shell_repo(tmp_path, monkeypatch):
+    """A prior attempt that created the repo and died before its first upload
+    (the OpenSWE 20261127b v8 card refusal) leaves an empty shell: only the
+    Hub's .gitattributes. The adoption adopts it — the empty inventory holds
+    nothing outside this publication."""
+    card = b"---\nlicense: mit\n---\n# Dataset\n"
+    receipt = source_receipt(card)
+    (tmp_path / "README.md").write_bytes(card)
+    (tmp_path / "tasks.parquet").write_bytes(b"frozen source task bytes")
+    repo = "open-athena/fixture-publication"
+    writes = []
+
+    class Hub:
+        def create_repo(self, **kwargs):
+            assert kwargs["exist_ok"] is False
+            raise RuntimeError("409 Conflict: the repo already exists")
+
+        def list_repo_tree(self, dataset, *, repo_type, recursive):
+            assert dataset == repo and recursive is True
+            return [SimpleNamespace(path=".gitattributes")]
+
+        def repo_info(self, dataset, **kwargs):
+            assert dataset == repo
+            return SimpleNamespace(private=True, sha="c" * 40)
+
+        def upload_folder(self, **kwargs):
+            writes.append("upload")
+            return SimpleNamespace(oid="d" * 40)
+
+    monkeypatch.setattr(license_publication, "HfApi", Hub)
+    monkeypatch.setattr(license_publication, "hf_hub_download", lambda repo, name, **kwargs: str(tmp_path / name))
+    monkeypatch.setattr(license_publication, "check_publication", lambda *args, **kwargs: {"verdict": "PASS"})
+    prepared = license_publication.prepare_private_dataset(
+        receipt.source_id, repo, tmp_path, ("README.md", "tasks.parquet"), receipt, use="train"
+    )
+    result = license_publication.publish_private_dataset(prepared)
+    assert writes == ["upload"] and result.revision == "d" * 40
+
+
 def test_private_publication_rejects_a_repo_with_other_content(tmp_path, monkeypatch):
     card = b"---\nlicense: mit\n---\n# Dataset\n"
     receipt = source_receipt(card)
