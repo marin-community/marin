@@ -412,7 +412,7 @@ def test_changed_helper_module_forces_full_scope(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "path", [".github/workflows/ops-loom-review.yaml", ".github/actions/launch-loom-run/action.yaml"]
+    "path", [".github/workflows/ops-codehealth-refinement.yaml", ".github/actions/launch-loom-run/action.yaml"]
 )
 def test_loom_workflow_change_runs_the_iac_suite(tmp_path: Path, path: str) -> None:
     write(tmp_path, "infra/loom/tests/test_infrastructure.py", "def test_workflow():\n    assert True\n")

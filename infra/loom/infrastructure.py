@@ -677,6 +677,34 @@ def _google_federation_mapping(
     }
 
 
+def _pull_request_rule_setting(
+    pull_request_rules: object, profiles: list[ProfileConfig], federations: list[GitHubFederationConfig]
+) -> tuple[str, str]:
+    if not isinstance(pull_request_rules, list):
+        raise ValueError("githubPullRequestRules must be a list")
+    federations_by_name = {federation.name: federation for federation in federations}
+    profile_names = {profile.name for profile in profiles}
+    for rule in pull_request_rules:
+        if not isinstance(rule, dict):
+            raise ValueError("each GitHub pull request rule must be an object")
+        name = rule.get("name")
+        target = rule.get("target")
+        if not isinstance(target, dict) or len(target) != 1:
+            raise ValueError(f"rule {name!r} must name one profile or federation")
+        if "profile" in target:
+            if str(target["profile"]) not in profile_names:
+                raise ValueError(f"rule {name!r} names an unknown profile")
+            continue
+        federation = federations_by_name.get(str(target.get("federation")))
+        if (
+            federation is None
+            or federation.repository_id != str(rule.get("repository_id"))
+            or federation.event_name != "pull_request_target"
+        ):
+            raise ValueError(f"rule {name!r} requires a pull_request_target federation for its repo")
+    return "github.pull_request_rules", json.dumps(pull_request_rules, separators=(",", ":"))
+
+
 @dataclass(frozen=True)
 class DeploymentConfig:
     project: str
@@ -828,6 +856,12 @@ class DeploymentConfig:
             if not isinstance(value, dict):
                 raise ValueError("each GitHub federation must be an object")
             github_federations.append(GitHubFederationConfig.parse(value))
+        pull_request_rules = config.get_object("githubPullRequestRules")
+        if pull_request_rules is not None:
+            key, value = _pull_request_rule_setting(pull_request_rules, profiles, github_federations)
+            if key in raw_settings:
+                raise ValueError(f"githubPullRequestRules and settings.{key} both declare pull request rules")
+            settings.append((key, value))
         raw_oauth_clients = config.get_object("oauthClients") or {}
         if not isinstance(raw_oauth_clients, dict):
             raise ValueError("oauthClients must be an object")

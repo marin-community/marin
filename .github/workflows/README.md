@@ -44,21 +44,18 @@ events, not edits. The launch uses the low-effort `prose-cleanup` Loom profile p
 and reopen events return the existing run instead of starting another. A body that already carries
 the `marin-prose-cleanup` marker skips the launch entirely.
 
-## Agentic lint
+## Pull request reviews
 
-`agentic-lint.yaml` runs a best-effort Loom lint review on a pull request that
-lacks the `agentic-lint` label. The label records that the PR has had a lint
-pass: the `manage-pr` skill applies it at PR creation after the author's local
-`./infra/pre-commit.py --review`, and the Loom session adds it after reporting
-its findings. The launcher runs when a non-draft PR from this repository opens,
-reopens, or becomes ready for review, and only when its author has write access
-or is `marin-ops-agent[bot]`. Pushes to a PR do not launch another review;
-removing the label requests a fresh review of the current head. The idempotency
-key is the PR number and head SHA, so repeated events on one commit reuse a run.
-The review is not a required check, so a failed Loom run does not block merging.
-Loom's `agentic-lint` profile and the workflow's OIDC federation are declared in
-`infra/loom/Pulumi.marin-loom.yaml`; the GitHub profile variable is published
-from `infra/pulumi/github`.
+The GitHub App webhook starts Loom sessions for holistic review and agentic
+lint. The rules and rollout steps live in the
+[Loom deployment guide](../../infra/loom/README.md#pull-request-webhook-rules).
+
+Agentic lint runs when a non-draft PR from this repository
+opens, reopens, or becomes ready for review without the `agentic-lint` label.
+The author needs write access or must be `marin-ops-agent[bot]`. Removing the
+label triggers review at the current head. The PR number and head SHA identify
+each run. The `manage-pr` skill applies the label after a local lint review,
+and the Loom session adds it after reporting its findings.
 
 Other GitHub agent entry points use the `github-automation` Loom profile.
 
@@ -69,10 +66,8 @@ private organization membership, so a regular member with private visibility
 appears as `CONTRIBUTOR` and would be skipped. The action asks GitHub for the
 author's effective repository permission with the workflow token and allows
 `write`, `maintain`, or `admin`; a lookup failure logs the API error and denies
-the launch. Bot accounts do not resolve through that endpoint, so the
-pull-request launchers pass `marin-ops-agent[bot]` through the action's
-`allowed-bots` input. Scheduled and label-driven launchers such as prose
-cleanup do not use the check.
+the launch. Scheduled and label-driven launchers such as prose cleanup
+use their own eligibility rules.
 
 Canary failure workflows launch an independent triage session and continue to
 send the immediate Slack fallback notification. The Iris smoke test still
@@ -80,11 +75,11 @@ uploads screenshots for inspection through the `Marin - Unit` run.
 
 ## Holistic review and deslop
 
-`ops-loom-holistic-review.yaml` launches a whole-change review session for a
+The holistic webhook rule launches a whole-change review session for a
 non-draft pull request from this repository whose author has write access or
 is `marin-ops-agent[bot]` or `loom-oa-dev[bot]`. Each distinct head gets a run in the PR's Loom
-channel. The session reads the `review-pr` skill from the workflow revision
-so an older branch receives the current rubric. The reviewer maintains
+channel. The session reads the `review-pr` skill from the trusted default
+branch. The reviewer maintains
 one compact overview ending in
 `<!-- marin-holistic-review:<sha> -->`. Re-reviews replace the original
 overview by comment ID, preserving finding numbers and updating their status.

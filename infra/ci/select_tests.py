@@ -164,8 +164,6 @@ EXTERNAL_TEST_INPUTS: dict[str, frozenset[str]] = {
             ".github/actions/launch-loom-run/action.yaml",
             ".github/workflows/ops-codehealth-refinement.yaml",
             ".github/workflows/ops-fork-ferry.yaml",
-            ".github/workflows/ops-loom-holistic-review.yaml",
-            ".github/workflows/ops-loom-review.yaml",
         }
     ),
 }

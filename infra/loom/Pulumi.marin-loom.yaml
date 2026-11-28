@@ -190,28 +190,6 @@ config:
         - marin-community/xla
       allowedTools: []
       mcpAccess: *builtinMcpAccess
-    pr-review:
-      agent: claude
-      description: Review trusted Marin pull requests from immutable head commits
-      model: claude-opus-5-5
-      effort: xhigh
-      protocol: acp
-      mode: auto
-      class: automation
-      strict: true
-      envClear: true
-      ambientAllowlist: []
-      idleArchiveSeconds: 60
-      maxConcurrent: 16
-      turnBudget: 200
-      prelude: weaver
-      instructionsFile: profiles/pr-review/AGENTS.md
-      env: *claudeSessionEnv
-      restricted: false
-      githubRepositories:
-        - marin-community/marin
-      allowedTools: []
-      mcpAccess: *builtinMcpAccess
     pr-holistic-review:
       agent: claude
       description: Review each head of trusted, non-draft Marin pull requests as a whole change
@@ -460,8 +438,10 @@ config:
       serviceAccountId: marin-grafana
       createServiceAccount: false
   marin-loom:githubFederations:
+    # The review rules use the retired workflow refs to preserve run
+    # reservations and the holistic review conversation across cutover.
     - name: agentic-lint
-      repositoryId: &marinRepositoryId "775839592"
+      repositoryId: &marinRepositoryId 775839592
       workflowRef: marin-community/marin/.github/workflows/agentic-lint.yaml@refs/heads/main
       profile: agentic-lint
       serviceTag: agentic-lint
@@ -544,13 +524,6 @@ config:
       profile: *githubAutomationProfile
       serviceTag: *githubAutomationProfile
       ref: refs/heads/main
-    - name: pr-review
-      repositoryId: *marinRepositoryId
-      workflowRef: marin-community/marin/.github/workflows/ops-loom-review.yaml@refs/heads/main
-      profile: pr-review
-      serviceTag: pr-review
-      event: pull_request_target
-      ref: refs/heads/main
     - name: pr-holistic-review
       repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/ops-loom-holistic-review.yaml@refs/heads/main
@@ -564,6 +537,49 @@ config:
       profile: codehealth-refinement
       serviceTag: codehealth-refinement
       ref: refs/heads/main
+  marin-loom:githubPullRequestRules:
+    - name: pr-holistic-review
+      repository_id: *marinRepositoryId
+      target: {federation: pr-holistic-review}
+      events:
+        - actions: &reviewActions [opened, ready_for_review, reopened]
+        - actions: [synchronize]
+      allowed_bots:
+        - &reviewBot "marin-ops-agent[bot]"
+        - "loom-oa-dev[bot]"
+      run:
+        idempotency_key: "pr-holistic:{number}:{head}"
+        channel: "pr-holistic:{number}"
+        title: "Holistic review for #{number}"
+        goal: >-
+          Review pull request #{number} at head {head} as a whole change. If
+          the session worktree is at a different commit, fetch this exact SHA
+          from origin and check it out detached before reviewing. Remain
+          read-only except for creating or replacing the original holistic
+          overview comment and optionally creating one new top-level comment
+          with new or materially changed actionable findings. Fetch
+          refs/heads/main from origin and use FETCH_HEAD as the policy revision.
+          Read the review-pr skill and its references from that revision with
+          git show. Use the PR revisions for the code and its scoped project
+          instructions. Run review-pr in holistic mode with --comment and
+          publish a typed result.
+    - name: agentic-lint
+      repository_id: *marinRepositoryId
+      target: {federation: agentic-lint}
+      events:
+        - actions: *reviewActions
+        - actions: [unlabeled]
+          label: &agenticLintLabel agentic-lint
+      excluded_labels: [*agenticLintLabel]
+      allowed_bots: [*reviewBot]
+      run:
+        idempotency_key: "agentic-lint:{number}:{head}"
+        title: "Agentic lint for #{number}"
+        goal: >-
+          Review pull request #{number} at head {head}. Follow the agentic-lint
+          profile instructions. Run the lint catalog review, report every
+          finding on the PR, and add the agentic-lint label once the review
+          completes. Append a typed result to the Loom channel.
   marin-loom:watches:
     goals:
       enabled: true

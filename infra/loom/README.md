@@ -113,9 +113,8 @@ Repository-owned task procedures live in `procedures/`:
   execution requires a Loom watch that names the procedure path. They retain
   the harness result footer but register no schedule.
 
-The `pr-review` and `pr-holistic-review` profiles both use `review-pr`, selecting
-its correctness and holistic reporting contracts respectively. Profile
-permissions and automation behavior remain specific to each pass.
+The `pr-holistic-review` profile uses the holistic reporting contract of
+`review-pr`. The `agentic-lint` profile applies Marin's lint catalog.
 
 Runtime profiles and workload federation mappings live in
 `Pulumi.marin-loom.yaml` and are applied through Loom's deployment API during
@@ -159,15 +158,13 @@ and pull-request write access. The App key remains in `LOOM_DOTENV`; the profile
 does not store a GitHub token or grant Actions access. The GitHub Pulumi stack
 reads the mapping's profile from this stack's `githubFederationProfiles` output
 and publishes it as the workflow's `LOOM_FORK_FERRY_PROFILE` repository variable.
-The `agentic-lint` mapping authorizes the dedicated PR lint profile, and the
-`agent-prose-cleanup` mapping authorizes the low-effort `prose-cleanup` profile
+The `agent-prose-cleanup` mapping authorizes the low-effort `prose-cleanup` profile
 with a 16-session concurrency cap and a 40-turn budget, so description rewrites never
 consume the shared automation pool. The remaining GitHub agent workflows have
 individual federation mappings to the `github-automation` profile. Each mapping binds an exact workflow path on
 `main`; the shared profile does not make other workflows eligible. Deploy the
 Loom stack before the GitHub Pulumi stack so the latter can publish
-`LOOM_AGENTIC_LINT_PROFILE`, `LOOM_GITHUB_AUTOMATION_PROFILE`,
-`LOOM_PR_HOLISTIC_REVIEW_PROFILE`, and `LOOM_PROSE_CLEANUP_PROFILE`. Apply the
+`LOOM_GITHUB_AUTOMATION_PROFILE` and `LOOM_PROSE_CLEANUP_PROFILE`. Apply the
 Loom stack before the GitHub Pulumi stack whenever these federations or profile
 variables change.
 
@@ -297,6 +294,40 @@ but it does not reserve capacity for either channel. The `marin-grafana` service
 account already exists in the production Grafana stack. In a new environment,
 deploy Grafana once with `marin-grafana:loom_alerts` set to `false`, deploy Loom
 to bind the new service account, then enable Loom alerts and redeploy Grafana.
+
+## Pull request webhook rules
+
+`githubPullRequestRules` in [Pulumi.marin-loom.yaml](Pulumi.marin-loom.yaml)
+declares which GitHub pull request events start Loom runs. A rollout reconciles
+these rules with the launch profiles and federations. Each rule lists its
+repository ID, actions, optional label filters, bot allowlist, and launch
+templates. A new rule can target a Loom profile directly. Loom checks that
+the current PR is open, ready for review, and from the same repository.
+Human authors need write access. The two review rules reuse the identities
+of the retired workflows so earlier runs and the holistic review conversation
+remain addressable.
+
+For the initial cutover, roll out and verify webhook delivery before the merge
+that removes the three Actions workflows.
+
+1. Disable the standalone correctness workflow:
+
+   ```sh
+   gh workflow disable ops-loom-review.yaml --repo marin-community/marin
+   ```
+
+   Let in-flight launches and active `pr-review` sessions finish. Loom can
+   then remove the retired profile during rollout.
+2. In the `loom-oa-dev` GitHub App settings, subscribe to **Pull request** events.
+3. From the reviewed Marin checkout, [roll out the Loom stack](#deploy) using a
+   Loom build with pull request rule support.
+4. Confirm that an eligible delivery receives HTTP 202 and Loom records the
+   expected runs at the PR head with a link to the PR. While Actions and the
+   webhook overlap, verify that both transports resolve to the same run.
+   Check a holistic re-review after a push and a lint launch after removing
+   the lint label from a head without a prior lint run.
+5. Merge the Marin change to retire the Actions workflows. Apply the GitHub
+   Pulumi stack afterward to remove the retired workflow profile variables.
 
 ## VM permissions
 
