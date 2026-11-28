@@ -480,8 +480,10 @@ files in bounded transactions when autotuning is enabled. With
 the snapshot without starting an uploader. XLA can read cached configurations
 before choosing its level-0 fallback. The local directory and remote root
 are keyed by the launch tree hash; the remote root uses 30-day temporary storage.
-Iris also accepts `--xla_gpu_autotune_level 0` and converts it to XLA's required
-equals form before importing JAX.
+During `initialize_jax`, Iris converts all space-separated `XLA_FLAGS` values
+to XLA's required equals form, including `--xla_gpu_autotune_level 0`. This
+runs before XLA backend initialization on that path; a process that initializes
+the backend earlier cannot use this normalization.
 The fetch allows at most 500,000 files and 2 GiB of logical data, checks a
 5-minute deadline between file operations, and logs progress after a completed
 file when at least 10 seconds have elapsed. Each uploader stops before its own
