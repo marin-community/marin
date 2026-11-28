@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
 import pytest
+from rigging.task_errors import VERIFIER_RUNTIME_ERROR, VERIFIER_TIMEOUT_ERROR
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
@@ -32,7 +33,7 @@ from verifyit.spec import NumericSpec
 
 import taskcompendium.runtime.grading as grading
 from taskcompendium.grader import verifyit_package
-from taskcompendium.grading_result import GradingFailure, Outcome
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome, grading_failure_identity
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
@@ -525,6 +526,18 @@ NUMBER_FILE = (RewardFile(path=REWARD_TXT, format=RewardFileFormat.NUMBER),)
 JSON_FILE = (RewardFile(path=REWARD_JSON, format=RewardFileFormat.JSON),)
 METRICS_FILE = (RewardFile(path=REWARD_JSON, format=RewardFileFormat.JSON_METRICS),)
 DETAIL = {"cases": [{"passed": True}]}
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (GradingFailure.GRADER_EXIT, VERIFIER_RUNTIME_ERROR),
+        (GradingFailure.GRADER_TIMEOUT, VERIFIER_TIMEOUT_ERROR),
+    ],
+)
+def test_grader_command_failures_have_an_error_identity(failure, expected):
+    identity = grading_failure_identity(GradeResult(Outcome.INFRA_ERROR, reward=None, failure=failure))
+    assert identity is not None and identity.exception_type == expected
 
 
 @pytest.mark.asyncio
