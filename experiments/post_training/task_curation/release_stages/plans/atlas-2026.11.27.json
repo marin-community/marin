@@ -30,7 +30,7 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v25/package-inputs/source-counts.json"
     }
   },
-  "prior_snapshot_id": "assembly-projection-refresh-20261127-v10-fallback",
+  "prior_snapshot_id": "assembly-projection-refresh-20261126-v4",
   "production_version": 76,
   "qc_exclusions": [],
   "release_id": "atlas-2026.11.27",
