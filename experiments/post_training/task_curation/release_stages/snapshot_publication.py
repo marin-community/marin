@@ -11,7 +11,6 @@ stage writes object storage, not SQL, but the same pre-write discipline applies)
 """
 
 import argparse
-import dataclasses
 import hashlib
 import json
 import subprocess
@@ -21,14 +20,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from finestore.rl.curation import CurationCatalog
+from finestore.rl.curation import QualifiedSourceDeclaration as SourceDeclaration
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
 from experiments.post_training.task_curation.catalog_identity import canonical_declaration
-from experiments.post_training.task_curation.catalog_snapshot import publish_assembly_snapshot
+from experiments.post_training.task_curation.catalog_snapshot import (
+    PublicationSource,
+    publish_assembly_snapshot,
+)
 from experiments.post_training.task_curation.datasets.derived_contract_measurements import derived_contract_receipts
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+from experiments.post_training.task_curation.source import SourceInfo
 from experiments.post_training.task_curation.source_duplicate_ci import fingerprint_input
 from experiments.post_training.task_curation.sources import all_sources
 from infra.marina.apps.rl_data_catalog.server.admission import require_catalog_declaration
@@ -117,6 +121,23 @@ def verify_repo_state(repo_root: Path, inputs: SnapshotPublicationInputs) -> str
             "cut from a checkout that contains it"
         )
     return revision
+
+
+class _CarriedDeclarationSource:
+    """A source view whose declaration is the served row (a deliberate exclusion):
+    the assembly publication projects the served declaration verbatim."""
+
+    def __init__(self, source: PublicationSource, served_declaration: SourceDeclaration) -> None:
+        self._source = source
+        self._served_declaration = served_declaration
+
+    @property
+    def info(self) -> SourceInfo:
+        return self._source.info
+
+    @property
+    def declaration(self) -> SourceDeclaration:
+        return self._served_declaration
 
 
 def verify_current_declarations(inputs: SnapshotPublicationInputs) -> dict[str, dict]:
@@ -282,7 +303,7 @@ def run_snapshot_publication(
             source_id = canonical_source_id(source.info.id)
             if source_id in inputs.deliberate_exclusions and source_id in current:
                 sources.append(
-                    dataclasses.replace(source, declaration=type(source.declaration).model_validate(current[source_id]))
+                    _CarriedDeclarationSource(source, type(source.declaration).model_validate(current[source_id]))
                 )
             else:
                 sources.append(source)
