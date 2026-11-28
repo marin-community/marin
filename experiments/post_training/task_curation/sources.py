@@ -249,6 +249,19 @@ UNFROZEN_ADMITTED_IDS = frozenset(
     }
 )
 
+# The 2026-11-29 pending-listing ruling: these admitted sources serve from their
+# retained receipts (three Available; StructEval a final-empty Excluded) and were
+# never in the R41 freeze — their staging entries leave the pending-intake
+# listing below.
+ADMITTED_LISTED_IDS = frozenset(
+    {
+        "SynthLabs:Big-Math-RL-Verified",
+        "Tiger-lab:AceCode-89K",
+        "Newfacade:LeetCodeDataset",
+        "Tiger-lab:StructEval",
+    }
+)
+
 
 @lru_cache(maxsize=1)
 def pending_measurement_sources() -> tuple[RlDataSource, ...]:
@@ -287,10 +300,12 @@ def pending_measurement_sources() -> tuple[RlDataSource, ...]:
         *s1_deepresearch_admitted.sources(),
         *freeform_formatting_admitted.sources(),
         *citation_formatting_admitted.sources(),
-        *big_math_admitted.sources(),
-        *acecode_89k_admitted.sources(),
-        *leetcode_dataset_admitted.sources(),
-        *structeval_admitted.sources(),
+        # The four ADMITTED_LISTED_IDS rows serve from their retained receipts
+        # above; they are not pending intake.
+        *(source for source in big_math_admitted.sources() if source.info.id not in ADMITTED_LISTED_IDS),
+        *(source for source in acecode_89k_admitted.sources() if source.info.id not in ADMITTED_LISTED_IDS),
+        *(source for source in leetcode_dataset_admitted.sources() if source.info.id not in ADMITTED_LISTED_IDS),
+        *(source for source in structeval_admitted.sources() if source.info.id not in ADMITTED_LISTED_IDS),
         *(
             source
             for source in campaign_releases.sources()
