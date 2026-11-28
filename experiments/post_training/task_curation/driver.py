@@ -30,6 +30,7 @@ from taskcompendium.pipeline.assessment import AssessmentSampling
 from taskcompendium.pipeline.assessment_review import ASSESSMENT_RUBRIC, AssessmentModel
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
 from taskcompendium.pipeline.curriculum.models import EmbeddingSpec
+from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.pipeline.query_cache import compact_query_cache
 from taskcompendium.pipeline.semantics import DescriptionModel
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
@@ -57,6 +58,12 @@ from experiments.post_training.task_curation.config import (
     InputOverrides,
     PipelineOptions,
     RecipeSettings,
+)
+from experiments.post_training.task_curation.cross_source_step import (
+    CROSS_SOURCE_DEDUP_VERSION as CROSS_SOURCE_KEY,
+)
+from experiments.post_training.task_curation.cross_source_step import (
+    cross_source_dedup_step,
 )
 from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY
 from experiments.post_training.task_curation.embedding import (
@@ -810,6 +817,11 @@ def main(
             plan["publication_catalog"] = publication_root
             plan["quality_policy"] = {"sample_size": quality_sample_size, "seed": seed}
             plan["embedding_stage"] = embed
+            plan["cross_source_dedup"] = (
+                "runs after the campaign over the training sources' final views"
+                if sum(1 for source in selected.values() if source.intended_use is IntendedUse.TRAIN) >= 2
+                else None
+            )
             plan[TASK_SELECTION_KEY] = _selection_plan(selection_step) if selection_step is not None else None
             click.echo(json.dumps(plan, indent=2))
             return
@@ -836,6 +848,19 @@ def main(
             raise
         else:
             _publish_campaign(report_path, selected, publication_root)
+        training_sources = {
+            source.info.id: step
+            for source, step in zip(selected.values(), curation_steps, strict=True)
+            if source.intended_use is IntendedUse.TRAIN
+        }
+        cross_source = cross_source_dedup_step(
+            training_sources,
+            max_workers=max_workers,
+            worker_resources=worker_resources,
+        )
+        if cross_source is not None:
+            cross_source_result = run(cross_source, max_concurrent=1)[0]
+            click.echo(json.dumps({CROSS_SOURCE_KEY: cross_source_result.path}, indent=2))
         if selection_step is not None or embedding is not None:
             roots = {source.info.id: step.path() for source, step in zip(selected.values(), curation_steps, strict=True)}
             _write_corpus(roots, inventory, report_path, "admitted")
