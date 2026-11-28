@@ -233,16 +233,15 @@ _ASYNC_P40 = Recipe(
     ),
 )
 
-_GRADER_REPORT = RecipePatch(trainer=sections.Trainer(dump_grader_report=True))
 _REPORTING_P40 = replace(
     _ASYNC_P40,
-    config=_ASYNC_P40.config.merge(_GRADER_REPORT),
+    config=_ASYNC_P40.config.merge(RecipePatch(trainer=sections.Trainer(dump_grader_report=True))),
 )
 
 _GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH, training_plan=_P40_PLAN)
 
 # The nightly Iris principal can submit H100 workloads in Reno.
-_RENO_TRAINING = replace(
+_RENO_SPEED_TRAINING = replace(
     _ASYNC_P40,
     layout=replace(
         P40,
@@ -255,7 +254,7 @@ _RENO_TRAINING = replace(
         RecipePatch(trainer=sections.Trainer(rollout_buffer=sections.RolloutBuffer(max_in_flight=64)))
     ),
 )
-_RENO_GENERATING = replace(_GENERATING, layout=replace(E8, cluster=_RENO_TRAINING.layout.cluster))
+_RENO_GENERATING = replace(_GENERATING, layout=replace(E8, cluster=_RENO_CLUSTER))
 
 _GAPS = ("aaii-coverage", NO_AGENTIC_TASKS, NO_IMAGE_SANDBOX)
 
@@ -293,7 +292,7 @@ _LEARNING_MEDIUM = _snowball(
     checkpoints="best",
     export="best",
     name="learning-medium",
-    recipe=replace(_RENO_TRAINING, config=_RENO_TRAINING.config.merge(_GRADER_REPORT)),
+    recipe=replace(_REPORTING_P40, layout=replace(P40, cluster=_RENO_CLUSTER)),
     owned_keys=_OWNED_KEYS,
     updates=25,
     measured=range(21, 26),
@@ -482,9 +481,9 @@ _PRESETS = (
         name="speed-medium",
         checkpoints="none",
         recipe=replace(
-            _RENO_TRAINING,
+            _RENO_SPEED_TRAINING,
             fixed_reply_tokens=4096,
-            config=_RENO_TRAINING.config.merge(
+            config=_RENO_SPEED_TRAINING.config.merge(
                 RecipePatch(
                     trainer=sections.Trainer(algorithm=sections.Algorithm(rloo_n_filter_zero_reward_groups=False))
                 )
@@ -502,13 +501,13 @@ _PRESETS = (
         evaluations=(),
         name="speed-long",
         checkpoints="none",
-        recipe=_RENO_TRAINING,
+        recipe=_RENO_SPEED_TRAINING,
         updates=20,
         measured=range(3, 21),
         owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
         guards=_SPEED_GUARDS,
         objectives=_SPEED_OBJECTIVES,
-        budget="32 H100s; wall time and cost are unmeasured",
+        budget="32 min; about 17 H100-h",
     ),
     _LEARNING_MEDIUM,
     replace(

@@ -1026,7 +1026,7 @@ def test_python_run_saves_typed_inputs_for_comparison(
     assert report["run"]["settings"] == list(recorded.settings)
     assert report["run"]["tasks"] == recorded.tasks
     assert report["run"]["attempt_ids"] == ["recorded-attempt"]
-    assert comparisons(report)[gain_key]["run"] == pytest.approx(0.00625)
+    assert comparisons(report)[gain_key]["run"] == pytest.approx(0.005)
     _json(source / "exports/best_checkpoint.json", {"step": preset.updates})
     [status] = snowball._status(built, preset, stored_only=True)["runs"]
     assert status["best_checkpoint_step"] == preset.updates
@@ -1037,6 +1037,7 @@ def test_python_run_saves_typed_inputs_for_comparison(
             "skyrl.generator.max_num_seqs",
             "skyrl.trainer.train_batch_size",
             "skyrl.trainer.micro_forward_batch_size_per_gpu",
+            "skyrl.trainer.rollout_buffer.max_in_flight",
         } <= set(report["run"]["config_changes"])
         trainer = read_attempt(str(source / "exports"), "recorded-attempt").native.config["skyrl"]["trainer"]
         assert (trainer["micro_forward_batch_size_per_gpu"], trainer["rollout_buffer"]["max_in_flight"]) == (2, 64)

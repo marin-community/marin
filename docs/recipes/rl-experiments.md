@@ -18,9 +18,9 @@ The short loop, also called the quick loop, uses gated presets to compare one ch
 | `data-short` | Fraction of prompts with both passing and failing answers | 8 H100s, 256 candidate training prompts × four answers, 10–15 min and about 2 H100-hours | Scores the sampled candidate tasks. Gated on mixed-answer fraction. | Screen a new `--tasks` selection before training on it with `data-medium`. | CPU plan only |
 | `eval-short` | Published model scores | 8 H100s. | Scores the full EvalLite pool without a control comparison. | Evaluate a published checkpoint in a generation-only job. | Ran as written |
 | `speed-medium` | Update time and policy agreement | 32 H100s, 10 updates. 24 min and 12.9 H100-hours in the Reno comparison. | Training metrics on updates 2–10. Gated on speed and mismatch. | Check startup, trainer kernels, parallelism, weight synchronization or numerics. Use `learning-medium` to measure quality after a precision change. | [Direct GPU comparison](https://github.com/marin-community/marin/pull/12414) |
-| `learning-medium` | EvalLite pool family mean and score gain per GPU-hour | 32 H100s, 25 updates. | EvalLite pool at steps 0 and 25. Gated on EvalLite pool family mean. | Compare objectives, optimizers, sampling, batch shape or initial weights. | [GPU validation](https://github.com/marin-community/marin/pull/12414) |
-| `data-medium` | Learning on a candidate training selection | 32 H100s, 25 updates. | EvalLite pool at steps 0 and 25. Reports scores for the candidate selection. | Train on a `--tasks` selection after it passes the short screen. | Shares the `learning-medium` recipe |
-| `speed-long` | Sustained asynchronous update time and policy agreement | 32 H100s, 20 updates. | Training metrics on updates 3–20. Gated on speed and mismatch. | Measure grading, admission or throughput changes over a longer window. | [GPU validation](https://github.com/marin-community/marin/pull/12414) |
+| `learning-medium` | EvalLite pool family mean and score gain per GPU-hour | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Gated on EvalLite pool family mean. | Compare objectives, optimizers, sampling, batch shape or initial weights. | CPU plan only |
+| `data-medium` | Learning on a candidate training selection | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Reports scores for the candidate selection. | Train on a `--tasks` selection after it passes the short screen. | CPU plan only |
+| `speed-long` | Sustained asynchronous update time and policy agreement | 32 H100s, 20 updates. 32 min and 17.2 H100-hours on Reno. | Training metrics on updates 3–20. Gated on speed and mismatch. | Measure grading, admission or throughput changes over a longer window. | [GPU validation](https://github.com/marin-community/marin/pull/12414) |
 
 ### Long loop
 
@@ -372,7 +372,7 @@ candidate training tasks with four sampled answers each; it does not evaluate Ev
 Speed-short measures 512 training tasks with four 4,096-token answers before its separate EvalLite pass.
 Learning/data medium evaluate at update 0 and 25; train-long evaluates before training and every ten updates.
 Speed-medium measures update time over updates 2–10, speed-long over 3–20. Their mismatch guard uses the
-selected-token-weighted staleness-0 KL over the measured window. Quick-loop training on Reno uses 16 learner
+selected-token-weighted staleness-0 KL over the measured window. Speed training on Reno uses 16 learner
 H100s with Adam state in host memory and two 8-H100 rollout engines. The rollout buffer can run up to 64 groups
 concurrently.
 
