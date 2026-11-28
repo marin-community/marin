@@ -3,11 +3,16 @@
 
 """Seeded fingerprint determinism, candidate ranking, and duplicate-group folding."""
 
-import json
-from datetime import UTC, datetime
 
-from finestore.rl.source_identity import original_source_id
-from infra.marina.apps.rl_data_catalog.server.duplicate_folding import SourceStanding
+from taskcompendium.models import TaskSpec
+from taskcompendium.pipeline.fingerprints import semantic_digest
+from taskcompendium.source_fingerprints import (
+    DirectionalOverlap,
+    DuplicateLabel,
+    DuplicateReview,
+    MeasuredOverlap,
+    PairVerdict,
+)
 
 from experiments.post_training.task_curation.source_fingerprints import (
     candidate_pairs,
@@ -15,12 +20,7 @@ from experiments.post_training.task_curation.source_fingerprints import (
     fingerprint_source,
     pair_similarity,
 )
-from taskcompendium.source_fingerprints import (
-    DuplicateLabel,
-    DuplicateReview,
-    MeasuredOverlap,
-    PairVerdict,
-)
+from infra.marina.apps.rl_data_catalog.server.duplicate_folding import SourceStanding
 
 
 def document(task_id: str, dataset: str, instruction: str, *, grader: dict | None = None) -> dict:
@@ -42,9 +42,7 @@ def fingerprint(documents, inputs):
 
 
 def test_fingerprint_sample_and_counts_are_seed_deterministic():
-    documents = [
-        document(f"task-{index}", "fixture/dataset", f"Solve problem number {index}.") for index in range(50)
-    ]
+    documents = [document(f"task-{index}", "fixture/dataset", f"Solve problem number {index}.") for index in range(50)]
     inputs = {"s3://fixture/population/specs/part-000000.parquet": "a" * 64}
     first = fingerprint(documents, inputs)
     second = fingerprint(list(reversed(documents)), inputs)
@@ -65,8 +63,6 @@ def test_fingerprint_counts_identical_contracts_once():
 
 def test_reporting_subset_label_does_not_change_the_semantic_digest():
     """A task re-filed under another reporting subset keeps its task semantics."""
-    from taskcompendium.models import TaskSpec
-    from taskcompendium.pipeline.fingerprints import semantic_digest
 
     def task(labels: dict) -> TaskSpec:
         return TaskSpec.model_validate(
@@ -113,7 +109,6 @@ def test_candidate_pairs_shortlist_deterministically_per_changed_source():
 
 
 def _measured(left_fraction: float, right_fraction: float) -> MeasuredOverlap:
-    from taskcompendium.source_fingerprints import DirectionalOverlap
 
     return MeasuredOverlap(
         seed=0,
@@ -127,7 +122,6 @@ def _measured(left_fraction: float, right_fraction: float) -> MeasuredOverlap:
 
 
 def _direction(fraction: float):
-    from taskcompendium.source_fingerprints import DirectionalOverlap
 
     return DirectionalOverlap(
         population=20,
@@ -149,9 +143,9 @@ def test_duplicate_groups_fold_a_contained_source_under_its_canonical():
         DuplicateReview(
             similarity=pair_similarity(
                 "Small:source",
-                fingerprint([document("task", "fixture/small", "Solve.")], {f"s3://fixture/small": "1" * 64}),
+                fingerprint([document("task", "fixture/small", "Solve.")], {"s3://fixture/small": "1" * 64}),
                 "Large:source",
-                fingerprint([document("task", "fixture/large", "Solve.")], {f"s3://fixture/large": "2" * 64}),
+                fingerprint([document("task", "fixture/large", "Solve.")], {"s3://fixture/large": "2" * 64}),
             ),
             verdict=PairVerdict(label=DuplicateLabel.DUPLICATE, overlap_fraction=1.0, reason="fixture"),
             prompt_sha256="0" * 64,
@@ -174,15 +168,13 @@ def test_duplicate_groups_fold_a_contained_source_under_its_canonical():
 
 
 def test_duplicate_groups_never_fold_on_a_distinct_verdict():
-    from experiments.post_training.task_curation.source_fingerprints import pair_similarity as similarity
-
     reviews = [
         DuplicateReview(
-            similarity=similarity(
+            similarity=pair_similarity(
                 "Small:source",
-                fingerprint([document("task", "fixture/small", "Solve.")], {f"s3://fixture/small": "1" * 64}),
+                fingerprint([document("task", "fixture/small", "Solve.")], {"s3://fixture/small": "1" * 64}),
                 "Large:source",
-                fingerprint([document("task", "fixture/large", "Solve.")], {f"s3://fixture/large": "2" * 64}),
+                fingerprint([document("task", "fixture/large", "Solve.")], {"s3://fixture/large": "2" * 64}),
             ),
             verdict=PairVerdict(label=DuplicateLabel.DISTINCT, overlap_fraction=0.0, reason="fixture"),
             prompt_sha256="0" * 64,

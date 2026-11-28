@@ -33,17 +33,9 @@ def _conflict_response() -> httpx.Response:
 
 
 @pytest.fixture(autouse=True)
-def isolated_rulings(monkeypatch):
-    """Unit tests rule against staged empty rulings; the pinned registry loads only
-    where data-integration runs resolve the committed reference."""
-    monkeypatch.setattr(
-        licensing,
-        "read_registry_json",
-        lambda _reference: {"version": "test", "bans": []},
-    )
-    licensing.license_bans.cache_clear()
+def _isolated_rulings(isolated_rulings):
+    """Autouse: every test in this module rules against staged empty rulings."""
     yield
-    getattr(licensing.license_bans, "cache_clear", lambda: None)()
 
 
 def test_new_private_pin_cannot_hide_a_resolved_upstream_ban(monkeypatch):
