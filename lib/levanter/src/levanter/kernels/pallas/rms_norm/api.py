@@ -17,7 +17,7 @@ from jax.sharding import NamedSharding
 from levanter.kernels.pallas.autotune_utils import sharding_of
 
 from .pallas_tpu import batch_invariant_rms_norm_pallas_tpu
-from .reference import _reference, _sum_hidden_tiles, _validate_inputs
+from .reference import _reference, _reference_tile, _validate_inputs
 
 Implementation: TypeAlias = Literal["reference", "pallas_tpu"]
 
@@ -64,33 +64,17 @@ def _batch_invariant_rms_norm_fwd(x, weight, eps, implementation):
     return y, (x, weight)
 
 
-def _parallel_gradients(x: jax.Array, weight: jax.Array, dy: jax.Array, eps: float) -> tuple[jax.Array, jax.Array]:
-    x32 = x.astype(jnp.float32)
-    dy32 = dy.astype(jnp.float32)
-    weighted_dy = dy32 * weight.astype(jnp.float32)
-    width = x.shape[-1]
-    # Keep the forward's hidden reduction order. Compute all row gradients
-    # together so the scale gradient needs one reduction over the batch.
-    inv_rms = jax.lax.rsqrt(_sum_hidden_tiles(x32)[..., None] / width + eps)
-    normalized = x32 * inv_rms
-    mean_x_dy = jnp.sum(x32 * weighted_dy, axis=-1, keepdims=True) / width
-    dx = (weighted_dy - normalized * mean_x_dy * inv_rms) * inv_rms
-    dw = jnp.sum(dy32 * normalized, axis=tuple(range(x.ndim - 1)))
-    return dx.astype(x.dtype), dw.astype(weight.dtype)
-
-
 def _batch_invariant_rms_norm_bwd(eps, implementation, residual, dy):
     x, weight = residual
     x_sharding = sharding_of(x)
     dy_aligned = _reshard_to_nonempty_named_mesh(dy, x_sharding)
-    if implementation == "pallas_tpu":
-        dx, dw = _parallel_gradients(x, weight, dy_aligned, eps)
-        return _reshard_to_nonempty_named_mesh(dx, x_sharding), _reshard_to_nonempty_named_mesh(
-            dw, sharding_of(weight)
-        )
 
     def reference(value, scale):
-        output = _reference(value, scale, eps=eps)
+        if implementation == "pallas_tpu":
+            # The VJP can reduce all row contributions to the scale at once.
+            output = _reference_tile(value, scale.astype(jnp.float32), eps=eps)
+        else:
+            output = _reference(value, scale, eps=eps)
         return _reshard_to_nonempty_named_mesh(output, x_sharding)
 
     _, pullback = jax.vjp(reference, x, weight)
