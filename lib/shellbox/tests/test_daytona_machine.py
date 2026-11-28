@@ -40,7 +40,6 @@ from daytona import (
     DaytonaNotFoundError,
     DaytonaTimeoutError,
     DaytonaValidationError,
-    DaytonaValidationError,
     Image,
     Resources,
     SandboxState,
