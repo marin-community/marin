@@ -37,8 +37,10 @@ from daytona import (
     ExecuteResponse,
     SandboxState,
 )
+from rigging.task_errors import RetryDisposition
 from rigging.timing import ExponentialBackoff
 
+from shellbox.backends.daytona.errors import DAYTONA_DELETE_OPERATION, daytona_error_identity
 from shellbox.backends.daytona.process import DaytonaProcessSession
 from shellbox.backends.daytona.snapshot import (
     daytona_image,
@@ -46,7 +48,7 @@ from shellbox.backends.daytona.snapshot import (
     snapshot_request_for_spec,
     validate_source,
 )
-from shellbox.backends.daytona.transient import is_transient_daytona_error, retry_transient
+from shellbox.backends.daytona.transient import retry_transient
 from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND, START_COMMAND
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
@@ -60,6 +62,7 @@ from shellbox.machine import (
     MachineDiskFull,
     MachineSpec,
     MachineTerminated,
+    MachineUnavailable,
     NetworkPolicy,
     ProcessScope,
     Result,
@@ -109,7 +112,11 @@ def _control_command(script: str) -> str:
 async def _create_sandbox(
     client: AsyncDaytona, params: CreateSandboxFromSnapshotParams | CreateSandboxFromImageParams, timeout: float
 ) -> AsyncSandbox:
-    """Retry throttling using a caller-owned name to recover an accepted creation."""
+    """Retry throttling using a caller-owned name to recover an accepted creation.
+
+    Raises:
+        MachineUnavailable: Daytona removed the sandbox before it started.
+    """
     assert params.name is not None
     backoff = ExponentialBackoff(initial=1, maximum=30, factor=2, jitter=0.5)
     while True:
@@ -120,6 +127,8 @@ async def _create_sandbox(
                 sandbox = await client.get(params.name)
                 await sandbox.wait_for_sandbox_start(timeout=timeout)
                 return sandbox
+        except DaytonaNotFoundError as error:
+            raise MachineUnavailable(f"Daytona removed sandbox {params.name} before it started") from error
         except DaytonaRateLimitError as error:
             retry_after = max(
                 (
@@ -171,7 +180,10 @@ async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
                     logger.warning("Retrying Daytona sandbox deletion during a state change: %s: %s", name, error)
                     retried = error
                 except DaytonaError as error:
-                    if not is_transient_daytona_error(error):
+                    if (
+                        daytona_error_identity(error, operation=DAYTONA_DELETE_OPERATION).retry_disposition
+                        is not RetryDisposition.TRANSIENT
+                    ):
                         raise
                     logger.warning(
                         "Retrying Daytona sandbox deletion after %s: %s",
@@ -542,7 +554,10 @@ class DaytonaMachine:
                         response = await request()
                         exit_code, diagnostic = response.exit_code, response.result or ""
                     except DaytonaError as error:
-                        if not is_transient_daytona_error(error):
+                        if (
+                            daytona_error_identity(error, operation="run").retry_disposition
+                            is not RetryDisposition.TRANSIENT
+                        ):
                             raise
                         logger.warning("Reattaching to a Daytona command after %s", type(error).__name__)
                         exit_code, diagnostic = await self._exit_after_lost_request(request, pidfile, completed_path)

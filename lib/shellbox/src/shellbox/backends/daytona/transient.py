@@ -7,22 +7,15 @@ import logging
 from asyncio import sleep
 from collections.abc import Awaitable, Callable
 
-from daytona import DaytonaConnectionError, DaytonaError
+from daytona import DaytonaError
+from rigging.task_errors import RetryDisposition
 from rigging.timing import ExponentialBackoff
+
+from shellbox.backends.daytona.errors import daytona_error_identity
 
 logger = logging.getLogger(__name__)
 
-# Gateway and availability statuses a Daytona API request may return transiently.
-TRANSIENT_DAYTONA_STATUS = frozenset({502, 503, 504})
 TRANSIENT_RETRIES = 3
-
-
-def is_transient_daytona_error(error: DaytonaError) -> bool:
-    """Whether a request failed in transit: a lost connection, or a gateway or availability status.
-
-    The provider may have run the request, so repeat only a request that is safe to run twice.
-    """
-    return isinstance(error, DaytonaConnectionError) or error.status_code in TRANSIENT_DAYTONA_STATUS
 
 
 async def retry_transient[T](request: Callable[[], Awaitable[T]]) -> T:
@@ -32,7 +25,8 @@ async def retry_transient[T](request: Callable[[], Awaitable[T]]) -> T:
         try:
             return await request()
         except DaytonaError as error:
-            if not is_transient_daytona_error(error):
+            failure = daytona_error_identity(error, operation="request")
+            if failure.retry_disposition is not RetryDisposition.TRANSIENT:
                 raise
             delay = backoff.next_interval()
             logger.warning("Retrying a Daytona request after %s: delay=%.3f", type(error).__name__, delay)

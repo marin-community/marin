@@ -4,9 +4,12 @@
 """Connect published evaluation corpora to model transports and isolated graders."""
 
 import asyncio
+import functools
 import logging
-from collections.abc import Mapping
+import threading
+from collections.abc import Callable, Iterator, Mapping
 from types import MappingProxyType
+from typing import Any
 
 from iris.cluster.setup_scripts import default_setup_script
 from levanter.compat.hf_checkpoints import load_tokenizer
@@ -16,7 +19,7 @@ from rigging.secrets import get_secret, require_secret
 from rigging.timing import retry_with_backoff
 from rolloutengine.agents.mini_swe.agent import MiniSweOptions, mini_swe_harness
 from rolloutengine.agents.model_relay import VllmTokenizer
-from rolloutengine.agents.pi.agent import PiOptions, PiThinking, pi_harness
+from rolloutengine.agents.pi.agent import PI_HARNESS, PiOptions, PiThinking, pi_harness
 from rolloutengine.agents.terminus.agent import TerminusOptions, TerminusParser, terminus_harness
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
@@ -29,6 +32,7 @@ from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import Backend, MachineFactory, NetworkPolicy
 from taskcompendium.evaluation.spec import EpisodeAgent, PiAgent
+from transformers import PreTrainedTokenizerBase
 from verifyit.modes.grade_judge import JudgeConnection
 
 from marin.rollouts.evaluation import (
@@ -62,8 +66,10 @@ backs off between retries, and the session's model-turn timeout bounds them all.
 # parsing, tools or options change, so its runs get new identities instead of resuming older episodes.
 # tests/evaluation/test_harness_revisions.py pins each revision to a digest of its harness's sources.
 EPISODE_HARNESS_REVISIONS: Mapping[str, str] = MappingProxyType(
-    {"shell": "2026.11.21.1", "terminus-2": "2026.11.21.1", "pi": "2026.11.21.1", "mini-swe-agent": "2026.11.21.1"}
+    {"shell": "2026.11.23.1", "terminus-2": "2026.11.23.1", PI_HARNESS: "2026.11.24.1", "mini-swe-agent": "2026.11.23.1"}
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _shell(_agent: EpisodeAgent, _budget: EpisodeBudget) -> Harness:
@@ -112,7 +118,7 @@ def episode_harnesses(config: EvaluationRunConfig, client: AsyncOpenAI) -> Mappi
         )
         return mini_swe_harness(options, tokenizer)
 
-    factories = {"shell": _shell, "terminus-2": _terminus, "pi": pi, "mini-swe-agent": mini_swe}
+    factories = {"shell": _shell, "terminus-2": _terminus, PI_HARNESS: pi, "mini-swe-agent": mini_swe}
     # Planning records a revision for each kind it accepts; the worker must build every one of them.
     assert factories.keys() == EPISODE_HARNESS_REVISIONS.keys(), sorted(
         factories.keys() ^ EPISODE_HARNESS_REVISIONS.keys()
@@ -127,9 +133,13 @@ def machine_backends(config: EvaluationRunConfig) -> frozenset[str]:
 
 
 def execution_config(config: EvaluationRunConfig) -> EvaluationRunConfig:
-    """Default to network-denied Shellbox graders, preserving explicit machine settings."""
+    """Default to network-denied Shellbox graders, preserving explicit machine settings.
+
+    A grader runs the agent's changes, so it runs on the task machines' backend; runs without task machines
+    grade on the local backend.
+    """
     verifier = config.verifier_machine or MachineRuntimeSpec(
-        backend=Backend.LOCAL,
+        backend=config.task_machine.backend if config.task_machine is not None else Backend.LOCAL,
         network=NetworkPolicy.DENY,
         cpus=None,
         memory_mb=None,
@@ -155,36 +165,69 @@ def worker_egress(config: EvaluationRunConfig) -> tuple[str, ...]:
     return DAYTONA_EGRESS if Backend.DAYTONA in machine_backends(config) else ()
 
 
-def daytona_connection(api_key: str) -> DaytonaConnection:
-    return DaytonaConnection(api_key=api_key)
+class LazyMachineFactories(Mapping[str, MachineFactory]):
+    """Build each backend factory on first lookup."""
+
+    def __init__(self, builders: Mapping[str, Callable[[], MachineFactory]]):
+        self._builders = dict(builders)
+        self._built: dict[str, MachineFactory] = {}
+        self._lock = threading.Lock()
+
+    def __getitem__(self, backend: str) -> MachineFactory:
+        with self._lock:
+            if backend not in self._built:
+                self._built[backend] = self._builders[backend]()
+            return self._built[backend]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._builders)
+
+    def __len__(self) -> int:
+        return len(self._builders)
 
 
-def machine_factories(config: EvaluationRunConfig, daytona: DaytonaConnection | None) -> dict[str, MachineFactory]:
-    """Construct the factory of each backend the run selects."""
-    factories: dict[str, MachineFactory] = {}
+def machine_factories(config: EvaluationRunConfig, daytona: DaytonaConnection | None) -> LazyMachineFactories:
+    """The factory of each backend the run selects, each constructed when a task first needs it."""
+    builders: dict[str, Callable[[], MachineFactory]] = {}
     for backend in machine_backends(config):
         match backend:
             case Backend.LOCAL:
-                factories[backend] = LocalMachineFactory()
+                builders[backend] = LocalMachineFactory
             case Backend.DOCKER:
-                factories[backend] = DockerMachineFactory()
+                builders[backend] = DockerMachineFactory
             case Backend.DAYTONA:
                 if daytona is None:
                     raise ValueError("Daytona machines require an explicit Daytona connection")
-                # The Daytona SDK is optional; marin-core's daytona extra installs it.
-                from shellbox.backends.daytona.machine import DaytonaImageBuild, DaytonaMachineFactory  # noqa: PLC0415
-
-                factories[backend] = DaytonaMachineFactory(
-                    client_factory=daytona.client_factory(), image_build=DaytonaImageBuild(config.image_build)
-                )
+                builders[backend] = functools.partial(daytona_machine_factory, config, daytona.client_factory())
             case _:
                 raise ValueError(f"Evaluation workers have no factory for {backend!r}")
-    return factories
+    return LazyMachineFactories(builders)
+
+
+def daytona_machine_factory(config: EvaluationRunConfig, client_factory: Callable[[], Any]) -> MachineFactory:
+    # The Daytona SDK is optional; marin-core's daytona extra installs it.
+    from shellbox.backends.daytona.machine import DaytonaImageBuild, DaytonaMachineFactory  # noqa: PLC0415
+
+    return DaytonaMachineFactory(client_factory=client_factory, image_build=DaytonaImageBuild(config.image_build))
 
 
 def model_client(endpoint: str, api_key: str, timeout: float | None) -> AsyncOpenAI:
     """The served model's client, which retries transient request failures."""
     return AsyncOpenAI(base_url=endpoint, api_key=api_key, max_retries=MODEL_REQUEST_RETRIES, timeout=timeout)
+
+
+def context_bos_token_id(tokenizer: PreTrainedTokenizerBase) -> int | None:
+    """Return the BOS token the model expects before a likelihood context, if any.
+
+    Gemma 4's chat template writes BOS although its tokenizer never adds it, so either signal counts.
+    """
+    bos = tokenizer.bos_token_id
+    if bos is None:
+        return None
+    adds_bos = tokenizer.encode("a", add_special_tokens=True)[:1] == [bos]
+    template = tokenizer.chat_template
+    writes_bos = isinstance(template, str) and "bos_token" in template
+    return bos if adds_bos or writes_bos else None
 
 
 async def execute(
@@ -208,6 +251,8 @@ async def execute(
     prefix = tokenizer.bos_token_id if tokenizer.bos_token_id is not None else tokenizer.eos_token_id
     if prefix is None:
         raise ValueError("Likelihood scoring needs a tokenizer BOS or EOS prefix token")
+    bos = context_bos_token_id(tokenizer)
+    logger.info("Likelihood contexts start with BOS token %s", bos)
     machines = machine_factories(config, daytona)
     async with model_client(endpoint, api_key, config.limits.model_turn_timeout) as client:
         await run_evaluation(
@@ -217,7 +262,7 @@ async def execute(
             # Each request sets its own output limit: the protocol's, or for Pi, Pi's.
             ChatModel(client, config.model.name, max_tokens=None),
             completion_model=CompletionModel(client, config.model.name),
-            likelihood=VllmLikelihood(client, config.model.name, tokenizer, config.model.context_window, prefix),
+            likelihood=VllmLikelihood(client, config.model.name, tokenizer, config.model.context_window, prefix, bos),
             machine_factories=machines,
             harnesses=episode_harnesses(config, client),
             tokenizer=tokenizer,
@@ -268,7 +313,9 @@ def run_worker(
     judge_endpoint = get_secret(JUDGE_ENDPOINT)
     judge = JudgeConnection(judge_endpoint, require_secret(JUDGE_API_KEY)) if judge_endpoint else None
     daytona = (
-        daytona_connection(require_secret(DAYTONA_API_KEY)) if Backend.DAYTONA in machine_backends(config) else None
+        DaytonaConnection(api_key=require_secret(DAYTONA_API_KEY))
+        if Backend.DAYTONA in machine_backends(config)
+        else None
     )
     execute_with_retries(
         datasets,

@@ -11,7 +11,9 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from typing import Any, NoReturn
 
+from rigging.task_errors import ErrorIdentity, exception_identity
 from shellbox.machine import Machine
+from shellbox.task_errors import ERROR_CATEGORIES
 from taskcompendium.models import TaskSpec
 
 from rolloutengine.cleanup import _Cleanup
@@ -40,7 +42,6 @@ from rolloutengine.models import (
     RolloutContractError,
     RolloutEnded,
     RolloutEventPayload,
-    RolloutFailure,
     RolloutInterrupted,
     RolloutLimits,
     RolloutOperation,
@@ -54,16 +55,18 @@ from rolloutengine.trace import _token_trace
 ADVANCE_INCOMPLETE = "advance_incomplete"
 """``Transition.metrics`` key of a turn that the harness did not finish handling; training must exclude its step."""
 FAILURE_ERROR_LIMIT = 2_000
-"""The characters of the failure's message that ``RolloutFailure.diagnostics["error"]`` keeps."""
+"""The characters of the failure's message that ``ErrorIdentity.diagnostics["error"]`` keeps."""
 
 
-def _failure_record(operation: RolloutOperation, cause: BaseException) -> RolloutFailure:
+def _failure_record(operation: RolloutOperation, cause: BaseException) -> ErrorIdentity:
     """The failure of an interrupted attempt: its operation, and the cause's type, message, and notes."""
-    diagnostics: dict[str, Any] = {"operation": operation.value, "error": str(cause)[:FAILURE_ERROR_LIMIT]}
+    diagnostics: dict[str, str | list[str]] = {"error": str(cause)[:FAILURE_ERROR_LIMIT]}
     notes = getattr(cause, "__notes__", ())
     if notes:
         diagnostics["notes"] = list(notes)
-    return RolloutFailure(type(cause).__name__, diagnostics)
+    return exception_identity(cause, operation=operation.value, categories=ERROR_CATEGORIES).model_copy(
+        update={"diagnostics": diagnostics}
+    )
 
 
 class _NoEvents:
@@ -220,12 +223,12 @@ class _Recorder:
         conversation = self.conversation
         return (conversation is not None and conversation.has_turn) or any(record.steps for record in self.earlier)
 
-    def graded_messages(self) -> tuple[dict[str, Any], ...] | None:
-        """The chat of the last conversation that has a model turn, or ``None``."""
+    def graded_conversation(self) -> ConversationRecord | None:
+        """The last conversation that has a model turn, or ``None``."""
         conversation = self.conversation
         if conversation is not None and conversation.has_turn:
-            return tuple(conversation.messages)
-        return next((record.messages for record in reversed(self.earlier) if record.steps), None)
+            return conversation.record(self._incomplete())
+        return next((record for record in reversed(self.earlier) if record.steps), None)
 
     async def start(self, prompt: Prompt) -> ModelTurn:
         await self._enter()
@@ -235,13 +238,17 @@ class _Recorder:
         ):
             # The turn and token limits end the attempt before a new conversation. A length stop does not.
             self._stop_at_limit(self.step_observations, None)
-        deadlines = self.deadlines
-        assert deadlines is not None
-        if current is None and deadlines.total.when() is None and self.limits.total_turn_timeout is not None:
-            deadlines.total.reschedule(asyncio.get_running_loop().time() + self.limits.total_turn_timeout)
+        if current is None:
+            self.begin_turn_budget()
         conversation = _Conversation(prompt, self.mode)
         request = _Request(self.step_observations, None, conversation, self._waited())
         return await self._send(request, conversation.request((), prompt.token_ids))
+
+    def begin_turn_budget(self) -> None:
+        deadlines = self.deadlines
+        assert deadlines is not None
+        if deadlines.total.when() is None and self.limits.total_turn_timeout is not None:
+            deadlines.total.reschedule(asyncio.get_running_loop().time() + self.limits.total_turn_timeout)
 
     async def reply(
         self,
@@ -529,7 +536,7 @@ async def _run_harness(
     """
     failure: Exception | None = None
     recorder.turn_ended = time.monotonic()
-    # The recorder sets both deadlines: the total one at the first request, the tool one after each turn.
+    # The recorder arms the total deadline when turns begin and the tool deadline after each turn.
     total, tool = asyncio.timeout(None), asyncio.timeout(None)
     try:
         async with total, tool:
@@ -591,7 +598,9 @@ async def harness_rollout(
     recorder = _Recorder(model, limits, trace, events, context_recovery=harness.context_recovery)
     cleanup = _Cleanup(limits.cleanup_timeout)
     async with AsyncExitStack() as released, AsyncExitStack() as stopped:
-        context = HarnessContext(task, limits, machine, events, _CleanupScope(stopped, released, cleanup), run_id)
+        context = HarnessContext(
+            task, limits, machine, events, _CleanupScope(stopped, released, cleanup), run_id, recorder.begin_turn_budget
+        )
         failure = await _run_harness(harness, context, recorder, attempt_deadline=None)
     rollout = recorder.rollout(run_id, {})
     if cleanup.errors:

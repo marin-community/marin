@@ -450,7 +450,7 @@ class Trial(ABC):
             self.result.completion = None
             self.result.verifier_result = None
             prior = self.result.exception_info
-            if prior is None or error_category(prior.exception_type, categories=ERROR_CATEGORIES) in (
+            if prior is None or prior.category in (
                 ErrorCategory.AGENT,
                 ErrorCategory.PASSTHROUGH,
             ):

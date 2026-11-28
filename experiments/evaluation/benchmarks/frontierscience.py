@@ -3,6 +3,8 @@
 
 """Pinned public FrontierScience evaluations."""
 
+from finestore.rl.curation import SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.evaluation.spec import (
     ContextPolicy,
     EvaluationProtocol,
@@ -49,9 +51,11 @@ def benchmarks() -> list[EvaluationBenchmark]:
         sources.append(
             RlDataSource(
                 info=SourceInfo(
-                    id=name,
-                    title=f"FrontierScience {track.title()}",
-                    origin="OpenAI",
+                    data_restriction=DataRestriction.OPEN,
+                    origin=SourceOrigin.OPENAI,
+                    upstream_dataset=name,
+                    upstream_name=f"FrontierScience {track.title()}",
+                    build_path="Evalchemy",
                     family="judged-answer",
                     tags=("eval", "single-turn", "benchmark", "llm-judge"),
                     count=count,

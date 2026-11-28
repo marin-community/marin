@@ -9,8 +9,8 @@ from typing import Any
 import numpy as np
 from omegaconf import DictConfig
 from transformers import PreTrainedTokenizerBase
+from rigging.task_errors import VERIFIER_RUNTIME_ERROR
 from skyrl_gym.verification import (
-    VERIFIER_RUNTIME_ERROR,
     RewardResult,
     TrainingDisposition,
     VerificationResult,
@@ -24,6 +24,7 @@ from skyrl_train.rollouts.training_record import (
 )
 
 from skyrl_train.error_treatment import ErrorTreatment
+from skyrl_train.task_errors import TIMED_OUT_DIAGNOSTIC
 from skyrl_train.dataset.tasks import TASKCOMPENDIUM_ENVIRONMENT
 from skyrl_train.distillation import INVALID_TOPK_INDEX
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
@@ -36,6 +37,7 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 )
 from skyrl_train.trajectory_runners.selected_topk import AlignedStudentTopK, align_student_topk
 from skyrl_train.trajectory_runners.types import (
+    ERROR_IDENTITIES_KEY,
     RESPONSE_POLICY_STEPS_KEY,
     RESPONSE_SPAN_TAGS_KEY,
     ROUTED_EXPERTS_KEY,
@@ -45,7 +47,7 @@ from skyrl_train.trajectory_runners.types import (
 from skyrl_train.task_error_handling import (
     DEFAULT_ERROR_HANDLING_CONFIG,
     ErrorHandlingConfig,
-    classify_exception_type,
+    classify_failure,
     passthrough_logprob_error_type,
     treatment_excludes_from_baseline,
 )
@@ -94,7 +96,7 @@ def rollout_loss_eligible(
         bool(any(rollout.loss_mask))
         and not treatment_excludes_from_baseline(treatment, verifier_available=graded)
         and missing_logprobs is None
-        and (not rollout.failure.diagnostics.get("timed_out") or error_handling.preserve_logprobs_on_timeout)
+        and (not rollout.failure.diagnostics.get(TIMED_OUT_DIAGNOSTIC) or error_handling.preserve_logprobs_on_timeout)
     )
 
 
@@ -105,7 +107,7 @@ def _failure_policy(
 ) -> tuple[ErrorTreatment, str | None]:
     assert rollout.failure is not None
     treatment = (
-        classify_exception_type(rollout.failure.exception_type, error_handling)
+        classify_failure(rollout.failure, error_handling)
         if error_handling.enable_error_classification
         else ErrorTreatment.MASK
     )
@@ -222,7 +224,7 @@ def _training_decision(
             exception_type=missing_logprobs or failure.exception_type,
         )
         error_treatment = treatment.value
-        diagnostics = {**verification.diagnostics, "exception_type": failure.exception_type, **failure.diagnostics}
+        diagnostics = {**verification.diagnostics, **failure.diagnostics}
         verification = (
             replace(verification, diagnostics=diagnostics)
             if graded
@@ -246,14 +248,11 @@ class WholeTaskProjection:
     runner_config: DictConfig
     tokenizer: PreTrainedTokenizerBase
     error_handling: ErrorHandlingConfig = DEFAULT_ERROR_HANDLING_CONFIG
-    harbor_error_handling: ErrorHandlingConfig | None = None
 
     def project(self, rollouts: Sequence[TrainingRollout], request: TaskRequestBatch) -> TrajectoryBatch:
         required = logprobs_requested(request, self.runner_config)
-        policies = _task_error_policies(request, self.error_handling, self.harbor_error_handling)
         decisions = [
-            _training_decision(rollout, policy, logprobs_required=required)
-            for rollout, policy in zip(rollouts, policies, strict=True)
+            _training_decision(rollout, self.error_handling, logprobs_required=required) for rollout in rollouts
         ]
         classes = [row.metadata.metric_class for row in request.rows]
         metrics = [
@@ -283,24 +282,22 @@ class StepTaskProjection:
     runner_config: DictConfig
     tokenizer: PreTrainedTokenizerBase
     error_handling: ErrorHandlingConfig = DEFAULT_ERROR_HANDLING_CONFIG
-    harbor_error_handling: ErrorHandlingConfig | None = None
 
     def project(self, rollouts: Sequence[TrainingRollout], request: TaskRequestBatch) -> TrajectoryBatch:
         trajectory_ids = request.trajectory_ids
         if trajectory_ids is None:
             raise ValueError("Per-turn training samples require trajectory_ids")
         required = logprobs_requested(request, self.runner_config)
-        policies = _task_error_policies(request, self.error_handling, self.harbor_error_handling)
         samples = []
         decisions = []
         projected_ids = []
         final_steps = []
         classes = []
-        for rollout, policy, trajectory_id, row in zip(rollouts, policies, trajectory_ids, request.rows, strict=True):
+        for rollout, trajectory_id, row in zip(rollouts, trajectory_ids, request.rows, strict=True):
             turns = _step_rollouts(rollout)
             for index, sample in enumerate(turns):
                 last = index == len(turns) - 1
-                decision = _training_decision(sample, policy, logprobs_required=required)
+                decision = _training_decision(sample, self.error_handling, logprobs_required=required)
                 if (
                     not last
                     and not sample.steps[0].transition.done
@@ -379,7 +376,7 @@ def _training_batch(
         task_outcomes=[rollout.grade.status for rollout in rollouts],
     )
     _attach_reward_channels(batch, decisions)
-    _attach_failure_channels(batch, decisions)
+    _attach_failure_channels(batch, decisions, rollouts)
     _attach_student_topk(batch, rollouts)
     _attach_routed_experts(batch, rollouts)
     _attach_policy_steps(batch, rollouts)
@@ -418,7 +415,12 @@ def _attach_reward_channels(batch: TrajectoryBatch, decisions: Sequence[_Trainin
         ]
 
 
-def _attach_failure_channels(batch: TrajectoryBatch, decisions: Sequence[_TrainingDecision]) -> None:
+def _attach_failure_channels(
+    batch: TrajectoryBatch, decisions: Sequence[_TrainingDecision], rollouts: Sequence[TrainingRollout]
+) -> None:
+    failures = [rollout.failure for rollout in rollouts]
+    if any(failure is not None for failure in failures):
+        batch[ERROR_IDENTITIES_KEY] = failures
     exception_types = [decision.disposition.exception_type for decision in decisions]
     if any(value is not None for value in exception_types):
         batch["exception_types"] = exception_types
@@ -543,14 +545,6 @@ def _attach_reasoning_violations(
         _reasoning_violation_count(row, last) for row, last in zip(rows, ends_attempt, strict=True)
     ]
     batch["reasoning_span_violation_tokens"] = [_violation_tokens(row) for row in rows]
-
-
-def _task_error_policies(
-    request: TaskRequestBatch, default: ErrorHandlingConfig, harbor: ErrorHandlingConfig | None
-) -> list[ErrorHandlingConfig]:
-    if harbor is None:
-        return [default] * len(request.rows)
-    return [harbor if "harbor" in row.spec.task.tags else default for row in request.rows]
 
 
 def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout], request: TaskRequestBatch) -> None:

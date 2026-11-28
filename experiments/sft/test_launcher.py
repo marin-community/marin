@@ -116,7 +116,12 @@ def test_openthoughts_keeps_one_conversation_per_context_window(tmp_path):
     with SerialCacheWriter(str(tmp_path / "cache"), conversations[0]) as writer:
         writer.write_batch(conversations)
     dataset = dataset_for_component(
-        component, Axis("position", 8), writer.result(), eos_id=None, block_cross_document_attention=True
+        component,
+        Axis("position", 8),
+        writer.result(),
+        eos_id=None,
+        block_cross_document_attention=True,
+        remainder="drop",
     )
     assert blocking_wait(dataset.async_len()) == 3
     long, first_short, second_short = blocking_wait(dataset.get_batch([0, 1, 2]))

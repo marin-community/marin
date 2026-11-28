@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+import requests
+from finestore.rl.status_taxonomy import DataRestriction
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
@@ -64,7 +66,7 @@ from experiments.post_training.task_curation.pipeline import (
     process_rows,
     source_recipe,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 from experiments.post_training.task_curation.tests.image_builds import (
     COMPILED_LOCK,
     DATA_PATH,
@@ -97,7 +99,13 @@ def config() -> SourcePipelineConfig:
 
 def source_step(recipe: CurationRecipe, options: PipelineOptions):
     source = RlDataSource(
-        info=SourceInfo(id=f"fixture:{recipe.name}", title=recipe.name, origin="fixture"),
+        info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset=recipe.name,
+            upstream_name=recipe.name,
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+        ),
         config=recipe,
         pipeline=process_rows,
     )
@@ -494,8 +502,16 @@ def served(tmp_path):
     server.server_close()
 
 
-def test_url_download_stages_the_file_only_when_its_digest_matches(tmp_path, served):
+@pytest.mark.parametrize("source_kind", ["http", "local", "mirror"])
+def test_url_download_stages_the_file_only_when_its_digest_matches(tmp_path, served, source_kind, monkeypatch):
     url, data = served
+    if source_kind in ("local", "mirror"):
+        source = tmp_path / "source.jsonl"
+        source.write_bytes(data)
+        url = str(source)
+        if source_kind == "mirror":
+            monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+            url = "mirror://source.jsonl"
     good = UrlSource(url, hashlib.sha256(data).hexdigest(), "rows.jsonl", SourceFormat.JSONL)
     download_source(DownloadRequest(good, str(tmp_path / "good")), campaign=CampaignRuntime())
     assert (tmp_path / "good" / "rows.jsonl").read_bytes() == data
@@ -504,6 +520,34 @@ def test_url_download_stages_the_file_only_when_its_digest_matches(tmp_path, ser
     with pytest.raises(ValueError, match="SHA-256"):
         download_source(DownloadRequest(bad, str(tmp_path / "bad")), campaign=CampaignRuntime())
     assert not (tmp_path / "bad" / "rows.jsonl").exists()
+
+
+def test_url_download_times_out_when_the_response_body_stalls(tmp_path, monkeypatch):
+    release = threading.Event()
+    (tmp_path / "rows.jsonl").write_bytes(b"data")
+
+    class StalledBody(SimpleHTTPRequestHandler):
+        def copyfile(self, _source, _outputfile):
+            release.wait()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(StalledBody, directory=str(tmp_path)))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(pipeline_module, "URL_TIMEOUT", 0.1)
+    source = UrlSource(
+        f"http://127.0.0.1:{server.server_address[1]}/rows.jsonl",
+        hashlib.sha256(b"data").hexdigest(),
+        "rows.jsonl",
+        SourceFormat.JSONL,
+    )
+    try:
+        with pytest.raises((requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+            download_source(DownloadRequest(source, str(tmp_path / "download")), campaign=CampaignRuntime())
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def convert_judge_fixture(row, context):
@@ -588,20 +632,14 @@ def archive_rows(path, context):
 
 def test_harbor_hub_download_reuses_cache_and_separates_release_pins(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
-    original_run = pipeline_module.subprocess.run
     acquired = []
 
-    def exporter(command, **kwargs):
-        if str(pipeline_module.HARBOR_EXPORTER) not in command:
-            return original_run(command, **kwargs)
-        release = command[command.index("--release") + 1]
-        output = StoragePath(command[command.index("--output") + 1])
+    def acquire(release, output, _selected):
         acquired.append(release)
         (output / "tasks/task.tar.gz").write_bytes(release.encode(), auto_mkdir=True)
         (output / "release.json").write_text(json.dumps({"release": release}))
-        return None
 
-    monkeypatch.setattr(pipeline_module.subprocess, "run", exporter)
+    monkeypatch.setattr(pipeline_module, "acquire_release", acquire)
     source = HarborHubSource("fixture/tasks", "sha256:" + "a" * 64, read=archive_rows)
     runtime = CampaignRuntime()
     client = LocalClient()

@@ -66,9 +66,12 @@ class InvalidLikelihoodRequest(ValueError):
 
 
 def encode_pair(
-    tokenizer: Tokenizer, context: str, continuation: str, *, prefix_token_id: int
+    tokenizer: Tokenizer, context: str, continuation: str, *, prefix_token_id: int, bos_token_id: int | None
 ) -> tuple[tuple[int, ...], tuple[int, ...]]:
-    """Move trailing context whitespace into the jointly encoded continuation."""
+    """Move trailing context whitespace into the jointly encoded continuation.
+
+    An empty context becomes ``prefix_token_id``; a nonempty one starts with ``bos_token_id`` when given.
+    """
     if not context:
         return (prefix_token_id,), tuple(tokenizer.encode(continuation, add_special_tokens=False))
     spaces = len(context) - len(context.rstrip())
@@ -77,14 +80,16 @@ def encode_pair(
         context = context[:-spaces]
     whole = tokenizer.encode(context + continuation, add_special_tokens=False)
     prefix = tokenizer.encode(context, add_special_tokens=False)
-    return tuple(prefix), tuple(whole[len(prefix) :])
+    bos = () if bos_token_id is None else (bos_token_id,)
+    return (*bos, *prefix), tuple(whole[len(prefix) :])
 
 
 @dataclass(frozen=True)
 class VllmLikelihood:
     """Score full continuation tokens with a one-token output reserve.
 
-    The caller owns the client and pins the tokenizer revision and prefix token.
+    The caller owns the client and pins the tokenizer revision, the empty-context prefix token and the
+    BOS token that starts nonempty contexts, if the model expects one.
     """
 
     client: AsyncOpenAI
@@ -92,21 +97,29 @@ class VllmLikelihood:
     tokenizer: Tokenizer
     context_size: int
     prefix_token_id: int
+    bos_token_id: int | None
 
     def prepare(self, context: str, continuation: str) -> EncodedLikelihood:
         context_tokens, continuation_tokens = encode_pair(
-            self.tokenizer, context, continuation, prefix_token_id=self.prefix_token_id
+            self.tokenizer,
+            context,
+            continuation,
+            prefix_token_id=self.prefix_token_id,
+            bos_token_id=self.bos_token_id,
         )
+        # Truncation drops the oldest context text but keeps the BOS that starts it.
+        bos = context_tokens[:1] if self.bos_token_id is not None and context else ()
+        text = context_tokens[len(bos) :]
         maximum_prompt = self.context_size - 1
         removed = max(0, len(context_tokens) + len(continuation_tokens) - maximum_prompt)
-        retained_context = len(context_tokens) - removed
+        retained_context = len(text) - removed
         if not continuation_tokens or retained_context < 1:
             raise InvalidLikelihoodRequest(
                 "Likelihood scoring requires a nonempty continuation and a retained context token"
             )
         return EncodedLikelihood(
-            prompt_token_ids=(context_tokens + continuation_tokens)[-maximum_prompt:],
-            context_tokens=retained_context,
+            prompt_token_ids=bos + (text + continuation_tokens)[removed:],
+            context_tokens=len(bos) + retained_context,
             continuation_tokens=len(continuation_tokens),
             truncated_context_tokens=removed,
         )

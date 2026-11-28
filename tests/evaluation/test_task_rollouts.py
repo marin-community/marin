@@ -5,9 +5,12 @@ import asyncio
 import json
 import threading
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import httpx
 import openai
@@ -17,6 +20,7 @@ from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT
 from evalrecords.rollout_results import terminal_attempts
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 from finestore.reader import ReadView
+from finestore.store import DataStore
 from fray.local_backend import LocalClient
 from marin.rollouts import evaluation
 from marin.rollouts.evaluation import (
@@ -26,6 +30,7 @@ from marin.rollouts.evaluation import (
     EvaluationRunConfig,
     ModelIdentity,
     episode_turn,
+    generation_turn,
     grading_limits,
     run_evaluation,
     run_identity,
@@ -41,7 +46,7 @@ from rolloutengine.likelihood import VllmLikelihood
 from rolloutengine.models import ModelRequest, ModelTurn, Prompt, RolloutLimits, TokenUsage
 from rolloutengine.test_support import machine_runtime
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import MachineDiskFull, MachineSpec, NetworkPolicy, PackageSpec
+from shellbox.machine import CommandOutputLost, MachineDiskFull, MachineSpec, NetworkPolicy, PackageSpec
 from taskcompendium.convert.answers import answer_task, exact_answer_task, source_evidence
 from taskcompendium.evaluation.corpus import chat_item, evaluation_cases, evaluation_protocol
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE
@@ -94,10 +99,54 @@ from verifyit.spec import (
 )
 from zephyr.context import ZephyrContext
 
+CORPUS_TRIAL_SEED = 7
+
 
 def convert(row: RawRow, _context: ConversionContext):
     task = exact_answer_task(row, prompt=row.data["question"], answers=("red",), ignore_case=False)
     return task.model_copy(update={"tags": ("eval",)})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish_reason", ["stop", "length", "tool_calls"])
+async def test_provider_response_preserves_failures_without_executing_tools(finish_reason):
+    requests = []
+    message = {
+        "role": "assistant",
+        "content": "FINAL: 2",
+        "reasoning_content": "reasoning",
+        "refusal": "provider refused",
+        "tool_calls": [{"id": "call", "type": "function", "function": {"name": "unexpected", "arguments": "{}"}}],
+    }
+
+    async def handle(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "response",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "fixture",
+                "choices": [{"index": 0, "finish_reason": finish_reason, "message": message}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+            },
+        )
+
+    prompt = ({"role": "system", "content": "frozen system"}, {"role": "user", "content": "frozen question"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        async with openai.AsyncOpenAI(base_url="http://fixture/v1", api_key="fixture", http_client=http) as client:
+            turn = await generation_turn(
+                ModelRequest(prompt, {"extra_body": {"tool_choice": "auto"}}),
+                model=ChatModel(client, "fixture", 16),
+                operation=ChatGeneration(response_selection="provider_response"),
+            )
+    assert requests[0]["messages"] == list(prompt)
+    assert requests[0]["tools"] is None
+    assert requests[0]["tool_choice"] == "none"
+    assert json.loads(turn.text) == {"message": message, "finish_reason": finish_reason}
+    assert "tool_calls" not in turn.message
+    assert turn.metadata["evaluation_raw_message"] == message
 
 
 @pytest.fixture
@@ -128,7 +177,7 @@ def published_corpora(tmp_path):
                     sampling=Sampling(
                         temperature=0.7, top_p=1, top_k=None, max_tokens=8, stop=(), chat_template_kwargs={}
                     ),
-                    trials=TrialPolicy(count=2, seed=7),
+                    trials=TrialPolicy(count=2, seed=CORPUS_TRIAL_SEED),
                     metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
                     primary_metric="accuracy",
                     summary=SummaryKind.MEAN,
@@ -172,7 +221,7 @@ def run_config():
 @pytest.mark.asyncio
 async def test_unexpected_model_error_is_saved_and_propagates(tmp_path, published_corpora, run_config):
     async def model(_request):
-        raise RuntimeError("model adapter bug")
+        raise RuntimeError("model adapter bug") from ConnectionError("connection reset")
 
     output = str(tmp_path / "unexpected-error")
     with pytest.raises(ExceptionGroup) as failure:
@@ -183,33 +232,99 @@ async def test_unexpected_model_error_is_saved_and_propagates(tmp_path, publishe
     failed = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
     assert failed
     assert all((row["retry"], row["outcome"]) == (0, "infra_error") for row in failed)
-    assert all(
-        json.loads(reader.read_blob(row["result_blob"]))["failure"]["exception_type"] == "RuntimeError" for row in failed
+    failures = [json.loads(reader.read_blob(row["result_blob"]))["failure"] for row in failed]
+    assert all(record["exception_type"] == "RuntimeError" for record in failures)
+    assert all(record["cause_type"] == "ConnectionError" for record in failures)
+    assert all(record["operation"] == "model" for record in failures)
+    assert all(record["retry_disposition"] == "transient" for record in failures)
+
+
+@pytest.mark.asyncio
+async def test_malformed_model_tool_arguments_score_zero_without_cancelling_other_attempts(
+    tmp_path, published_corpora, run_config
+):
+    malformed_arguments = '{"cmd": "oops'
+
+    async def model(request):
+        prompt = request.messages[-1]["content"]
+        if prompt == "colors/0" and request.options["seed"] == CORPUS_TRIAL_SEED:
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call-1", "type": "function", "function": {"name": "bash", "arguments": malformed_arguments}}
+                ],
+            }
+        else:
+            message = {"role": "assistant", "content": "red"}
+        return ModelTurn(message, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+    output = str(tmp_path / "results")
+    await run_evaluation((published_corpora[0],), output, run_config, model, machine_factories={})
+
+    reader = ReadView(output)
+    finished = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert Counter(row["outcome"] for row in finished) == {"submission_failure": 1, "graded": 3}
+    failed = next(row for row in finished if row["outcome"] == "submission_failure")
+    assert failed["retry"] == 0
+    raw = json.loads(reader.read_blob(failed["result_blob"]))
+    assert raw["grade"]["reward"] == 0
+    samples = list(reader.iter_rows(ARCHIVE_SAMPLES_TABLE))
+    assert Counter(row["grading"]["score"] for row in samples) == {0.0: 1, 1.0: 3}
+    assert (
+        raw["conversations"][0]["steps"][0]["turn"]["message"]["tool_calls"][0]["function"]["arguments"]
+        == malformed_arguments
     )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "update", [{"source_limit": 1}, {"task_machine": machine_runtime(backend="shellsim")}], ids=["selection", "backend"]
-)
-async def test_driver_resume_rejects_a_different_selection_or_machine_backend(
-    tmp_path, published_corpora, run_config, update
+async def test_attempts_larger_than_the_store_s_batch_limit_are_saved(
+    tmp_path, published_corpora, run_config, monkeypatch
+):
+    open_store = evaluation.DataStore.open
+    monkeypatch.setattr(evaluation.DataStore, "open", lambda root: open_store(root, max_buffer_bytes=64 * 1024))
+    reply = "red " * 64 * 1024
+
+    async def model(_request):
+        return ModelTurn({"role": "assistant", "content": reply}, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+    output = str(tmp_path / "results")
+    await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
+    reader = ReadView(output)
+    finished = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert finished
+    assert all(row["outcome"] == "graded" for row in finished)
+    assert all(reply in reader.read_blob(row["result_blob"]).decode() for row in finished)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed_setting", ["selection", "backend", "turn_budget", "token_budget"])
+async def test_driver_resume_rejects_different_scoring_settings(
+    tmp_path, published_corpora, run_config, changed_setting
 ):
     async def model(_request):
         return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
 
     output = str(tmp_path / "results")
     await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
+    updates = {
+        "selection": {"source_limit": 1},
+        "backend": {"task_machine": machine_runtime(backend="shellsim")},
+        "turn_budget": {"limits": run_config.limits.model_copy(update={"max_turns": 2})},
+        "token_budget": {"limits": run_config.limits.model_copy(update={"max_total_tokens": 128})},
+    }
     with pytest.raises(ValueError, match="Resume requires"):
         await run_evaluation(
-            published_corpora, output, run_config.model_copy(update=update), model, machine_factories={}
+            published_corpora,
+            output,
+            run_config.model_copy(update=updates[changed_setting]),
+            model,
+            machine_factories={},
         )
 
 
 @pytest.mark.asyncio
-async def test_driver_resumes_partial_archive_after_request_concurrency_and_task_evidence_change(
-    tmp_path, published_corpora, run_config
-):
+async def test_driver_resumes_partial_archive_after_operational_settings_change(tmp_path, published_corpora, run_config):
     calls = 0
     recovered = False
 
@@ -233,7 +348,15 @@ async def test_driver_resumes_partial_archive_after_request_concurrency_and_task
     await run_evaluation(
         published_corpora,
         output,
-        run_config.model_copy(update={"concurrency": 3, "task_evidence": TaskEvidence.REFERENCE}),
+        run_config.model_copy(
+            update={
+                "concurrency": 3,
+                "task_evidence": TaskEvidence.REFERENCE,
+                "limits": run_config.limits.model_copy(
+                    update={"model_turn_timeout": 60, "total_turn_timeout": 60, "attempt_timeout": 90}
+                ),
+            }
+        ),
         model,
         machine_factories={},
     )
@@ -924,7 +1047,7 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
             machine_factories={"shellsim": ShellSimMachineFactory()},
             tokenizer=tokenizer,
             completion_model=CompletionModel(client, "fixture"),
-            likelihood=VllmLikelihood(client, "fixture", tokenizer, 64, 0),
+            likelihood=VllmLikelihood(client, "fixture", tokenizer, 64, 0, None),
         )
         model = ChatModel(client, "fixture", 16, extra_body={"skip_special_tokens": True})
         with pytest.raises(EvaluationInfrastructureError, match="raw evidence is saved"):
@@ -1205,6 +1328,42 @@ def publish_episodes(tmp_path, questions, agent, convert=convert_episode_row):
     return str(output)
 
 
+@pytest.mark.asyncio
+async def test_reused_model_tool_call_id_scores_zero_without_cancelling_other_attempts(tmp_path, run_config):
+    corpus = publish_episodes(tmp_path, ("episode/reused", "episode/solve"), ShellAgent())
+
+    async def model(request):
+        question = request.messages[0]["content"]
+        observations = sum(message["role"] == "tool" for message in request.messages)
+        if question == "episode/reused" and observations < 2:
+            call = {
+                "id": "reused",
+                "type": "function",
+                "function": {"name": "shell", "arguments": json.dumps({"command": "echo red"})},
+            }
+            message = {"role": "assistant", "content": "", "tool_calls": [call]}
+        else:
+            message = {"role": "assistant", "content": "red"}
+        return ModelTurn(message, (), (), None, "stop", usage=TokenUsage(5, 2))
+
+    config = run_config.model_copy(update={"source_limit": None, "task_machine": machine_runtime(backend="shellsim")})
+    output = str(tmp_path / "results")
+    await run_evaluation(
+        (corpus,),
+        output,
+        config,
+        model,
+        machine_factories={"shellsim": ShellSimMachineFactory()},
+        harnesses={"shell": lambda _agent, _budget: ShellHarness(command_timeout=None)},
+    )
+
+    reader = ReadView(output)
+    finished = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert Counter(row["outcome"] for row in finished) == {"submission_failure": 1, "graded": 1}
+    failed = next(row for row in finished if row["outcome"] == "submission_failure")
+    assert json.loads(reader.read_blob(failed["result_blob"]))["grade"]["reward"] == 0.0
+
+
 @pytest.fixture
 def episode_corpus(tmp_path):
     return publish_episodes(tmp_path, ("episode/flaky", STALL, "episode/solve"), ShellAgent())
@@ -1276,7 +1435,7 @@ async def test_agent_episodes_grade_turn_deadlines_and_retry_machine_start_failu
         ("rows.jsonl:1", 0): "submission_failure",
         ("rows.jsonl:2", 0): "graded",
     }
-    assert finished["rows.jsonl:0", 0][1]["failure"]["diagnostics"]["operation"] == "start"
+    assert finished["rows.jsonl:0", 0][1]["failure"]["operation"] == "start"
     stalled = finished["rows.jsonl:1", 0][1]
     assert (stalled["stop_reason"], stalled["limits"]["total_turn_timeout"]) == ("total_turn_timeout", 0.5)
     samples = [sample_from_archive_row(row) for row in reader.iter_rows(ARCHIVE_SAMPLES_TABLE)]
@@ -1400,18 +1559,22 @@ class FullDiskFactory(ShellSimMachineFactory):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("filled_by_agent", "outcomes"),
-    [(False, ["infra_error", "graded"]), (True, ["submission_failure"])],
-    ids=["before-the-agent", "by-the-agent"],
+    ("agent_failure", "outcomes"),
+    [
+        (None, ["infra_error", "graded"]),
+        (MachineDiskFull("The sandbox is full"), ["submission_failure"]),
+        (CommandOutputLost("Failed to measure command output: cannot open /tmp/out"), ["submission_failure"]),
+    ],
+    ids=["disk-full-before-the-agent", "disk-filled-by-the-agent", "output-lost-during-the-episode"],
 )
-async def test_a_full_disk_is_retried_only_when_the_agent_did_not_fill_it(
-    tmp_path, run_config, filled_by_agent, outcomes
+async def test_a_broken_machine_is_retried_only_when_it_broke_before_the_agent_ran(
+    tmp_path, run_config, agent_failure, outcomes
 ):
     corpus = publish_episodes(tmp_path, ("episode/solve",), PiAgent())
 
     async def run_pi(context, complete):
-        if filled_by_agent:
-            raise MachineDiskFull("The sandbox is full")
+        if agent_failure is not None:
+            raise agent_failure
         await complete(Prompt(({"role": "user", "content": "Solve."},), {}))
 
     async def model(request):
@@ -1421,11 +1584,11 @@ async def test_a_full_disk_is_retried_only_when_the_agent_did_not_fill_it(
         update={"concurrency": 1, "source_limit": None, "task_machine": machine_runtime(backend="shellsim")}
     )
     arguments = {
-        "machine_factories": {"shellsim": ShellSimMachineFactory() if filled_by_agent else FullDiskFactory()},
+        "machine_factories": {"shellsim": FullDiskFactory() if agent_failure is None else ShellSimMachineFactory()},
         "harnesses": {"pi": lambda _agent, _budget: AgentHarness(run_pi)},
     }
     output = str(tmp_path / "results")
-    if not filled_by_agent:
+    if agent_failure is None:
         with pytest.raises(EvaluationInfrastructureError):
             await run_evaluation((corpus,), output, config, model, **arguments)
     await run_evaluation((corpus,), output, config, model, **arguments)
@@ -1636,16 +1799,12 @@ async def test_reuse_asks_the_model_when_a_sampling_option_changed(tmp_path, run
 
 
 @pytest.mark.asyncio
-async def test_reuse_records_the_source_run_and_its_driver_revision_outside_the_run_identity(
-    tmp_path, run_config, monkeypatch
-):
+async def test_reuse_records_the_source_run_outside_the_run_identity(tmp_path, run_config):
     strict = publish_colors_corpus(tmp_path, "strict")
     lenient = publish_colors_corpus(tmp_path, "lenient", converter=convert_ignoring_case)
     source, output, fresh = (str(tmp_path / name) for name in ("stored", "regraded", "fresh"))
     red = dict.fromkeys(COLORS, "red")
-    with monkeypatch.context() as older:
-        older.setattr(evaluation, "EVALUATION_EXECUTION_REVISION", "older-driver")
-        await run_evaluation((strict,), source, run_config, ScriptedModel(red), machine_factories={})
+    await run_evaluation((strict,), source, run_config, ScriptedModel(red), machine_factories={})
     await run_evaluation((lenient,), fresh, run_config, ScriptedModel(red), machine_factories={})
 
     await run_evaluation((lenient,), output, run_config, no_model, machine_factories={}, reuse_from=source)
@@ -1654,11 +1813,30 @@ async def test_reuse_records_the_source_run_and_its_driver_revision_outside_the_
 
     regraded = json.loads(ReadView(output).read_blob(RUN_OBJECT))
     assert regraded[RESPONSE_SOURCES] == [
-        {"root": source, "run": stored_run_identity(source), "driver_revision": "older-driver"}
+        {
+            "root": source,
+            "run": stored_run_identity(source),
+        }
     ]
     assert regraded["driver_revision"] == evaluation.EVALUATION_EXECUTION_REVISION
     assert RESPONSE_SOURCES not in json.loads(ReadView(fresh).read_blob(RUN_OBJECT))
     assert run_identity(regraded) == stored_run_identity(fresh)
+
+
+@pytest.mark.asyncio
+async def test_reuse_rejects_a_source_stored_by_another_execution_revision(tmp_path, run_config, monkeypatch):
+    strict = publish_colors_corpus(tmp_path, "strict")
+    source, output = str(tmp_path / "stored"), str(tmp_path / "regraded")
+    with monkeypatch.context() as older:
+        older.setattr(evaluation, "EVALUATION_EXECUTION_REVISION", "older-driver")
+        await run_evaluation(
+            (strict,), source, run_config, ScriptedModel(dict.fromkeys(COLORS, "red")), machine_factories={}
+        )
+
+    with pytest.raises(ValueError, match="execution revision"):
+        await run_evaluation((strict,), output, run_config, no_model, machine_factories={}, reuse_from=source)
+
+    assert ReadView(output).read_blob(RUN_OBJECT) is None
 
 
 @pytest.mark.asyncio
@@ -1713,7 +1891,7 @@ async def test_mixed_reuse_regrades_generations_and_rescores_likelihoods(tmp_pat
             machine_factories={"shellsim": ShellSimMachineFactory()},
             tokenizer=tokenizer,
             completion_model=CompletionModel(client, "fixture"),
-            likelihood=VllmLikelihood(client, "fixture", tokenizer, 64, 0),
+            likelihood=VllmLikelihood(client, "fixture", tokenizer, 64, 0, None),
         )
         model = ChatModel(client, "fixture", 16)
         with pytest.raises(EvaluationInfrastructureError, match="raw evidence is saved"):
@@ -1787,3 +1965,87 @@ async def test_judged_reuse_keeps_retried_responses_in_the_source_and_the_regrad
         assert (attempt["outcome"], attempt["retry"], attempt["completion_tokens"]) == ("graded", 1, 0)
         assert raw["reused_response_from_retry"] == 0
         assert raw[REUSED_FROM_RUN]["result_blob"] == stored[key][0]["result_blob"]
+
+
+def commit_count(root):
+    return json.loads((Path(root) / "HEAD").read_text())["sequence"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_attempts_share_commits(tmp_path, run_config):
+    questions = tuple(f"colors/{index}" for index in range(12))
+    config = run_config.model_copy(update={"source_limit": None, "concurrency": len(questions)})
+    corpus = publish_colors_corpus(tmp_path, "many", questions=questions)
+    output = str(tmp_path / "run")
+
+    await run_evaluation((corpus,), output, config, ScriptedModel(dict.fromkeys(questions, "red")), machine_factories={})
+
+    evidence = terminal_evidence(output)
+    assert len(evidence) == 3 * len(questions)
+    assert {attempt["outcome"] for attempt, _ in evidence.values()} == {"graded"}
+    # Committed one by one, the selections, started rows and terminal evidence would take three commits per attempt.
+    assert commit_count(output) < len(evidence)
+
+
+def write_blob(name, data, transaction):
+    transaction.write_object(name, data)
+
+
+def fail_write(_transaction):
+    raise ValueError("unserializable evidence")
+
+
+@contextmanager
+def held_writer(root, **store_options):
+    """A writer whose thread stays busy until the block's writes are queued, so they share one batch."""
+    release = threading.Event()
+    with DataStore.open(root, **store_options) as store, ThreadPoolExecutor(max_workers=1) as executor:
+        executor.submit(release.wait)
+        yield evaluation._EvaluationWriter(store, executor), release.set
+
+
+@pytest.mark.asyncio
+async def test_a_failing_write_fails_only_its_own_caller(tmp_path):
+    root = str(tmp_path / "run")
+    blobs = {f"evidence/{index}.json": bytes([index]) for index in range(5)}
+    with held_writer(root) as (writer, release):
+        writes = [writer.commit(partial(write_blob, name, data)) for name, data in blobs.items()]
+        results = asyncio.gather(*writes[:2], writer.commit(fail_write), *writes[2:], return_exceptions=True)
+        await asyncio.sleep(0)
+        release()
+        outcomes = await results
+
+    assert [type(outcome) for outcome in outcomes] == [type(None)] * 2 + [ValueError] + [type(None)] * 3
+    reader = ReadView(root)
+    assert {name: reader.read_blob(name) for name in blobs} == blobs
+
+
+@pytest.mark.asyncio
+async def test_writes_over_the_transaction_budget_are_all_committed(tmp_path):
+    root = str(tmp_path / "run")
+    # Each small blob fits the budget alone but not with another; the large one fits no bounded transaction.
+    blobs = {f"evidence/{index}.json": bytes([index]) * 600 for index in range(4)} | {"evidence/large.json": b"x" * 5000}
+    with held_writer(root, max_buffer_bytes=1_000) as (writer, release):
+        results = asyncio.gather(*(writer.commit(partial(write_blob, name, data)) for name, data in blobs.items()))
+        await asyncio.sleep(0)
+        release()
+        await results
+
+    reader = ReadView(root)
+    assert {name: reader.read_blob(name) for name in blobs} == blobs
+
+
+@pytest.mark.asyncio
+async def test_a_write_whose_caller_is_cancelled_is_committed_before_the_store_closes(tmp_path):
+    root = str(tmp_path / "run")
+    with held_writer(root) as (writer, release):
+        caller = asyncio.create_task(writer.commit(partial(write_blob, "evidence/terminal.json", b"graded")))
+        await asyncio.sleep(0)
+        caller.cancel()
+        await asyncio.sleep(0)
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        release()
+
+    assert ReadView(root).read_blob("evidence/terminal.json") == b"graded"

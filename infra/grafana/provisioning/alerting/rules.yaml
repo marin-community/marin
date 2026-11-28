@@ -710,8 +710,9 @@ groups:
         labels:
           severity: warning
           notification: storage-daily
+          operator_behavior: storage
         annotations:
-          summary: "{{ $labels.region }} / {{ $labels.storage_class }}: CoreWeave storage projected above 80% of quota"
+          summary: "{{ $labels.region }} / {{ $labels.storage_class }}: CoreWeave storage projected at {{ humanizePercentage $values.A.Value }} of quota"
           description: >-
             Projected quota use in 24 hours is {{ humanizePercentage $values.A.Value }}
             if recent growth continues, with current usage as a floor.
@@ -719,6 +720,8 @@ groups:
             before the end of the working day. This warning is delivered daily
             between 15:00 and 16:00 America/Los_Angeles.
           runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md#coreweave-storage-telemetry
+          related_url: https://cw-s3.oa.dev/?v=time
+          related_label: Size & growth
           __dashboardUid__: marin-storage
           __panelId__: "2"
         data:
@@ -1136,6 +1139,62 @@ groups:
     folder: Alerts
     interval: 1m
     rules:
+      - uid: iris-controller-checkpoint-failed
+        title: IrisControllerCheckpointFailed
+        condition: C
+        for: 0m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.cluster }}: Iris controller cannot write its periodic checkpoint"
+          description: >-
+            The latest periodic checkpoint attempt failed. Check controller logs and
+            S3 credentials for the storage.remote_state_dir bucket. A successful
+            periodic checkpoint clears this alert; controller liveness is covered separately.
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md#controller-checkpoint-storage
+        data:
+          - refId: A
+            relativeTimeRange: { from: 10800, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/query
+              url_options:
+                method: GET
+                params:
+                  - key: sql
+                    value: >-
+                      WITH latest AS (
+                        SELECT "cluster", value,
+                               ROW_NUMBER() OVER (PARTITION BY "cluster" ORDER BY timestamp_ms DESC, seq DESC) AS row_rank
+                        FROM "telemetry_v1.iris"
+                        WHERE service = 'iris-controller'
+                          AND name = 'iris_controller_checkpoint_upload_success'
+                          AND "cluster" LIKE 'cw-%'
+                          AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '3 hours') * 1000 AS BIGINT)
+                      )
+                      SELECT "cluster", 1 - value AS value
+                      FROM latest WHERE row_rank = 1
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
       - uid: iris-federation-peer-unreachable
         title: IrisFederationPeerUnreachable
         condition: C

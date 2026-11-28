@@ -23,12 +23,12 @@ from marin.evaluation.task_worker import (
     DAYTONA_EGRESS,
     JUDGE_API_KEY,
     JUDGE_ENDPOINT,
-    DaytonaConnection,
     machine_factories,
 )
 from marin.inference.types import InferenceBackendState
 from openai import OpenAI
 from rolloutengine.agents.mini_swe.agent import MiniSweModelFormat
+from shellbox.backends.daytona.connection import DaytonaConnection
 
 from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.launch import LaunchSpec, prepare_evaluation_batch
@@ -119,12 +119,15 @@ def test_frontierscience_worker_receives_named_judge(track, tmp_path, created, s
 
 
 def test_context_admission_uses_server_limit_and_resume_identity_ignores_server_timestamp(created):
+    model = replace(MODEL, evaluation_request_timeout=21600)
     settings = CuratedSettings(max_tokens=8192, source_limit=2, seed=42, judge=None)
-    first = runtime_config(MODEL, settings, SESSION)
+    first = runtime_config(model, settings, SESSION)
     assert first.model.context_window == SERVED_CONTEXT
     assert first.max_tokens == SERVED_CONTEXT - 1
+    # Long-context requests must survive both the turn and enclosing attempt deadlines.
+    assert first.limits.attempt_timeout > first.limits.model_turn_timeout >= 21600
     created[0] += 100
-    assert runtime_config(MODEL, settings, SESSION) == first
+    assert runtime_config(model, settings, SESSION) == first
 
 
 @pytest.mark.parametrize(
@@ -148,7 +151,7 @@ def test_agent_worker_runs_planned_task_machines_with_daytona_credentials_only_f
     evaluator = DatasetEvaluator(("s3://corpora/agent",), model, settings, agent=AGENT)
     daytona = backend is TaskMachineBackend.DAYTONA
     # The launcher grants the eval-org key only to Daytona evaluations.
-    env_vars = {"DAYTONA_TARGET": "us", **({DAYTONA_API_KEY: "eval-org-key"} if daytona else {})}
+    env_vars = {DAYTONA_API_KEY: "eval-org-key"} if daytona else {}
 
     evaluator(SESSION, "s3://results/agent", env_vars, backend_state=lambda: InferenceBackendState.READY)
 
@@ -157,7 +160,6 @@ def test_agent_worker_runs_planned_task_machines_with_daytona_credentials_only_f
     assert (task_machine.backend, task_machine.cpus, task_machine.memory_mb) == (backend, 2, 4096)
     environment = submitted["environment"]
     assert (environment.secrets.get(DAYTONA_API_KEY) == "eval-org-key") is daytona
-    assert environment.env_vars == {"DAYTONA_TARGET": "us"}
     assert (tuple(submitted["egress_allow"]) == DAYTONA_EGRESS) is daytona
     assert ("daytona" in environment.setup_scripts[0]) is daytona
 
@@ -184,7 +186,7 @@ def test_agent_worker_receives_task_secrets_as_secrets_its_run_may_resolve(creat
     evaluator(
         SESSION,
         "s3://results/agent",
-        {"SEC_EDGAR_API_KEY": "edgar-key", "DAYTONA_TARGET": "us"},
+        {"SEC_EDGAR_API_KEY": "edgar-key"},
         backend_state=lambda: InferenceBackendState.READY,
     )
 
@@ -192,7 +194,6 @@ def test_agent_worker_receives_task_secrets_as_secrets_its_run_may_resolve(creat
     assert args[2].task_secrets == ("SEC_EDGAR_API_KEY",)
     environment = submitted["environment"]
     assert environment.secrets["SEC_EDGAR_API_KEY"] == "edgar-key"
-    assert environment.env_vars == {"DAYTONA_TARGET": "us"}
 
 
 def test_agent_worker_rejects_a_server_window_other_than_the_planned_one(created, submitted):

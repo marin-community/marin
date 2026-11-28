@@ -59,6 +59,12 @@ eligible rows fails rather than producing an empty score. GraphWalks requires a
 reference-dependent output allowance of at least 8,192 tokens, so a blanket
 512-token smoke budget cannot exercise it.
 
+[PDBThink](../explanations/pdbthink.md) uses the published 88-question coordinate
+panel with three completions per question. `--evals pdbthink` preserves each
+prompt and fails before inference if any selected question exceeds the context.
+Use the model's full context and output allowance; headline accuracy gives each
+question family equal weight. It needs no LLM judge.
+
 [LongBench v2](https://huggingface.co/datasets/zai-org/LongBench-v2) asks 503
 multiple-choice questions over contexts of 8,000 to 2 million words, with the
 upstream [THUDM/LongBench](https://github.com/THUDM/LongBench/tree/2e00731f8d0bff23dc4325161044d0ed8af94c1e)
@@ -219,7 +225,10 @@ Harbor's hosted verifier. See [Harbor integration](../harbor-integration.md).
 Curated agent benchmarks on Daytona use the same eval-org key as Harbor:
 `DAYTONA_EVAL_API_KEY` from the launch environment, then the `DAYTONA_EVAL_API_KEY`
 secret in the `hai-gcp-models` GCP project. The evaluation worker receives it as its
-`DAYTONA_API_KEY` secret and may reach `app.daytona.io`. Judged agent graders use the
+`DAYTONA_API_KEY` secret and may reach `app.daytona.io`. When the task machines are on
+Daytona, package tests that grade in a separate verifier machine run on Daytona too, so
+the agent's changes execute only on Daytona. Graders run on the task machines' backend
+in general, and in the worker's local sandbox when a run has no task machines. Judged agent graders use the
 curated `judge`, `judge_endpoint` and `judge_api_key` run settings; task machines
 receive no judge credentials.
 

@@ -275,6 +275,10 @@ retired; missing reference evidence does not establish saturation.
 
 ### Rebuild a Snowball training selection
 
+Ungated Snowball presets and Mochi use `snowball-100k@2026.11.25.1`
+and `eval-lite@2026.11.25.1`. These manifests use catalog source IDs for training
+and evaluation subsets. The selection summaries record the parent versions.
+
 `recipes/snowball-100k.json` selects the 100,000 training tasks from twelve
 admitted training sources, with a quota for each source. It excludes the
 development panel (`heldout`) and EvalLite (`exclusions`) by task ID, full
@@ -296,7 +300,9 @@ To change the Snowball training tasks, copy `recipes/snowball-100k.json` under a
 name or version and run a FULL [campaign](#run-a-campaign) with `--selection` set to
 that recipe. Repeat `--source` for each recipe source, using its invocation name from
 [`runnable_sources()`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py):
-recipe ID `MarinSkyRL:eurus2_code` is `--source eurus2_code`. To select again from a
+recipe ID `MarinSkyRL:eurus2_code` is `--source eurus2_code`. A recipe's historical
+source IDs resolve through the alias table, so older recipes select the renamed
+sources without edits. To select again from a
 finished campaign, pass its `corpus.json` with `--corpus` as shown in
 [Final task selection](#final-task-selection). Check the source and family counts in
 `summary.json` before training.
@@ -395,8 +401,23 @@ ArtifactSteps.
 ## Declarations
 
 An `RlDataSource` has `info`, a typed `config` and an optional `pipeline`.
-`SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
-search tags, notes and an optional input-row count. The `deprecated` tag marks a
+`SourceInfo` generates `id` and `title` from its upstream identity keys:
+`id` is `<origin>:<upstream_dataset>[/<subset>][@<variant>]` and `title` is
+`<upstream_name> · <subset> · <variant>`, omitting absent parts. `origin` is a
+`SourceOrigin` naming the upstream provider; internal campaigns and pipelines
+belong in `build_path`. Stored records written under historical IDs resolve
+through the alias table (`finestore.rl.source_identity`) where they are read -
+recipes, corpora and catalog joins canonicalize both sides, publication re-keys
+a matched prior row onto its generated identity, and the Atlas load compares a
+selected assessment's source through the same aliases, so historical keys
+select renamed sources. Every source states its `data_restriction` tier
+explicitly; `PRIVATE_ALWAYS` keeps the source's content in its private store
+whatever else changes, and the tier travels with the qualified declaration the
+source's ingestion publishes, not with this catalog row. `current_release`
+pins the exact release consumed for training, separately from the upstream
+provenance URL, and `license_receipt` references the stage-0 license resolution
+that ingest and admission rest on (`RlDataSource.require_license` fails closed
+on it). The `deprecated` tag marks a
 source `Deprecated` in the catalog (overriding `excluded`), and its notes carry
 the deprecation reason. A source without a `pipeline` is `Inventory`: it stays
 visible in the Atlas with its evidence, but it is never admitted to selection and
@@ -496,8 +517,10 @@ two fields: `inputs`, the staged auxiliary sources, and `grader_environment`, th
 
 `HarborHubSource(name, revision, read)` acquires a complete release pinned by
 `sha256:...`. It caches the original task archives as
-`tasks/<task-reference-hash>.tar.gz`, verifies their extracted contents with the
-vendored Harbor runtime, and records the task references in `release.json`.
+`tasks/<task-reference-hash>.tar.gz` and records task references in `release.json`.
+New downloads hash every regular archive member and compare the digest with the
+public Hub record. Cached archives are reused without rehashing. Archives with
+files outside Harbor's hashed task paths fail the check.
 The recipe's `read(StoragePath, ConversionContext)` yields rows from each archive,
 using the same custom-reader interface as HF sources. Acquisition does not
 convert task files or impose a package size cutoff. Dataset-level scoring files
@@ -505,13 +528,11 @@ are not supported.
 
 The existing download cache, sampling, and local-input overrides apply. Retries
 reuse completed archives; use a fresh override directory for a different release
-or task selection. The cache identity includes the release, acquisition code, and
-vendored runtime's source and lock digests. To acquire selected tasks locally,
-inspect the CLI in its isolated environment:
+or task selection. The cache identity includes the release digest. To acquire
+selected tasks locally, inspect the CLI:
 
 ```bash
-uv run --isolated --project vendor/harbor --extra runtime --no-default-groups --frozen \
-  python -m experiments.post_training.task_curation.harbor_hub --help
+uv run python -m experiments.post_training.task_curation.harbor_hub --help
 ```
 
 ## Environments

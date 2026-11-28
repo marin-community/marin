@@ -1,7 +1,7 @@
 # Daytona operations for agentic RL
 
-Use this runbook when Harbor trials fail during sandbox setup, snapshot quota
-prevents a launch, or completed trials leave provider capacity occupied. Iris
+Use this runbook when task attempts fail during sandbox setup, snapshot quota
+prevents a launch, or completed attempts leave provider capacity occupied. Iris
 job operations remain in [Iris OPS](../../lib/iris/OPS.md).
 
 ## Credentials and account selection
@@ -9,18 +9,13 @@ job operations remain in [Iris OPS](../../lib/iris/OPS.md).
 Agentic RL uses the dedicated `DAYTONA_RL_API_KEY`. A generic Daytona key can
 authenticate successfully against the wrong account. Do not substitute it for
 the RL key. Resolve the credential through the launcher's supported secret
-indirection and verify that the coordinator and trial workers receive it.
+indirection and verify that the coordinator and rollout workers receive it.
 
-Validation that needs declarative image builds uses the Daytona **eval** account,
-not the RL account. Keep the two credentials separately named and select the
-eval credential only in the validation subprocess. For inline Harbor validation,
-set the callback's `daytona_api_key_env: DAYTONA_EVAL_API_KEY` and
-forward it through both the coordinator and task launcher. Do not globally
-replace the RL credential: training containers remain in the RL account.
-`DaytonaValidationError: declarative builds are not allowed` is an account/build
-permission failure, not a model failure or a zero reward. Inline validation accepts
-`image_build: snapshot` and `image_build: declarative`. Select declarative mode for
-per-sandbox image builds in the eval account.
+Checkpoint evaluation uses the Daytona **eval** account for declarative image
+builds. The evaluation TaskSpecs select the `daytona-eval` backend and training
+tasks select `daytona`. Keep both credentials separately named through the
+coordinator and task launcher. A `DaytonaValidationError` about declarative
+builds identifies an account or build permission failure.
 
 The keys live in Google Secret Manager in project `hai-gcp-models`:
 `DAYTONA_RL_API_KEY` for training and `DAYTONA_EVAL_API_KEY` for validation.
@@ -37,14 +32,12 @@ export DAYTONA_EVAL_API_KEY="$(gcloud secrets versions access latest \
 : "${DAYTONA_EVAL_API_KEY:?Eval secret resolution failed}"
 ```
 
-The Marin RL coordinator allowlist forwards both names. Configure the SkyRL
-task launcher's `terminal_bench_config.harbor` with
-`daytona_api_key_env: DAYTONA_RL_API_KEY` and
-`eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY`; its Daytona credential
-forwarding reads those fields and rejects missing values. In the
-`trainer.callbacks` entry with `type: harbor_evaluation`, set
-`daytona_api_key_env: DAYTONA_EVAL_API_KEY`. These paths are relative to the
-SkyRL training config (`skyrl` in the generated launch config).
+The Marin RL coordinator allowlist forwards both names. Under
+`environment.task_sessions.daytona`, set `api_key_env: DAYTONA_RL_API_KEY`,
+`eval_api_key_env: DAYTONA_EVAL_API_KEY`, and `eval_image_build: declarative`.
+The task launcher reads those fields and rejects missing credentials. These
+paths are relative to `skyrl` in the generated launch config. Shellbox fixes the
+provider endpoint and target for both accounts.
 
 With [the explicit coordinator-secret declaration](https://github.com/marin-community/marin/pull/10333),
 also set `IrisSkyRLExecution.required_env_vars` to
@@ -119,38 +112,73 @@ Read the account's current quota and inventory before submission. Snapshot quota
 and live sandbox capacity are separate limits. A successful GPU allocation proves
 neither is available.
 
-`shellbox-daytona-usage` reads the account's live quota, current usage and
-remaining capacity. It lists the account's sandboxes (paginated) and reports
-the usage overview with sandbox counts by state. The `/organizations` endpoint
-rejects API-key credentials with 401, so the command resolves the organization
-ID from the inventory; when the org has no sandboxes, it reads snapshots and
-then volumes instead:
+`shellbox-daytona-usage` reads every page of the sandbox inventory and reports
+headroom per region. It does not call the organization-usage endpoint, which
+rejects API keys with 401. The quota presets are the `ACCOUNT_LIMITS` mapping in
+`lib/shellbox/src/shellbox/backends/daytona/usage_cli.py` — the single source of
+record. They hold the account owner's limits (2026-11-19) for the `us` region,
+the one Daytona region Marin launches in (`DAYTONA_TARGET`); add further regions
+to that mapping when the owner supplies their rows.
 
 ```bash
 uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-usage \
-  --api-key-env DAYTONA_RL_API_KEY --cpu 2 --memory-gib 8 --disk-gib 8
+  --api-key-env DAYTONA_RL_API_KEY --cpu 2 --memory-gib 8 --disk-gib 8 --json
+
+uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-usage \
+  --all --cpu 4 --memory-gib 8 --disk-gib 10 --headroom 0.2 --json
 ```
 
-`--all` reads the three known accounts in one sweep (eval =
-`DAYTONA_EVAL_API_KEY`; rl = `DAYTONA_RL_API_KEY`;
-data = `DAYTONA_DATA_API_KEY`). `DAYTONA_API_KEY` is never an account
-selector here: the SDK treats it as an ambient variable, and some launchers
-load the RL key into it. `--json` emits the
-machine-readable report, including per-region rows with the provider's
-per-sandbox maxima.
+`--all` uses the dedicated keys: eval = `DAYTONA_EVAL_API_KEY`,
+rl = `DAYTONA_RL_API_KEY`, data = `DAYTONA_DATA_API_KEY`. Missing keys produce
+explicit skipped-account entries. A single standard key selects its quota
+preset. For another variable, select the limits explicitly, for example
+`--api-key-env DAYTONA_API_KEY --limits eval`. Check that this variable holds
+the intended account's key. The ambient `DAYTONA_API_KEY` never selects an
+account by itself.
 
-Size concurrency from the remaining capacity. The `max concurrency` line sizes
-against the quota row for the launch's target region and sandbox class
-(`--target`, `--sandbox-class`, default class `container`), because the
-provider enforces each row's quota separately; the summed totals above it are
-informational. The line applies the headroom (default 20%, `--headroom`) to
-that row's remaining CPU, memory and disk capacity, divides by the per-sandbox
-request from `--cpu`, `--memory-gib` and `--disk-gib`, and reports the
-minimum. The sandbox state counts show what is live. The reading moves as
-lanes start and stop, so re-read before large submissions. A
-per-sandbox request above the row's `max_cpu_per_sandbox`,
-`max_memory_gib_per_sandbox` or `max_disk_gib_per_sandbox` fails at creation;
-the command prints a warning when the profile exceeds one.
+Daytona enforces quota per region (and per sandbox class) with no organization
+total, so the command groups inventory usage by each sandbox's `target` and
+compares it only with that region's recorded limits; it never sums across
+regions. Each preset also caps one sandbox at 4 vCPU, 8 GiB RAM and 10 GiB
+disk. The report converts decimal GB quotas to GiB to match inventory
+allocations, and `--memory-gib` and `--disk-gib` take whole GiB. The command
+does not fetch live quotas.
+
+The report counts every state. Compute is charged for `creating`, `restoring`,
+`started`, `starting`, `stopping`, `pending_build`, `building_snapshot`,
+`unknown`, `pulling_snapshot`, `forking`, `pausing` and `resuming`.
+`resizing` and `snapshotting` also charge compute when their desired state is
+`started`. Disk is charged for every compute state plus `stopped`, `paused`,
+`archiving`, `resizing` and `snapshotting`, regardless of desired state.
+`destroyed`, `destroying`, `error`, `build_failed` and `archived` consume
+nothing. These rules follow the provider's
+[compute](https://github.com/daytonaio/daytona/blob/b5a5d9e/apps/api/src/organization/constants/sandbox-states-consuming-compute.constant.ts)
+and [disk](https://github.com/daytonaio/daytona/blob/b5a5d9e/apps/api/src/organization/constants/sandbox-states-consuming-disk.constant.ts)
+quota state definitions. Unrecognized API states and missing desired states for
+conditional compute fail the reading. For each resource, `remaining` is `max(0, quota - used)`,
+and `available` is `max(0, quota * (1 - headroom) - used)`. The default
+`--headroom 0.2` reserves 20% of each region's quota. Each region's
+`max_concurrency.limit` is the minimum of `floor(available / per_sandbox_request)`
+across CPU, RAM and disk. A profile above any per-sandbox maximum gets a zero
+limit.
+
+JSON includes `organization_id`, `observed_at`, `usage_source`, `quota_source`,
+`headroom_fraction`, `per_sandbox`, account-wide `sandboxes` (`total`,
+`started`, `by_state`), and `regions`. Each `regions` entry is keyed by region
+and carries that region's `limits`, `resources`, and `sandboxes` (`total`,
+`compute_charged`, `disk_charged`). A supplied profile adds `max_concurrency`
+per region (`profile`, `by_resource`, `exceeds_per_sandbox_maximum`, `limit`).
+Resource fields are `quota`, `used`, `remaining` and `available`.
+An empty inventory reports zero usage and a null organization ID, without
+querying snapshots or volumes. Duplicate IDs, mixed organizations, regions
+without recorded limits, or missing active allocations fail the reading instead
+of reporting free capacity.
+
+Inventory estimates capacity at read time. It reserves no capacity. Re-read it
+before and during submissions, include the entire simultaneous batch, and
+back off when it does not fit. Keep lane admission locks and pending-create
+reservations: this read-only command does not coordinate concurrent submitters
+or enforce creation-rate limits. Snapshot quota is separate.
 
 1. Inventory snapshots in the intended account, including every result page:
 
@@ -181,9 +209,9 @@ the command prints a warning when the profile exceeds one.
    Shellbox spec JSON. Do not hand-write task-level CPU or memory values: the
    snapshot name follows the effective request. For example, `ot-tblite` launches
    at 2 CPU, 8192 MB memory and 8192 MB storage regardless of task-level values.
-   A SkyRL launcher sets the same values under `terminal_bench.harbor` as
-   `override_cpus`, `override_memory_mb` and `override_storage_mb`; use those,
-   not the task's `task.toml`. Use `--specs -` on the next commands to read stdin.
+   For SkyRL, use the selected TaskRolloutSpecs and the deployment's
+   `environment.task_sessions.task_spec` bindings to determine the effective
+   image and resource requests. Use `--specs -` on the next commands to read stdin.
    When the launch overrides the dataset through a runtime overlay file, pass it
    as a second argument (`snapshot-specs <policy> <overlay>`); otherwise the
    stable policy's own task set is emitted.
@@ -320,10 +348,9 @@ or capacity problems; identify the concrete exception before assigning a cause.
 
 ## Evidence and progress
 
-Resolve the durable `trace_jobs/` location from the launched configuration or run
-metadata. Agentic trials commonly retain their start configuration, final result,
-agent/verifier outputs, exceptions, and timing data. Standard dataset-reward RL
-has no Harbor trial artifacts; missing `trace_jobs/` is expected in that mode.
+SkyRL writes agentic training attempt receipts under `task-health/` in the run
+export. These record setup and verifier outcomes and bounded diagnostics. The
+standalone Harbor evaluator and older runs store trial artifacts under `trace_jobs/`.
 
 Inspect actual rewards, verifier results, stop reasons, and exceptions. All-zero
 rewards from the first step can reflect sandbox, data, verifier, or weight-sync
@@ -336,10 +363,10 @@ coexist with a stalled trainer. Require advancing trainer phases/steps and
 durable artifacts for training progress. Report dispatched, completed, scored,
 correct, retained, and accepted-for-training counts separately.
 
-Measure sandbox demand across all concurrent workers and replicas. Per-worker
-`n_concurrent_trials` is not an account-wide concurrency limit. Compare admitted
-trial demand with model-serving capacity (`max_num_seqs` times inference-engine
-count), then inspect scheduler queues, KV-cache use, and request flow. Before
+Measure sandbox demand across all concurrent workers and replicas. SkyRL divides
+`trajectory_runner.max_concurrent_training_machine_tasks` among its rollout
+workers. Compare demand with model-serving capacity (`max_num_seqs` times
+inference-engine count), then inspect scheduler queues, KV-cache use, and request flow. Before
 attributing under-feeding to Daytona, check coordinator CPU/GIL pressure and
 staleness throttling.
 

@@ -123,25 +123,22 @@ The default workdir is the image's workdir, or `/workspace` for the built-in fil
 An explicit `working_directory` overrides that selection.
 
 Machine setup commands run as trusted root before task operations.
-`MachineRuntimeSpec.user` supplies the default user for harness commands.
+`MachineRuntimeSpec.user` supplies the default user for harness commands and persistent processes.
 When the execution user is set, the task machine runs an execution-user probe after root setup and before model inference.
-An explicit command user overrides that default.
-The verifier machine uses its own configured default user.
-
-Original Harbor trials run each `setup_commands` entry as root with `sh`, after
-environment staging and before agent installation. An entry's nonzero exit status
-fails the trial; output stays separate from model traces, and setup uses the
-configured installed-agent `setup_timeout` while counting toward the whole
-trial's time limit.
-For these trials, the Harbor task package defines the image, environment variables
-and agent user. TaskSpec may add `setup_commands` and their setup-only
-`working_directory`; other TaskSpec machine-environment overrides are rejected.
+An explicit command user overrides that default. A grader in the agent's machine runs as
+trusted root. A separate verifier machine uses its own configured default user.
 
 ## SkyRL reply text
 
 SkyRL reply text (`responses`, assistant content) never includes a trailing EOS or turn
 terminator, even with `skip_special_tokens=False`. `response_ids` keep every sampled
 token, including the terminator.
+
+SkyRL sets `environment.task_sessions.daytona.image_build` to `snapshot` or
+`declarative`. Tasks that select the `daytona-eval` backend can use a separate
+build mode through `eval_image_build`. They use the primary credential unless
+`eval_api_key_env` is set. Declarative builds create no persistent snapshot and
+require an account that permits them.
 
 ## Harnesses
 
@@ -209,8 +206,7 @@ Harnesses declare `context_recovery`: `NEVER` stops or fails the attempt using t
 permits recovery, and `AFTER_TURN` permits it after a completed model turn anywhere in the attempt.
 Model adapters report context refusals by raising `ContextRejected(original_error, message)`; when recovery
 is permitted, the session raises `ContextWindowExceeded` without recording the refused request, spending a
-model turn or resetting cumulative limits or attempt deadlines. SkyRL's native agent harness uses `ALWAYS`,
-and full Harbor trials use `AFTER_TURN`.
+model turn or resetting cumulative limits or attempt deadlines. The shared `AgentHarness` uses `ALWAYS`.
 
 The session applies these rules:
 
@@ -334,7 +330,8 @@ Harbor's Terminus-2 agent on the task machine. The task context must be one user
 Harbor's prompts, JSON and XML response formats, tmux keystroke handling, 10,000-byte terminal output limit,
 completion confirmation, and summarization near the context limit or after a context rejection. Its requests go
 through `complete`, so the rollout records each one, including the summarization requests; all of them count
-toward `max_turns`. After a reply cut by its output limit, the agent asks again in a new conversation.
+toward `RolloutLimits.max_turns`. Set `TerminusOptions.max_main_turns` to cap terminal interaction turns
+independently of summary requests. After a reply cut by its output limit, the agent asks again in a new conversation.
 
 ```python
 from rolloutengine.agents.terminus.agent import TerminusOptions, TerminusParser, terminus_harness
@@ -349,8 +346,9 @@ engine = RolloutEngine(machine_factories, {"terminus-2": terminus_harness(option
 limits, and each main request asks for `max_output_tokens`. The context limit is `max_input_tokens`, or the
 served `max_model_len` less 8 tokens when that is smaller. Harbor counts prompt tokens with the server's
 `/tokenize` route; the lifted agent counts the chat through its last answered prompt with the prompt tokens that
-the model reported, and estimates the messages after it at three characters per token. Serve it with
-`ChatModel` under `TraceMode.MESSAGES`, so that context-length rejections reach the agent.
+the model reported, and estimates the messages after it at three characters per token. An explicit
+`setup_timeout` bounds tmux startup and starts the agent turn deadline when tmux is ready. The offline
+evaluator records messages. SkyRL runs the same harness through its exact-token model callable.
 
 ### Pi
 
@@ -628,6 +626,57 @@ Events still queued when the process dies are lost.
 Concurrent attempts deliver to a shared observer concurrently.
 No end event is emitted when a token-contract error or cancellation propagates.
 
+### Finelog observer
+
+`rolloutengine.finelog_observer.FinelogObserver` writes each event to two Finelog tables. It needs the
+`marin-finelog` package, and the caller owns the `LogClient`.
+
+```python
+log = FinelogRolloutLog(client)
+scope = RolloutScope(run_id=run_id, run_attempt_id=run_attempt_id, phase="train", step=step)
+engine = RolloutEngine(machine_factories, harnesses, observer=FinelogObserver(log, scope, content_fraction=1.0))
+await engine.run_task(spec, model, run_id=unique_rollout_id)
+await asyncio.to_thread(log.flush, 60)
+```
+
+| Table | One row for each | Content |
+| --- | --- | --- |
+| `rolloutengine.events` | Event | The scope, the scalar fields of the payload, and the size of the event's content |
+| `rolloutengine.messages` | Message | The message as JSON in `content`, and one `options` row for each conversation |
+
+Every row has the scope: `run_id` and `run_attempt_id` are the `run_id` and `attempt_id` of
+`marin.rollout_runs`, which has the producer, the model, and the job of a run. `phase` and `step` place the task
+attempt in the run. `rollout_id` is the engine's `run_id`, so give each task attempt a unique one.
+
+In the events table, payloads share the columns `duration`, `stop_reason`, `done`, and `error`, so the meaning
+of those follows `event_type`. Other columns name their payload: `tool_call_id` and `tool_name` are the `call_id`
+and `name` of `ToolCallCompleted`, `grade_status` and `grade_failure` the `status` and `failure` of `Graded`,
+`failed_operation` the `operation` of `AttemptEnded`, and `trace_mode` the `trace` of `AttemptStarted`.
+
+To read a transcript, order the message rows of one `rollout_id` by `event_index`, then `message_index`.
+`ConversationStarted` writes every message of the first request, `ModelTurnCompleted` the new assistant message,
+and `TransitionCompleted` the new observations. A harness that starts a new conversation writes its messages
+again.
+
+`content_fraction` is the share of task attempts whose content is written. A hash of `rollout_id` decides, so a
+task attempt has all of its content or none, and the events table has every task attempt. On an event row,
+`content_chars` is the size of the content also when it is not written, `content_captured` says that it was
+written, and `content_rows` how many rows, so a captured event with fewer message rows lost some. A message
+longer than 1 MiB is cut and marked `truncated`.
+
+The messages table repeats content that other stores hold after the fact. The FineStore archive of an evaluation
+has the transcript of each finished attempt, and SkyRL trajectory retention keeps a sample of the trajectories of
+an RL run. This table has the turns of a task attempt while it runs, for every producer, in one place that SQL
+reads across runs. Finelog is telemetry here, and the returned `Rollout` stays the record: a retry can repeat a
+row, so remove duplicates on `(rollout_id, event_index, message_index)`, and rows are lost when the engine's
+event queue or a table's buffer is full, or when the process dies.
+
+Each table buffers its rows in the process, up to 200,000 rows and 64 MiB of events or 128 MiB of messages by
+the client's size estimate. While Finelog is slow or down, a process with both buffers full held 132 MiB of event
+rows and 160 MiB of message rows, and then lost the oldest rows. `FinelogRolloutLog.flush` waits for the buffered
+rows and logs a table whose rows Finelog did not confirm, because they were lost or the wait timed out. It blocks,
+so call it off the event loop, and call it before the client closes.
+
 ## Deadlines and failures
 
 | Field | Boundary |
@@ -636,15 +685,15 @@ No end event is emitted when a token-contract error or cancellation propagates.
 | `model_turn_timeout` | One model request |
 | `ShellHarness(command_timeout=...)` | Each shell-tool command, including separate calls within one model turn |
 | `tool_turn_timeout` | The time from a model turn to the harness's next request or its end, including its tool operations; a cancelled request starts it again |
-| `total_turn_timeout` | The time from the harness's first request to its end, across all turns in one attempt |
+| `total_turn_timeout` | The time from the first model request or the end of explicit agent setup, across all turns in one attempt |
 | `attempt_timeout` | Task startup, the harness, and final verification |
 | `verifier_timeout` | Output capture and the full `grade` call, including separate verifier startup and artifact transfer |
 | `RolloutLimits.cleanup_timeout` | Each cleanup action, outside the attempt deadline |
 | Machine `cleanup_timeout` | Optional override for that machine's cleanup action |
 
-The total-turn deadline excludes startup, the harness's work before its first request, and final verification.
+The total-turn deadline excludes task startup and final verification. Pi and Terminus-2 start it as soon as they finish setup when setup has its own timeout.
 Its expiration cancels the harness and starts grading with `stop_reason="total_turn_timeout"`.
-No model response means `grade.status=Outcome.UNAVAILABLE` and `grade.reward=None`.
+A conversation grader receives no submission when the model never replies. A workspace grader can still score work left on the machine.
 Backend command limits also stop commands that outlive an enclosing coroutine deadline.
 The command limit is separate from the tool-turn deadline.
 When these limits are finite, the shell harness's check requires the command limit to be less than the tool-turn deadline.
@@ -748,9 +797,9 @@ Grading removes existing reward files before the grader command executes.
 A valid reward file can supply a grade after a nonzero exit code. A command timeout has no grade.
 `RewardFileFormat.VERDICT_JSON` requires a zero exit code and reads Verifyit's
 structured verdict, retaining scored, invalid-task and infrastructure-error
-outcomes with their details. A scripted judge declares `ScriptGrader.judge`;
-the runtime stages `/tests/judge.toml` and supplies its connection credentials
-only in the verifier machine's environment.
+outcomes with their details. A scripted judge declares `ScriptGrader.judge`.
+The runtime stages `/tests/judge.toml` and sets the judge connection for the verifier.
+A fresh Daytona verifier receives a machine-local endpoint. Its requests are forwarded through the host client, where the upstream key stays.
 
 `GradeResult.failure` identifies timeout, execution failure, missing reward, empty reward, or invalid reward.
 An incorrect answer receives a numeric grade. A grading failure has no reward.

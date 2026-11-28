@@ -91,6 +91,7 @@ from experiments.evaluation.curated import (
     record_ref_for,
     resolve_selection,
     runs_agent,
+    selected_sources,
     settings_for,
 )
 from experiments.evaluation.evals import (
@@ -107,6 +108,7 @@ from experiments.evaluation.policy_finalization import (
     requires_policy_judge,
 )
 from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation.pipeline import download_hosts
 
 EVALUATION_CONTROLLER_CLUSTER = "marin"
 DEFAULT_EVAL_CONCURRENCY = 1
@@ -124,10 +126,22 @@ def _model_identity(model: ModelRef) -> dict:
         mode="json",
         exclude={
             "config_digest": True,
-            "config": {"serve": _SERVE_THROUGHPUT_FIELDS, "evaluation_num_concurrent": True},
-            "source_config": {"serve": _SERVE_THROUGHPUT_FIELDS, "evaluation_num_concurrent": True},
+            "config": {
+                "serve": _SERVE_THROUGHPUT_FIELDS,
+                "evaluation_num_concurrent": True,
+                "evaluation_request_timeout": True,
+            },
+            "source_config": {
+                "serve": _SERVE_THROUGHPUT_FIELDS,
+                "evaluation_num_concurrent": True,
+                "evaluation_request_timeout": True,
+            },
         },
     )
+
+
+def _judge_identity(config: ModelConfigRef | None) -> dict | None:
+    return None if config is None else config.model_dump(mode="json", exclude={"evaluation_request_timeout"})
 
 
 def _evaluation_identity(evaluation: EvalRef) -> dict:
@@ -308,6 +322,12 @@ def _resolve_definitions(
             }
             egress_allow = (
                 (urlsplit(definition.run.judge_endpoint).hostname,) if definition.run.judge_endpoint is not None else ()
+            )
+            egress_allow += tuple(
+                host
+                for source in selected_sources(protocol)
+                if source.config is not None
+                for host in download_hosts(source.config.recipe)
             )
             if settings.task_machine is not None and settings.task_machine.backend is TaskMachineBackend.DAYTONA:
                 secret_env[DAYTONA_API_KEY] = DAYTONA_SECRET_ENV[DAYTONA_API_KEY]
@@ -538,9 +558,7 @@ def build_evaluation_batch(
                     else {}
                 ),
                 "judge": (
-                    ModelConfigRef.model_validate(asdict(judge.model)).model_dump(mode="json")
-                    if judge is not None
-                    else None
+                    _judge_identity(ModelConfigRef.model_validate(asdict(judge.model))) if judge is not None else None
                 ),
                 "policy": spec.version,
             },
@@ -622,7 +640,7 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
             source_config=batch.source_model_config,
         )
     )
-    judge = None if batch.judge is None else ModelConfigRef.model_validate(asdict(batch.judge.model))
+    judge = _judge_identity(None if batch.judge is None else ModelConfigRef.model_validate(asdict(batch.judge.model)))
     records = sorted(
         (
             record
@@ -630,7 +648,9 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
             if record.group_id == batch.group_id
             and record.version == batch.version
             and _model_identity(record.model) == model
-            and (record.judge.model.source_config or record.judge.model.config if record.judge is not None else None)
+            and _judge_identity(
+                record.judge.model.source_config or record.judge.model.config if record.judge is not None else None
+            )
             == judge
         ),
         key=lambda record: (record.status is RunStatus.SUCCEEDED, record.created_at),

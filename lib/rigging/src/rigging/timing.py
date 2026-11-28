@@ -522,7 +522,13 @@ class ExponentialBackoff:
             self._max_attempt = int(math.log(self._maximum / self._initial) / math.log(self._factor)) + 1
 
     def next_interval(self) -> float:
-        effective_attempt = min(self._attempt, self._max_attempt)
+        interval = self.interval(self._attempt)
+        self._attempt += 1
+        return interval
+
+    def interval(self, attempt: int) -> float:
+        """Return the jittered interval for a zero-based attempt."""
+        effective_attempt = min(attempt, self._max_attempt)
         interval = self._initial * (self._factor**effective_attempt)
         interval = min(interval, self._maximum)
 
@@ -530,7 +536,6 @@ class ExponentialBackoff:
             jitter = interval * self._jitter * (2 * random.random() - 1)
             interval = max(0.001, interval + jitter)
 
-        self._attempt += 1
         return interval
 
     def reset(self) -> None:

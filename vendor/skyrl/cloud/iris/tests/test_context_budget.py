@@ -32,13 +32,11 @@ def context_config_path(tmp_path):
     config.write_text(
         yaml.safe_dump(
             {
-                "entrypoint": "terminal_bench",
                 "context_budget": {
                     "request_window_tokens": 131072,
                     "max_new_tokens_per_turn": 16384,
                     "max_turns": 90,
                 },
-                "terminal_bench": {"harbor": {}},
             }
         )
     )
@@ -54,7 +52,7 @@ def test_context_budget_derives_all_hydra_length_arguments(context_config_path):
     assert cfg.generator.max_turns == 90
     assert cfg.generator.sampling_params.max_generate_length == 16384
     assert cfg.generator.engine_init_kwargs.max_model_len == 131072
-    assert cfg.terminal_bench_config.harbor.max_turns == 90
+    assert cfg.environment.task_sessions.session.max_turns == 90
     assert cfg.generator.trajectory_reward_shaping.overlong.l_max == 65536
     assert cfg.generator.trajectory_reward_shaping.overlong.l_cache == 16384
 

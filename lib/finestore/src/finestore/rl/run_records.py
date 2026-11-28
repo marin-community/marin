@@ -9,13 +9,14 @@ recorded checkpoint ancestors, bounded by each continuation's starting step.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, StrictInt, model_validator
 from rigging.filesystem.storage_path import prefix_join
 
 from finestore.layout import OnConflict
@@ -23,6 +24,9 @@ from finestore.reader import ReadView
 from finestore.rl.strata import TaskStrata
 from finestore.schema import arrow_schema
 from finestore.store import DataStore, DataTable
+
+Identity = Annotated[str, Field(min_length=1)]
+RL_WANDB_PROJECT = "marin-rl"
 
 RUN_RECORDS_SUBDIRECTORY = "run-records"
 METRICS_TABLE = "metrics"
@@ -37,6 +41,10 @@ class LaunchState(StrEnum):
     SUBMITTED = "submitted"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in (LaunchState.SUCCEEDED, LaunchState.FAILED)
 
 
 class ExportedPolicy(BaseModel):
@@ -73,6 +81,34 @@ class CheckpointReference(BaseModel):
     step: int
 
 
+class RunIndexIdentity(BaseModel):
+    """Configuration identity and provenance shared by an attempt's public links."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+    run_id: Identity
+    model: Identity
+    preset: Identity
+    preset_version: Identity
+    is_control: bool = False
+    wandb_project: Identity = RL_WANDB_PROJECT
+    user: Identity
+    branch: str | None
+    source_revision: Identity
+    tree_hash: Identity | None = None
+    base_commit: Identity | None = None
+    base_preset_version: Identity | None = None
+    dirty: bool
+    pr_number: Annotated[StrictInt, Field(gt=0)] | None = None
+    submitted_at: str | None = None
+
+    @property
+    def wandb_tags(self) -> list[str]:
+        tags = [f"model:{self.model}", f"preset:{self.preset}", f"version:{self.preset_version}", f"user:{self.user}"]
+        if self.branch is not None:
+            tags.append(f"branch:{self.branch}")
+        return tags
+
+
 class AttemptRecord(BaseModel):
     """One native attempt with its receipt, startup facts and checkpoint parent."""
 
@@ -90,6 +126,14 @@ class AttemptRecord(BaseModel):
     config: dict[str, Any] | None = None
     result: LaunchResult | None = None
     issue: int | None = None
+    index: RunIndexIdentity | None = None
+    interruption: Literal["coordinator_terminated"] | None = None
+    elapsed_excluding_eval_seconds: Annotated[FiniteFloat, Field(ge=0)] | None = None
+
+    @property
+    def index_run_id(self) -> str:
+        """Return the cross-system identity when this attempt has one."""
+        return self.index.run_id if self.index is not None else self.run_id
 
     @property
     def native(self) -> LaunchReceipt:
@@ -189,16 +233,22 @@ def register_run_tables(store: DataStore) -> dict[str, DataTable]:
     }
 
 
-def update_attempt(store: DataStore, record: AttemptRecord) -> None:
-    """Commit a fresh writer-owned update; omitted fields stay stored, explicit null clears a field."""
+def update_attempt(store: DataStore, record: AttemptRecord, *, base: ReadView | None = None) -> None:
+    """Commit an attempt update, guarding its table against concurrent writes when a base is supplied."""
     values = record.model_dump(mode="json", exclude_unset=True)
     values.pop("attempt_id")
     rows = [
         AttemptRow(attempt_id=record.attempt_id, field=name, value_json=json.dumps(value)).model_dump()
         for name, value in values.items()
     ]
-    register_run_tables(store)[ATTEMPTS_TABLE].extend(rows)
-    store.flush()
+    table = register_run_tables(store)[ATTEMPTS_TABLE]
+    if base is None:
+        table.extend(rows)
+        store.flush()
+    else:
+        with store.transaction(base=base) as transaction:
+            transaction.require_unchanged(ATTEMPTS_TABLE)
+            transaction.table(ATTEMPTS_TABLE).extend(rows)
 
 
 def write_attempt(export_root: str, record: AttemptRecord) -> None:
@@ -226,10 +276,10 @@ def read_attempt(export_root: str, attempt_id: str) -> AttemptRecord | None:
     return _attempt(ReadView(run_records_root(export_root)), attempt_id)
 
 
-def read_attempts(export_root: str) -> dict[str, AttemptRecord]:
-    """Read the stored attempts from one export root's committed snapshot."""
-    view = ReadView(run_records_root(export_root))
-    return _records(view.iter_rows(ATTEMPTS_TABLE))
+def read_attempts(export_root: str, *, view: ReadView | None = None) -> dict[str, AttemptRecord]:
+    """Read attempts from an export root, using an existing pinned snapshot when supplied."""
+    snapshot = view if view is not None else ReadView(run_records_root(export_root))
+    return _records(snapshot.iter_rows(ATTEMPTS_TABLE))
 
 
 def _lineage(export_root: str, attempt_id: str, views: dict[str, ReadView]) -> tuple[LineageEntry, ...]:
@@ -293,11 +343,24 @@ def write_evaluations(export_root: str, rows: Sequence[EvaluationTaskRow]) -> No
 
 
 def read_evaluations(
-    export_root: str, *, attempt_id: str, evaluation: str, step: int | None = None
+    export_root: str, *, attempt_id: str, evaluation: str | None = None, step: int | None = None
 ) -> list[EvaluationTaskRow]:
     """Read one attempt and evaluation without combining retries or other profiles."""
     view = ReadView(run_records_root(export_root))
-    where = [("attempt_id", "==", attempt_id), ("evaluation", "==", evaluation)]
+    where = [("attempt_id", "==", attempt_id)]
+    if evaluation is not None:
+        where.append(("evaluation", "==", evaluation))
     if step is not None:
         where.append(("step", "==", step))
     return [EvaluationTaskRow.model_validate(row) for row in view.iter_rows(EVALUATIONS_TABLE, where=where)]
+
+
+def attempt_evidence_digest(export_root: str, attempt_id: str) -> str:
+    """Hash the metrics and evaluations consumed for this attempt, including bounded ancestors."""
+    metrics = read_attempt_metrics(export_root, attempt_id)
+    evaluations = sorted(
+        read_evaluations(export_root, attempt_id=attempt_id),
+        key=lambda row: (row.evaluation, row.step, row.task_id),
+    )
+    evidence = (metrics, [row.model_dump(mode="json") for row in evaluations])
+    return hashlib.sha256(json.dumps(evidence, sort_keys=True).encode()).hexdigest()

@@ -9,6 +9,7 @@ from functools import partial
 from typing import Literal
 
 from evalrecords.records import PromptFormat
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.evaluation.corpus import ItemBuilder
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
@@ -42,10 +43,16 @@ from taskcompendium.pipeline.models import Converter, IntendedUse
 from experiments.evaluation.benchmark import EvaluationBenchmark, ProtocolVariant
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, chat_source, prepare_evaluation
 from experiments.post_training.task_curation.environment import Environment
-from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, RecipeSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, RecipeSource, UrlSource
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 EXPLICIT_TEMPLATE_VERSION = "2026.11.05.3"
+LIKELIHOOD_CONTEXT_REVISION = "bos-2026.11.24"
+
+
+def likelihood_protocol_version(version: str) -> str:
+    """Mark a likelihood protocol so results scored before contexts started with BOS are not reused."""
+    return version + "-" + LIKELIHOOD_CONTEXT_REVISION
 
 
 def evaluation_source(
@@ -67,9 +74,11 @@ def evaluation_source(
     """
     return RlDataSource(
         info=SourceInfo(
-            id="Eval:" + name,
-            title=protocol.benchmark,
-            origin="eval",
+            data_restriction=DataRestriction.OPEN,
+            origin=SourceOrigin.EVALCHEMY,
+            upstream_dataset=name,
+            upstream_name=name,
+            build_path="Evalchemy",
             family=protocol.operation.value,
             tags=("eval", "benchmark", "benchmark:" + protocol.benchmark),
             count=protocol.expected_population,
@@ -95,7 +104,7 @@ def multiple_choice_evaluation(
     *,
     name: str,
     benchmark: str,
-    source: HfSource,
+    source: HfSource | UrlSource,
     population: int,
     template: ChoiceTemplate,
     metrics: tuple[LikelihoodMetric, ...],
@@ -103,11 +112,17 @@ def multiple_choice_evaluation(
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     """Bind a family's explicit prompt and normalization policies to a curated corpus."""
     policy = template.fewshot
+    inputs = {}
+    if policy.pool_file:
+        assert isinstance(source, HfSource), "a few-shot pool file is read from the source's Hugging Face revision"
+        inputs = {"fewshot": HfSource(source.repo, source.revision, (policy.pool_file,), SourceFormat.PARQUET)}
     return RlDataSource(
         info=SourceInfo(
-            id="Checkpoint:" + name,
-            title=name,
-            origin="lm-eval",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset=name,
+            upstream_name=name,
+            build_path="Checkpoint",
+            origin=SourceOrigin.LM_EVAL,
             family="checkpoint",
             tags=("eval", "benchmark"),
             count=population,
@@ -116,18 +131,14 @@ def multiple_choice_evaluation(
             CurationRecipe(
                 name="checkpoint-" + name,
                 source=replace(source, read=partial(read_fewshot_choices, template=template)),
-                inputs=(
-                    {"fewshot": HfSource(source.repo, source.revision, (policy.pool_file,), SourceFormat.PARQUET)}
-                    if policy.pool_file
-                    else {}
-                ),
+                inputs=inputs,
                 convert=partial(convert_choice_document, benchmark=benchmark),
                 version=EXPLICIT_TEMPLATE_VERSION,
                 intended_use=IntendedUse.EVAL,
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version=EXPLICIT_TEMPLATE_VERSION,
+                version=likelihood_protocol_version(EXPLICIT_TEMPLATE_VERSION),
                 operation=OperationKind.CHOICE_LIKELIHOOD,
                 sampling=None,
                 trials=TrialPolicy(count=1, seed=None),
@@ -180,9 +191,11 @@ def lm_eval_multiple_choice(
     )
     return RlDataSource(
         info=SourceInfo(
-            id="Evalchemy:" + name,
-            title=name,
-            origin="Evalchemy",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset=name,
+            upstream_name=name,
+            build_path="Evalchemy",
+            origin=SourceOrigin.EVALCHEMY,
             family="likelihood-choice",
             tags=(
                 "eval",
@@ -198,7 +211,7 @@ def lm_eval_multiple_choice(
             recipe=recipe,
             protocol=EvaluationProtocol(
                 benchmark=benchmark,
-                version=version,
+                version=likelihood_protocol_version(version),
                 operation=OperationKind.CHOICE_LIKELIHOOD,
                 sampling=None,
                 trials=TrialPolicy(count=1, seed=None),
@@ -246,9 +259,11 @@ def text_generation_evaluation(
     """Bind a family's compiled demonstrations, scorer and sampling protocol."""
     return RlDataSource(
         info=SourceInfo(
-            id="Checkpoint:" + name,
-            title=name,
-            origin="lm-eval",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset=name,
+            upstream_name=name,
+            build_path="Checkpoint",
+            origin=SourceOrigin.LM_EVAL,
             family="checkpoint",
             tags=("eval", "benchmark"),
             count=population,
@@ -303,9 +318,11 @@ def _compile_lm_eval_text_generation(
     template = HarnessTemplate(name=dataset.name, num_fewshot=shots, fewshot_file=dataset.pool_file)
     source = RlDataSource(
         info=SourceInfo(
-            id="Evalchemy:" + dataset.name,
-            title=dataset.name,
-            origin="Evalchemy",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset=dataset.name,
+            upstream_name=dataset.name,
+            build_path="Evalchemy",
+            origin=SourceOrigin.EVALCHEMY,
             family="short-answer",
             tags=("eval", "source:evalchemy", "benchmark", "family:short-answer"),
             count=dataset.population,

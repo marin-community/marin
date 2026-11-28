@@ -13,16 +13,17 @@ for ``taskcompendium.pipeline.source_processing.run_source_pipeline``. SAMPLE/FU
 import hashlib
 import json
 import re
-import subprocess
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from functools import cached_property, partial
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 import click
 import requests
+from finestore.rl.curation import huggingface_dataset_url
 from fray.types import ResourceConfig
 from marin.datakit.download.huggingface import (
     DownloadConfig,
@@ -30,7 +31,6 @@ from marin.datakit.download.huggingface import (
     plan_download,
     stream_file_to_fsspec,
 )
-from marin.evaluation.harbor.driver_config import harbor_runtime_command
 from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -83,6 +83,7 @@ from experiments.post_training.glm import GLM_REQUEST_ATTEMPTS, GLM_REQUEST_TIME
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.environment import Environment, Placement, placement
+from experiments.post_training.task_curation.harbor_hub import REGISTRY_HOST, acquire_release
 from experiments.post_training.task_curation.harbor_packages import (
     PACKAGE_ARCHIVE_REVISION,
     PACKAGE_ARCHIVES,
@@ -103,8 +104,6 @@ URL_CHUNK_BYTES = 1024 * 1024
 URL_TIMEOUT = 60
 IMAGE_MACHINE_CPUS = 4
 INPUT_OVERRIDES_REVISION = "2"
-
-HARBOR_EXPORTER = Path(__file__).with_name("harbor_hub.py")
 
 
 type RowSelector = Callable[[dict[str, Any], ConversionContext], bool]
@@ -143,7 +142,7 @@ class HfSource:
 
     @property
     def url(self) -> str:
-        return f"https://huggingface.co/datasets/{self.repo}/tree/{self.revision}"
+        return huggingface_dataset_url(self.repo, self.revision)
 
 
 @dataclass(frozen=True)
@@ -203,7 +202,7 @@ class HarborHubSource:
 
 @dataclass(frozen=True)
 class HarborRepoSource:
-    """Harbor task packages, one top-level directory each, from a pinned Hugging Face dataset repository.
+    """Harbor task packages directly under ``root`` of a pinned Hugging Face dataset repository.
 
     Acquisition stages each package as a reproducible archive in Harbor Hub's layout, so ``read`` sees
     the same files as for a ``HarborHubSource``.
@@ -212,6 +211,7 @@ class HarborRepoSource:
     repo: str
     revision: str
     read: FileReader
+    root: str = field(default="", metadata={"fingerprint_omit_value": ""})
 
     def __post_init__(self) -> None:
         if re.fullmatch(r"[0-9a-f]{40}", self.revision) is None:
@@ -223,7 +223,7 @@ class HarborRepoSource:
 
     @property
     def url(self) -> str:
-        return f"https://huggingface.co/datasets/{self.repo}/tree/{self.revision}"
+        return huggingface_dataset_url(self.repo, self.revision)
 
     @property
     def files(self) -> tuple[str, ...]:
@@ -688,6 +688,7 @@ def download_identity(source: RecipeSource) -> dict[str, Any]:
             "harbor_repository": source.repo,
             "revision": source.revision,
             "archive_revision": PACKAGE_ARCHIVE_REVISION,
+            **({"root": source.root} if source.root else {}),
         }
     if isinstance(source, HarborArchiveSource):
         return {
@@ -699,6 +700,18 @@ def download_identity(source: RecipeSource) -> dict[str, Any]:
             **({"packages": sorted(source.packages)} if source.packages is not None else {}),
         }
     return {"url": source.url, "sha256": source.sha256, "filename": source.filename}
+
+
+def download_hosts(recipe: CurationRecipe) -> tuple[str, ...]:
+    """Hosts to grant in addition to Iris's default Hugging Face access."""
+    hosts: set[str] = set()
+    for source in (recipe.source, *recipe.inputs.values()):
+        if isinstance(source, HarborHubSource):
+            hosts.add(REGISTRY_HOST)
+        elif isinstance(source, UrlSource | HarborArchiveSource):
+            if host := urlsplit(source.url).hostname:
+                hosts.add(host)
+    return tuple(sorted(hosts))
 
 
 def pipeline_identity(
@@ -768,20 +781,10 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
                 source.prepare(task.destination_path, campaign.context)
         return
     if isinstance(source, HarborRepoSource):
-        stage_repository_packages(source.repo, source.revision, StoragePath(request.output_path))
+        stage_repository_packages(source.repo, source.revision, StoragePath(request.output_path), root=source.root)
         return
     if isinstance(source, HarborHubSource):
-        subprocess.run(
-            harbor_runtime_command(
-                HARBOR_EXPORTER,
-                "--release",
-                f"{source.name}@{source.revision}",
-                "--output",
-                request.output_path,
-                "--all",
-            ),
-            check=True,
-        )
+        acquire_release(f"{source.name}@{source.revision}", StoragePath(request.output_path), ())
         return
     if isinstance(source, HarborArchiveSource):
         with requests.get(source.url, stream=True, timeout=URL_TIMEOUT) as response:
@@ -798,10 +801,16 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
 def download_verified(url: str, sha256: str, destination: StoragePath) -> None:
     """Stream ``url`` to ``destination``, removing it unless its SHA-256 is ``sha256``."""
     digest = hashlib.sha256()
-    with requests.get(url, stream=True, timeout=URL_TIMEOUT) as response:
-        response.raise_for_status()
+    with ExitStack() as stack:
+        if url.startswith(("http://", "https://")):
+            response = stack.enter_context(requests.get(url, stream=True, timeout=URL_TIMEOUT))
+            response.raise_for_status()
+            chunks = response.iter_content(URL_CHUNK_BYTES)
+        else:
+            reader = stack.enter_context(StoragePath(url).open("rb"))
+            chunks = iter(lambda: reader.read(URL_CHUNK_BYTES), b"")
         with destination.open("wb", auto_mkdir=True) as stream:
-            for chunk in response.iter_content(URL_CHUNK_BYTES):
+            for chunk in chunks:
                 digest.update(chunk)
                 stream.write(chunk)
     if digest.hexdigest() != sha256:

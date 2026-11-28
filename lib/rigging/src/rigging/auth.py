@@ -282,14 +282,16 @@ class IapServiceAccountTokenProvider:
     ADC written by ``gcloud auth application-default login
     --impersonate-service-account``, or a Workload Identity Federation
     external-account ADC that impersonates a service account (e.g. GitHub Actions).
+    An explicit impersonating ADC file scopes the credential to this provider.
     Bare end-user ``gcloud`` credentials cannot produce an IAP token and raise
     :class:`IapCredentialsUnavailable`. The audience is the OAuth client id of the
     IAP-protected resource. The token is cached until five minutes before its
     ``exp`` claim; credential access happens only inside ``get_token``.
     """
 
-    def __init__(self, audience: str):
+    def __init__(self, audience: str, *, credentials_file: str | None = None):
         self._audience = audience
+        self._credentials_file = credentials_file
         self._cached_token: str | None = None
         self._expires_at: float = 0.0
 
@@ -307,10 +309,11 @@ class IapServiceAccountTokenProvider:
         request = google.auth.transport.requests.Request()
         # fetch_id_token covers a service-account key (GOOGLE_APPLICATION_CREDENTIALS)
         # and the GCE/Cloud Run metadata server.
-        try:
-            return cast(str, google.oauth2.id_token.fetch_id_token(request, self._audience))
-        except google.auth.exceptions.DefaultCredentialsError:
-            pass
+        if self._credentials_file is None:
+            try:
+                return cast(str, google.oauth2.id_token.fetch_id_token(request, self._audience))
+            except google.auth.exceptions.DefaultCredentialsError:
+                pass
         # fetch_id_token never reads the well-known ADC file, so an impersonating
         # ADC lands here: the `gcloud auth application-default login
         # --impersonate-service-account` ADC, or a Workload Identity Federation
@@ -318,7 +321,10 @@ class IapServiceAccountTokenProvider:
         # account. Both reduce to an impersonated credential we mint through; bare
         # user creds or no ADC cannot.
         try:
-            source, _ = google.auth.default(scopes=_IMPERSONATION_SCOPES)
+            if self._credentials_file is None:
+                source, _ = google.auth.default(scopes=_IMPERSONATION_SCOPES)
+            else:
+                source, _ = google.auth.load_credentials_from_file(self._credentials_file, scopes=_IMPERSONATION_SCOPES)
         except google.auth.exceptions.DefaultCredentialsError as exc:
             raise IapCredentialsUnavailable(_NO_IAP_CREDENTIALS_MESSAGE) from exc
         signing_credentials = _impersonated_source(source)

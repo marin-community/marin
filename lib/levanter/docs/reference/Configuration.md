@@ -175,6 +175,19 @@ are split across their replicas. A save also bounds the host memory it stages: o
 share fits under `max_staged_host_bytes` returns while the commits drain, and a larger save
 rolls through it.
 
+When several processes save to a local or NFS path, each OCDBT manifest commit takes a lock
+file that every other writer waits on. Each process chooses its commit path from its own
+staged bytes. A save that does not fit in `max_staged_host_bytes` batches each staging wave
+into one atomic manifest commit. A save that fits, and every save that is not using lock
+files, commits each chunk as soon as it is staged, which overlaps staging with storage I/O.
+In either path, one process publishes the array metadata before the others open the arrays,
+and the others open it without reading it back. Before each manifest commit, the writer
+refreshes the directory and holds a commit-order lock until the commit finishes, so it
+rewrites the manifest the previous client published instead of a cached copy. A save also
+publishes a writer lease for its lifetime. Lock files left in the directory are removed only
+after that lease is gone or stale. Set `checkpointer.write.file_io_locking` to `os`,
+`lockfile`, or `none` to override that default.
+
 | Parameter                                  | Description                                                                            | Default |
 |--------------------------------------------|----------------------------------------------------------------------------------------|---------|
 | `checkpointer.write.max_write_replicas`    | Cap on how many replicas of an array write part of it. `1` disables replica splitting. | 1024    |
@@ -183,9 +196,7 @@ rolls through it.
 | `checkpointer.write.max_staged_host_bytes` | Cap on host memory one process stages at once during a save.                           | 16 GiB  |
 | `checkpointer.write.cache_pool_bytes`      | Soft limit for each TensorStore write cache.                                            | 1 GiB   |
 | `checkpointer.write.data_copy_concurrency` | Maximum CPU concurrency TensorStore uses to copy and encode checkpoint data.           | 16      |
-| `checkpointer.write.file_io_locking`       | TensorStore file driver locking: `os`, `lockfile`, or `none`.                          | unset   |
-
-When unset, `file_io_locking` selects `lockfile` for multi-process saves to local paths, such as a shared NFS directory, and TensorStore's default otherwise. TensorStore's default advisory OS locks do not exclude writers on different NFS clients, so their manifest commits race; the NFS server enforces an exclusively created lock file. Before a `lockfile` save, process 0 removes `*.__lock` files that an interrupted save left in the checkpoint directory, while the other processes wait.
+| `checkpointer.write.file_io_locking`       | File-driver lock while a key commits: `os`, `lockfile`, or `none`. Unset uses the default above. | lock file when several processes save to a local or NFS path |
 
 #### Checkpoint Telemetry
 

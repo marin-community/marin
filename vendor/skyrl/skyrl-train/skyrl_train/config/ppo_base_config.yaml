@@ -6,15 +6,10 @@ defaults:
   - mismatch_probe@trainer.mismatch_probe: default
 
 data:
-  task_cache_dir: "~/.cache/marinskyrl/tasks"
   train_data: ["${oc.env:HOME}/data/gsm8k/train.parquet"]
   val_data: ["${oc.env:HOME}/data/gsm8k/validation.parquet"]
   shuffle: true
   preference_pair_format: text # text completions or tokenized conversations with assistant masks
-  # Optional task-directory sidechannel for mixed Nemotron Ultra RLVR. The
-  # parquet dataloader remains authoritative; SWE rows resolve their instance ID
-  # against these terminal-bench task roots at rollout time.
-  terminal_bench_data: []
   sampling:
     kind: null # null = seeded passes (data.shuffle); domain-weighted|naive|thompson|learnability|grade-uniform|grade-adaptive|grade-prior
     domain_weights: {} # exact teacher-route mixture in every train_batch_size prompts drawn when kind=domain-weighted
@@ -47,7 +42,7 @@ trainer:
   # Best selection queues only the final export, after the last evaluation.
   hf_export_checkpoint: latest  # latest or best native checkpoint for HF export
   batch_builder: driver  # driver, worker
-  evaluation_runner: training # task or harbor selects generated validation for offline preference training
+  evaluation_runner: training # task selects generated validation for offline preference training
   trajectory_selector:
     type: null # null | best_of_n; selection runs after reward postprocessing and before teacher scoring
   # light is the shared default: fatal Python stacks, bounded NCCL flight recording,
@@ -75,7 +70,7 @@ trainer:
     count_step: 1000
   placement:
     # TOPOLOGY-SENSITIVE: the launcher uses this to merge or split physical role bundles, while the runtime also
-    # uses it to choose placement groups, model residency, weight transfer, and Terminal Bench sync/async execution.
+    # uses it to choose placement groups, model residency, and weight transfer.
     # A wrapper must treat this as part of the launch topology, not as a trainer-only optimization.
     colocate_all: true
     # TOPOLOGY-SENSITIVE: when a reference role is active, this decides whether it shares the policy bundle or
@@ -240,12 +235,11 @@ trainer:
     # prompt waits until the prompt order offers it again.
     max_stale_retries: 1
     # How many unusable groups in a row (every sample masked, or too few graded samples for the group baseline) a
-    # prompt may produce before it sits out 10 training steps. A prompt stays in rotation when one batch needs every
-    # prompt still offered.
+    # prompt may produce before it sits out 10 training steps. Each pool keeps enough eligible prompts to fill its
+    # open batches and one spare.
     max_unusable_groups: 3
-    # Cap on prompt groups generating at once. An Iris launch replaces null with 1.5 training batches, rounded up; in a
-    # run with a terminal_bench_config, at most its Harbor n_concurrent_trials (16 when unset) divided by
-    # n_samples_per_prompt. Elsewhere null bounds generation only by staleness.
+    # Cap on prompt groups generating at once. Iris defaults to 1.5 training batches, rounded up.
+    # Elsewhere null bounds generation only by staleness.
     max_in_flight: null
     # Directory, usually an S3 prefix, that holds each trainable group as its own object; a checkpoint then
     # records URIs instead of copying groups. Nothing deletes the objects, so use an expiring prefix. null keeps
@@ -332,6 +326,8 @@ trainer:
   tracker_commit_each_step: true
   dump_data_batch: false
   dump_eval_results: true
+  dump_grader_report: false
+  grader_report_dir: ${trainer.export_path}
   log_level: "INFO"
 
   rope_scaling: null
@@ -406,8 +402,7 @@ generator:
   weight_sync_pause_timeout_seconds: 30.0
   max_turns: 1
 
-  # Shared Harbor/Gym terminal-error taxonomy. Unknown Gym failures retain the
-  # previous masking behavior; context overflow and timeouts are agent errors.
+  # Terminal-error treatment by name/category; unknown failures use the configured default treatment.
   error_handling:
     enable_error_classification: true
     passthrough_exceptions: []
@@ -424,8 +419,8 @@ generator:
 
   engine_init_kwargs: {}
 
-  # Managed EAGLE serving and optional online draft training. vLLM resolves immutable
-  # Hugging Face revisions or streams object-store checkpoints through Run:ai.
+  # Managed speculative decoding with optional online training for EAGLE3.
+  # SkyRL mirrors pinned Hugging Face drafts and streams object-store checkpoints into vLLM through Run:ai.
   speculative_decoding: null
 
   override_existing_update_group: "auto"
@@ -470,7 +465,7 @@ generator:
       advantage_penalty_per_token: 0.0
       max_advantage_penalty: 0.2
     passthrough:
-      # Subtract from optimization reward when the Harbor taxonomy classifies the terminal exception as PASSTHROUGH.
+      # Subtract from optimization reward for terminal exceptions classified as PASSTHROUGH.
       penalty: 0.0
     non_termination:
       penalty: 0.0
@@ -527,6 +522,8 @@ generator:
 
 environment:
   env_class: "gsm8k"
+  task_sessions:
+    agent_harnesses: {}
 
 trajectory_runner:
   command_timeout: 120
@@ -534,6 +531,8 @@ trajectory_runner:
   shutdown_timeout: 45
   # Trajectories each rollout worker runs at once; an evaluation runs at most this many across all workers.
   max_concurrent_tasks: 1024
+  # Training machine trajectories across the rollout worker pool, with at least one slot per worker.
+  max_concurrent_training_machine_tasks: null
   # One worker pool executes all task families on the trainer's node.
   rollout_workers:
     num_workers: 4
