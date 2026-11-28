@@ -76,17 +76,6 @@ def _shell(_agent: EpisodeAgent, _budget: EpisodeBudget) -> Harness:
     return ShellHarness(command_timeout=None)
 
 
-def _terminus(_agent: EpisodeAgent, budget: EpisodeBudget) -> Harness:
-    return terminus_harness(
-        TerminusOptions(
-            parser=TerminusParser.JSON,
-            max_input_tokens=budget.max_input_tokens,
-            max_output_tokens=budget.max_output_tokens,
-            served_max_model_len=budget.context_window,
-        )
-    )
-
-
 def episode_harnesses(config: EvaluationRunConfig, client: AsyncOpenAI) -> Mapping[str, HarnessFactory]:
     """The harness factory of each agent kind; each attempt builds its own instance for its model budgets.
 
@@ -110,6 +99,16 @@ def episode_harnesses(config: EvaluationRunConfig, client: AsyncOpenAI) -> Mappi
         )
         return pi_harness(options, tokenizer)
 
+    def terminus(_agent: EpisodeAgent, budget: EpisodeBudget) -> Harness:
+        options = TerminusOptions(
+            parser=TerminusParser.JSON,
+            max_input_tokens=budget.max_input_tokens,
+            max_output_tokens=budget.max_output_tokens,
+            served_max_model_len=budget.context_window,
+            interleaved_thinking=config.terminus_interleaved_thinking,
+        )
+        return terminus_harness(options)
+
     def mini_swe(_agent: EpisodeAgent, budget: EpisodeBudget) -> Harness:
         options = MiniSweOptions(
             max_input_tokens=budget.max_input_tokens,
@@ -118,7 +117,7 @@ def episode_harnesses(config: EvaluationRunConfig, client: AsyncOpenAI) -> Mappi
         )
         return mini_swe_harness(options, tokenizer)
 
-    factories = {"shell": _shell, "terminus-2": _terminus, PI_HARNESS: pi, "mini-swe-agent": mini_swe}
+    factories = {"shell": _shell, "terminus-2": terminus, PI_HARNESS: pi, "mini-swe-agent": mini_swe}
     # Planning records a revision for each kind it accepts; the worker must build every one of them.
     assert factories.keys() == EPISODE_HARNESS_REVISIONS.keys(), sorted(
         factories.keys() ^ EPISODE_HARNESS_REVISIONS.keys()

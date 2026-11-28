@@ -17,7 +17,7 @@ from evalrecords.records import (
 )
 from marin.evaluation.dataset_evaluator import DatasetEvaluator, runtime_config
 from marin.evaluation.hardware import Platform
-from marin.evaluation.model_config import AgentConfig, GenerationConfig, ModelConfig, ServeConfig
+from marin.evaluation.model_config import AgentConfig, GenerationConfig, ModelConfig, ServeConfig, load_model_config
 from marin.evaluation.task_worker import (
     DAYTONA_API_KEY,
     DAYTONA_EGRESS,
@@ -142,6 +142,21 @@ def test_runs_take_mini_swe_agents_history_format_from_the_models_agent_argument
     assert config.mini_swe_model_format is model_format
     # The default format leaves the identity of runs that predate the setting unchanged.
     assert ("mini_swe_model_format" in config.model_dump(mode="json")) is (model_format is MiniSweModelFormat.K2_HORIZON)
+
+
+@pytest.mark.parametrize(("agent_arguments", "interleaved"), [("{}", False), ("{interleaved_thinking: true}", True)])
+def test_runs_take_terminus_reasoning_replay_from_the_models_catalog_entry(
+    created, tmp_path, agent_arguments, interleaved
+):
+    entry = tmp_path / "model.yaml"
+    entry.write_text(f"name: solver\nlocation: example/solver\nagent:\n  agent_kwargs: {agent_arguments}\n")
+    model = replace(load_model_config(entry), revision="pinned", tokenizer_revision="tokenizer-pin")
+
+    config = runtime_config(model, CuratedSettings(), SESSION)
+
+    assert config.terminus_interleaved_thinking is interleaved
+    # Runs of models that do not replay reasoning keep their identity.
+    assert ("terminus_interleaved_thinking" in config.model_dump(mode="json")) is interleaved
 
 
 @pytest.mark.parametrize("backend", list(TaskMachineBackend))
