@@ -6,17 +6,28 @@
 from pathlib import Path
 
 from shellbox.backends.local.cgroup import check_cgroup_parent
+from shellbox.capabilities import MachineCapability
 from shellbox.image import PreparedImage, RegistryImage, is_digest_pinned_image
 from shellbox.machine import (
-    LINUX_PROCESS_CAPABILITIES,
     HostImage,
-    MachineCapability,
     MachineSpec,
     PackageSpec,
     TaskRequirements,
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
+
+LOCAL_CAPABILITIES = frozenset(
+    {
+        MachineCapability.SHELL,
+        MachineCapability.FILESYSTEM,
+        MachineCapability.PYTHON,
+        MachineCapability.PROCESS,
+        MachineCapability.NETWORK,
+        MachineCapability.GIT_REPOSITORY,
+    }
+)
+"""The local backend's declared execution capabilities without a cgroup unit."""
 
 
 def local_source(spec: MachineSpec) -> HostImage | PackageSpec | PreparedImage | RegistryImage:
@@ -41,7 +52,7 @@ def check_local_environment(
     source = local_source(spec)
     origin = source.source if isinstance(source, PreparedImage) else source
     reference = origin.reference if isinstance(origin, RegistryImage) else None
-    capabilities = LINUX_PROCESS_CAPABILITIES
+    capabilities = LOCAL_CAPABILITIES
     if cgroup_parent is not None:
         check_cgroup_parent(cgroup_parent)
         capabilities = capabilities | {MachineCapability.RETAINED_COMMAND_CANCELLATION, MachineCapability.PROCESS_SCOPE}

@@ -11,7 +11,7 @@ from functools import partial
 from typing import Any, Protocol
 
 from shellbox.context import MachineRoute
-from shellbox.machine import Backend, Command, MachineFactory, MachineSpec, UnsupportedMachineSpec
+from shellbox.machine import Command, MachineFactory, MachineSpec, UnsupportedMachineSpec
 from verifyit.grade import positive_candidate
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import ExactSpec, MathSpec, McqSpec, NumericSpec, StructureClosureSpec
@@ -39,10 +39,10 @@ from taskcompendium.pipeline.models import (
     CheckSuite,
     Controls,
     ControlSubmission,
+    MachineRole,
     OracleCommand,
     Reply,
-    TierRole,
-    TierVerdict,
+    ValidationVerdict,
     VerificationReport,
     WorkspaceFiles,
 )
@@ -53,7 +53,7 @@ from taskcompendium.runtime.requirements import require_resolved_environment
 from taskcompendium.runtime.shell import ShellEnvironment, upload_resources
 from taskcompendium.runtime.task_grading import grade_task, sandbox_grade
 
-CONTROLS_REVISION = "23"
+CONTROLS_REVISION = "24"
 ORACLE_TIMEOUT = 600.0
 ORACLE_OUTPUT_LIMIT_BYTES = 1_048_576
 FILE_SUBMISSION_MESSAGE = TextMessage(role="assistant", content="The submission is in the workspace.")
@@ -154,7 +154,7 @@ async def _control_checks(
     grader = task.grader
     if isinstance(grader, NoGrader):
         return VerificationReport(
-            [
+            checks=[
                 CheckResult(
                     check="grader", status=CheckStatus.UNSUPPORTED, detail=f"A {grader.kind} grader has no controls"
                 )
@@ -162,7 +162,7 @@ async def _control_checks(
         )
     if isinstance(grader.placement, AgentMachine):
         return VerificationReport(
-            [
+            checks=[
                 CheckResult(
                     check="grader",
                     status=CheckStatus.UNSUPPORTED,
@@ -183,7 +183,7 @@ async def _control_checks(
             machines,
             controls.memory_mb,
             environment,
-            _tier_candidates(machines, environment, controls.memory_mb),
+            _machine_candidates(machines, environment, controls.memory_mb),
         )
     golden = controls.golden(task) if controls.golden is not None else None
     if golden is not None:
@@ -195,10 +195,10 @@ async def _control_checks(
         outcome = await _empty_sandbox_control(task, sandbox, judge_connection)
     else:
         outcome = await _control(task, "empty", _empty_submission(task), 0.0, None, judge_connection)
-    return VerificationReport([outcome.result], verdicts=outcome.verdicts, route_backends=outcome.route_backends)
+    return VerificationReport(checks=[outcome.result.model_copy(update={"verdicts": outcome.verdicts})])
 
 
-def _tier_candidates(
+def _machine_candidates(
     machines: GradingMachines, environment: EnvironmentRequirements, memory_mb: int
 ) -> tuple[MachineRoute, ...]:
     """Return configured candidates, rejecting tasks no factory supports."""
@@ -206,24 +206,24 @@ def _tier_candidates(
     routes = machines.routes(environment, memory_mb)
     if not routes:
         raise UnsupportedMachineSpec(
-            f"No tier satisfies the declared requirements: {environment.model_dump_json(exclude_none=True)}"
+            f"No backend satisfies the declared requirements: {environment.model_dump_json(exclude_none=True)}"
         )
     return routes
 
 
-def _verdict(role: TierRole, route: MachineRoute, status: CheckStatus, detail: str) -> TierVerdict:
-    return TierVerdict(role=role, tier=route.tier, status=status, detail=detail)
+def _verdict(role: MachineRole, route: MachineRoute, status: CheckStatus, detail: str) -> ValidationVerdict:
+    return ValidationVerdict(role=role, backend=route.backend, status=status, detail=detail)
 
 
-def _exhausted(name: str, verdicts: list[TierVerdict]) -> CheckResult:
-    """The final verdict after the ladder ends: the top tried tier's outcome."""
+def _exhausted(name: str, verdicts: list[ValidationVerdict]) -> CheckResult:
+    """The final verdict after the ladder ends: the top tried backend's outcome."""
     last = verdicts[-1]
     return CheckResult(check=name, status=last.status, detail=last.detail)
 
 
 @dataclass(frozen=True)
 class _Sandbox:
-    """Where a sandbox-graded task's controls run, with the verifier machine's tier candidates."""
+    """Where a sandbox-graded task's controls run, with the verifier machine's backend candidates."""
 
     machines: GradingMachines
     memory_mb: int
@@ -237,14 +237,13 @@ class _OracleAttempt:
     """One task factory's submission and execution verdict."""
 
     attempt: GradingAttempt | None
-    verdict: TierVerdict
+    verdict: ValidationVerdict
 
 
 @dataclass(frozen=True)
 class _ControlOutcome:
     result: CheckResult
-    verdicts: tuple[TierVerdict, ...]
-    route_backends: tuple[Backend, ...]
+    verdicts: tuple[ValidationVerdict, ...]
 
 
 async def _oracle_on_route(
@@ -253,17 +252,19 @@ async def _oracle_on_route(
     environment: EnvironmentRequirements,
     route: MachineRoute,
 ) -> _OracleAttempt:
-    """Run the oracle on one task tier, recording what the tier did with it."""
+    """Run the oracle on one task backend, recording what that backend did with it."""
     try:
         validate_machine_spec(environment, route.factory, route.spec)
         attempt = await _oracle_attempt(task, command, route.factory, route.spec, environment)
     except UnsupportedMachineSpec as error:
-        return _OracleAttempt(None, _verdict(TierRole.TASK, route, CheckStatus.UNSUPPORTED, str(error)))
+        return _OracleAttempt(None, _verdict(MachineRole.TASK, route, CheckStatus.UNSUPPORTED, str(error)))
     except OracleFailed as error:
-        return _OracleAttempt(None, _verdict(TierRole.TASK, route, CheckStatus.FAIL, str(error)))
+        return _OracleAttempt(None, _verdict(MachineRole.TASK, route, CheckStatus.FAIL, str(error)))
     except (RuntimeError, OSError) as error:
-        return _OracleAttempt(None, _verdict(TierRole.TASK, route, CheckStatus.INFRA_ERROR, str(error)))
-    return _OracleAttempt(attempt, _verdict(TierRole.TASK, route, CheckStatus.SKIPPED, "Oracle produced a submission"))
+        return _OracleAttempt(None, _verdict(MachineRole.TASK, route, CheckStatus.INFRA_ERROR, str(error)))
+    return _OracleAttempt(
+        attempt, _verdict(MachineRole.TASK, route, CheckStatus.SKIPPED, "Oracle produced a submission")
+    )
 
 
 async def _verifier_ladder(
@@ -272,25 +273,25 @@ async def _verifier_ladder(
     environment: EnvironmentRequirements,
     routes: tuple[MachineRoute, ...],
     grade: Callable[[MachineRoute], Awaitable[GradeResult]],
-) -> tuple[CheckResult, list[TierVerdict]]:
-    """Grade across the verifier tier ladder, failing up on control failure.
+) -> tuple[CheckResult, list[ValidationVerdict]]:
+    """Grade across the verifier backend ladder, failing up on control failure.
 
     A pass ends the ladder; an infrastructure error stops it for the suite retry.
     Every other rejecting outcome — including a refusal the backend raises only at
-    acquisition — tries the next tier, and the top tier's outcome is the final
-    verdict.
+    acquisition — tries the next backend, and the top tried backend's outcome is
+    the final verdict.
     """
-    verdicts: list[TierVerdict] = []
+    verdicts: list[ValidationVerdict] = []
     for route in routes:
         try:
             validate_machine_spec(environment, route.factory, route.spec)
             result = control_result(await grade(route), name, expected)
         except UnsupportedMachineSpec as error:
-            verdicts.append(_verdict(TierRole.VERIFIER, route, CheckStatus.UNSUPPORTED, str(error)))
+            verdicts.append(_verdict(MachineRole.VERIFIER, route, CheckStatus.UNSUPPORTED, str(error)))
             continue
-        verdicts.append(_verdict(TierRole.VERIFIER, route, result.status, result.detail))
+        verdicts.append(_verdict(MachineRole.VERIFIER, route, result.status, result.detail))
         if result.status in {CheckStatus.PASS, CheckStatus.INFRA_ERROR}:
-            # An infrastructure error says nothing about the tier; the suite retry reruns the ladder.
+            # An infrastructure error says nothing about the backend; the suite retry reruns the ladder.
             return result, verdicts
     return _exhausted(name, verdicts), verdicts
 
@@ -336,16 +337,15 @@ async def _oracle_control(
 ) -> _ControlOutcome:
     """Retry oracle backends until a submission passes the verifier ladder."""
     environment = _oracle_environment(task)
-    task_routes = _tier_candidates(sandbox.machines, environment, sandbox.memory_mb)
-    verdicts: list[TierVerdict] = []
-    for index, route in enumerate(task_routes):
+    task_routes = _machine_candidates(sandbox.machines, environment, sandbox.memory_mb)
+    verdicts: list[ValidationVerdict] = []
+    for route in task_routes:
         oracle = await _oracle_on_route(task, command, environment, route)
         verdicts.append(oracle.verdict)
         if oracle.verdict.status is CheckStatus.INFRA_ERROR:
             return _ControlOutcome(
                 CheckResult(check=name, status=oracle.verdict.status, detail=oracle.verdict.detail),
                 tuple(verdicts),
-                (),
             )
         if oracle.attempt is None:
             continue
@@ -358,13 +358,12 @@ async def _oracle_control(
         )
         verdicts.extend(verifier_verdicts)
         if result.status is CheckStatus.PASS:
-            passed = _verdict(TierRole.TASK, route, CheckStatus.PASS, "The oracle's submission passed the control")
-            remaining = tuple(candidate.tier for candidate in task_routes[index:])
-            return _ControlOutcome(result, (*verdicts, passed), remaining)
+            passed = _verdict(MachineRole.TASK, route, CheckStatus.PASS, "The oracle's submission passed the control")
+            return _ControlOutcome(result, (*verdicts, passed))
         if result.status is CheckStatus.INFRA_ERROR:
-            return _ControlOutcome(result, tuple(verdicts), ())
-        verdicts.append(_verdict(TierRole.TASK, route, CheckStatus.FAIL, "Grading failed on every verifier tier"))
-    return _ControlOutcome(_exhausted(name, verdicts), tuple(verdicts), ())
+            return _ControlOutcome(result, tuple(verdicts))
+        verdicts.append(_verdict(MachineRole.TASK, route, CheckStatus.FAIL, "Grading failed on every verifier backend"))
+    return _ControlOutcome(_exhausted(name, verdicts), tuple(verdicts))
 
 
 async def _control(
@@ -400,13 +399,12 @@ async def _control(
                     detail=f"Judge control was decided by a local gate without a remote verdict: {grade.detail}",
                 ),
                 (),
-                (),
             )
-        return _ControlOutcome(control_result(grade, name, expected), (), ())
+        return _ControlOutcome(control_result(grade, name, expected), ())
     result, verdicts = await _verifier_ladder(
         name, expected, sandbox.environment, sandbox.grader_routes, _submission_grader(task, attempt, judge_connection)
     )
-    return _ControlOutcome(result, tuple(verdicts), ())
+    return _ControlOutcome(result, tuple(verdicts))
 
 
 async def _empty_sandbox_control(
@@ -418,7 +416,7 @@ async def _empty_sandbox_control(
     result, verdicts = await _verifier_ladder(
         "empty", 0.0, sandbox.environment, sandbox.grader_routes, _empty_submission_grader(task, judge_connection)
     )
-    return _ControlOutcome(result, tuple(verdicts), ())
+    return _ControlOutcome(result, tuple(verdicts))
 
 
 async def _oracle_attempt(

@@ -3,8 +3,8 @@
 
 """ShellSim admission without initializing its execution context."""
 
+from shellbox.capabilities import MachineCapability
 from shellbox.machine import (
-    SHELL_SIMULATOR_CAPABILITIES,
     MachineSpec,
     NetworkPolicy,
     PackageSpec,
@@ -12,6 +12,15 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
+
+SHELLSIM_CAPABILITIES = frozenset(
+    {
+        MachineCapability.SHELL,
+        MachineCapability.FILESYSTEM,
+        MachineCapability.PYTHON,
+    }
+)
+"""The ShellSim backend's declared execution capabilities."""
 
 
 def package_source(spec: MachineSpec) -> PackageSpec:
@@ -26,4 +35,4 @@ def package_source(spec: MachineSpec) -> PackageSpec:
 
 def check_environment(requirements: TaskRequirements, spec: MachineSpec) -> None:
     package_source(spec)
-    check_execution_requirements(requirements, spec, capabilities=SHELL_SIMULATOR_CAPABILITIES)
+    check_execution_requirements(requirements, spec, capabilities=SHELLSIM_CAPABILITIES)

@@ -5,14 +5,26 @@
 
 import re
 
+from shellbox.capabilities import MachineCapability
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
-    LINUX_PROCESS_CAPABILITIES,
     MachineSpec,
     TaskRequirements,
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
+
+DAYTONA_CAPABILITIES = frozenset(
+    {
+        MachineCapability.SHELL,
+        MachineCapability.FILESYSTEM,
+        MachineCapability.PYTHON,
+        MachineCapability.PROCESS,
+        MachineCapability.NETWORK,
+        MachineCapability.GIT_REPOSITORY,
+    }
+)
+"""The Daytona backend's declared execution capabilities."""
 
 
 def daytona_source(spec: MachineSpec) -> DockerfileSource | RegistryImage:
@@ -26,7 +38,7 @@ def daytona_source(spec: MachineSpec) -> DockerfileSource | RegistryImage:
 def check_environment(requirements: TaskRequirements, spec: MachineSpec) -> None:
     source = daytona_source(spec)
     reference = source.reference if isinstance(source, RegistryImage) else None
-    check_execution_requirements(requirements, spec, capabilities=LINUX_PROCESS_CAPABILITIES, image_reference=reference)
+    check_execution_requirements(requirements, spec, capabilities=DAYTONA_CAPABILITIES, image_reference=reference)
 
 
 def validate_source(

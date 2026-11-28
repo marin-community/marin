@@ -204,7 +204,7 @@ def test_attempt_with_infrastructure_error_is_rerun_before_it_is_recorded(reusab
         runs.append(task.id)
         if len(runs) <= outages:
             return VerificationReport(
-                [CheckResult(check="golden", status=CheckStatus.INFRA_ERROR, detail="sandbox did not start")]
+                checks=[CheckResult(check="golden", status=CheckStatus.INFRA_ERROR, detail="sandbox did not start")]
             )
         return suite.run(task)
 
@@ -240,10 +240,15 @@ def test_mixed_failure_infrastructure_trial_reexecutes_without_erasing_definite_
             update={
                 "trials": [
                     original.result.trials[0].model_copy(
-                        update={"status": CheckStatus.FAIL, "checks": [failed, unavailable]}
+                        update={
+                            "status": CheckStatus.FAIL,
+                            "report": VerificationReport(checks=[failed, unavailable]),
+                        }
                     ),
                     (
-                        original.result.trials[1].model_copy(update={"status": CheckStatus.FAIL, "checks": [failed]})
+                        original.result.trials[1].model_copy(
+                            update={"status": CheckStatus.FAIL, "report": VerificationReport(checks=[failed])}
+                        )
                         if second_failed
                         else original.result.trials[1]
                     ),
@@ -373,8 +378,9 @@ def test_source_decision_counts_tasks_and_requires_complete_coverage(
                 VerificationTrial(
                     attempt=attempt,
                     status=CheckStatus(status),
-                    checks=[CheckResult(check="oracle", status=CheckStatus(status), detail="fixture")],
-                    rollouts=(),
+                    report=VerificationReport(
+                        checks=[CheckResult(check="oracle", status=CheckStatus(status), detail="fixture")]
+                    ),
                 )
                 for attempt, status in enumerate(trials)
             ],
@@ -390,7 +396,9 @@ def test_source_decision_counts_tasks_and_requires_complete_coverage(
     if expected == "skipped":
         assert report.pass_fraction is None
         row = {"task_id": "0", "filter_status": "keep", "filter_reasons": [], "grader_readiness": "unverified"}
-        gated = gate_source_row(row, status=SourceVerificationStatus.SKIPPED, results={"0": results[0].trials[0].checks})
+        gated = gate_source_row(
+            row, status=SourceVerificationStatus.SKIPPED, results={"0": results[0].trials[0].report.checks}
+        )
         assert gated["filter_status"] == "keep"
         assert gated["grader_readiness"] == "unverified"
 
@@ -419,7 +427,7 @@ def test_task_without_a_golden_is_verified_by_its_empty_submission(tmp_path):
     metrics = next(execution.counters for execution in telemetry.executions if execution.operation == "trials")
     assert metrics["verification/attempts"] == 1
     assert metrics["verification/control/empty/pass"] == metrics["verification/trial/pass"] == 1
-    assert {check.check: check.status for check in trial.checks} == {"empty": CheckStatus.PASS}
+    assert {check.check: check.status for check in trial.report.checks} == {"empty": CheckStatus.PASS}
     assert report["status"] == "passed"
     assert report["counts"]["checked"] == report["counts"]["passed"] == 1
     gated = pq.read_table(output / "audit").to_pylist()[0]
@@ -428,7 +436,7 @@ def test_task_without_a_golden_is_verified_by_its_empty_submission(tmp_path):
     unsampled = gate_source_row(
         {**row, "task_id": "unsampled"},
         status=SourceVerificationStatus(report["status"]),
-        results={task.id: trial.checks},
+        results={task.id: trial.report.checks},
     )
     assert unsampled["filter_status"] == "keep"
     assert unsampled["grader_readiness"] == GraderReadiness.SOURCE_SAMPLED
@@ -445,8 +453,7 @@ def test_source_decision_preserves_infrastructure_failure_alongside_failed_contr
                 VerificationTrial(
                     attempt=attempt,
                     status=status,
-                    checks=[CheckResult(check="golden", status=status, detail=detail)],
-                    rollouts=(),
+                    report=VerificationReport(checks=[CheckResult(check="golden", status=status, detail=detail)]),
                 )
                 for attempt, (status, detail) in enumerate(outcomes)
             ],
@@ -497,7 +504,7 @@ def test_inconclusive_source_defers_eligible_rows_but_preserves_failed_controls(
 
 def fixture_control_outcome(task: TaskSpec) -> VerificationReport:
     return VerificationReport(
-        [
+        checks=[
             CheckResult(
                 check="empty",
                 status=CheckStatus.DEFECT if task.id == "defect" else CheckStatus.PASS,
@@ -509,7 +516,7 @@ def fixture_control_outcome(task: TaskSpec) -> VerificationReport:
 
 def assigned_controls(task: TaskSpec, *, outcomes: dict[str, CheckStatus]) -> VerificationReport:
     return VerificationReport(
-        [CheckResult(check="golden", status=outcomes.get(task.id, CheckStatus.PASS), detail="control")]
+        checks=[CheckResult(check="golden", status=outcomes.get(task.id, CheckStatus.PASS), detail="control")]
     )
 
 
@@ -577,7 +584,7 @@ def recovering_controls(task: TaskSpec, *, unavailable: str, failed: str, flag: 
         if task.id == failed
         else (CheckStatus.INFRA_ERROR if task.id == unavailable and Path(flag).exists() else CheckStatus.PASS)
     )
-    return VerificationReport([CheckResult(check="golden", status=status, detail="control")])
+    return VerificationReport(checks=[CheckResult(check="golden", status=status, detail="control")])
 
 
 def test_recovered_sample_keeps_known_individual_failures(tmp_path):

@@ -289,7 +289,7 @@ def test_grader_controls_reject_simulation_of_linux_processes_before_start(execu
     machines = ControlMachines(factory=GradingMachines(backend=Backend.SHELLSIM))
     report = run_controls(executable_task, controls=CONTROLS, machines=machines)
     assert {check.check: check.status for check in report.checks} == {"golden": CheckStatus.UNSUPPORTED}
-    assert [verdict.tier for verdict in report.verdicts] == ["shellsim"]
+    assert [verdict.backend.value for check in report.checks for verdict in check.verdicts] == ["shellsim"]
     assert not machines.factory.machines
 
 

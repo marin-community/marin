@@ -20,9 +20,9 @@ from shellbox.machine import Backend, Machine, MachineSpec, NetworkPolicy, Packa
 from skyrl_gym.rollout_specs import is_shell_harness
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import SourceTaskDataset
-from skyrl_train.dataset.machine_routing import tier_machine
+from skyrl_train.dataset.machine_routing import backend_machine
 from skyrl_train.task_inputs import TaskInput, task_messages
-from taskcompendium.runtime.requirements import ROUTE_BACKENDS_LABEL
+from taskcompendium.pipeline.machine_routes import ROUTE_VERDICTS_LABEL
 from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.models import (
     GraderMachine,
@@ -83,7 +83,7 @@ FACTORIES = {
 }
 
 
-def test_tier_routing_obeys_the_configured_factory_network_policy(tmp_path):
+def test_backend_routing_obeys_the_configured_factory_network_policy(tmp_path):
     task = text_task("networked", source="mixed").model_copy(
         update={"environment_requirements": NATIVE_ENVIRONMENT.model_copy(update={"capabilities": ("network",)})}
     )
@@ -95,7 +95,7 @@ def test_tier_routing_obeys_the_configured_factory_network_policy(tmp_path):
         tmp_path,
         (task,),
         machine_factories=factories,
-        task_machine_by_tier={
+        task_machines_by_backend={
             backend: machine_runtime(backend).model_copy(update={"network": NetworkPolicy.ALLOW}).model_dump()
             for backend in factories
         },
@@ -104,13 +104,13 @@ def test_tier_routing_obeys_the_configured_factory_network_policy(tmp_path):
     validate_spec(loaded[0].spec, factories)
 
 
-def test_offline_tier_admission_does_not_require_provider_credentials(monkeypatch):
+def test_offline_backend_admission_does_not_require_provider_credentials(monkeypatch):
     monkeypatch.delenv("SHELLBOX_OFFLINE_TEST_API_KEY", raising=False)
     runtime = machine_runtime("daytona").model_dump()
-    selected = tier_machine(
+    selected = backend_machine(
         NATIVE_ENVIRONMENT,
         {"daytona": runtime},
-        (),
+        frozenset(),
         ConfiguredTaskMachines(
             json.dumps({"daytona": {"api_key_env": "SHELLBOX_OFFLINE_TEST_API_KEY", "ttl_minutes": 60}})
         ),
@@ -125,7 +125,7 @@ def test_prepared_routes_follow_changed_provider_configuration(tmp_path):
     write_selection_panel(selection, [task], "fixture", "1", lambda _: {"family": "math"})
     cache = PreparedTaskCacheSource(str(selection / "validation.parquet"), "fixture@1", str(tmp_path / "prepared"))
     configs = OmegaConf.to_container(get_default_config().environment.task_sessions, resolve=True)
-    configs["task_spec"]["task_machine_by_tier"] = {"daytona": machine_runtime("daytona").model_dump(mode="json")}
+    configs["task_spec"]["task_machines_by_backend"] = {"daytona": machine_runtime("daytona").model_dump(mode="json")}
     configs["daytona"] = {"api_key_env": "SHELLBOX_OFFLINE_TEST_API_KEY", "ttl_minutes": 60}
     first = SourceTaskDataset(
         [cache.path], tokenizer(), 128, num_workers=1, environment_configs=configs, prepared_cache=cache
@@ -163,7 +163,7 @@ def test_command_semantics_select_the_machine_for_a_mixed_dataset(tmp_path: Path
     inputs = _load(
         tmp_path,
         (simulated, linux, reply),
-        task_machine_by_tier={
+        task_machines_by_backend={
             Backend.SHELLSIM.value: shellsim.model_dump(),
             Backend.DAYTONA.value: daytona.model_dump(),
         },
@@ -174,8 +174,8 @@ def test_command_semantics_select_the_machine_for_a_mixed_dataset(tmp_path: Path
         validate_spec(spec, {"shellsim": ShellSimMachineFactory(), **FACTORIES})
 
 
-def test_tier_routing_fails_up_to_the_next_registered_tier(tmp_path: Path):
-    """A simulator task that needs the network skips ShellSim; an unregistered cheaper tier is skipped too."""
+def test_backend_routing_fails_up_to_the_next_registered_backend(tmp_path: Path):
+    """A simulator task that needs the network skips ShellSim; an unregistered cheaper backend is skipped too."""
     networked_simulator = text_task("networked-simulator", source="mixed").model_copy(
         update={
             "environment_requirements": EnvironmentRequirements(
@@ -196,7 +196,7 @@ def test_tier_routing_fails_up_to_the_next_registered_tier(tmp_path: Path):
     simulated_load = _load(
         tmp_path,
         (networked_simulator,),
-        task_machine_by_tier={
+        task_machines_by_backend={
             Backend.SHELLSIM.value: shellsim.model_dump(),
             Backend.LOCAL.value: local.model_dump(),
         },
@@ -205,7 +205,7 @@ def test_tier_routing_fails_up_to_the_next_registered_tier(tmp_path: Path):
     native_load = _load(
         tmp_path,
         (native,),
-        task_machine_by_tier={
+        task_machines_by_backend={
             Backend.SHELLSIM.value: shellsim.model_dump(),
             Backend.DAYTONA.value: daytona.model_dump(),
         },
@@ -216,7 +216,7 @@ def test_tier_routing_fails_up_to_the_next_registered_tier(tmp_path: Path):
         validate_spec(spec.spec, {"shellsim": ShellSimMachineFactory(), **FACTORIES})
 
 
-def test_tier_routing_preserves_template_network_policy_for_networked_tasks(tmp_path: Path):
+def test_backend_routing_preserves_template_network_policy_for_networked_tasks(tmp_path: Path):
     """A network requirement cannot override a denied template; an allowed candidate can serve it."""
     plain = text_task("plain", source="mixed").model_copy(
         update={
@@ -234,22 +234,22 @@ def test_tier_routing_preserves_template_network_policy_for_networked_tasks(tmp_
     denied = _load(
         tmp_path,
         (plain, networked),
-        task_machine_by_tier={Backend.LOCAL.value: local.model_dump()},
+        task_machines_by_backend={Backend.LOCAL.value: local.model_dump()},
     )
     assert [spec.spec.task_machine for spec in denied] == [local, None]
     daytona = machine_runtime("daytona").model_copy(update={"network": NetworkPolicy.ALLOW})
     fallback = _load(
         tmp_path,
         (plain, networked),
-        task_machine_by_tier={Backend.LOCAL.value: local.model_dump(), Backend.DAYTONA.value: daytona.model_dump()},
+        task_machines_by_backend={Backend.LOCAL.value: local.model_dump(), Backend.DAYTONA.value: daytona.model_dump()},
     )
     assert [spec.spec.task_machine for spec in fallback] == [local, daytona]
     for item in fallback:
         validate_spec(item.spec, FACTORIES)
 
 
-def test_tier_routing_binds_no_machine_when_no_registered_tier_satisfies(tmp_path: Path):
-    """A lock-sourced Linux task is a local-tier task; without a registered local tier it binds none."""
+def test_backend_routing_binds_no_machine_when_no_registered_backend_satisfies(tmp_path: Path):
+    """A lock-sourced Linux task is a local-backend task; without a registered local backend it binds none."""
     lock_task = text_task("lock-task", source="mixed").model_copy(
         update={
             "environment_requirements": EnvironmentRequirements(
@@ -262,7 +262,7 @@ def test_tier_routing_binds_no_machine_when_no_registered_tier_satisfies(tmp_pat
     loaded = _load(
         tmp_path,
         (lock_task,),
-        task_machine_by_tier={
+        task_machines_by_backend={
             Backend.SHELLSIM.value: machine_runtime("shellsim").model_dump(),
             Backend.DAYTONA.value: machine_runtime("daytona").model_dump(),
         },
@@ -270,8 +270,8 @@ def test_tier_routing_binds_no_machine_when_no_registered_tier_satisfies(tmp_pat
     assert [spec.spec.task_machine for spec in loaded] == [None]
 
 
-@pytest.mark.parametrize("registered, expected", [("local", "local"), ("daytona", None)])
-def test_recorded_routes_require_a_registered_candidate(tmp_path: Path, registered, expected):
+@pytest.mark.parametrize("registered, expected", [("local", None), ("daytona", "daytona")])
+def test_failed_backends_require_a_registered_alternative(tmp_path: Path, registered, expected):
     task = text_task("routed", source="mixed").model_copy(
         update={
             "environment_requirements": EnvironmentRequirements(
@@ -279,25 +279,31 @@ def test_recorded_routes_require_a_registered_candidate(tmp_path: Path, register
                 capabilities=("shell", "filesystem"),
                 docker_image="fixture@sha256:" + "0" * 64,
             ),
-            "labels": {ROUTE_BACKENDS_LABEL: json.dumps([Backend.LOCAL.value])},
+            "labels": {
+                ROUTE_VERDICTS_LABEL: json.dumps({"task": {"local": "fail", "daytona": "pass"}}),
+            },
         }
     )
-    loaded = _load(tmp_path, (task,), task_machine_by_tier={registered: machine_runtime(registered).model_dump()})
+    loaded = _load(tmp_path, (task,), task_machines_by_backend={registered: machine_runtime(registered).model_dump()})
     machine = loaded[0].spec.task_machine
     assert (None if machine is None else machine.backend) == expected
 
 
-def test_recorded_routes_keep_a_higher_admitted_backend_when_local_is_absent(tmp_path):
-    task = text_task("locally-verified", source="mixed").model_copy(
+def test_excluded_backends_fall_through_to_the_next_admitted_backend(tmp_path):
+    task = text_task("locally-failed", source="mixed").model_copy(
         update={
             "environment_requirements": NATIVE_ENVIRONMENT,
-            "labels": {ROUTE_BACKENDS_LABEL: json.dumps(["local", "daytona"])},
+            "labels": {
+                ROUTE_VERDICTS_LABEL: json.dumps(
+                    {"task": {"local": "fail", "shellsim": "unsupported", "daytona": "pass"}}
+                )
+            },
         }
     )
     loaded = _load(
         tmp_path,
         (task,),
-        task_machine_by_tier={
+        task_machines_by_backend={
             backend: machine_runtime(backend).model_dump(mode="json") for backend in ("shellsim", "daytona")
         },
     )
@@ -305,18 +311,18 @@ def test_recorded_routes_keep_a_higher_admitted_backend_when_local_is_absent(tmp
     validate_spec(loaded[0].spec, FACTORIES)
 
 
-@pytest.mark.parametrize("explicit_backend, expected", [(None, "local"), ("shellsim", None), ("local", "local")])
+@pytest.mark.parametrize("explicit_backend, expected", [(None, "shellsim"), ("shellsim", "shellsim"), ("local", None)])
 def test_recorded_candidates_exclude_the_cheaper_backend_that_failed_controls(tmp_path, explicit_backend, expected):
     task = text_task("failed-simulator", source="mixed").model_copy(
         update={
             "environment_requirements": SHELL_ENVIRONMENT,
-            "labels": {ROUTE_BACKENDS_LABEL: json.dumps(["local"])},
+            "labels": {ROUTE_VERDICTS_LABEL: json.dumps({"task": {"local": "fail"}})},
         }
     )
     loaded = _load(
         tmp_path,
         (task,),
-        task_machine_by_tier={backend: machine_runtime(backend).model_dump() for backend in ("shellsim", "local")},
+        task_machines_by_backend={backend: machine_runtime(backend).model_dump() for backend in ("shellsim", "local")},
         task_machine_by_dataset=(
             {} if explicit_backend is None else {"mixed": machine_runtime(explicit_backend).model_dump()}
         ),
@@ -331,12 +337,12 @@ def test_recorded_candidates_exclude_the_cheaper_backend_that_failed_controls(tm
 
 
 @pytest.mark.parametrize("unsupported", [{"cpus": 1}, {"network": NetworkPolicy.ALLOW}])
-def test_tier_routing_skips_unsupported_deployment_templates(tmp_path: Path, unsupported):
+def test_backend_routing_skips_unsupported_deployment_templates(tmp_path: Path, unsupported):
     task = text_task("simulator", source="mixed").model_copy(update={"environment_requirements": SHELL_ENVIRONMENT})
     simulated = machine_runtime("shellsim").model_copy(update=unsupported)
     local = machine_runtime("local")
     loaded = _load(
-        tmp_path, (task,), task_machine_by_tier={"shellsim": simulated.model_dump(), "local": local.model_dump()}
+        tmp_path, (task,), task_machines_by_backend={"shellsim": simulated.model_dump(), "local": local.model_dump()}
     )
     assert loaded[0].spec.task_machine == local
     validate_spec(loaded[0].spec, FACTORIES)

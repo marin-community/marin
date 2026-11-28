@@ -8,6 +8,7 @@ from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import ClassVar, Protocol, runtime_checkable
 
+from shellbox.capabilities import MachineCapability
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage
 
 DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES = 1_048_576
@@ -32,31 +33,6 @@ class CommandSemantics(StrEnum):
 
     LINUX_PROCESS = "linux_process"
     SHELL_SIMULATOR = "shell_simulator"
-
-
-class MachineCapability(StrEnum):
-    SHELL = "shell"
-    FILESYSTEM = "filesystem"
-    PYTHON = "python"
-    PROCESS = "process"
-    NETWORK = "network"
-    GIT_REPOSITORY = "git_repository"
-    RETAINED_COMMAND_CANCELLATION = "retained_command_cancellation"
-    PROCESS_SCOPE = "process_scope"
-
-
-SHELL_SIMULATOR_CAPABILITIES = frozenset(
-    {
-        MachineCapability.SHELL,
-        MachineCapability.FILESYSTEM,
-        MachineCapability.PYTHON,
-    }
-)
-LINUX_PROCESS_CAPABILITIES = SHELL_SIMULATOR_CAPABILITIES | {
-    MachineCapability.PROCESS,
-    MachineCapability.NETWORK,
-    MachineCapability.GIT_REPOSITORY,
-}
 
 
 @dataclass(frozen=True)
@@ -242,10 +218,10 @@ def check_execution_requirements(
     capabilities: frozenset[MachineCapability],
     image_reference: str | None = None,
 ) -> None:
-    """Check declared execution support and image origin, without acquiring resources.
+    """Check the task contract against the declaring backend's capabilities and image origin.
 
-    Backends check their source and allocation features separately. This does not
-    promise installed executables, available capacity or successful acquisition.
+    This does not promise installed executables, available capacity or successful
+    acquisition; backends check their source and allocation features separately.
     """
     unsupported = requirements.capabilities - capabilities
     if unsupported:

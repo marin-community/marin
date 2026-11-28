@@ -12,7 +12,6 @@ from shellbox.machine import (
     CommandSemantics,
     ExecutionRequirements,
     HostImage,
-    Machine,
     MachineFactory,
     MachineSpec,
     NetworkPolicy,
@@ -51,13 +50,19 @@ class MachineRoute:
     spec: MachineSpec
 
     @property
-    def tier(self) -> Backend:
+    def backend(self) -> Backend:
         return self.factory.backend
 
 
 @dataclass(frozen=True)
 class ShellboxContext:
-    """Select factories statically or acquire the first supported machine."""
+    """Select factories statically from each backend's admission checks.
+
+    The context owns ordered candidates and per-task admission only. Callers bind
+    allocation inputs into each ``MachineRoute`` and acquire machines from the
+    selected route at their own execution boundary; the context does not create
+    machines until it owns an explicit preparation and lifecycle contract.
+    """
 
     candidates: tuple[MachineRoute, ...]
 
@@ -70,11 +75,3 @@ class ShellboxContext:
                 continue
             selected.append(route)
         return tuple(selected)
-
-    async def create_machine(self, requirements: TaskRequirements) -> Machine:
-        for route in self.routes(requirements):
-            try:
-                return await route.factory.create(route.spec)
-            except UnsupportedMachineSpec:
-                continue
-        raise UnsupportedMachineSpec("No configured factory can serve the task")

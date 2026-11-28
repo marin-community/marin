@@ -924,7 +924,9 @@ self-contained Python environment (a uv-managed CPython 3.12 and a venv) under
 `files.tar`; the sandbox mounts that directory, the system directories and each
 placed file at its declared path, runs graders with the declared `env`, and
 concurrent graders on one host build it once.
-Image grading requires `--image-backend gvisor` or `--image-backend daytona`.
+Image grading runs on the first configured candidate that admits the grader's
+image: a digest-pinned image can verify through Local, while `--image-backend gvisor`
+or `--image-backend daytona` add sandbox or remote image candidates.
 The gvisor backend (Iris SANDBOX jobs) uses the enclosing Iris job's controller, or
 `--controller-url` outside a job, to create sandbox jobs. Daytona creates remote
 sandboxes through its API.

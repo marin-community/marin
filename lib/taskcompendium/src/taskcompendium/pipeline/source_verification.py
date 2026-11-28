@@ -20,7 +20,7 @@ import pyarrow as pa
 from fray.types import ResourceConfig
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
-from shellbox.machine import Backend, UnsupportedMachineSpec
+from shellbox.machine import UnsupportedMachineSpec
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
@@ -29,16 +29,20 @@ from zephyr.writers import write_parquet_file
 
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.check_rows import record_checks
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry, execute_phase
 from taskcompendium.pipeline.fingerprints import callable_identity
-from taskcompendium.pipeline.machine_routes import attach_machine_route
+from taskcompendium.pipeline.machine_routes import (
+    RouteEvidence,
+    attach_route_evidence,
+    merge_route_evidence,
+)
 from taskcompendium.pipeline.models import (
     REJECTING_CHECK_STATUSES,
     CheckResult,
     CheckStatus,
     CheckSuite,
     GraderReadiness,
+    MachineRole,
     VerificationReport,
 )
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
@@ -48,15 +52,16 @@ from taskcompendium.pipeline.stages import (
     write_filtered_shard,
 )
 from taskcompendium.pipeline.transforms import is_accepted
+from taskcompendium.pipeline.verification import grader_readiness
 from taskcompendium.pipeline.verification_trials import (
     HistoricalTrial,
     SampleResult,
     TrialEvidence,
     VerificationTrial,
-    sample_result_routes,
+    result_route_evidence,
 )
 
-SOURCE_VERIFICATION_REVISION = "15"
+SOURCE_VERIFICATION_REVISION = "16"
 VERIFICATION_REPORT_FILENAME = "verification.json"
 """The verified stage's report; a rerun at the same output reuses its matching control trials."""
 INFRA_ERROR_RETRIES = 2
@@ -191,7 +196,7 @@ def _saved_report_trials(
                 or item.verification_identity != current.verification_identity
                 or item.attempt != previous.trial.attempt
                 or item.attempt not in range(report["policy"]["attempts"])
-                or previous.trial.status != _trial_status(previous.trial.checks)
+                or previous.trial.status != _trial_status(previous.trial.report.checks)
             ):
                 raise ValueError("Verification history contradicts its independent task evidence")
             execution_ids.add(item.execution_id)
@@ -204,7 +209,7 @@ def _saved_report_trials(
         if item.verification_identity != identity or item.attempt >= attempts:
             continue
         trial = next(trial for trial in result.trials if trial.attempt == item.attempt)
-        if trial.status != _trial_status(trial.checks):
+        if trial.status != _trial_status(trial.report.checks):
             raise ValueError("Saved trial status contradicts its actual control evidence")
         reused[(item.task_sha256, item.attempt)] = SavedTrial(
             trial,
@@ -214,20 +219,33 @@ def _saved_report_trials(
     return reused
 
 
+def record_checks(row: dict[str, Any], checks: list[CheckResult]) -> dict[str, Any]:
+    """Attach check outcomes and reject rows with a failed control."""
+    row = {
+        **row,
+        "checks": [check.model_dump(mode="json") for check in checks],
+        "grader_readiness": grader_readiness(checks).value,
+    }
+    failed = {f"check:{check.check}" for check in checks if check.status in REJECTING_CHECK_STATUSES}
+    if failed:
+        row = {**row, "filter_status": "reject", "filter_reasons": [*row["filter_reasons"], *sorted(failed)]}
+    return row
+
+
 def _complete_trial(trial: VerificationTrial) -> bool:
     return trial.status not in {CheckStatus.INFRA_ERROR, CheckStatus.UNSUPPORTED} and not any(
-        check.status in {CheckStatus.INFRA_ERROR, CheckStatus.UNSUPPORTED} for check in trial.checks
+        check.status in {CheckStatus.INFRA_ERROR, CheckStatus.UNSUPPORTED} for check in trial.report.checks
     )
 
 
 def sample_result_checks(result: SampleResult) -> list[CheckResult]:
     """Keep definite historical failures and defects visible without retaining resolved runtime blockers."""
     return [
-        *(check for trial in result.trials for check in trial.checks),
+        *(check for trial in result.trials for check in trial.report.checks),
         *(
             check
             for previous in result.previous_trials
-            for check in previous.trial.checks
+            for check in previous.trial.report.checks
             if check.status in REJECTING_CHECK_STATUSES
         ),
     ]
@@ -327,7 +345,7 @@ def _verify_sample_with_evidence(
                 report = suite.run(task)
             except UnsupportedMachineSpec as error:
                 report = VerificationReport(
-                    [
+                    checks=[
                         CheckResult(
                             check="runtime_compatibility",
                             status=CheckStatus.UNSUPPORTED,
@@ -351,22 +369,22 @@ def _verify_sample_with_evidence(
             metrics.update_counter("verification/infra_error_retries", 1)
         for check in report.checks:
             metrics.update_counter(f"verification/control/{check.check}/{check.status.value}", 1)
-        for verdict in report.verdicts:
-            metrics.update_counter(f"verification/tier/{verdict.tier}/{verdict.status.value}", 1)
+            for verdict in check.verdicts:
+                metrics.update_counter(f"verification/backend/{verdict.backend}/{verdict.status.value}", 1)
         status = _trial_status(report.checks)
         metrics.update_counter(f"verification/trial/{status.value}", 1)
-        if report.route_backends:
-            metrics.update_counter(f"verification/route/{report.route_backends[0]}", 1)
-        trials.append(
-            VerificationTrial(
-                attempt=attempt,
-                status=status,
-                checks=report.checks,
-                rollouts=report.rollouts,
-                verdicts=report.verdicts,
-                route_backends=report.route_backends,
-            )
+        passed = next(
+            (
+                verdict.backend
+                for check in report.checks
+                for verdict in check.verdicts
+                if verdict.role is MachineRole.TASK and verdict.status is CheckStatus.PASS
+            ),
+            None,
         )
+        if passed is not None:
+            metrics.update_counter(f"verification/route/{passed}", 1)
+        trials.append(VerificationTrial(attempt=attempt, status=status, report=report))
         evidence.append(
             TrialEvidence(
                 task_id=task.id,
@@ -398,14 +416,14 @@ def source_verification_report(
         ):
             raise ValueError("Verification result has incomplete trials")
         statuses = {trial.status for trial in result.trials}
-        historical = {check.status for previous in result.previous_trials for check in previous.trial.checks}
+        historical = {check.status for previous in result.previous_trials for check in previous.trial.report.checks}
         failed = CheckStatus.FAIL in statuses or CheckStatus.FAIL in historical
         # A defect shows the grader ran, so it counts toward the source's pass fraction.
         counts.passed += statuses <= {CheckStatus.PASS, CheckStatus.DEFECT} and not failed
         counts.failed += failed
         counts.defective += CheckStatus.DEFECT in statuses or CheckStatus.DEFECT in historical
         counts.inconsistent += CheckStatus.PASS in statuses and failed
-        all_checks = [check for trial in result.trials for check in trial.checks]
+        all_checks = [check for trial in result.trials for check in trial.report.checks]
         counts.checked += bool(historical & REJECTING_CHECK_STATUSES) or any(
             c.status in GRADED_CHECK_STATUSES for c in all_checks
         )
@@ -439,13 +457,18 @@ def gate_source_row(
     *,
     status: SourceVerificationStatus,
     results: dict[str, list[CheckResult]],
-    routes_by_task: Mapping[str, tuple[Backend, ...]] | None = None,
+    evidence_by_task: Mapping[str, RouteEvidence] | None = None,
+    source_evidence: RouteEvidence | None = None,
 ) -> dict[str, Any]:
     if row["task_id"] in results:
         row = record_checks(row, results[row["task_id"]])
-    route = () if routes_by_task is None else routes_by_task.get(row["task_id"], ())
     if is_accepted(row):
-        row = attach_machine_route(row, route)
+        evidence = (evidence_by_task or {}).get(row["task_id"])
+        # A row the sample did not check inherits the passing sample's verdicts, so a backend
+        # whose sampled control failed cannot serve it either.
+        if evidence is None and status == SourceVerificationStatus.PASSED and row["task_id"] not in results:
+            evidence = source_evidence
+        row = attach_route_evidence(row, evidence or {})
     if not is_accepted(row):
         return row
     if status == SourceVerificationStatus.VALIDATED:
@@ -644,14 +667,27 @@ def _gate_with_previous(
     status: SourceVerificationStatus,
     results: dict[str, list[CheckResult]],
     previous: dict[str, dict[str, list[CheckResult]]],
-    routes_by_task: Mapping[str, tuple[Backend, ...]],
+    evidence_by_task: Mapping[str, RouteEvidence],
+    source_evidence: RouteEvidence | None,
 ) -> dict[str, Any]:
     if row["task_id"] not in results and row["task_id"] in previous and is_accepted(row):
         digest = canonical_sha256(TaskSpec.model_validate_json(row["task_json"]).model_dump(mode="json"))
         checks = previous[row["task_id"]].get(digest)
         if checks is not None:
-            return gate_source_row(row, status=status, results={row["task_id"]: checks}, routes_by_task=routes_by_task)
-    return gate_source_row(row, status=status, results=results, routes_by_task=routes_by_task)
+            return gate_source_row(
+                row,
+                status=status,
+                results={row["task_id"]: checks},
+                evidence_by_task=evidence_by_task,
+                source_evidence=source_evidence,
+            )
+    return gate_source_row(
+        row,
+        status=status,
+        results=results,
+        evidence_by_task=evidence_by_task,
+        source_evidence=source_evidence,
+    )
 
 
 def _gate_rows(
@@ -664,17 +700,20 @@ def _gate_rows(
     previous: dict[str, dict[str, list[CheckResult]]] = {}
     for saved in prior.values():
         checks = [
-            *saved.trial.checks,
+            *saved.trial.report.checks,
             *(
                 check
                 for item in saved.history
-                for check in item.trial.checks
+                for check in item.trial.report.checks
                 if check.status in REJECTING_CHECK_STATUSES
             ),
         ]
         if any(check.status in REJECTING_CHECK_STATUSES for check in checks):
             previous.setdefault(saved.evidence.task_id, {}).setdefault(saved.evidence.task_sha256, []).extend(checks)
-    routes_by_task = {result.task_id: route for result in results if (route := sample_result_routes(result))}
+    evidence_by_task = {
+        result.task_id: evidence for result in results if (evidence := result_route_evidence(result)) is not None
+    }
+    source_evidence = merge_route_evidence(*evidence_by_task.values()) or None
     result = execute_phase(
         run.context,
         Dataset.from_files(run.inputs)
@@ -685,7 +724,8 @@ def _gate_rows(
                 status=decision.status,
                 results={result.task_id: sample_result_checks(result) for result in results},
                 previous=previous,
-                routes_by_task=routes_by_task,
+                evidence_by_task=evidence_by_task,
+                source_evidence=source_evidence,
             )
         )
         .map_shard(partial(write_filtered_shard, output=run.output)),

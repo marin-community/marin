@@ -414,7 +414,7 @@ def test_reviewed_local_inputs_keep_controls_and_invalidate_changed_bytes(
                 check["check"] == "golden" and check["status"] == "pass"
                 for row in trials["results"]
                 for trial in row["trials"]
-                for check in trial["checks"]
+                for check in trial["report"]["checks"]
             )
         assert not (tmp_path / "artifacts" / "task-curation" / "download").exists()
         manifest = json.loads(StoragePath(second.result.evidence["manifest"]).read_text())

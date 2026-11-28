@@ -13,7 +13,6 @@ from shellbox.machine import Backend
 
 from taskcompendium.models import AssistantToolCalls, EnvironmentRequirements, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles
-from taskcompendium.runtime.models import RolloutRecord
 
 RESOURCE_BUDGET_BYTES = 1_000_000
 """Default limit on one task's decoded resource bytes; larger rows are deferred at normalization."""
@@ -207,37 +206,36 @@ class Admission(StrEnum):
     UNVERIFIED = "unverified"
 
 
-class CheckResult(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    check: str
-    status: CheckStatus
-    detail: str
-
-
-class TierRole(StrEnum):
-    """Which machine of a task a tier verdict describes."""
+class MachineRole(StrEnum):
+    """Which machine of a task a verdict describes."""
 
     TASK = "task"
     VERIFIER = "verifier"
 
 
-class TierVerdict(BaseModel):
-    """One tier's control outcome: the machine role, the tier and what happened there."""
+class ValidationVerdict(BaseModel):
+    """One backend's control outcome for one machine role of a task."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
-    role: TierRole
-    tier: Backend
+    role: MachineRole
+    backend: Backend
     status: CheckStatus
     detail: str
 
 
-@dataclass(frozen=True)
-class VerificationReport:
+class CheckResult(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    check: str
+    status: CheckStatus
+    detail: str
+    verdicts: tuple[ValidationVerdict, ...] = ()
+    """Every backend the control tried, in order, with each role's outcome on it."""
+
+
+class VerificationReport(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
     checks: list[CheckResult]
-    rollouts: tuple[RolloutRecord, ...] = ()
-    verdicts: tuple[TierVerdict, ...] = ()
-    route_backends: tuple[Backend, ...] = ()
-    """The passing oracle backend followed by its higher admitted candidates; empty for reply and empty controls."""
+    """Each control's outcome, carrying the backend verdicts it produced."""
 
 
 @dataclass(frozen=True)

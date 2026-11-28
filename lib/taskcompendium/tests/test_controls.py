@@ -29,7 +29,7 @@ from taskcompendium.models import (
     TaskSpec,
 )
 from taskcompendium.pipeline.controls import answer_reply, control_suite
-from taskcompendium.pipeline.models import CheckStatus, Controls, OracleCommand, TierRole, WorkspaceFiles
+from taskcompendium.pipeline.models import CheckStatus, Controls, MachineRole, OracleCommand, WorkspaceFiles
 from taskcompendium.runtime.local import LocalGraderMachines
 
 from .control_machines import (
@@ -227,7 +227,7 @@ class FailingOracleFactory:
 
 
 class RefusingThenImageMachines(FixtureGradingMachines):
-    """A task ladder whose cheapest tier refuses the requirements and whose next tier serves the oracle."""
+    """A task ladder whose cheapest backend refuses the requirements and whose next backend serves the oracle."""
 
     def routes(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineRoute, ...]:
         refusing = MachineRoute(ShellSimMachineFactory(), MachineSpec(PackageSpec(), memory_mb=memory_mb))
@@ -235,7 +235,7 @@ class RefusingThenImageMachines(FixtureGradingMachines):
 
 
 class FailingThenImageMachines(FixtureGradingMachines):
-    """A task ladder whose cheapest tier fails the oracle and whose next tier serves it."""
+    """A task ladder whose cheapest backend fails the oracle and whose next backend serves it."""
 
     def routes(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineRoute, ...]:
         routes = super().routes(environment, memory_mb)
@@ -253,9 +253,9 @@ class FailingThenImageMachines(FixtureGradingMachines):
         (RefusingThenImageMachines, "unsupported", ("verifier", "shellsim", "unsupported")),
         (FailingThenImageMachines, "fail", None),
     ],
-    ids=["refusing_tier", "failing_tier"],
+    ids=["refusing_backend", "failing_backend"],
 )
-def test_oracle_fails_up_from_a_tier_that_cannot_serve_it(machines, refusal_status, verifier_refusal):
+def test_oracle_fails_up_from_a_backend_that_cannot_serve_it(machines, refusal_status, verifier_refusal):
     task = file_task()
     requirements = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=AGENT_IMAGE)
     task = TaskSpec.model_validate(task.model_copy(update={"environment_requirements": requirements}).model_dump())
@@ -264,10 +264,13 @@ def test_oracle_fails_up_from_a_tier_that_cannot_serve_it(machines, refusal_stat
         task
     )
     assert {check.check: check.status for check in report.checks} == {"golden": PASS}
-    assert report.route_backends == (Backend.DOCKER,)
-    # The task tier's verdict lands when its oracle's submission passes the control; the
+    # The task backend's verdict lands when its oracle's submission passes the control; the
     # grader machine's ladder serves where it can.
-    assert [(verdict.role.value, verdict.tier.value, verdict.status.value) for verdict in report.verdicts] == [
+    assert [
+        (verdict.role.value, verdict.backend.value, verdict.status.value)
+        for check in report.checks
+        for verdict in check.verdicts
+    ] == [
         ("task", "shellsim", refusal_status),
         ("task", "docker", "skipped"),
         *((verifier_refusal,) if verifier_refusal is not None else ()),
@@ -309,7 +312,7 @@ def scripted_answer_route(answer: bytes, backend: Backend, memory_mb: int) -> Ma
 
 
 class WrongThenRightAnswerMachines(FixtureGradingMachines):
-    """A task ladder whose cheapest tier's oracle submits a wrong answer and whose next tier passes."""
+    """A task ladder whose cheapest backend's oracle submits a wrong answer and whose next backend passes."""
 
     def routes(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineRoute, ...]:
         routes = super().routes(environment, memory_mb)
@@ -335,15 +338,16 @@ def test_passing_oracle_retains_higher_candidates_for_other_deployments():
         PassingThenHigherMachines(RecordingImages()),
     ).run(task)
     assert {check.check: check.status for check in report.checks} == {"golden": PASS}
-    assert report.route_backends == (Backend.LOCAL, Backend.DAYTONA)
-    assert [verdict.tier for verdict in report.verdicts if verdict.role is TierRole.TASK] == [
+    assert [
+        verdict.backend for check in report.checks for verdict in check.verdicts if verdict.role is MachineRole.TASK
+    ] == [
         Backend.LOCAL,
         Backend.LOCAL,
     ]
 
 
 def test_oracle_fails_up_when_its_submission_fails_grading():
-    """An oracle that runs cleanly but submits a wrong answer fails up to the next task tier."""
+    """An oracle that runs cleanly but submits a wrong answer fails up to the next task backend."""
     task = answer_task()
     requirements = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=AGENT_IMAGE)
     task = TaskSpec.model_validate(task.model_copy(update={"environment_requirements": requirements}).model_dump())
@@ -352,8 +356,11 @@ def test_oracle_fails_up_when_its_submission_fails_grading():
         WrongThenRightAnswerMachines(RecordingImages()),
     ).run(task)
     assert {check.check: check.status for check in report.checks} == {"golden": PASS}
-    assert report.route_backends == (Backend.DAYTONA,)
-    assert [(verdict.role.value, verdict.tier.value, verdict.status.value) for verdict in report.verdicts] == [
+    assert [
+        (verdict.role.value, verdict.backend.value, verdict.status.value)
+        for check in report.checks
+        for verdict in check.verdicts
+    ] == [
         ("task", "shellsim", "skipped"),
         ("verifier", "docker", "fail"),
         ("task", "shellsim", "fail"),
@@ -377,7 +384,7 @@ class RefusingAtAcquisitionFactory:
 
 
 class RefusingThenServingMachines(FixtureGradingMachines):
-    """A verifier ladder whose cheapest tier refuses at acquisition and whose next tier serves."""
+    """A verifier ladder whose cheapest backend refuses at acquisition and whose next backend serves."""
 
     def routes(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineRoute, ...]:
         if environment.docker_image == AGENT_IMAGE:
@@ -389,8 +396,8 @@ class RefusingThenServingMachines(FixtureGradingMachines):
         return (refused, *super().routes(environment, memory_mb))
 
 
-def test_verifier_refusal_at_acquisition_fails_up_to_the_next_tier():
-    """A backend that refuses only when acquiring the machine is a tier verdict, not an unsupported task."""
+def test_verifier_refusal_at_acquisition_fails_up_to_the_next_backend():
+    """A backend that refuses only when acquiring the machine gets its own verdict, not an unsupported task."""
     task = answer_task()
     requirements = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=AGENT_IMAGE)
     task = TaskSpec.model_validate(task.model_copy(update={"environment_requirements": requirements}).model_dump())
@@ -399,7 +406,11 @@ def test_verifier_refusal_at_acquisition_fails_up_to_the_next_tier():
         RefusingThenServingMachines(RecordingImages()),
     ).run(task)
     assert {check.check: check.status for check in report.checks} == {"golden": PASS}
-    assert [(verdict.role.value, verdict.tier.value, verdict.status.value) for verdict in report.verdicts] == [
+    assert [
+        (verdict.role.value, verdict.backend.value, verdict.status.value)
+        for check in report.checks
+        for verdict in check.verdicts
+    ] == [
         ("task", "daytona", "skipped"),
         ("verifier", "local", "unsupported"),
         ("verifier", "docker", "pass"),
@@ -445,5 +456,5 @@ def test_lock_backed_oracle_rejects_image_only_provider_before_acquisition():
     suite = control_suite(Controls(golden=lambda _: OracleCommand("bash /solution/solve.sh")), OracleMachines(images))
     report = suite.run(task)
     assert {check.check: check.status for check in report.checks} == {"golden": CheckStatus.UNSUPPORTED}
-    assert [verdict.tier for verdict in report.verdicts] == ["docker"]
+    assert [verdict.backend for check in report.checks for verdict in check.verdicts] == ["docker"]
     assert images.created == []

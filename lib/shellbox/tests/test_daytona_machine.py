@@ -71,13 +71,13 @@ from shellbox.backends.daytona.snapshot import (
 )
 from shellbox.backends.daytona.transient import retry_transient
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
+from shellbox.capabilities import MachineCapability
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
     Command,
     CommandOutputLost,
     DockerImage,
     ExitReason,
-    MachineCapability,
     MachineDiskFull,
     MachineSpec,
     MachineTerminated,

@@ -26,4 +26,4 @@ def test_campaign_records_the_configured_gvisor_image_backend():
         docker_image="fixture@sha256:" + "0" * 64,
     )
     routes = machines.routes(requirements, 2048)
-    assert [route.tier for route in routes] == [Backend.GVISOR]
+    assert [route.backend for route in routes] == [Backend.GVISOR]

@@ -35,9 +35,9 @@ from iris.rpc.errors import DEFAULT_RETRY_MAX_ATTEMPTS, DEFAULT_RETRY_MAX_ELAPSE
 from rigging.secrets import SecretSpec, resolve_secret_spec
 from rigging.timing import Duration, ExponentialBackoff, retry_with_backoff
 
+from shellbox.capabilities import MachineCapability
 from shellbox.image import RegistryImage
 from shellbox.machine import (
-    LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
     CommandOutcomeUnknown,
@@ -57,6 +57,19 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
+
+IRIS_CAPABILITIES = frozenset(
+    {
+        MachineCapability.SHELL,
+        MachineCapability.FILESYSTEM,
+        MachineCapability.PYTHON,
+        MachineCapability.PROCESS,
+        MachineCapability.NETWORK,
+        MachineCapability.GIT_REPOSITORY,
+    }
+)
+"""The Iris backend's declared execution capabilities."""
+
 
 # The worker runs `docker exec` or `kubectl exec` with the command as argv, and Linux caps one
 # argument at 128 KiB (MAX_ARG_STRLEN). An upload chunk travels base64-encoded inside one
@@ -618,7 +631,7 @@ class IrisMachineFactory:
         check_execution_requirements(
             requirements,
             spec,
-            capabilities=LINUX_PROCESS_CAPABILITIES,
+            capabilities=IRIS_CAPABILITIES,
             image_reference=source.reference,
         )
 

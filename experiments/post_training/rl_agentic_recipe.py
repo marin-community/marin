@@ -10,7 +10,7 @@ from rolloutengine.agents.pi.agent import PI_HARNESS
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.machine import Backend, NetworkPolicy
 from skyrlrecipe import RecipePatch, sections
-from skyrlrecipe.declared import TASK_MACHINE_BY_TIER
+from skyrlrecipe.declared import TASK_MACHINES_BY_BACKEND
 
 from experiments.post_training.rl_presets import CHECKPOINT_EVALUATION, BatchMix, Preset, Recipe
 from experiments.post_training.task_curation.swesmith_training import (
@@ -101,7 +101,7 @@ TOOL_TURNS = 16
 TASK_MACHINE_STARTUP_TIMEOUT = 600
 TASK_MACHINE_CLEANUP_TIMEOUT = 60
 # Shell-tool tasks try supported backends in this deployment order.
-TIER_MACHINES = (
+BACKEND_MACHINES = (
     # ShellSim has no guest network.
     MachineRuntimeSpec(
         backend=Backend.SHELLSIM,
@@ -133,7 +133,9 @@ _SHELL_TOOL_RECIPE = RecipePatch(
             "daytona": {"api_key_env": _DAYTONA_RL_KEY, "ttl_minutes": 60},
             "task_spec": {
                 "session": {"max_turns": TOOL_TURNS},
-                TASK_MACHINE_BY_TIER: {machine.backend: machine.model_dump(mode="json") for machine in TIER_MACHINES},
+                TASK_MACHINES_BY_BACKEND: {
+                    machine.backend: machine.model_dump(mode="json") for machine in BACKEND_MACHINES
+                },
             },
         }
     ),

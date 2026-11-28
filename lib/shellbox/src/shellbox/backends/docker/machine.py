@@ -10,9 +10,9 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from shellbox.capabilities import MachineCapability
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
-    LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
     DockerImage,
@@ -309,6 +309,19 @@ class DockerMachine:
             raise RuntimeError(result.stderr.decode(errors="replace"))
 
 
+DOCKER_CAPABILITIES = frozenset(
+    {
+        MachineCapability.SHELL,
+        MachineCapability.FILESYSTEM,
+        MachineCapability.PYTHON,
+        MachineCapability.PROCESS,
+        MachineCapability.NETWORK,
+        MachineCapability.GIT_REPOSITORY,
+    }
+)
+"""The Docker backend's declared capabilities; the gVisor backend shares them."""
+
+
 class DockerMachineFactory:
     """Start a Docker image as a fresh trial container."""
 
@@ -328,7 +341,7 @@ class DockerMachineFactory:
         check_execution_requirements(
             requirements,
             spec,
-            capabilities=LINUX_PROCESS_CAPABILITIES,
+            capabilities=DOCKER_CAPABILITIES,
             image_reference=reference,
         )
 

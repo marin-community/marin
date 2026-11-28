@@ -1,14 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Machine routing metadata and admission requirements."""
+"""Machine admission requirements shared by preparation and selection."""
 
 from shellbox.machine import UnsupportedMachineSpec
 
 from taskcompendium.models import EnvironmentRequirements
-
-ROUTE_BACKENDS_LABEL = "machine.route_backends"
-"""The JSON task label holding the passing backend and its higher admitted candidates."""
 
 
 def require_resolved_environment(requirements: EnvironmentRequirements) -> None:
