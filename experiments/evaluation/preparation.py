@@ -50,7 +50,9 @@ from experiments.post_training.task_curation.pipeline import (
 )
 from experiments.post_training.task_curation.source import RlDataSource
 
-EVALUATION_PIPELINE_VERSION = "2026.11.08.1"
+# Bump when corpus contents change without a change to their identity, such as a new item field or value name, so
+# no region reuses a corpus that older code built under the same identity.
+EVALUATION_PIPELINE_VERSION = "2026.11.28"
 
 
 @dataclass(frozen=True)
