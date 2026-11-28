@@ -466,10 +466,14 @@ def test_remote_cache_skips_the_autotune_flag_when_the_mount_is_unusable(tmp_pat
         assert "XLA_FLAGS" not in os.environ
 
 
-def test_remote_cache_keeps_an_explicit_xla_autotune_dir(tmp_path) -> None:
+@pytest.mark.parametrize(
+    "xla_flags",
+    ["--xla_gpu_per_fusion_autotune_cache_dir=/mnt/elsewhere", "--xla_gpu_per_fusion_autotune_cache_dir /mnt/elsewhere"],
+)
+def test_remote_cache_keeps_an_explicit_xla_autotune_dir(tmp_path, xla_flags) -> None:
     """An operator-chosen autotune directory wins over the node mount."""
     with _isolated_jax_cache_config(), _gpu_task(tmp_path):
-        os.environ["XLA_FLAGS"] = "--xla_gpu_per_fusion_autotune_cache_dir=/mnt/elsewhere"
+        os.environ["XLA_FLAGS"] = xla_flags
         with patch("iris.jax.compile_cache.marin_prefix", return_value="s3://marin-eu/marin/"):
             configure_jax_compilation_cache()
 
@@ -493,7 +497,8 @@ def test_launch_provenance_mirrors_the_autotune_cache_to_object_storage(tmp_path
     assert calls == [(jax_cache_module._XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)]
 
 
-def test_disabled_autotuning_fetches_without_publishing_host_leftovers(tmp_path) -> None:
+@pytest.mark.parametrize("xla_flags", [_DISABLED_AUTOTUNE_FLAG, "--xla_gpu_autotune_level 0"])
+def test_disabled_autotuning_fetches_without_publishing_host_leftovers(tmp_path, xla_flags) -> None:
     root = str(tmp_path / "remote")
     seed = tmp_path / "seed"
     writer = FineStoreDirectory(root, str(seed))
@@ -502,7 +507,7 @@ def test_disabled_autotuning_fetches_without_publishing_host_leftovers(tmp_path)
 
     with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
         os.environ[LAUNCH_PROVENANCE_ENV] = "{}"
-        os.environ["XLA_FLAGS"] = _DISABLED_AUTOTUNE_FLAG
+        os.environ["XLA_FLAGS"] = xla_flags
         autotune_dir = scratch_cache_dir / "xla" / "per-fusion-autotune"
         autotune_dir.mkdir(parents=True)
         (autotune_dir / "leftover.textproto").write_bytes(b"old")
@@ -513,6 +518,7 @@ def test_disabled_autotuning_fetches_without_publishing_host_leftovers(tmp_path)
         ):
             configure_jax_compilation_cache()
         assert (autotune_dir / "cached.textproto").read_bytes() == b"tuned"
+        assert _DISABLED_AUTOTUNE_FLAG in os.environ["XLA_FLAGS"].split()
 
     assert fetch_file_set(root, str(tmp_path / "reloaded")) == {"cached.textproto"}
 

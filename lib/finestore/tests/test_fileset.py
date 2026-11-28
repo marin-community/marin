@@ -217,8 +217,9 @@ def test_file_set_fetch_rejects_oversized_snapshot(tmp_path, max_files, max_byte
         store.flush()
 
     limits = FileSetFetchLimits(max_files=max_files, max_bytes=max_bytes, timeout=60)
-    with pytest.raises(FileSetFetchLimitError, match=message):
+    with pytest.raises(FileSetFetchLimitError, match=message) as error:
         fetch_file_set(root, str(tmp_path / "local"), limits=limits)
+    assert root in str(error.value)
 
 
 def test_file_set_fetch_deadline_and_progress_are_visible(tmp_path, monkeypatch, caplog):
@@ -233,8 +234,9 @@ def test_file_set_fetch_deadline_and_progress_are_visible(tmp_path, monkeypatch,
     monkeypatch.setattr(fileset_module, "time", fake_time)
     monkeypatch.setattr(timing, "time", fake_time)
     limits = FileSetFetchLimits(max_files=10, max_bytes=100, timeout=1, log_interval=0.1)
-    with caplog.at_level("INFO"), pytest.raises(FileSetFetchDeadlineError):
+    with caplog.at_level("INFO"), pytest.raises(FileSetFetchDeadlineError) as error:
         fetch_file_set(root, str(tmp_path / "local"), limits=limits)
+    assert root in str(error.value)
     assert any(
         record.__dict__.get("files_processed") == 1
         and record.__dict__.get("files_written") == 1

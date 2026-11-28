@@ -62,13 +62,13 @@ def _local_files(directory: pathlib.Path) -> set[str]:
     return {path.relative_to(directory).as_posix() for path in directory.rglob("*") if path.is_file()}
 
 
-def _check_deadline(deadline: Deadline | None) -> None:
+def _check_deadline(deadline: Deadline | None, root: str) -> None:
     if deadline is not None and deadline.expired():
-        raise FileSetFetchDeadlineError("file-set fetch deadline exceeded")
+        raise FileSetFetchDeadlineError(f"file-set fetch from {root} exceeded its deadline")
 
 
 def _local_matches_blob(
-    target: pathlib.Path, descriptor: BlobDescriptor, view: ReadView, deadline: Deadline | None
+    target: pathlib.Path, descriptor: BlobDescriptor, view: ReadView, deadline: Deadline | None, root: str
 ) -> bool:
     try:
         local_stat = target.lstat()
@@ -82,17 +82,19 @@ def _local_matches_blob(
         return False
     with current:
         for part in view.blob_parts(descriptor):
-            _check_deadline(deadline)
+            _check_deadline(deadline, root)
             if current.read(len(part)) != part:
                 return False
         return not current.read(1)
 
 
-def _write_blob(target: pathlib.Path, descriptor: BlobDescriptor, view: ReadView, deadline: Deadline | None) -> None:
+def _write_blob(
+    target: pathlib.Path, descriptor: BlobDescriptor, view: ReadView, deadline: Deadline | None, root: str
+) -> None:
     with atomic_rename(str(target)) as staged:
         with pathlib.Path(staged).open("wb") as output:
             for part in view.blob_parts(descriptor):
-                _check_deadline(deadline)
+                _check_deadline(deadline, root)
                 output.write(part)
 
 
@@ -113,22 +115,22 @@ def fetch_file_set(root: str, local: str, *, limits: FileSetFetchLimits | None =
         BlobTables.DESCRIPTORS,
         columns=BlobDescriptor.COLUMNS,
     ):
-        _check_deadline(deadline)
+        _check_deadline(deadline, root)
         descriptor = BlobDescriptor.from_row(row)
         if limits is not None:
             if len(fetched) + 1 > limits.max_files:
-                raise FileSetFetchLimitError(f"file-set fetch exceeds {limits.max_files} files")
+                raise FileSetFetchLimitError(f"file-set fetch from {root} exceeds {limits.max_files} files")
             if descriptor.size is None:
-                raise FileSetFetchLimitError(f"file-set fetch cannot bound size of {descriptor.name!r}")
+                raise FileSetFetchLimitError(f"file-set fetch from {root} cannot bound size of {descriptor.name!r}")
             if total_bytes + descriptor.size > limits.max_bytes:
-                raise FileSetFetchLimitError(f"file-set fetch exceeds {limits.max_bytes} bytes")
+                raise FileSetFetchLimitError(f"file-set fetch from {root} exceeds {limits.max_bytes} bytes")
         relative = _safe_relative(descriptor.name)
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        if _local_matches_blob(target, descriptor, view, deadline):
+        if _local_matches_blob(target, descriptor, view, deadline, root):
             files_skipped += 1
         else:
-            _write_blob(target, descriptor, view, deadline)
+            _write_blob(target, descriptor, view, deadline, root)
             files_written += 1
         fetched.add(relative.as_posix())
         total_bytes += descriptor.size or 0
@@ -151,7 +153,7 @@ def fetch_file_set(root: str, local: str, *, limits: FileSetFetchLimits | None =
                 },
             )
             next_log = now + (limits.log_interval if limits else DEFAULT_FETCH_LOG_INTERVAL)
-    _check_deadline(deadline)
+    _check_deadline(deadline, root)
     logger.info(
         "File-set fetch complete: %d files (%d written, %d skipped), %d bytes in %.1fs",
         len(fetched),
@@ -210,7 +212,9 @@ class FineStoreDirectory:
                 return
             if self._fetch_limits is not None:
                 if self._published_files + len(pending) > self._fetch_limits.max_files:
-                    raise FileSetPublishLimitError(f"file-set publish exceeds {self._fetch_limits.max_files} files")
+                    raise FileSetPublishLimitError(
+                        f"file-set publish to {self._root} exceeds {self._fetch_limits.max_files} files"
+                    )
                 pending_bytes = sum((self._local / name).stat().st_size for name in pending)
                 self._check_publish_bytes(pending_bytes)
             batch = []
@@ -282,4 +286,6 @@ class FineStoreDirectory:
 
     def _check_publish_bytes(self, additional_bytes: int) -> None:
         if self._fetch_limits is not None and self._published_bytes + additional_bytes > self._fetch_limits.max_bytes:
-            raise FileSetPublishLimitError(f"file-set publish exceeds {self._fetch_limits.max_bytes} bytes")
+            raise FileSetPublishLimitError(
+                f"file-set publish to {self._root} exceeds {self._fetch_limits.max_bytes} bytes"
+            )

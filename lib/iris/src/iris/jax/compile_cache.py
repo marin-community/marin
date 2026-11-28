@@ -37,14 +37,35 @@ class _AutotuneCacheRole(enum.StrEnum):
 
 def _xla_flag_value(flags: str, name: str) -> str | None:
     """Return the last value, or ``None`` if absent; a bare flag has an empty value."""
-    tokens = flags.split()
+    tokens = _normalize_xla_flags(flags).split()
     value = None
-    for index, token in enumerate(tokens):
+    for token in tokens:
         if token.startswith(f"{name}="):
             value = token.partition("=")[2]
         elif token == name:
-            value = tokens[index + 1] if index + 1 < len(tokens) and not tokens[index + 1].startswith("--") else ""
+            value = ""
     return value
+
+
+def _normalize_xla_flags(flags: str) -> str:
+    """Convert space-separated values to the equals form required by XLA_FLAGS."""
+    tokens = flags.split()
+    normalized = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if (
+            token.startswith("--")
+            and "=" not in token
+            and index + 1 < len(tokens)
+            and not tokens[index + 1].startswith("--")
+        ):
+            normalized.append(f"{token}={tokens[index + 1]}")
+            index += 2
+        else:
+            normalized.append(token)
+            index += 1
+    return " ".join(normalized)
 
 
 def configure_jax_compilation_cache() -> None:
@@ -59,6 +80,9 @@ def configure_jax_compilation_cache() -> None:
     which would otherwise hand XLA's C++ filesystem layer a URL it cannot open,
     and redirects XLA's per-fusion autotune cache to node-local disk instead.
     """
+    if raw_xla_flags := os.environ.get("XLA_FLAGS"):
+        os.environ["XLA_FLAGS"] = _normalize_xla_flags(raw_xla_flags)
+
     import jax  # noqa: PLC0415  # optional dep: jax (iris does not depend on jax)
 
     cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR") or jax.config.jax_compilation_cache_dir
