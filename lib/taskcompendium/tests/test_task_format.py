@@ -130,6 +130,7 @@ def carrier_row(task: TaskSpec) -> dict:
         (FormatRow(raw=carrier_row(taskcompendium_task()), task=taskcompendium_task()), TaskFormat.TASKSPEC),
         (FormatRow(raw=blend_record(), task=None), TaskFormat.MARINSKYRL),
         (FormatRow(raw=agent_blend_record(), task=None), TaskFormat.MARINSKYRL),
+        (FormatRow(raw=agent_blend_record(), task=native_task()), TaskFormat.MARINSKYRL),
         (FormatRow(raw={"record": "answer-row"}, task=native_task()), TaskFormat.TASKSPEC),
         # The carrier is transport: a frozen cohort row whose task has no task directory
         # is a native TaskSpec row, whatever encoding stores it.

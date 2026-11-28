@@ -118,7 +118,9 @@ def _is_harbor_row(row: FormatRow) -> bool:
 
 def _is_taskspec_row(row: FormatRow) -> bool:
     """A TaskSpec row that is not a Harbor package."""
-    return _parsed_task(row) is not None and not _is_harbor_row(row)
+    # Conversion supplies a parsed TaskSpec for blend inputs too. That output
+    # must not turn the original blend schema into a second format match.
+    return not _is_blend_record(row.raw) and _parsed_task(row) is not None and not _is_harbor_row(row)
 
 
 def _is_marinskyrl_row(row: FormatRow) -> bool:
