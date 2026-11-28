@@ -13,14 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Answer extraction and reward functions from NVIDIA NeMo Gym litmus_agent at e87f88065db6105548194e1f12feea720c129cca."""
+"""Answer extraction and reward functions from NVIDIA NeMo Gym litmus_agent
+at e87f88065db6105548194e1f12feea720c129cca."""
 
 from __future__ import annotations
 
 import math
 import re
-from typing import Any, Callable, Dict, Optional, Union
-
+from collections.abc import Callable
+from typing import Any
 
 FLOAT = "float"
 BOOL = "bool"
@@ -75,7 +76,7 @@ def resolve_answer_type(answer_type: str) -> str:
     return answer_type
 
 
-def _capture_with_pattern(text: str, pattern: re.Pattern[str]) -> Optional[str]:
+def _capture_with_pattern(text: str, pattern: re.Pattern[str]) -> str | None:
     """Return the last match of a compiled answer regex, or None.
 
     Only the last match is considered, so a self-correcting response ("...3,
@@ -91,7 +92,7 @@ def _capture_with_pattern(text: str, pattern: re.Pattern[str]) -> Optional[str]:
     return match.strip()
 
 
-def _raw_capture(text: str, answer_format: str) -> Optional[str]:
+def _raw_capture(text: str, answer_format: str) -> str | None:
     """Return the last match of the named ``fmt_XX`` regex, or None."""
     pattern = _ANSWER_FORMAT_REGEXES.get(answer_format)
     if pattern is None:
@@ -114,7 +115,7 @@ def _compile_output_regex(output_regex: str) -> re.Pattern[str]:
     return pattern
 
 
-def _parse_bool(inner: str) -> Optional[float]:
+def _parse_bool(inner: str) -> float | None:
     """Coerce a capture into 1.0/0.0, accepting word tokens or 0/1 numerics."""
     token = inner.strip().lower()
     if token in _TRUE_TOKENS:
@@ -127,7 +128,7 @@ def _parse_bool(inner: str) -> Optional[float]:
     return 1.0 if num != 0.0 else 0.0
 
 
-def _parse_numeric(inner: str) -> Optional[float]:
+def _parse_numeric(inner: str) -> float | None:
     """Parse a number from a capture; fall back to the last number-like token."""
     inner = inner.strip()
     try:
@@ -147,9 +148,9 @@ def extract_predicted_value(
     response: str,
     answer_type: str,
     *,
-    output_regex: Optional[str] = None,
-    answer_format: Optional[str] = None,
-) -> Optional[Union[float, str]]:
+    output_regex: str | None = None,
+    answer_format: str | None = None,
+) -> float | str | None:
     """Extract the model's predicted value from its response text.
 
     Locates the answer, then coerces it by ``answer_type``: numeric types parse
@@ -221,7 +222,7 @@ def _rule_string_eq(predicted: Any, expected: Any, **_: Any) -> float:
 
 
 # Registry of named reward rules. Register a custom rule by adding an entry here.
-REWARD_RULES: Dict[str, Callable[..., float]] = {
+REWARD_RULES: dict[str, Callable[..., float]] = {
     "exact": _rule_exact,
     "isclose": _rule_isclose,
     "abs_window": _rule_abs_window,
@@ -233,7 +234,7 @@ REWARD_RULES: Dict[str, Callable[..., float]] = {
 # Default reward rule per answer_type, used when a row supplies no ``match``.
 # ``float`` defaults to numeric equality; rows wanting rounded-integer matching
 # opt in with match={"rule": "exact"}.
-_DEFAULT_RULE: Dict[str, str] = {
+_DEFAULT_RULE: dict[str, str] = {
     FLOAT: "isclose",
     BOOL: "bool_eq",
     STRING: "string_eq",
@@ -245,7 +246,7 @@ def _normalize_str(value: object) -> str:
 
 
 
-def resolve_reward_rule(answer_type: str, match: Optional[Dict[str, Any]]) -> tuple[str, Dict[str, Any]]:
+def resolve_reward_rule(answer_type: str, match: dict[str, Any] | None) -> tuple[str, dict[str, Any]]:
     """Resolve (rule_name, params) from a per-row ``match`` or the type default.
 
     A ``match`` overrides the default and must carry a ``rule`` key; its other
@@ -262,11 +263,11 @@ def resolve_reward_rule(answer_type: str, match: Optional[Dict[str, Any]]) -> tu
 
 
 def compute_reward(
-    predicted: Optional[Union[float, str]],
-    expected: Union[str, float, int],
+    predicted: float | str | None,
+    expected: str | float | int,
     answer_type: str,
     *,
-    match: Optional[Dict[str, Any]] = None,
+    match: dict[str, Any] | None = None,
     float_rel_tol: float = 1e-6,
     float_abs_tol: float = 1e-6,
 ) -> float:

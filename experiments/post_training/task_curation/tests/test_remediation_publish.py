@@ -38,7 +38,6 @@ from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.models import EnvironmentRequirements, NoGrader, TaskSpec
 from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
-from taskcompendium.pipeline.task_format import TaskFormat
 
 from experiments.post_training.task_curation import (
     license_publication,
