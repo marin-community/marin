@@ -16,11 +16,14 @@ from starlette.routing import Route
 
 
 def pool_router(
-    names: Sequence[str], resolve: Callable[[str], str], *, transport: httpx.AsyncBaseTransport | None = None
+    names: Sequence[str] | Callable[[], Sequence[str]],
+    resolve: Callable[[str], str],
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
 ) -> Starlette:
-    if not names:
+    if not callable(names) and not names:
         raise ValueError("A solver router needs qualified slice endpoints")
-    pending = [0] * len(names)
+    pending: dict[str, int] = {}
     client = httpx.AsyncClient(timeout=1800, transport=transport, limits=httpx.Limits(max_connections=256))
 
     @asynccontextmanager
@@ -30,11 +33,14 @@ def pool_router(
 
     async def forward(request: Request):
         # One event loop owns this counter; increment before awaiting discovery or I/O.
-        selected = min(range(len(names)), key=lambda index: pending[index])
-        pending[selected] += 1
+        available = tuple(names() if callable(names) else names)
+        if not available:
+            return JSONResponse({"error": "qualified TPU slice unavailable"}, status_code=503)
+        selected = min(available, key=lambda name: pending.get(name, 0))
+        pending[selected] = pending.get(selected, 0) + 1
         upstream = None
         try:
-            address = await asyncio.to_thread(resolve, names[selected])
+            address = await asyncio.to_thread(resolve, selected)
             url = address.rstrip("/") + request.url.path
             if request.url.query:
                 url += "?" + request.url.query

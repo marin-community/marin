@@ -36,6 +36,7 @@ from marin.inference.types import InferenceBackendState
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 from taskcompendium.evaluation.corpus import file_sha256
 
 from experiments.post_training.task_curation.difficulty.campaign import rebind_regional_campaign, stage_campaign
@@ -58,6 +59,9 @@ REGIONAL_ROOT = "gs://marin-us-central2/rl-data/atlas/difficulty-tpu-v4"
 CHIP_BUDGET = 256
 FAILURE_RETRIES = 3
 PREEMPTION_RETRIES = 10
+REPLICA_ATTEMPTS = 4
+REPLICA_HEALTH_INTERVAL = 30
+REPLICA_RETRY_BACKOFF = ExponentialBackoff(initial=10, maximum=60)
 
 
 @dataclass(frozen=True)
@@ -248,7 +252,11 @@ def run_tpu_pool(
     excluded_tpu_names: tuple[str, ...] = (),
     solver_protocol_id: str = PROTOCOL_ID,
 ) -> None:
-    """Own qualified slice sessions; label their request policy for client-side enforcement."""
+    """Keep qualified slices serving during independent replica recovery.
+
+    Each replica gets four attempts. The owner endpoint remains stable during
+    recovery; receipts distinguish the allocation target from active capacity.
+    """
     if solver_protocol_id != PROTOCOL_ID and (
         solver != Solver.LARGE or solver_protocol_id != LARGE_DYNAMIC_OUTPUT_PROTOCOL_ID
     ):
@@ -268,6 +276,71 @@ def run_tpu_pool(
 
     def replica(index: int) -> None:
         original_info = get_job_info()
+        generation = 0
+
+        def serve_once() -> None:
+            nonlocal generation
+            if stop.is_set():
+                return
+            generation += 1
+            with remote_inference(config) as session:
+                try:
+                    ready = session.ready_direct_session()
+                    effective = ready.effective_serving
+                    if effective is None or effective.max_model_len is None or effective.max_model_len < 65536:
+                        raise ValueError("TPU endpoint did not qualify the frozen context length")
+                    endpoint = ready.model.endpoint.base_url
+                    probe = probe_endpoint(
+                        solver, endpoint, SOLVER_MODELS[solver], "EMPTY", sampling_settings(solver, [])
+                    )
+                    context_probe = long_context_probe(solver, endpoint, root)
+                    sweep = [
+                        asyncio.run(warm_throughput(endpoint, SOLVER_MODELS[solver], shape.chips, concurrency=n))
+                        for n in sorted({8, 32, 128, 128 * shape.data_parallel})
+                    ]
+                    for measurement in sweep:
+                        measurement["output_tokens_per_second_per_chip"] = measurement.pop(
+                            "output_tokens_per_second_per_gpu"
+                        )
+                    measurement = max(sweep, key=lambda value: value["output_tokens_per_second"])
+                    events.put(
+                        (
+                            "ready",
+                            index,
+                            {
+                                "index": index,
+                                "generation": generation,
+                                "endpoint_name": session.endpoint_name,
+                                "engine_jobs": [str(job.job_id) for job in session.jobs],
+                                "effective_serving": asdict(effective),
+                                "probe": probe,
+                                "long_context_probe": context_probe,
+                                "warm_throughput": measurement,
+                                "throughput_sweep": sweep,
+                            },
+                        )
+                    )
+                    health_failures = 0
+                    while not stop.wait(REPLICA_HEALTH_INTERVAL):
+                        session.check_alive()
+                        if session.backend_state() != InferenceBackendState.READY:
+                            raise RuntimeError("Qualified TPU replica lost readiness")
+                        try:
+                            current = session.direct_session().model.endpoint.base_url
+                            response = httpx.get(current.rstrip("/") + "/models", timeout=30)
+                            response.raise_for_status()
+                            if SOLVER_MODELS[solver] not in {model["id"] for model in response.json()["data"]}:
+                                raise ValueError("Live TPU endpoint stopped advertising its frozen solver")
+                        except Exception:
+                            health_failures += 1
+                            if health_failures >= 3:
+                                raise
+                        else:
+                            health_failures = 0
+                finally:
+                    # Withdraw routing before this replica's context tears down.
+                    events.put(("unavailable", index, None))
+
         try:
             if excluded_tpu_names:
                 if original_info is None:
@@ -284,73 +357,41 @@ def run_tpu_pool(
                         ],
                     )
                 )
-            with remote_inference(config) as session:
-                ready = session.ready_direct_session()
-                effective = ready.effective_serving
-                if effective is None or effective.max_model_len is None or effective.max_model_len < 65536:
-                    raise ValueError("TPU endpoint did not qualify the frozen context length")
-                endpoint = ready.model.endpoint.base_url
-                probe = probe_endpoint(solver, endpoint, SOLVER_MODELS[solver], "EMPTY", sampling_settings(solver, []))
-                context_probe = long_context_probe(solver, endpoint, root)
-                sweep = [
-                    asyncio.run(warm_throughput(endpoint, SOLVER_MODELS[solver], shape.chips, concurrency=n))
-                    for n in sorted({8, 32, 128, 128 * shape.data_parallel})
-                ]
-                for measurement in sweep:
-                    measurement["output_tokens_per_second_per_chip"] = measurement.pop(
-                        "output_tokens_per_second_per_gpu"
-                    )
-                measurement = max(sweep, key=lambda value: value["output_tokens_per_second"])
-                events.put(
-                    (
-                        "ready",
-                        {
-                            "index": index,
-                            "endpoint_name": session.endpoint_name,
-                            "engine_jobs": [str(job.job_id) for job in session.jobs],
-                            "effective_serving": asdict(effective),
-                            "probe": probe,
-                            "long_context_probe": context_probe,
-                            "warm_throughput": measurement,
-                            "throughput_sweep": sweep,
-                        },
-                    )
-                )
-                health_failures = 0
-                while not stop.wait(30):
-                    session.check_alive()
-                    if session.backend_state() != InferenceBackendState.READY:
-                        continue
-                    try:
-                        current = session.direct_session().model.endpoint.base_url
-                        response = httpx.get(current.rstrip("/") + "/models", timeout=30)
-                        response.raise_for_status()
-                        if SOLVER_MODELS[solver] not in {model["id"] for model in response.json()["data"]}:
-                            raise ValueError("Live TPU endpoint stopped advertising its frozen solver")
-                    except Exception:
-                        health_failures += 1
-                        if health_failures >= 3:
-                            raise
-                    else:
-                        health_failures = 0
+            retry_with_backoff(
+                serve_once,
+                max_attempts=REPLICA_ATTEMPTS,
+                backoff=REPLICA_RETRY_BACKOFF,
+                operation=f"TPU {solver.value} replica {index}",
+            )
         except BaseException as error:
-            events.put(("failed", error))
-            stop.set()
-            raise
+            events.put(("failed", index, error))
         finally:
             if excluded_tpu_names:
                 set_job_info(original_info)
 
+    ready_by_index: dict[int, dict] = {}
+    routing_lock = threading.Lock()
+
+    def endpoint_names() -> tuple[str, ...]:
+        with routing_lock:
+            return tuple(ready_by_index[index]["endpoint_name"] for index in sorted(ready_by_index))
+
+    def accept_event(event: str, index: int, value) -> None:
+        if event == "failed":
+            raise RuntimeError(f"TPU replica {index} exhausted its restart budget") from value
+        with routing_lock:
+            if event == "ready":
+                ready_by_index[index] = value
+            else:
+                ready_by_index.pop(index, None)
+        LOGGER.info("DIFFICULTY_ENGINE_REPLICA_%s index=%s", event.upper(), index)
+
     with ThreadPoolExecutor(max_workers=replicas) as workers:
         futures = [workers.submit(contextvars.copy_context().run, replica, index) for index in range(replicas)]
         try:
-            ready = []
-            while len(ready) < replicas:
-                event, value = events.get(timeout=7500)
-                if event == "failed":
-                    raise value
-                ready.append(value)
-            ready.sort(key=lambda value: value["index"])
+            while len(ready_by_index) < replicas:
+                accept_event(*events.get(timeout=7500))
+            ready = [ready_by_index[index] for index in sorted(ready_by_index)]
             receipt = {
                 "solver": solver,
                 "model": SOLVER_MODELS[solver],
@@ -359,7 +400,10 @@ def run_tpu_pool(
                 "region": REGION,
                 "zone": ZONE,
                 "priority": "INTERACTIVE",
+                # Allocation accounting includes recovery, as it did before.
+                # active_chip_count separately reports qualified serving capacity.
                 "chip_count": shape.chips * replicas,
+                "chip_count_basis": "allocation target including replica recovery",
                 "gpu_count": 0,
                 "shape": asdict(shape),
                 "replicas": ready,
@@ -371,28 +415,44 @@ def run_tpu_pool(
                 "excluded_tpu_names": sorted(set(excluded_tpu_names)),
                 **({"solver_protocol_id": solver_protocol_id} if solver_protocol_id != PROTOCOL_ID else {}),
             }
-            # Retain expensive qualification measurements even if publication fails.
+            # Retain qualification even if endpoint registration fails.
             immutable_json(StoragePath(root) / "qualification" / solver.value / (digest(receipt) + ".json"), receipt)
             context = iris_ctx()
             info = get_job_info()
             assert info is not None
             name = f"/serve/atlas-difficulty-tpu-{solver.value}-{uuid.uuid4().hex}"
-            app = pool_router(receipt["endpoint_names"], context.client.resolve_endpoint)
+            app = pool_router(endpoint_names, context.client.resolve_endpoint)
+
+            def publish() -> None:
+                active = [ready_by_index[index] for index in sorted(ready_by_index)]
+                current = {
+                    **receipt,
+                    "endpoint_name": name,
+                    "replicas": active,
+                    "endpoint_names": [item["endpoint_name"] for item in active],
+                    "active_chip_count": shape.chips * len(active),
+                    "recovering_replica_indices": sorted(set(range(replicas)) - ready_by_index.keys()),
+                    "updated_at": datetime.now(UTC).isoformat(),
+                }
+                publish_pool_receipt(root + "/pools", solver, current)
+                LOGGER.info("DIFFICULTY_ENGINE_READY %s", json.dumps(current, sort_keys=True))
+
             with bind_serving_socket(info.advertise_host, 0) as sock, serve_app_background(app, sock):
                 address = f"http://{info.advertise_host}:{sock.getsockname()[1]}"
                 with context.registry.registered(
                     name, address, {"model": receipt["model"]}, access=EndpointAccess.ENDPOINT_ACCESS_LINK
                 ):
-                    receipt["endpoint_name"] = name
-                    publish_pool_receipt(root + "/pools", solver, receipt)
-                    LOGGER.info("DIFFICULTY_ENGINE_READY %s", json.dumps(receipt, sort_keys=True))
-                    while not stop.wait(30):
-                        for future in futures:
-                            if future.done():
-                                future.result()
-                                raise RuntimeError("TPU replica stopped unexpectedly")
-                    event, value = events.get(timeout=60)
-                    raise RuntimeError(f"TPU pool lost a replica: {event}") from value
+                    publish()
+                    while not stop.is_set():
+                        try:
+                            accept_event(*events.get(timeout=1))
+                        except queue.Empty:
+                            for future in futures:
+                                if future.done():
+                                    future.result()
+                                    raise RuntimeError("TPU replica stopped unexpectedly") from None
+                        else:
+                            publish()
         finally:
             stop.set()
 
