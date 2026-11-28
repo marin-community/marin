@@ -240,6 +240,13 @@ def _infer_max_pages_from_hbm(
 
 @dataclass(frozen=True)
 class _KvPageReservation:
+    """Budget the KV pages a request can need before the scheduler admits it.
+
+    The request reserves full prompt pages once while any choice is active. Each
+    live choice budgets its own partial prompt page, if any, and its continuation
+    pages through the decode limit. A finished choice gives back its private budget.
+    """
+
     shared: int
     per_choice: int
 
@@ -926,9 +933,13 @@ class InferenceEngine:
     def _prefill_batch(
         self, batch: Sequence[Request], page_requirements: dict[int, _KvPageReservation]
     ) -> _DecodeOutputs | None:
-        """Admit a batch from the head of the queue that fits in free slots/pages.
+        """Prefill the leading requests that fit the token, slot, and page budgets.
 
-        Returns the decode outputs for the admitted prefill batch, or None if no work was admitted.
+        `page_requirements` maps each active or queued request ID to its shared and
+        per-choice KV reservation. Admission accounts for the active choices before
+        reserving pages for the queued requests.
+
+        Returns the prefill decode outputs, or None when no request fits.
         """
         # Build a single PrefillWork description and run prefill exactly once
         prefill_work = self._prefill_prompts(batch, page_requirements)
