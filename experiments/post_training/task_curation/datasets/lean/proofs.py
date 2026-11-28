@@ -72,6 +72,23 @@ TARGET = re.compile(rf"(?P<keyword>theorem|lemma)\s+(?P<name>{TARGET_NAME.patter
 """The target's declaration, with a name the grader accepts; any other name is not a target."""
 PREFIX_DEFECT = re.compile(r"(?<![\w.'])(?:sorry|admit|axiom)(?![\w'])")
 NAMESPACE = re.compile(r"(?<![\w.'])namespace(?![\w'])")
+GRADER_IMAGE_PACKAGES = frozenset(
+    {
+        "mathlib",
+        "cli",
+        "leansearchclient",
+        "qq",
+        "aesop",
+        "batteries",
+        "importgraph",
+        "plausible",
+        "proofwidgets",
+    }
+)
+"""Import allowlist derived from the lake-manifest.json at the pinned Mathlib commit
+(d13f23b723b8a846827a245b89c10fc7d3f11612 in lean.Dockerfile). Every package resolves
+in the grader image and may be imported by the data. Matched case-insensitively
+(the lake manifest uses lowercase names; Lean imports use the capitalized module name)."""
 IMPORT = re.compile(r"^\s*import\s+(?P<modules>[^\n]+)$", re.MULTILINE)
 SORRY = re.compile(r"(?<![\w.'])sorry(?![\w'])")
 
@@ -106,8 +123,16 @@ def statement_contract(prefix: str, formal_statement: str, target: str) -> Contr
     """The grader's frozen contract for ``target``, or why the statement cannot be frozen."""
     prefix, formal_statement = without_comments(prefix).strip(), without_comments(formal_statement).strip()
     modules = [module for line in IMPORT.findall(prefix) for module in line.split()]
-    if any(module != "Mathlib" and not module.startswith("Mathlib.") for module in modules):
-        return source_defect("non_mathlib_import", "The grader image provides Mathlib only")
+    disallowed = [
+        module
+        for module in modules
+        if module.lower() not in GRADER_IMAGE_PACKAGES and not module.startswith("Mathlib.") and module != "Mathlib"
+    ]
+    if disallowed:
+        return source_defect(
+            "non_mathlib_import",
+            f"Imports not in the grader image's lake manifest: {disallowed}",
+        )
     if PREFIX_DEFECT.search(prefix):
         return source_defect("unproved_helper", "Helpers must be proved and add no axioms")
     if NAMESPACE.search(prefix):
