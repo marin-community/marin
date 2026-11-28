@@ -147,6 +147,11 @@ class GoedelSubset:
     subset: str
 
 
+def subset_selector(expected: str):
+    """Row selector keeping only one subset's rows: each recipe converts its own subset."""
+    return lambda data, context: data.get("subset") == expected
+
+
 SUBSETS = (
     GoedelSubset("goedel_lean_revision", "lean4_revision"),
     GoedelSubset("goedel_lean_completion", "lean4_completion"),
@@ -182,6 +187,7 @@ def sources() -> list[RlDataSource]:
                         GOEDEL_REVISION,
                         GOEDEL_FILES,
                         SourceFormat.PARQUET,
+                        select=subset_selector(subset.subset),
                     ),
                     convert=convert_goedel,
                     version="1",
