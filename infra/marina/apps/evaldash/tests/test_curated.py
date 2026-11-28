@@ -128,7 +128,6 @@ def write_observations(
         primary_metric=metrics[0],
         num_fewshot=num_fewshot,
         summary=summary,
-        expected_population=2,
     )
     snapshot = (
         manifest.model_dump(mode="json", exclude_none=True)
@@ -222,7 +221,6 @@ def test_regional_curation_builds_compare_and_grader_changes_remain_separate(raw
         benchmark="colors",
         source=HfSource("fixture/colors", "a" * 40, ("test.jsonl",), SourceFormat.JSONL),
         answer_field="answer",
-        population=2,
         trials=1,
     )
     dataset = source.config

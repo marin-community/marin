@@ -234,7 +234,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
                 tags=("agentic", "multi-turn"),
-                count=46391,
                 notes=(
                     "IFEval-style deterministic checkers. Filter rows with empty constraint lists "
                     "(vacuous pass) at conversion."
@@ -261,7 +260,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
                 tags=("agentic", "multi-turn"),
-                count=9437,
                 notes="Any schema-valid instance is accepted, and jsonschema does the grading.",
                 task_format=TaskFormat.TASKCOMPENDIUM,
             ),

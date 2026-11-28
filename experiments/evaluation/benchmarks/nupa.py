@@ -33,9 +33,9 @@ PANEL_SOURCE_COMMIT = "623134de90723e7f189036da005067f36817b6e7"
 
 def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     result = []
-    for name, rows, reader in (
-        ("NUPA-Loose", 238926, read_nupa_sample),
-        ("NUPA5K-Loose", 5000, read_nupa_panel),
+    for name, reader in (
+        ("NUPA-Loose", read_nupa_sample),
+        ("NUPA5K-Loose", read_nupa_panel),
     ):
         inputs = (
             {
@@ -61,7 +61,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                     origin=SourceOrigin.EVALCHEMY,
                     family="numeric-representation",
                     tags=("eval", "source:evalchemy", "single-turn", "benchmark", "family:numeric-representation"),
-                    count=rows,
                 ),
                 config=EvaluationCorpusRecipe(
                     recipe=CurationRecipe(
@@ -108,7 +107,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                         ),
                         primary_metric="exact_match",
                         summary=SummaryKind.MEAN,
-                        expected_population=rows,
                         context_window=73664 if name == "NUPA5K-Loose" else None,
                     ),
                     item_builder=nupa_item,

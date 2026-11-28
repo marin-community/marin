@@ -110,7 +110,7 @@ def _rebuilt_cohort(
     *,
     lock_grader: _LockGraderEvidence | None = None,
 ) -> RlDataSource[PrebuiltCohort]:
-    """Derive inventory identity and counts, optionally adding measured lock-grader evidence."""
+    """Derive inventory identity, optionally adding measured lock-grader evidence."""
     rows = config.expected_rows
     if lock_grader is not None:
         oversight = OversightEvidence(
@@ -131,7 +131,7 @@ def _rebuilt_cohort(
     return RlDataSource(
         pipeline=import_prebuilt,
         config=config,
-        info=replace(info, count=rows, dataset=config.dataset),
+        info=replace(info, dataset=config.dataset),
     )
 
 
@@ -152,7 +152,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="terminal-agent",
                 tags=("agentic", "multi-turn", "license:cc-by-4.0", "campaign-release", "deprecated"),
-                count=2205,
                 daytona_snapshot_count=2205,
                 daytona_count_basis=(
                     "production snapshot_identity over the pinned payloads; each task names its own "
@@ -760,7 +759,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="terminal-agent",
                 tags=("agentic", "multi-turn", "license:cc-by-4.0", "campaign-release", "deprecated"),
-                count=324,
                 daytona_snapshot_count=23,
                 daytona_count_basis=(
                     "campaign provisioning record snapshot-capacity-check.json (the public lowered "
@@ -797,7 +795,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="swe-repo",
                 tags=("agentic", "multi-turn", "campaign-release"),
-                count=8045,
                 daytona_snapshot_count=5,
                 daytona_count_basis="shellbox-identity over the pinned tasks.parquet build contexts",
                 notes=(
@@ -828,7 +825,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="swe-repo",
                 tags=("agentic", "multi-turn", "campaign-release"),
-                count=1699,
                 notes=(
                     "1,683 setup-branch parents from qualified repositories, retained as 1,699 staged "
                     "variants. Stage 1 tests repository and workspace readiness, not issue repair. The "
@@ -858,7 +854,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="swe-repo",
                 tags=("agentic", "multi-turn", "campaign-release"),
-                count=778,
                 notes=(
                     "778 repair handoffs from 600 parents: 600 complete and 178 partial, retained as "
                     "762 train / 16 validation. Complete handoffs start from repaired code that passed "

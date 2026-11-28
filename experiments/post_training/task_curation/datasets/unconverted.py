@@ -40,7 +40,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.HARBOR_HUB,
                 family="terminal-agent",
                 tags=("agentic", "multi-turn"),
-                count=7496,
                 notes=(
                     "Native Harbor training tasks with reference solutions and programmatic component-reward verifiers. "
                     "The paper's private S2EBench is a separate evaluation set. "
@@ -84,7 +83,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="unit-test-gen",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=2726,
                 notes=(
                     "The legacy pytest grader performs source-specific Django discovery and loads extra "
                     "plugins. Ten sampled empty and trivial submissions failed, but the source has no "
@@ -107,7 +105,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="unit-test-gen",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=4196,
                 notes=(
                     "GoogleTest tasks without shipped oracles. Sampled empty and trivial submissions "
                     "failed, but some tests contain the reference implementation and others require an "
@@ -130,7 +127,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="swe-repo",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=9659,
                 notes=(
                     "Never compiles or runs; regex on the rewritten method body with guards that accept "
                     "either polarity."
@@ -152,7 +148,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="unit-test-gen",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=1996,
                 notes=(
                     "Mixed verifier shapes: eight of 10 sampled empty and trivial checks timed out, and "
                     "the crosscodeeval slice only checks that an import succeeds."
@@ -174,7 +169,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="shell-cmd",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=6665,
                 notes=(
                     "Per-task LLM-written test_state.py with loose file discovery and dead code. Task "
                     "ideas are usable; regenerate verifiers with an oracle/no-op gate."
@@ -252,7 +246,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="competitive-programming",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=500,
                 notes="Byte-identical generator to codeforces-v3 at 500 rows; merge, do not keep separately.",
                 dataset=TASKTROVE_INPUT,
                 daytona_snapshot_count=1,
@@ -271,7 +264,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="swe-repo",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=479,
                 notes=(
                     "LLM-synthesized tests against a single-file stub, with assert True placeholders. "
                     "Rewrite against the real BugsInPy project suites."
@@ -293,7 +285,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="competitive-programming",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=6975,
                 notes=(
                     "Only 3 hidden cases and whitespace-collapsing compare. Oracle present; regenerate "
                     "20+ cases per task."
@@ -315,7 +306,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="code-completion",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=1768,
                 notes="0.25 reward for any identifier-shaped output; instruction coaches the hack.",
                 dataset=TASKTROVE_INPUT,
                 daytona_snapshot_count=1,
@@ -334,7 +324,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="code-completion",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=2139,
                 notes="Exact string match on a single line completion. Not agentic, no execution.",
                 dataset=TASKTROVE_INPUT,
                 daytona_snapshot_count=1,
@@ -353,7 +342,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="code-completion",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=3356,
                 notes=("Re-skin of the Python variant with the same free 0.25 tier; metadata still says " "python."),
                 dataset=TASKTROVE_INPUT,
                 daytona_snapshot_count=1,
@@ -372,7 +360,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="ci-workflow",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=9930,
                 notes=("Instruction lists every job and step verbatim; workflow is never executed. " "Transcription."),
                 dataset=TASKTROVE_INPUT,
                 daytona_snapshot_count=1,
@@ -391,7 +378,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="unit-test-gen",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=1194,
                 notes=(
                     "All 10 sampled shipped Java oracles failed because Maven could not resolve its "
                     "plugins offline. Recovering the source requires rebuilding the Java grading "
@@ -414,7 +400,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="unit-test-gen",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=447,
                 notes="20% of sampled tasks contain unconditional fail() stubs the verifier restores.",
                 dataset=TASKTROVE_INPUT,
                 daytona_snapshot_count=1,
@@ -433,7 +418,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="code-generation",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=3121,
                 notes=(
                     "LLM-synthesized stub-filling toys (TypeScript formatter shim, Flask hello page). " "Kata-grade."
                 ),
@@ -454,7 +438,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="unit-test-gen",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=7878,
                 notes=(
                     "Tests are lifted from real repositories with the repository stripped: sampled tasks "
                     "include headers and data files that do not exist in the image, and one pastes the "
@@ -477,7 +460,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="tool-use",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=587,
                 notes=(
                     "587 rows of gpt-5-mini-written per-task test scripts whose instructions describe "
                     "containers that do not exist."
@@ -499,7 +481,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="unit-test-gen",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=2275,
                 notes=(
                     "Tests import packages from the original repository (bridgr/internal/..., gosnowflake "
                     "internals) that are not in the task, so most tasks are unsolvable as specified."
@@ -521,7 +502,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="unit-test-gen",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=424,
                 notes="Spy-call contracts against a 90-package global npm image; 424 rows.",
                 dataset=TASKTROVE_INPUT,
                 daytona_snapshot_count=1,
@@ -540,7 +520,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="unit-test-gen",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=843,
                 notes=(
                     "JUnit grading is real but every instruction cites a test path that does not exist "
                     "and scan-class-path counts any test class."
@@ -562,7 +541,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="unit-test-gen",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=462,
                 notes="Fail-open exit paths, regex class discovery, 462 rows.",
                 dataset=TASKTROVE_INPUT,
                 daytona_snapshot_count=1,
@@ -581,7 +559,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="unit-test-gen",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=1782,
                 notes=(
                     "Stripped-repository pytest tasks without shipped oracles. Two of 10 sampled empty "
                     "and trivial checks timed out, and sampled tests include truthiness-only assertions "
@@ -604,7 +581,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="unit-test-gen",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=8860,
                 notes=(
                     "Real Ruby test files but gems are never installed and some tasks are unsolvable "
                     "offline. Bake gems and drop tasks that fail the oracle gate."
@@ -626,7 +602,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="llm-judge-freeform",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=4096,
                 notes=(
                     "Judge-only over a bundle of every file under /app collected by tests/"
                     "collect_submission.py; the judge mode grades one answer file, so the bundle shape "
@@ -649,7 +624,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="unit-test-gen",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=2858,
                 notes=(
                     "Four of 10 sampled trivial submissions received full credit because the codereval "
                     "slice tests a local mock rather than the solution."
@@ -671,7 +645,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="unit-test-gen",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=2859,
                 notes=(
                     "Mixed verifier shapes: eight of 10 sampled empty and trivial checks timed out; the "
                     "source also contains content-free crosscodeeval slices and syntactically invalid "
@@ -694,7 +667,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="unit-test-gen",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=2848,
                 notes=(
                     "All 10 sampled empty and trivial checks timed out, and prior inspection found import-"
                     "only test files in three of 10 tasks."
@@ -716,7 +688,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="tool-use",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=9579,
                 notes=(
                     "Predict-the-next-call from a frozen transcript with exact key-set match. The only "
                     "tool-call data here; rewrite into executable mock-tool envs built from the "
@@ -739,7 +710,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="prompt-injection",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=1272,
                 notes=(
                     "Five of five reviewed rows use the same negative-only checker, which rewards a "
                     "generic reply or unrelated action without validating the required safe continuation."
@@ -761,7 +731,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="tool-use",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=1541,
                 notes="No repo in the container; a 9B judge rates one predicted next action.",
                 dataset=TASKTROVE_INPUT,
                 daytona_snapshot_count=1,
@@ -780,7 +749,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=468,
                 notes=(
                     "Deterministic gate before the judge uses 31 constraint ids outside the IFEval "
                     "registry (tables, heading depth, numbered lists, unique words, ...); only 328 of "
@@ -803,7 +771,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=21660,
                 notes=(
                     "Persona is NVIDIA's; judge-only. Rewrite with our identity and deterministic name/"
                     "language checks, or skip."
@@ -825,7 +792,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=1000,
                 notes="Asks an LLM judge to count exactly five spelling errors.",
                 dataset=TASKTROVE_INPUT,
                 daytona_snapshot_count=1,
@@ -844,7 +810,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=9033,
                 notes="Grades presence of literal marker substrings; never checks the cited content.",
                 dataset=TASKTROVE_INPUT,
                 daytona_snapshot_count=1,
@@ -863,7 +828,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=8869,
                 notes="Counts markdown tables and bullets; no content check.",
                 dataset=TASKTROVE_INPUT,
                 daytona_snapshot_count=1,
@@ -882,7 +846,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=1982,
                 notes="Required literal format contradicts the demonstrated turns; judge-only.",
                 dataset=TASKTROVE_INPUT,
                 daytona_snapshot_count=1,
@@ -901,7 +864,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=1000,
                 notes="Gate matches against a deliberately broken synthetic reference; then judge.",
                 dataset=TASKTROVE_INPUT,
                 daytona_snapshot_count=1,
@@ -920,7 +882,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="qa-short-answer",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=2915,
                 notes=(
                     "Promises web search but ships no tool. Worth rewriting as a real search-tool env; "
                     "otherwise it is a 3k duplicate of mcqa."
@@ -942,7 +903,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="math-answer",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=5232,
                 notes=(
                     "Instruction asks for ((answer)), verifier greps boxed or last number; SMILES tasks "
                     "with no RDKit. Fix format contract and install cheminformatics."
@@ -964,7 +924,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="math-answer",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=5291,
                 notes=(
                     "Instruction refers to tools that do not exist and only the last number is graded. "
                     "Ground-truth expression tree is present, so rewrite with a calculator tool and grade "
@@ -987,7 +946,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="llm-judge-freeform",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=1050,
                 notes="Single subjective criterion with 'Expected answer: YES' embedded in the judge prompt.",
                 dataset=TASKTROVE_INPUT,
                 daytona_snapshot_count=1,
@@ -1006,7 +964,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="qa-short-answer",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=3150,
                 notes=(
                     "Abstention is never rewarded so the framing is dead, reference leaks into judge "
                     "text, and it duplicates openqa."
@@ -1028,7 +985,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=1010,
                 notes=(
                     "Deterministic gate before the judge uses 31 constraint ids outside the IFEval "
                     "registry (tables, heading depth, numbered lists, unique words, ...); only 328 of "
@@ -1051,7 +1007,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="swe-repo",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=11730,
                 notes=(
                     "No FAIL_TO_PASS ids: the v7 verifier scores whichever tests its custom pytest guard "
                     "plugin saw execute, and the repository is cloned by a root-level setup script at "
@@ -1074,7 +1029,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="swe-repo",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=2574,
                 notes=(
                     "Grades by overlap between test_info.json and expected_output_json rather than by "
                     "pytest node id; not the trusted-paths shape the swe converters handle."
@@ -1096,7 +1050,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="swe-repo",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=2428,
                 notes=(
                     "Image ships no repository: the instruction clones it and runs make init at agent "
                     "time, and the old grader pip-installed requirements again at grading time. Sampled "
@@ -1119,7 +1072,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="tool-use",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=4048,
                 notes=(
                     "Good design (offline tool service) but the CLI script embeds the gold calls and "
                     "answer, and the prompt states the conclusion. Move the fixture behind a server and "
@@ -1142,7 +1094,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="math-answer",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=9998,
                 notes="Easy SFT persona math, gold in plaintext, carries the terminal-bench canary.",
                 dataset=TASKTROVE_INPUT,
                 daytona_snapshot_count=1,
@@ -1182,7 +1133,6 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 family="competitive-programming",
                 tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=15165,
                 notes=(
                     "Only test is the example shown in the prompt. Oracle solutions exist, so generate "
                     "hidden cases by fuzzing inputs through the oracle."

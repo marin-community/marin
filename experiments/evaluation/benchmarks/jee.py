@@ -39,7 +39,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 origin=SourceOrigin.EVALCHEMY,
                 family="engineering-exam",
                 tags=("eval", "source:evalchemy", "single-turn", "benchmark"),
-                count=515,
             ),
             config=EvaluationCorpusRecipe(
                 recipe=CurationRecipe(
@@ -66,7 +65,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                     metrics=(Metric(name="accuracy", kind=MetricKind.CONTINUOUS, higher_is_better=True),),
                     primary_metric="accuracy",
                     summary=SummaryKind.MEAN,
-                    expected_population=515,
                 ),
                 item_builder=jee_item,
             ),

@@ -52,7 +52,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.MARIN,
                 family=FAMILY,
                 tags=("eval", "single-turn", "tool-calling", "reasoning-markup", "pi", "bixbench", "bfcl"),
-                count=328,
                 notes="One prefix per benchmark task; prefixes stop at pi's first compaction and 12,288 prompt tokens.",
             ),
             config=CurationRecipe(

@@ -187,7 +187,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="Lean kernel replay",
                 family="math-proof",
                 tags=("eval", "lean", "theorem-proving", "single-turn", "benchmark", "license:apache-2.0"),
-                count=367,
                 notes="Audited ProofNet statements for Lean and Mathlib v4.34; proofs are not public.",
             ),
             config=CurationRecipe(

@@ -230,7 +230,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.TASKTROVE,
                 family="competitive-programming",
                 tags=("agentic", "multi-turn", "language:python"),
-                count=8728,
                 notes="Hidden test_data.json, only the first case is shown. Exact-line compare; fine.",
                 task_format=TaskFormat.TASKCOMPENDIUM,
             ),
@@ -249,7 +248,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.TASKTROVE,
                 family="competitive-programming",
                 tags=("agentic", "multi-turn", "language:python"),
-                count=10000,
                 notes=(
                     "Keep rows with at least 5 test files; drop the zero-test fallback (currently full "
                     "credit for not crashing)."
@@ -272,7 +270,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.TASKTROVE,
                 family="competitive-programming",
                 tags=("agentic", "multi-turn", "language:python"),
-                count=15713,
                 notes="50 hidden stdin/stdout cases per task. Best competitive source in the corpus.",
                 task_format=TaskFormat.TASKCOMPENDIUM,
             ),
@@ -293,7 +290,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.TASKTROVE,
                 family="stdin-stdout",
                 tags=("agentic", "multi-turn", "language:python"),
-                count=10000,
                 notes=(
                     "Hidden cases plus oracle. Filter to tasks with at least 5 cases and add tolerance-"
                     "aware compare where the prompt promises one."

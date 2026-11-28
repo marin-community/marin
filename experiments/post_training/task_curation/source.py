@@ -132,10 +132,8 @@ class SourceInfo:
     ``<origin>:<upstream_dataset>[/<subset>][@<variant>]`` and
     ``<upstream_name> · <subset> · <variant>``. Stored records written under
     historical IDs resolve through the alias table where they are read, never
-    at authoring. ``count`` is the number of selected input rows at the dataset
-    revision, before conversion or curation. Leave it unknown unless the
-    pinned payload or a complete manifest establishes it. A sample size is not
-    a source count.
+    at authoring. The source declares no row count. Catalog publication may
+    use a COMPLETE attempt's count or carry the prior row's count at the same pin and recipe.
 
     ``dataset`` identifies inventory entries without a configuration. Runnable
     sources expose their configured pinned input directly. Tags describe task type,
@@ -170,7 +168,6 @@ class SourceInfo:
     """The stage-0 license resolution this source's ingest and admission rest on."""
     family: str = ""
     tags: tuple[str, ...] = ()
-    count: int | None = None
     notes: str = ""
     dataset: SourceReference | None = None
     independent_qc: IndependentQC | None = None
@@ -306,7 +303,6 @@ class RlDataSource[ConfigT: CatalogConfig]:
             origin=info.origin,
             family=info.family,
             tags=list(tags),
-            task_count=info.count,
             notes=info.notes,
             dataset_id=dataset.name if dataset else None,
             dataset_revision=dataset.revision if dataset else None,

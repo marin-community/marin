@@ -52,7 +52,6 @@ MEDMCQA_SOURCE = HfSource(
     ("data/validation-00000-of-00001.parquet",),
     SourceFormat.PARQUET,
 )
-MEDMCQA_POPULATION = 4183
 MEDMCQA_COT_VERSION = "2026.11.24"
 
 
@@ -68,7 +67,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 ("pubmed_qa_labeled_fold0_source/test/0000.parquet",),
                 SourceFormat.PARQUET,
             ),
-            population=500,
             template=pubmedqa_template(),
             metrics=(raw,),
         ),
@@ -76,7 +74,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             name="medmcqa",
             benchmark="medmcqa",
             source=MEDMCQA_SOURCE,
-            population=MEDMCQA_POPULATION,
             template=medmcqa_template(),
             metrics=(raw,),
         ),
@@ -100,7 +97,6 @@ def chat_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
         metrics=(Metrics.ACCURACY,),
         primary_metric="accuracy",
         summary=SummaryKind.MEAN,
-        expected_population=MEDMCQA_POPULATION,
     )
     return [
         evaluation_source(

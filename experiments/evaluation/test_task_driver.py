@@ -103,7 +103,6 @@ def recovery_corpora(tmp_path):
                     metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
                     primary_metric="accuracy",
                     summary=SummaryKind.MEAN,
-                    expected_population=2,
                 )
                 output = tmp_path / (name + "-published")
                 publish_evaluation_corpus(recipe, protocol, chat_item, context, str(source), str(output))

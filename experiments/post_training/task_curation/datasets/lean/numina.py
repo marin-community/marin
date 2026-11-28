@@ -227,7 +227,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="Lean kernel replay",
                 family="math-proof",
                 tags=("lean", "theorem-proving", "single-turn", "license:apache-2.0"),
-                count=9475,
                 notes="Competition problems with human Lean statements and proofs; the proofs are golden controls.",
             ),
             config=CurationRecipe(

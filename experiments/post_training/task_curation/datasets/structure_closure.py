@@ -53,7 +53,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.OPENATHENA,
                 family="structural",
                 tags=("rlvr", "single-turn", "structural-closure", "assistant-prefill"),
-                count=count,
                 notes="Text assistant prefills; validation is a reused development panel.",
             ),
             config=CurationRecipe(

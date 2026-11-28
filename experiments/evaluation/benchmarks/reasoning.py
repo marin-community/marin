@@ -61,7 +61,6 @@ def completion_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 ("data/test-00000-of-00001.parquet",),
                 SourceFormat.PARQUET,
             ),
-            population=230,
             template=agieval_template(),
             metrics=(raw, normalized),
         ),
@@ -69,18 +68,16 @@ def completion_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             name="leaderboard_mmlu_pro",
             benchmark="leaderboard_mmlu_pro",
             source=HfSource("TIGER-Lab/MMLU-Pro", MMLU_PRO_REVISION, (MMLU_TEST_FILE,), SourceFormat.PARQUET),
-            population=12032,
             template=mmlu_pro_likelihood_template(MMLU_VALIDATION_FILE),
             metrics=(raw,),
         ),
     ]
-    for subject, population in (("diamond", 198), ("main", 448), ("extended", 546)):
+    for subject in ("diamond", "main", "extended"):
         result.append(
             multiple_choice_evaluation(
                 name="leaderboard_gpqa-" + subject,
                 benchmark="leaderboard_gpqa",
                 source=HfSource("Idavidrein/gpqa", GPQA_REVISION, ("gpqa_" + subject + ".csv",), SourceFormat.CSV),
-                population=population,
                 template=gpqa_likelihood_template(),
                 metrics=(normalized,),
                 subject=subject,
@@ -90,7 +87,6 @@ def completion_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
         if not key.startswith(("bbh/", "bbh_cot/")):
             continue
         variant, subject = key.split("/", 1)
-        population = {"causal_judgement": 187, "penguins_in_a_table": 146, "snarks": 178}.get(subject, 250)
         source = HfSource(
             "SaylorTwift/bbh",
             BBH_REVISION,
@@ -103,7 +99,6 @@ def completion_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                     name="leaderboard_bbh-" + subject,
                     benchmark="leaderboard_bbh",
                     source=source,
-                    population=population,
                     template=bbh_likelihood_template(subject),
                     metrics=(normalized,),
                     subject=subject,
@@ -115,7 +110,6 @@ def completion_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 name="bbh_cot_fewshot-" + subject,
                 benchmark="bbh_cot_fewshot",
                 source=source,
-                population=population,
                 template=bbh_cot_template(subject),
                 metrics=("exact_match,get-answer",),
                 sampling=Sampling(
@@ -139,7 +133,6 @@ def choice_dataset(
     benchmark: str,
     source: HfSource,
     converter: Converter,
-    population: int,
     trials: int,
     inputs: dict[str, HfSource],
 ) -> RlDataSource[EvaluationCorpusRecipe]:
@@ -152,7 +145,6 @@ def choice_dataset(
             origin=SourceOrigin.EVALCHEMY,
             family="generated-choice",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "reasoning", "benchmark:" + benchmark),
-            count=population,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(
@@ -180,7 +172,6 @@ def choice_dataset(
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
-                expected_population=population,
                 context_window=65536 if benchmark == "MMLUPro" else None,
             ),
             partial(reasoning_item, benchmark=benchmark),
@@ -196,7 +187,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             benchmark="GPQADiamond",
             source=HfSource("Idavidrein/gpqa", GPQA_REVISION, ("gpqa_diamond.csv",), SourceFormat.CSV),
             converter=convert_gpqa,
-            population=198,
             trials=3,
             inputs={},
         ),
@@ -205,7 +195,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             benchmark="MMLUPro",
             source=HfSource("TIGER-Lab/MMLU-Pro", MMLU_PRO_REVISION, (MMLU_TEST_FILE,), SourceFormat.PARQUET),
             converter=convert_mmlu,
-            population=12032,
             trials=1,
             inputs={
                 "fewshot": HfSource(

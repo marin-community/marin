@@ -307,7 +307,7 @@ def test_driver_converts_embeds_and_resumes_without_rereading_raw_inputs(
     assert tasks[0]["matches"]["subjects"][0]["subject_id"] == "D01"
 
 
-def test_publication_adds_declared_inventory_sources_without_placement(tmp_path, description_server):
+def test_publication_drops_unmeasured_inventory_sources_without_placement(tmp_path, description_server):
     curated = tmp_path / "curated"
     (curated / "final").mkdir(parents=True)
     (curated / "manifest.json").write_text(json.dumps({"intended_use": "train", "revision": "fixture-1"}))
@@ -367,7 +367,6 @@ def test_publication_adds_declared_inventory_sources_without_placement(tmp_path,
                         upstream_name="Pointer",
                         build_path="test",
                         origin=SourceOrigin.MARIN,
-                        count=7,
                     )
                 ).declaration,
                 RlDataSource(
@@ -385,14 +384,12 @@ def test_publication_adds_declared_inventory_sources_without_placement(tmp_path,
     release = json.loads((Path(built.path) / "release.json").read_text())
     rows = {row["source_id"]: row for row in release["sources"]}
     assert rows["Marin:source"]["basis"] == "matched"
-    assert rows["Marin:release"]["basis"] == "declared"
-    assert rows["Marin:release"]["task_count"] == 7
-    assert rows["Marin:release"]["intended_use"] is None
+    assert "Marin:release" not in rows
     assert "Pointer:no-count" not in rows
     assert release["task_count"] == 1
 
 
-def test_corpus_resume_refreshes_inventory_and_declares_pointer_sources(tmp_path, monkeypatch, description_server):
+def test_corpus_resume_refreshes_inventory_and_drops_unmeasured_pointers(tmp_path, monkeypatch, description_server):
     monkeypatch.setattr(
         "experiments.post_training.task_curation.driver.load_harrier",
         lambda config: EmbeddingEndpoint(str(tmp_path / "embeddings.jsonl"), config.dimensions),
@@ -447,6 +444,4 @@ def test_corpus_resume_refreshes_inventory_and_declares_pointer_sources(tmp_path
     releases = [json.loads(path.read_text()) for path in (cache / "rl-semantics").glob("publication-*/*/release.json")]
     sources = {row["source_id"]: row for row in max(releases, key=lambda r: len(r["sources"]))["sources"]}
     assert sources["HuggingFaceH4:aime24"]["basis"] == "matched"
-    declared = [row for row in sources.values() if row["basis"] == "declared"]
-    assert declared and all(row["task_count"] > 0 and row["intended_use"] is None for row in declared)
-    assert any(row["source_id"] == "TaskTrove:smartie-calibforge-admitted" for row in declared)
+    assert "TaskTrove:smartie-calibforge-admitted" not in sources

@@ -115,7 +115,7 @@ function details(row) {
     ['Independent QC', row.independent_qc ? `${labels[row.independent_qc.verdict]}: ${row.independent_qc.admitted === null ? `${row.independent_qc.reviewed} reviewed` : `${row.independent_qc.admitted} of ${row.independent_qc.reviewed} reviewed`} — ${row.independent_qc.method}` : null],
     ['Daytona safe', daytonaLabels[row.daytona_safety]],
     ['Top curriculum area', row.coverage?.top_area?.name],
-    ['Input rows', row.task_count], ['Source ID', row.id], ['Dataset revision', row.dataset_revision],
+    ['Input rows', row.task_count ?? 'not measured'], ['Source ID', row.id], ['Dataset revision', row.dataset_revision],
     ['Pipeline', row.pipeline?.name], ['Curation', row.curation?.status],
     ['Assessment model', row.assessment.model?.model], ['Assessment note', row.assessment.reason],
     ['Admission counts', row.curation?.admission_counts], ['Control status', controls?.status], ['Control counts', controls?.counts],

@@ -119,8 +119,10 @@ def create_api(services: AppletServices) -> FastAPI:
                 text(
                     """
                 SELECT s.*, a.scope, a.model, summary.cohorts,
-                    COALESCE((s.curation->>'raw_population_count')::bigint,
-                        (s.declaration->>'task_count')::bigint) AS task_count
+                    -- The published row's measured task count: the measurement a COMPLETE
+                    -- attempt took at this row's pin. Rows published before the measured
+                    -- count carry null, and the interface reports them as not measured.
+                    s.measured_task_count AS task_count
                 FROM atlas_sources s
                 LEFT JOIN atlas_assessments a
                     ON a.load_id = s.load_id AND a.pipeline_key = s.assessment_key

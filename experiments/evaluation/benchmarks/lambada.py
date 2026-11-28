@@ -40,7 +40,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
             origin=SourceOrigin.EVALCHEMY,
             family="likelihood-continuation",
             tags=("eval", "source:evalchemy", "benchmark"),
-            count=5153,
         ),
         config=EvaluationCorpusRecipe(
             recipe=CurationRecipe(
@@ -68,7 +67,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
                 ),
                 primary_metric="acc,none",
                 summary=SummaryKind.PERPLEXITY,
-                expected_population=5153,
                 likelihood_metrics=(
                     LikelihoodMetric(
                         name="acc,none", normalization=LikelihoodNormalization.RAW, scoring="greedy_accuracy"

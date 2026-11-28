@@ -48,7 +48,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
         ),
         primary_metric=MACRO_METRIC,
         summary=SummaryKind.WEIGHTED_MEAN,
-        expected_population=5200,
         context_policy=ContextPolicy(output_fit=OutputFit.REQUIRE, context_reserve=0),
     )
     source = evaluation_source(

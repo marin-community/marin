@@ -15,9 +15,21 @@ from pathlib import Path
 import httpx
 import openai
 import pytest
-from evalrecords.records import JudgeIdentity, TaskEvidence
+from evalrecords.records import (
+    CuratedRef,
+    CuratedSettings,
+    EvalRef,
+    EvalRunRecord,
+    EvalTaskRef,
+    HardwareRef,
+    JudgeIdentity,
+    ModelRef,
+    Provenance,
+    RunStatus,
+    TaskEvidence,
+)
 from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT
-from evalrecords.rollout_results import terminal_attempts
+from evalrecords.rollout_results import score_curated_record, terminal_attempts
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 from finestore.reader import ReadView
 from finestore.store import DataStore
@@ -181,7 +193,6 @@ def published_corpora(tmp_path):
                     metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
                     primary_metric="accuracy",
                     summary=SummaryKind.MEAN,
-                    expected_population=3,
                 )
                 output = tmp_path / (benchmark + "-published")
                 publish_evaluation_corpus(recipe, protocol, chat_item, context, str(source), str(output))
@@ -550,7 +561,6 @@ def mixed_corpora(tmp_path):
                     ),
                     primary_metric=names[0],
                     summary=SummaryKind.MEAN,
-                    expected_population=len(documents),
                     likelihood_metrics=likelihoods,
                 )
                 output = tmp_path / (benchmark + "-mixed-corpus")
@@ -611,7 +621,6 @@ def publish_policy_corpus(tmp_path, rows, converter=convert_mixed_row):
         metrics=tuple(Metric(name=name, kind=MetricKind.BINARY, higher_is_better=True) for name in names),
         primary_metric=names[0],
         summary=SummaryKind.MEAN,
-        expected_population=len(rows),
     )
     output = str(tmp_path / "corpus")
     client = LocalClient()
@@ -1223,6 +1232,47 @@ async def test_generation_failure_archives_provider_body_and_resumes_only_failed
 
 
 @pytest.mark.asyncio
+async def test_scoring_upgrades_a_schema_3_run_descriptor(tmp_path, published_corpora, run_config):
+    async def model(_request):
+        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+    output = str(tmp_path / "schema-3")
+    await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
+
+    # Rewind the run descriptor to its pre-measured shape: schema 3 with a hand-written population.
+    descriptor = json.loads(ReadView(output).read_blob(RUN_OBJECT))
+    for entry in descriptor["datasets"]:
+        entry["protocol"] = {**entry["protocol"], "schema_version": 3, "expected_population": 3}
+    with DataStore.open(output) as store:
+        store.write_object(RUN_OBJECT, json.dumps(descriptor, allow_nan=False).encode())
+
+    record = EvalRunRecord(
+        run_id="20261125-schema3-rollout",
+        group_id="20261125-schema3-rollout",
+        created_at="2026-11-25T18:00:00+00:00",
+        user="fixture",
+        model=ModelRef(name="fixture", location="memory://fixture-model", backend="fixture"),
+        evaluation=EvalRef(
+            name="colors",
+            mechanism="curated",
+            tasks=(EvalTaskRef(name="colors", num_fewshot=0),),
+            curated=CuratedRef(datasets=("colors", "paints"), settings=CuratedSettings()),
+        ),
+        hardware=HardwareRef(platform="cpu", accelerator="cpu", region_or_cluster="local"),
+        status=RunStatus.SUCCEEDED,
+        error=None,
+        results_path=output,
+        metrics={},
+        jobs={},
+        log_tails={},
+        provenance=Provenance(git_sha="abc123", launch_host="dev-box"),
+    )
+    scored = score_curated_record(record)
+    assert set(scored.metrics) == {"colors", "paints"}
+    assert scored.evaluation.curated.datasets == ("colors", "paints")
+
+
+@pytest.mark.asyncio
 async def test_model_rendering_overrides_preserve_published_corpus_identity(tmp_path, mixed_corpora, run_config):
     corpus = next(root for root in mixed_corpora if evaluation_protocol(root)[0].operation == "chat_generation")
     published, _ = evaluation_protocol(corpus)
@@ -1315,7 +1365,6 @@ def publish_episodes(tmp_path, questions, agent, convert=convert_episode_row):
         metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
         primary_metric="accuracy",
         summary=SummaryKind.MEAN,
-        expected_population=len(questions),
     )
     output = tmp_path / "episodes-published"
     client = LocalClient()
@@ -1643,7 +1692,6 @@ def publish_colors_corpus(tmp_path, name, *, converter=convert, questions=COLORS
         metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
         primary_metric="accuracy",
         summary=SummaryKind.MEAN,
-        expected_population=len(questions),
     )
     output = tmp_path / (name + "-corpus")
     client = LocalClient()

@@ -163,7 +163,6 @@ def image_lock(recipe: str) -> dict[str, str]:
 def harbor_protocol(
     benchmark: str,
     version: str,
-    expected_population: int,
     *,
     max_output_tokens: int,
     requires_judge: bool,
@@ -186,7 +185,6 @@ def harbor_protocol(
         metrics=(REWARD,),
         primary_metric=REWARD.name,
         summary=SummaryKind.MEAN,
-        expected_population=expected_population,
     )
 
 
@@ -207,7 +205,6 @@ class HarborDataset:
     title: str
     source: PackageSource
     version: str
-    count: int
     rule: RuleFor = package_tests
     requires_judge: bool = False
     attempt_timeout: float = ATTEMPT_TIMEOUT
@@ -282,7 +279,6 @@ def harbor_source(
             origin=SourceOrigin.HARBOR,
             family="agentic",
             tags=("eval", "source:harbor", "agentic", "multi-turn", "benchmark"),
-            count=dataset.count,
             task_format=TaskFormat.HARBOR,
         ),
         config=EvaluationCorpusRecipe(
@@ -297,7 +293,6 @@ def harbor_source(
             harbor_protocol(
                 dataset.benchmark,
                 dataset.version,
-                dataset.count,
                 max_output_tokens=max_output_tokens,
                 requires_judge=dataset.requires_judge,
                 trials=trials,

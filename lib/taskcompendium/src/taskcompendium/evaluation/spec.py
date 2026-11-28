@@ -12,7 +12,7 @@ from shellbox.machine import NetworkPolicy
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ConversationInput
 
-EVALUATION_SCHEMA_VERSION = 3
+EVALUATION_SCHEMA_VERSION = 4
 type ResponseSelection = Literal[
     "combine", "final_only", "final_or_complete_reasoning", "final_or_complete_boxed_reasoning", "provider_response"
 ]
@@ -194,7 +194,7 @@ class CohortOrder(StrEnum):
 
     ``SHUFFLED`` sorts rows by a hash of their source row, so a limit selects a fixed uniform sample. The hash
     keys on the row's file position, so the sample is fixed per corpus revision: an upstream insert or delete
-    reshuffles which rows a limit selects, and also changes the protocol's expected population.
+    reshuffles which rows a limit selects.
     """
 
     SOURCE = "source"
@@ -347,7 +347,7 @@ class LikelihoodMetric(EvaluationModel):
 class EvaluationProtocol(EvaluationModel):
     """The immutable benchmark settings needed to execute and interpret individual attempts."""
 
-    schema_version: Literal[3] = EVALUATION_SCHEMA_VERSION
+    schema_version: Literal[4] = EVALUATION_SCHEMA_VERSION
     benchmark: str
     version: str
     operation: OperationKind
@@ -358,7 +358,6 @@ class EvaluationProtocol(EvaluationModel):
     num_fewshot: int | None = Field(default=None, ge=0)
     requires_judge: bool = False
     summary: SummaryKind
-    expected_population: int = Field(gt=0)
     context_window: int | None = Field(default=None, gt=0)
     cohort: CohortPolicy = Field(default_factory=CohortPolicy)
     context_policy: ContextPolicy | None = None

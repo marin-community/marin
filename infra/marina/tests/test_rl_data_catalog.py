@@ -98,7 +98,6 @@ def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False,
         origin="native",
         family="math",
         tags=[],
-        task_count=3,
         notes="",
         dataset_id=None,
         dataset_revision=None,
@@ -172,6 +171,7 @@ def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False,
             latest_attempt_status="complete",
             reason=None,
             curation=curation,
+            measured_task_count=3,
         )
         with store.transaction() as tx:
             tx.table(ASSESSMENTS).add(assessment.model_dump(mode="json"))
@@ -195,6 +195,75 @@ class CatalogServices:
         return self.database_engine
 
 
+def count_declaration(source_id: str) -> SourceDeclaration:
+    return SourceDeclaration(
+        id=source_id,
+        name=source_id,
+        display_name=source_id.title(),
+        origin="native",
+        family="count",
+        tags=[],
+        notes="",
+        dataset_id=None,
+        dataset_revision=None,
+        url=None,
+        type="RLVR",
+        turns="Single-turn",
+        is_benchmark=False,
+        kind="Dataset",
+        status="Available",
+        pipeline=None,
+    )
+
+
+def publish_count_rows(root: str, rows: list[SnapshotSource]) -> None:
+    with DataStore.open(root, writer_id="counts") as store:
+        register_catalog(store)
+        store.flush()
+        with store.transaction() as tx:
+            tx.table(SNAPSHOTS).add(
+                CatalogSnapshot(
+                    snapshot_id="counts", created_at="2026-10-13T00:00:00Z", source_count=len(rows)
+                ).model_dump()
+            )
+            tx.table(INVENTORY).extend(row.model_dump(mode="json") for row in rows)
+            tx.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id="counts").model_dump())
+
+
+def test_source_task_count_is_the_published_measurement(catalog_database, catalog_query, tmp_path):
+    """A published row's task count is the measurement publication wrote; an unmeasured
+    source publishes null and the interface reports it as not measured."""
+    publish_count_rows(
+        str(tmp_path / "catalog"),
+        [
+            SnapshotSource(
+                snapshot_id="counts",
+                id="measured",
+                declaration=count_declaration("measured"),
+                measured_task_count=7,
+                assessment_key=None,
+                latest_attempt_key=None,
+                latest_attempt_status="skipped",
+                reason=None,
+            ),
+            SnapshotSource(
+                snapshot_id="counts",
+                id="unmeasured",
+                declaration=count_declaration("unmeasured"),
+                assessment_key=None,
+                latest_attempt_key=None,
+                latest_attempt_status="skipped",
+                reason=None,
+            ),
+        ],
+    )
+    load_catalog(CurationCatalog(str(tmp_path / "catalog")), catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        sources = {row["id"]: row for row in client.get("/sources").json()["sources"]}
+        assert sources["measured"]["task_count"] == 7
+        assert sources["unmeasured"]["task_count"] is None
+
+
 def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_context") -> Path:
     declarations = [
         SourceDeclaration(
@@ -204,7 +273,6 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
             origin="fixture",
             family="Numbers",
             tags=[],
-            task_count=None,
             notes="",
             dataset_id=None,
             dataset_revision=None,

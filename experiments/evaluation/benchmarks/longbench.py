@@ -22,7 +22,6 @@ from taskcompendium.importers.evalchemy.grader import scorer_revision
 from taskcompendium.importers.longbench_v2 import (
     LONGBENCH_V2_LENGTH_LABEL,
     LONGBENCH_V2_LENGTHS,
-    LONGBENCH_V2_POPULATION,
     LONGBENCH_V2_TOKEN_BUDGETS,
     convert_longbench_v2,
     longbench_v2_item,
@@ -78,7 +77,6 @@ def longbench_source(protocol_name: str, sampling: Sampling, seed: int | None) -
             build_path="Checkpoint",
             family="long-context",
             tags=("eval", "source:longbench-v2", "benchmark", "long-context", "multiple-choice"),
-            count=LONGBENCH_V2_POPULATION,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(
@@ -105,7 +103,6 @@ def longbench_source(protocol_name: str, sampling: Sampling, seed: int | None) -
                 metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
-                expected_population=LONGBENCH_V2_POPULATION,
                 cohort=LONGBENCH_V2_COHORT,
             ),
             partial(longbench_v2_item, budgets=LONGBENCH_V2_TOKEN_BUDGETS),

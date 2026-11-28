@@ -35,7 +35,7 @@ machine with a pinned Python environment.
 | --- | --- |
 | Prompt rendering, row conversion, item builder | `lib/taskcompendium/src/taskcompendium/importers/evalchemy/<family>.py` |
 | New answer scorer | `lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/`, registered in `scorers/main.py` and `importers/evalchemy/grader.py` |
-| Source pin, population, protocol | `experiments/evaluation/benchmarks/<family>.py`, exposing `benchmarks()` |
+| Source pin, protocol | `experiments/evaluation/benchmarks/<family>.py`, exposing `benchmarks()` |
 | Catalog registration | `experiments/evaluation/catalog.py` |
 | Non-default selections, judge bindings, suites | `experiments/evaluation/configs/evaluations.yaml` |
 | Prompt and scorer tests | `lib/taskcompendium/tests/`: `test_checkpoint_harness.py` for likelihood templates, `test_evalchemy_<family>.py` for converters and scorers |
@@ -74,9 +74,9 @@ print(info.sha, [file.rfilename for file in info.siblings])
 
 Pin the exact files and split the reference evaluates. A dataset that ships
 only a loading script usually has Parquet exports on the `refs/convert/parquet`
-revision; pin that revision's commit. Set `expected_population` to the row
-count of the pinned files, not a count from a paper; publication fails when the
-two differ.
+revision; pin that revision's commit. Publication counts the rows conversion
+processes; selectors and custom readers can change that population. A hand
+count or a paper's stated count never enters the declaration.
 
 Record the license in the benchmark module docstring. Do not commit benchmark
 questions or answers to the repository; tests use synthetic rows.
@@ -172,7 +172,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 ("pubmed_qa_labeled_fold0_source/test/0000.parquet",),
                 SourceFormat.PARQUET,
             ),
-            population=500,
             template=pubmedqa_template(),
             metrics=(LikelihoodMetric(name="acc,none", normalization=LikelihoodNormalization.RAW),),
         )
@@ -204,7 +203,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
         metrics=(Metrics.ACCURACY,),
         primary_metric="accuracy",
         summary=SummaryKind.MEAN,
-        expected_population=MMLU_REDUX_POPULATION,
     )
     source = evaluation_source(
         name="mmlu-redux",
@@ -232,7 +230,6 @@ Protocol fields that need a deliberate choice:
 | `trials` | `TrialPolicy(count=1, seed=None)` unless the reference averages repeated samples. |
 | `metrics`, `primary_metric` | The reference's headline metric first. Use `Metrics.ACCURACY` for binary correctness. |
 | `summary` | `MEAN` for most benchmarks; `CLASSIFICATION` for judged correct, incorrect or abstained answers; `WEIGHTED_MEAN` when graders return weights. |
-| `expected_population` | The row count of the pinned files. |
 
 Register the module in `experiments/evaluation/catalog.py` by adding it to the
 imported families and the tuple in `evaluation_benchmarks()`. The benchmark is

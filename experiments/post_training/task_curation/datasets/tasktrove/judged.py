@@ -212,7 +212,6 @@ SOURCES = (
             origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
             tags=("agentic", "multi-turn"),
-            count=10000,
             notes=(
                 "Judge-only code review with a four-criterion rubric and no reference; the rubric "
                 "ships under tests/, which the agent never sees. Kept as rubric-only (tag no-"
@@ -234,7 +233,6 @@ SOURCES = (
             origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
             tags=("agentic", "multi-turn"),
-            count=10000,
             notes=(
                 "Judge-only over code that is never run, four-criterion rubric, no reference. Kept as "
                 "rubric-only (tag no-reference)."
@@ -255,7 +253,6 @@ SOURCES = (
             origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
             tags=("agentic", "multi-turn"),
-            count=89066,
             notes=(
                 "Judge-only against a two-line safety principle, no reference. Kept as rubric-only "
                 "(tag no-reference): the principle is specific to each prompt (refuse the harmful "
@@ -277,7 +274,6 @@ SOURCES = (
             origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
             tags=("agentic", "multi-turn"),
-            count=10000,
             notes=(
                 "Judge-only Stack Overflow answers, four-criterion rubric, no reference. Kept as "
                 "rubric-only (tag no-reference)."
@@ -298,7 +294,6 @@ SOURCES = (
             origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
             tags=("agentic", "multi-turn"),
-            count=10000,
             notes=(
                 "Judge-only Super User answers, four-criterion rubric, no reference. Kept as rubric-"
                 "only (tag no-reference)."
@@ -319,7 +314,6 @@ SOURCES = (
             origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
             tags=("agentic", "multi-turn"),
-            count=10000,
             notes=(
                 "Judge-only Tezos answers, four-criterion rubric, no reference; the _copyN duplicates "
                 "fall to the dedup step. Kept as rubric-only (tag no-reference)."
@@ -340,7 +334,6 @@ SOURCES = (
             origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
             tags=("agentic", "multi-turn"),
-            count=10000,
             notes=(
                 "Judge-only Unix & Linux answers, four-criterion rubric, no reference. Kept as rubric-"
                 "only (tag no-reference)."
@@ -361,7 +354,6 @@ SOURCES = (
             origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
             tags=("agentic", "multi-turn"),
-            count=10000,
             notes=(
                 "Judge-only over Orca-style instructions, three-criterion rubric, no reference. Kept "
                 "as rubric-only (tag no-reference)."

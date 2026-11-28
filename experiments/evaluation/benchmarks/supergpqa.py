@@ -31,7 +31,6 @@ from experiments.post_training.task_curation.pipeline import HfSource
 
 SUPERGPQA_REVISION = "4430d4458112c7d4497fdcf94d7cc223313d6acf"
 SUPERGPQA_FILE = "SuperGPQA-all.jsonl"
-SUPERGPQA_POPULATION = 26529
 VERSION = "2026.11.19"
 
 
@@ -52,7 +51,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
         metrics=(Metrics.ACCURACY,),
         primary_metric="accuracy",
         summary=SummaryKind.MEAN,
-        expected_population=SUPERGPQA_POPULATION,
         cohort=CohortPolicy(order=CohortOrder.SHUFFLED),
     )
     source = evaluation_source(

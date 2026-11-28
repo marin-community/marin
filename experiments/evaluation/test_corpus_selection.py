@@ -155,7 +155,6 @@ def publish_fixture(tmp_path: Path, benchmark: str, rows: list[dict], *, context
         metrics=(Metric(name=metric_name, kind=MetricKind.CONTINUOUS, higher_is_better=True),),
         primary_metric=metric_name,
         summary=SummaryKind.MEAN,
-        expected_population=len(rows),
         context_window=context_window,
         cohort=cohort,
         context_policy=context_policy,

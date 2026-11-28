@@ -81,7 +81,7 @@ def test_publication_compiles_selected_fewshots_and_retains_duplicate_rows(tmp_p
         else None
     )
     recipe = source_recipe(dataset.recipe, {"fewshot": str(fewshot_root)} if shots else {}, grader)
-    protocol = dataset.protocol.model_copy(update={"expected_population": 2})
+    protocol = dataset.protocol
     client = LocalClient()
     try:
         with ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
@@ -97,9 +97,9 @@ def test_publication_compiles_selected_fewshots_and_retains_duplicate_rows(tmp_p
     finally:
         client.shutdown()
     cases = list(evaluation_cases(str(output)))
-    published_protocol, _ = evaluation_protocol(str(output))
+    published_protocol, published_manifest = evaluation_protocol(str(output))
     assert published_protocol.num_fewshot == shots
-    assert manifest.rows == 2
+    assert published_manifest.rows == manifest.rows == 2
     assert [case.item.source_ordinal for case in cases] == [0, 1]
     assert cases[0].task.id != cases[1].task.id
     for case in cases:
@@ -110,24 +110,27 @@ def test_publication_compiles_selected_fewshots_and_retains_duplicate_rows(tmp_p
         assert context.count("AUXILIARY_SENTINEL") == shots
         assert document["question"].strip() in context
     catalog_root = str(tmp_path / "catalog")
-    declared = replace(source, info=replace(source.info, count=2), config=replace(dataset, protocol=protocol))
+    measured = replace(source, config=replace(dataset, protocol=protocol))
     write_campaign_report(
         str(tmp_path / "campaign.json"),
         CampaignStatus.COMPLETED,
         mode="quick",
-        outcomes=[SourceOutcome(declared.name, str(output), "completed", pipeline_key="fixture")],
+        outcomes=[SourceOutcome(measured.name, str(output), "completed", pipeline_key="fixture")],
         run_id="published-eval",
         started_at="2026-11-05T00:00:00+00:00",
-        source_ids={declared.name: declared.info.id},
+        source_ids={measured.name: measured.info.id},
         execution={},
         catalog_root=catalog_root,
     )
-    snapshot = publish_catalog(catalog_root, "published-eval", [declared])
+    snapshot = publish_catalog(catalog_root, "published-eval", [measured])
     (published,) = CurationCatalog(catalog_root).sources(snapshot.snapshot_id)
     assert published.curation is not None
     assert published.curation.status == "completed"
     assert published.curation.processed_rows == 2
     assert published.curation.raw_population_count == 2
+    # A QUICK run records a SKIPPED assessment, so its measured population stays in the
+    # curation summary while the published measured count stays empty.
+    assert published.measured_task_count is None
     assert published.declaration.type == "eval"
 
 
@@ -156,7 +159,7 @@ def test_generation_selection_preserves_context_derived_or_explicit_budget(tmp_p
         ),
         source=SourceFiles("budget-regression", "1", ("row.jsonl",), SourceFormat.JSONL),
     )
-    protocol = dataset.protocol.model_copy(update={"expected_population": 1})
+    protocol = dataset.protocol
     root = str(tmp_path / "published")
     client = LocalClient()
     try:

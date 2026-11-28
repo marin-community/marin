@@ -96,7 +96,6 @@ def test_python_publication_keeps_tests_private_and_expands_crux_directions(case
         sampling=Sampling(temperature=0, top_p=None, top_k=None, max_tokens=1024, stop=(), chat_template_kwargs={}),
         trials=TrialPolicy(count=1, seed=None),
         summary=SummaryKind.MEAN,
-        expected_population=len(case["rows"]) * (2 if suite == "cruxeval" else 1),
     )
     output = str(tmp_path / "published")
     client = LocalClient()
@@ -120,7 +119,7 @@ def test_python_publication_keeps_tests_private_and_expands_crux_directions(case
         published = list(evaluation_cases(output))
     finally:
         client.shutdown()
-    assert len(published) == protocol.expected_population
+    assert len(published) == len(case["rows"]) * (2 if suite == "cruxeval" else 1)
     if case["suite"] == "cruxeval":
         assert [item.item.groups["direction"] for item in published] == ["input", "output"]
         assert len({item.task.id for item in published}) == 2

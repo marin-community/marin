@@ -23,7 +23,6 @@ from taskcompendium.evaluation.spec import (
 )
 from taskcompendium.importers.evalchemy.grader import scorer_revision
 from taskcompendium.importers.evalchemy.long_context import (
-    MRCR_SOURCE_POPULATION,
     convert_graphwalks,
     convert_mrcr,
     graphwalks_item,
@@ -101,7 +100,6 @@ def mrcr_source(*, name: str, max_context: int) -> RlDataSource[EvaluationCorpus
             origin=SourceOrigin.EVALCHEMY,
             family="long-context",
             tags=("eval", "source:evalchemy", "benchmark", "long-context", "retrieval"),
-            count=MRCR_SOURCE_POPULATION,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(
@@ -132,7 +130,6 @@ def mrcr_source(*, name: str, max_context: int) -> RlDataSource[EvaluationCorpus
                 ),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
-                expected_population=MRCR_SOURCE_POPULATION,
                 context_window=max_context,
                 cohort=MRCR_COHORT,
             ),
@@ -157,7 +154,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 origin=SourceOrigin.EVALCHEMY,
                 family="long-context",
                 tags=("eval", "source:evalchemy", "benchmark", "long-context", "graph"),
-                count=1150,
             ),
             config=EvaluationCorpusRecipe(
                 CurationRecipe(
@@ -192,7 +188,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                     ),
                     primary_metric="f1",
                     summary=SummaryKind.MEAN,
-                    expected_population=1150,
                     cohort=GRAPHWALKS_COHORT,
                     context_policy=GRAPHWALKS_CONTEXT_POLICY,
                 ),

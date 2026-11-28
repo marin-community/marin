@@ -244,7 +244,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.TASKTROVE,
                 family="qa-short-answer",
                 tags=("agentic", "multi-turn"),
-                count=122357,
                 notes=(
                     "Exact gate then reference-based judge. Reference answers are real; needs the judge "
                     "in the new grader."
@@ -263,7 +262,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.TASKTROVE,
                 family="llm-judge-freeform",
                 tags=("agentic", "multi-turn"),
-                count=150644,
                 notes=(
                     "Reference answer plus judge. Move the reference out of the criterion text into a "
                     "data field at conversion."
@@ -299,7 +297,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin=SourceOrigin.TASKTROVE,
                 family="qa-short-answer",
                 tags=("agentic", "multi-turn"),
-                count=616888,
                 notes=(
                     "Held-out MCQA with regex extraction. Drop the trailing-letter fallback at conversion "
                     "and subsample hard: 617k rows is a third of the corpus."

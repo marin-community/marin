@@ -72,7 +72,6 @@ def fixture_source() -> RlDataSource[EvaluationCorpusRecipe]:
             origin=SourceOrigin.MARIN,
             family="test",
             tags=("eval",),
-            count=1,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(
@@ -91,7 +90,6 @@ def fixture_source() -> RlDataSource[EvaluationCorpusRecipe]:
                 metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
-                expected_population=1,
             ),
             chat_item,
         ),
@@ -151,7 +149,7 @@ def test_python_evaluation_artifact_cache_separates_operation_models_and_options
             config=replace(
                 dataset,
                 recipe=recipe,
-                protocol=dataset.protocol.model_copy(update={"expected_population": 1, "operation": operation.kind}),
+                protocol=dataset.protocol.model_copy(update={"operation": operation.kind}),
                 item_builder=partial(python_item, generation=operation),
             ),
         )

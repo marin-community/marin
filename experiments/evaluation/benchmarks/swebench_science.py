@@ -68,7 +68,6 @@ DATASET = "OpenMOSS-Team/SWE-bench-Science"
 REVISION = "997408298e8e4d09978b1120b95c4540d1a71bcb"
 VERSION = "2026.11.25.1"
 BENCHMARK = "swebench-science"
-TASK_COUNT = 118
 # The validation workspace accepts 10 GiB per solver. https://github.com/marin-community/marin/issues/12108
 SOLVER_DISK_MB = 10 * 1024
 PI = PiAgent(version="0.87.0", thinking="xhigh", setup_timeout=360)
@@ -207,7 +206,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
             data_restriction=DataRestriction.OPEN,
             family="agentic",
             tags=("eval", "source:harbor", "agentic", "multi-turn", "benchmark"),
-            count=TASK_COUNT,
             task_format=TaskFormat.HARBOR,
         ),
         config=EvaluationCorpusRecipe(
@@ -215,7 +213,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
             harbor_protocol(
                 BENCHMARK,
                 VERSION,
-                TASK_COUNT,
                 max_output_tokens=PI_MAX_OUTPUT_TOKENS,
                 requires_judge=False,
                 trials=1,
