@@ -30,6 +30,7 @@ from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.datakit.decontam.prepare_eval_corpus import LMH_FIELDS_ID_SUFFIX, LMH_QUESTION_ID_SUFFIX
 from experiments.datakit.testbed.decon_arm import (
     MIN_MATCHED_FEATURES,
     NGRAM_LENGTH,
@@ -39,7 +40,10 @@ from experiments.datakit.testbed.decon_arm import (
 
 logger = logging.getLogger(__name__)
 
-_SPLIT_RE = re.compile(r"^(.*)-(validation|test|training|train|dev|eval)-\d+$")
+# lm-eval ids are ``<task>-<split>-<index>``, with a suffix on a doc's raw-field and question records.
+_SPLIT_RE = re.compile(
+    rf"^(.*)-(validation|test|training|train|dev|eval)-\d+(?:{LMH_FIELDS_ID_SUFFIX}|{LMH_QUESTION_ID_SUFFIX})?$"
+)
 # Uncheatable Eval ids are ``uncheatable-<subset>-<record>``; the artifact sits in ``uncheatable/<subset>/``.
 _UNCHEATABLE_ID_RE = re.compile(r"^uncheatable-(?P<subset>[a-z0-9_]+)-\d+$")
 _SAMPLES_PER_SOURCE = 60
