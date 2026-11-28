@@ -14,6 +14,9 @@ resource_hint:
     H100: 8
   memory: 1600g
   disk: 700g
+# Long reasoning at 131,072 tokens outlasts the default 30-minute request deadline on a loaded server; the reply cap,
+# not the clock, should end a reply. Not part of the launch identity.
+evaluation_request_timeout: 7200
 serve:
   tensor_parallel_size: 8
   max_model_len: 131072

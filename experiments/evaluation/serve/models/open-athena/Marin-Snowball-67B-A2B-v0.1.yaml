@@ -11,6 +11,9 @@ resource_hint:
   gpu:
     H100: 4
   memory: 256g
+# Long reasoning at 131,072 tokens outlasts the default 30-minute request deadline on a loaded server; the reply cap,
+# not the clock, should end a reply. Not part of the launch identity.
+evaluation_request_timeout: 7200
 serve:
   hf_hub_disable_xet: true
   tensor_parallel_size: 1

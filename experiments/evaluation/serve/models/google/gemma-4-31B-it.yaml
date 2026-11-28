@@ -8,6 +8,9 @@ revision: 842da3794eaa0b77d5f08bae87a17459d91ff475
 apply_chat_template: true
 resource_hint:
   hbm_gb: 190
+# Long reasoning at 131,072 tokens outlasts the default 30-minute request deadline on a loaded server; the reply cap,
+# not the clock, should end a reply. Not part of the launch identity.
+evaluation_request_timeout: 7200
 serve:
   max_model_len: 131072
   limit_mm_per_prompt: '{"image":0,"video":0}'

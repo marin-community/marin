@@ -17,6 +17,9 @@ resource_hint:
     GB200: 4
   memory: 768g
   disk: 1400g
+# Long reasoning at 131,072 tokens outlasts the default 30-minute request deadline on a loaded server; the reply cap,
+# not the clock, should end a reply. Not part of the launch identity.
+evaluation_request_timeout: 7200
 serve:
   tensor_parallel_size: 4
   pipeline_parallel_size: 2
