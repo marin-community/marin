@@ -61,6 +61,7 @@ ones stay out of `final/`.
 
 | Module | Sources |
 | --- | --- |
+| [litmus/tasks.py](litmus/tasks.py) | NVIDIA Litmus-Bench v0.2 chemistry questions. The upstream train split is TRAIN and validation is EVAL. Each question retains its license and native NeMo answer-matching rules. |
 | [browsecomp/](browsecomp/README.md) | Evaluation-only BrowseComp-Plus task-directory preparation with the pinned offline BM25 retrieval protocol; admission remains pending exact-pin receipts. |
 | [terminalworld/tasks.py](terminalworld/tasks.py) | Full native Harbor population as TRAIN under the user decision of 2026-11-22. Upstream `test` naming is retained; standard TRAIN decontamination applies. Verified and sample are subsets. |
 | [ifbench/tasks.py](ifbench/tasks.py) | Explicit IFBench training split with the original pinned IFEvalG scorer and hidden constraint bundles. No released oracle; final-pin lexical, SAMPLE and admission receipts remain pending. |

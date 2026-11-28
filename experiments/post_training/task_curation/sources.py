@@ -72,6 +72,7 @@ from experiments.post_training.task_curation.datasets.lean import numina as lean
 from experiments.post_training.task_curation.datasets.lean import proofs as lean_proofs
 from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
 from experiments.post_training.task_curation.datasets.litecoder import tasks as litecoder
+from experiments.post_training.task_curation.datasets.litmus import tasks as litmus
 from experiments.post_training.task_curation.datasets.mcp_atlas_easy import tasks as mcp_atlas_easy
 from experiments.post_training.task_curation.datasets.mimo import tasks as mimo
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
@@ -251,6 +252,7 @@ def pending_measurement_sources() -> tuple[RlDataSource, ...]:
     pinned registry document, and importing ``sources`` must do no network I/O.
     """
     return (
+        *(source for source in litmus.sources() if source.info.subset == "validation"),
         *(
             source
             for source in repair_releases.sources()
@@ -348,6 +350,7 @@ def measured_pending_sources(selected: set[str]) -> dict[str, RlDataSource]:
 def configured_sources() -> list[RlDataSource]:
     """Return source populations registered for Atlas evidence binding."""
     sources = [
+        *(source for source in litmus.sources() if source.info.subset == "train"),
         *litecoder.sources(),
         *terminalworld.sources(),
         *mcp_atlas_easy.sources(),
