@@ -18,7 +18,8 @@ GRAPHWALKS_CONTEXT_MARGIN = 64
 GRAPHWALKS_PREFIX_TOKEN_MARGIN = 256
 GRAPHWALKS_PREFIX_CHARS_PER_TOKEN = 8
 GRAPHWALKS_MIN_OUTPUT_TOKENS = 4096
-GRAPHWALKS_REASONING_RESERVE = 4096
+# Room for a reasoning model's thinking before its final line: 4,096 cut off most replies on graphs past 8k tokens.
+GRAPHWALKS_REASONING_RESERVE = 24576
 GRAPHWALKS_OUTPUT_BUDGET_MULTIPLIER = 2
 FINAL_ANSWER_PREFIX = "Final Answer:"
 
@@ -36,6 +37,8 @@ def mrcr_bin(total_tokens: int) -> int | None:
 def grade_nonce_similarity(expected: str, nonce: str, response: str) -> Reward:
     if not isinstance(expected, str) or not isinstance(nonce, str) or not nonce:
         raise InvalidTask("MRCR requires text and a nonempty nonce")
+    # Leading whitespace is the reasoning parser's, not the model's (a newline left after a closed think block).
+    response = response.lstrip()
     hit = response.startswith(nonce)
     score = SequenceMatcher(None, response.removeprefix(nonce), expected.removeprefix(nonce)).ratio() if hit else 0.0
     return scored(score, metrics={"accuracy": score, "prefix_hit_rate": float(hit)})

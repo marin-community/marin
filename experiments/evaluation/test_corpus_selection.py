@@ -352,8 +352,8 @@ def test_graphwalks_filters_before_limit_and_retains_reference_dependent_budgets
             root,
             protocol,
             dataset_id="graphs",
-            context_window=10000,
-            max_tokens=8300,
+            context_window=50960,
+            max_tokens=49260,
             limit=2,
             tokenizer=tokenizer,
         )
@@ -370,8 +370,8 @@ def test_graphwalks_filters_before_limit_and_retains_reference_dependent_budgets
         for decision in decisions
         if decision.case is not None
     ] == [
-        (f"{filename}:2", 0, 8200),
-        (f"{filename}:3", 1, 8198),
+        (f"{filename}:2", 0, 49160),
+        (f"{filename}:3", 1, 49158),
     ]
     after_limit = decisions[4].record
     assert after_limit.status == "uninspected"
@@ -394,8 +394,8 @@ def test_graphwalks_counts_huggingface_chat_tokens_before_admitting_a_prompt(gra
             root,
             protocol,
             dataset_id="huggingface-graphs",
-            context_window=10000,
-            max_tokens=8300,
+            context_window=50960,
+            max_tokens=49260,
             limit=None,
             tokenizer=tokenizer,
         )
@@ -407,8 +407,10 @@ def test_graphwalks_counts_huggingface_chat_tokens_before_admitting_a_prompt(gra
 
 
 @pytest.mark.asyncio
-async def test_driver_archives_full_selection_ledger_and_sends_full_prompts(refill_mrcr, graph_corpus, tmp_path):
-    mrcr_root, _mrcr_protocol, mrcr_file, mrcr_rows = refill_mrcr
+async def test_driver_archives_full_selection_ledger_and_sends_full_prompts(graph_corpus, tmp_path):
+    # MRCR is capped at the window its fixture rows are sized for; GraphWalks needs the larger window for its budget.
+    mrcr_rows = [mrcr_row(0, 2, 4100, costly=True), mrcr_row(1, 2, 4100), mrcr_row(2, 4, 4100), mrcr_row(3, 8, 4100)]
+    mrcr_root, _mrcr_protocol, mrcr_file = publish_fixture(tmp_path / "capped", "MRCR", mrcr_rows, context_window=10000)
     graph_root, _graph_protocol, graph_file, graph_rows = graph_corpus
     requests = []
 
@@ -435,10 +437,10 @@ async def test_driver_archives_full_selection_ledger_and_sends_full_prompts(refi
             revision="model-commit",
             tokenizer="word-tokenizer",
             tokenizer_revision="tokenizer-commit",
-            context_window=10000,
+            context_window=50960,
             serving={"backend": "fake"},
         ),
-        max_tokens=8300,
+        max_tokens=49260,
         concurrency=2,
         source_limit=2,
         limits=RolloutLimits(
@@ -469,8 +471,8 @@ async def test_driver_archives_full_selection_ledger_and_sends_full_prompts(refi
     assert len(requests) == 4
     graph_requests = [request for request in requests if len(request.messages) == 1]
     assert {(request.messages[0]["content"], request.options["max_tokens"]) for request in graph_requests} == {
-        (graph_rows[2]["prompt"], 8200),
-        (graph_rows[3]["prompt"], 8198),
+        (graph_rows[2]["prompt"], 49160),
+        (graph_rows[3]["prompt"], 49158),
     }
     mrcr_requests = [request for request in requests if len(request.messages) > 1]
     expected_messages = []
