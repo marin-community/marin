@@ -411,7 +411,10 @@ class HFSide:
     def read(self, req: SliceRequest) -> np.ndarray:
         tensor = req.tensor
         stacked = self._expected_stacked_shape(tensor)
-        per_layer_slices = tuple(s for s in req.slices if not isinstance(s, int)) or ()
+        # Keep the per-layer slice tuple positional: for stacked tensors the
+        # leading int selects the layer and the remaining slices apply to the
+        # Levanter per-layer dims in order.
+        per_layer_slices = req.slices[1:] if req.slices and isinstance(req.slices[0], int) else req.slices
         if req.layer is None and stacked is not None and len(stacked) > 1 and stacked[0] == 48:
             # Stacked tensor read whole: concatenate the per-layer HF tensors.
             per_layer = [self._read_one(tensor, layer, per_layer_slices) for layer in range(48)]
