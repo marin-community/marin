@@ -21,6 +21,7 @@ import posixpath
 import time
 
 import fsspec
+import registry
 from megatron_map import build_mapping, preview
 from readers import LevanterReader, MegatronInventory, configure_object_storage
 from registry import CHECKPOINTS, LEVANTER, MEGATRON, OUTPUT_PREFIX
@@ -87,9 +88,8 @@ def _inventory_one(checkpoint, args_out, levanter_manifests):
             "preview": preview(entries),
             "mapping_notes": notes,
         }
-        name = f"{checkpoint.id}-preview.json"
-        path = write_json(args.out, name, preview_payload)
-        mapping_path = write_json(args.out, f"{checkpoint.id}-mapping.json", mapping)
+        path = write_json(args_out, f"{checkpoint.id}-preview.json", preview_payload)
+        mapping_path = write_json(args_out, f"{checkpoint.id}-mapping.json", mapping)
         logger.info(
             "megatron inventory %s: %d keys -> %s, mapping %s (%.1fs)",
             checkpoint.id,
