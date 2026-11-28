@@ -6,6 +6,7 @@
 import json
 from contextlib import nullcontext
 from dataclasses import dataclass, field
+from functools import partial
 from inspect import signature
 from types import SimpleNamespace
 
@@ -106,7 +107,14 @@ def recovery_corpora(tmp_path):
                     expected_population=2,
                 )
                 output = tmp_path / (name + "-published")
-                publish_evaluation_corpus(recipe, protocol, chat_item, context, str(source), str(output))
+                publish_evaluation_corpus(
+                    recipe,
+                    protocol,
+                    partial(chat_item, response_selection="final_only"),
+                    context,
+                    str(source),
+                    str(output),
+                )
                 roots.append(str(output))
         return tuple(roots)
     finally:

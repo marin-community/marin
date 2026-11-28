@@ -12,7 +12,13 @@ from evalrecords.records import TaskEvidence
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import MANIFEST_FILENAME, ItemBuilder, chat_variant_item
-from taskcompendium.evaluation.spec import AgentEpisode, EvaluationItem, EvaluationProtocol, OperationKind
+from taskcompendium.evaluation.spec import (
+    AgentEpisode,
+    EvaluationItem,
+    EvaluationProtocol,
+    OperationKind,
+    ResponseSelection,
+)
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
@@ -44,7 +50,9 @@ from experiments.post_training.task_curation.pipeline import (
 )
 from experiments.post_training.task_curation.source import RlDataSource
 
-EVALUATION_PIPELINE_VERSION = "2026.11.08.1"
+# Bump when corpus contents change without a change to their identity, such as a new item field or value name, so
+# no region reuses a corpus that older code built under the same identity.
+EVALUATION_PIPELINE_VERSION = "2026.11.28"
 
 
 @dataclass(frozen=True)
@@ -86,7 +94,10 @@ class EvaluationCorpusRecipe:
 
 
 def chat_source(
-    source: RlDataSource[EvaluationCorpusRecipe], chat_template_kwargs: dict[str, bool | str]
+    source: RlDataSource[EvaluationCorpusRecipe],
+    chat_template_kwargs: dict[str, bool | str],
+    *,
+    response_selection: ResponseSelection,
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     dataset = source.config
     assert dataset is not None and dataset.protocol.sampling is not None
@@ -98,7 +109,9 @@ def chat_source(
             protocol=dataset.protocol.model_copy(
                 update={"operation": OperationKind.CHAT_GENERATION, "sampling": sampling}
             ),
-            item_builder=partial(chat_variant_item, item_builder=dataset.item_builder),
+            item_builder=partial(
+                chat_variant_item, item_builder=dataset.item_builder, response_selection=response_selection
+            ),
         ),
     )
 

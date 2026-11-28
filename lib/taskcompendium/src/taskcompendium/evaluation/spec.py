@@ -45,7 +45,7 @@ class ChatGeneration(EvaluationModel):
     kind: Literal[OperationKind.CHAT_GENERATION] = OperationKind.CHAT_GENERATION
     variants: tuple[ChatPromptVariant, ...] = ()
     prompt_selection: Literal["fixed", "fit_context"] = "fixed"
-    response_selection: ResponseSelection = "combine"
+    response_selection: ResponseSelection
     historical_assistant_reasoning: Literal["omit", "empty"] = "omit"
 
     @model_validator(mode="after")

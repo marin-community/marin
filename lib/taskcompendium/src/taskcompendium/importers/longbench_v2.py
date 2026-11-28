@@ -20,7 +20,6 @@ from typing import Any
 from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.convert.tasks import conversation_task
-from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import ChatGeneration, ChatPromptVariant, EvaluationItem
 from taskcompendium.importers.evalchemy.grader import source_package
 from taskcompendium.importers.evalchemy.long_context import official_tokenizer
@@ -117,17 +116,13 @@ def longbench_v2_item(task: TaskSpec, *, budgets: tuple[int, ...]) -> Evaluation
         ),
         ChatPromptVariant(context=task.context, fewshot=len(truncated)),
     )
-    return chat_item(task).model_copy(
-        update={
-            "operation": ChatGeneration(
-                prompt_selection="fit_context",
-                response_selection="final_only",
-                variants=variants,
-            ),
-            "groups": {
-                "length": task.labels[LONGBENCH_V2_LENGTH_LABEL],
-                "difficulty": task.labels[LONGBENCH_V2_DIFFICULTY_LABEL],
-                "domain": task.labels[LONGBENCH_V2_DOMAIN_LABEL],
-            },
-        }
+    return EvaluationItem(
+        task_id=task.id,
+        source_row=task.source.row,
+        operation=ChatGeneration(prompt_selection="fit_context", response_selection="final_only", variants=variants),
+        groups={
+            "length": task.labels[LONGBENCH_V2_LENGTH_LABEL],
+            "difficulty": task.labels[LONGBENCH_V2_DIFFICULTY_LABEL],
+            "domain": task.labels[LONGBENCH_V2_DOMAIN_LABEL],
+        },
     )

@@ -364,7 +364,7 @@ def _compile_lm_eval_text_generation(
         pipeline=prepare_evaluation,
     )
     if variant.prompt_format is PromptFormat.CHAT:
-        source = chat_source(source, chat_options[shots])
+        source = chat_source(source, chat_options[shots], response_selection="final_only")
     return (source,)
 
 

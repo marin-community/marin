@@ -81,7 +81,7 @@ def _simpleqa_task(row: RawRow, benchmark: str, judge_spec: Callable[[str, str],
 def simpleqa_item(task: TaskSpec) -> EvaluationItem:
     evidence = source_evidence(task)
     groups = {"source_index": str(evidence["source_index"])} if "source_index" in evidence else {}
-    return chat_item(task).model_copy(update={"groups": groups})
+    return chat_item(task, response_selection="final_only").model_copy(update={"groups": groups})
 
 
 def simpleqa_verified_item(task: TaskSpec) -> EvaluationItem:

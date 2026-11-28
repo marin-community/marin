@@ -138,7 +138,7 @@ def source_order(locator: str) -> tuple[str, int]:
     return file, ordinal
 
 
-def chat_item(task: TaskSpec, *, response_selection: ResponseSelection = "combine") -> EvaluationItem:
+def chat_item(task: TaskSpec, *, response_selection: ResponseSelection) -> EvaluationItem:
     return EvaluationItem(
         task_id=task.id,
         source_row=task.source.row,
@@ -146,9 +146,11 @@ def chat_item(task: TaskSpec, *, response_selection: ResponseSelection = "combin
     )
 
 
-def chat_variant_item(task: TaskSpec, *, item_builder: ItemBuilder) -> EvaluationItem:
+def chat_variant_item(
+    task: TaskSpec, *, item_builder: ItemBuilder, response_selection: ResponseSelection
+) -> EvaluationItem:
     """Retain source grouping and provenance in an explicit chat transport variant."""
-    return item_builder(task).model_copy(update={"operation": ChatGeneration()})
+    return item_builder(task).model_copy(update={"operation": ChatGeneration(response_selection=response_selection)})
 
 
 def file_sha256(path: StoragePath) -> str:

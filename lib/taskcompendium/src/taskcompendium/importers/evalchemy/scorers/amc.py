@@ -7,6 +7,7 @@ This accepts normalized string identity and retains raw equality when
 normalization raises, rather than mathematical equivalence.
 """
 
+from verifyit.adapters.completion import final_text
 from verifyit.grade import Reward, scored
 
 
@@ -129,11 +130,11 @@ def is_equiv(candidate: str | None, reference: str | None) -> bool:
 
 def last_boxed_answer(response: str) -> str:
     """Extract using Hendrycks without reasoning or stop postprocessing."""
-    if r"\boxed " in response:
-        return response.split(r"\boxed ")[-1].split("$")[0]
     start = response.rfind(r"\boxed")
     if start < 0:
         return ""
+    if response.startswith(r"\boxed ", start):
+        return response[start + len(r"\boxed ") :].split("$")[0]
     depth = 0
     for index in range(start, len(response)):
         if response[index] == "{":
@@ -147,6 +148,6 @@ def last_boxed_answer(response: str) -> str:
 
 
 def grade_amc(expected: str, response: str) -> Reward:
-    """Apply the source's last-box extraction and literal normalization comparator."""
-    candidate = last_boxed_answer(response)
+    """Apply the source's last-box extraction to the final answer and its literal normalization comparator."""
+    candidate = last_boxed_answer(final_text(response))
     return scored(float(is_equiv(expected, candidate)), extracted=candidate)
