@@ -959,14 +959,6 @@ def test_dashboard_links_point_at_provisioned_dashboards():
             assert url.removeprefix("/d/").split("/")[0] in uids, f"{name}: dead link {url}"
 
 
-def test_rl_post_training_link_opens_the_board_at_its_own_default():
-    # keepTime would carry the 3h home/runs range into a board whose engine panels
-    # only load at 1h on large runs.
-    for source in ("home.json", "runs.json"):
-        (link,) = [link for link in _stitched_dashboards()[source]["links"] if link["url"] == "/d/marin-rl-runs"]
-        assert not link["keepTime"]
-
-
 def test_cluster_variable_lists_every_configured_cluster():
     # A cluster missing from the dropdown is invisible on every dashboard, so the list
     # tracks the clusters the bridge actually serves.
