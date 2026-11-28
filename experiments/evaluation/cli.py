@@ -29,7 +29,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import COREWEAVE_SECRET_NAMES, get_secret
 
-from experiments.evaluation.curated import load_evaluations
+from experiments.evaluation.curated import EVALUATIONS_KEY, load_evaluations
 from experiments.evaluation.evals import EvaluationDefinition, HarborDefinition, resolve_evaluations
 from experiments.evaluation.launch import (
     DEFAULT_EVAL_CONCURRENCY,
@@ -49,6 +49,17 @@ def _resolve_evaluations(evals_arg: str) -> tuple[EvaluationDefinition, ...]:
         return resolve_evaluations(evals_arg)
     except ValueError as error:
         raise click.BadParameter(str(error)) from error
+
+
+def _load_harbor_argument(path: Path) -> tuple[EvaluationDefinition, ...]:
+    """Resolve a Harbor policy or a curated selection retained at a Harbor path."""
+    try:
+        document = yaml.safe_load(path.read_text())
+    except yaml.YAMLError as error:
+        raise click.BadParameter(str(error), param_hint="--harbor-config") from error
+    if isinstance(document, dict) and EVALUATIONS_KEY in document:
+        return load_evaluations(path)
+    return (HarborDefinition(name=canonical_served_name(path.stem), config_path=path),)
 
 
 def _load_selected_model(
@@ -145,6 +156,12 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
         tasks = [task.name for task in eval_ref.tasks]
         harbor = eval_ref.harbor
         curated = eval_ref.curated
+        source_limit = None
+        if harbor is not None:
+            source_limit = harbor.task_limit
+        elif curated is not None:
+            source_limit = curated.settings.source_limit
+        limit_context = f"limit={source_limit}  " if source_limit is not None else ""
         agent_context = ""
         if harbor is not None:
             agent_context = f"max_input_tokens={harbor.max_input_tokens}  max_output_tokens={harbor.max_output_tokens}  "
@@ -162,6 +179,7 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
             f"serve={serving} tasks={task_count} x {batch.accelerator.label}  "
             f"region_or_cluster={batch.accelerator.target_cluster or batch.accelerator.region}  "
             f"tasks={tasks}  "
+            f"{limit_context}"
             f"{agent_context}"
             f"records={batch.records_prefix}  "
             f"results={evaluation.identity.output_dir}"
@@ -205,7 +223,7 @@ def cli() -> None:
     "--harbor-config",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     multiple=True,
-    help="Harbor JobConfig YAML or JSON, or a curated selection document for migrated policies. Repeatable.",
+    help="Harbor JobConfig YAML or JSON, or a curated selection document. Repeatable and additive with --evals.",
 )
 @click.option(
     "--retry-unscored-harbor-trials",
@@ -329,16 +347,8 @@ def launch(
     selected_model = resolve_model_config(model, model_config)
     selected_judge = resolve_judge_model_config(judge_model, judge_model_config)
     resolved_platform = Platform(platform) if platform else default_platform(selected_model)
-    selection_paths = list(evaluation_config)
-    harbor_definitions = []
-    for path in harbor_config:
-        document = yaml.safe_load(path.read_text())
-        if isinstance(document, dict) and "evaluations" in document:
-            selection_paths.append(path)
-        else:
-            harbor_definitions.append(HarborDefinition(name=canonical_served_name(path.stem), config_path=path))
-    configured = [entry for path in selection_paths for entry in load_evaluations(path)]
-    if selection_paths and evals_arg:
+    configured = [entry for path in evaluation_config for entry in load_evaluations(path)]
+    if evaluation_config and evals_arg:
         names = {name.strip() for name in evals_arg.split(",") if name.strip()}
         unknown = names - {entry.name for entry in configured}
         if unknown:
@@ -346,8 +356,8 @@ def launch(
                 f"Unknown configured evaluations: {', '.join(sorted(unknown))}", param_hint="--evals"
             )
         configured = [entry for entry in configured if entry.name in names]
-    evals = tuple(configured) + tuple(harbor_definitions)
-    if not selection_paths and evals_arg is not None:
+    evals = tuple(configured) + tuple(entry for path in harbor_config for entry in _load_harbor_argument(path))
+    if not evaluation_config and evals_arg is not None:
         evals += _resolve_evaluations(evals_arg)
     if not evals:
         evals = _resolve_evaluations("smoke")

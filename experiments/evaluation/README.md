@@ -33,7 +33,7 @@ Pass a suite name or comma-separated evaluation keys to `--evals`. Suites are
 `econevals-sampled-o3`, and `agentic`.
 [configs/evaluations.yaml](configs/evaluations.yaml) declares curated suite choices and run overrides. The benchmark catalog supplies ordinary defaults.
 
-Use `--evaluation-config` for a suite or campaign document. Repeat it to combine their named benchmark selections; `--evals` selects entries from the combined documents, or all entries run when omitted. Repeat `--harbor-config` to add Harbor jobs. With no selection, the launcher uses `smoke`.
+Use `--evaluation-config` for a suite or campaign document. Repeat it to combine their named benchmark selections; `--evals` selects entries from the combined documents, or all entries run when omitted. Repeat `--harbor-config` to add Harbor jobs. It also accepts curated selection documents retained at historical Harbor paths; these remain additive to `--evals`. With no selection, the launcher uses `smoke`.
 
 For example, run a curated task and a Harbor benchmark on shared GPU serving:
 

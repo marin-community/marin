@@ -1290,8 +1290,7 @@ def test_launch_dry_run_prints_the_resolved_harbor_agent_context(tmp_path, monke
 def test_bfcl_onboarding_dry_run_uses_curated_pi(monkeypatch):
     root = Path(__file__).resolve().parents[2]
     monkeypatch.setenv("DAYTONA_TARGET", "us")
-    monkeypatch.delenv("CW_KEY_ID", raising=False)
-    monkeypatch.delenv("CW_KEY_SECRET", raising=False)
+    monkeypatch.setattr("experiments.evaluation.cli.get_secret", lambda _name: None)
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
 
     result = CliRunner().invoke(
@@ -1320,6 +1319,7 @@ def test_bfcl_onboarding_dry_run_uses_curated_pi(monkeypatch):
     assert "eval=bfcl-one" in result.output
     assert "agent=pi@" in result.output
     assert "task_machine=daytona" in result.output
+    assert "limit=1" in result.output
 
 
 @pytest.mark.parametrize(
