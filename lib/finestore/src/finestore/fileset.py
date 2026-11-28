@@ -13,7 +13,7 @@ import threading
 
 from rigging.filesystem.atomic import atomic_rename
 
-from finestore.commit import read_snapshot_id
+from finestore.commit import read_pinned_snapshot
 from finestore.layout import BlobTables, FineStoreLayout
 from finestore.reader import BlobDescriptor, ReadView
 from finestore.store import DataStore
@@ -39,7 +39,7 @@ def fetch_file_set(root: str, local: str, *, snapshot_id: str | None = None) -> 
     destination.mkdir(parents=True, exist_ok=True)
     fetched = set()
     view = (
-        ReadView(root, read_snapshot_id(FineStoreLayout(root), snapshot_id))
+        ReadView(root, read_pinned_snapshot(FineStoreLayout(root), snapshot_id))
         if snapshot_id is not None
         else ReadView(root)
     )

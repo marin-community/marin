@@ -497,11 +497,15 @@ def test_multigpu_local_ranks_share_clean_pinned_snapshot(tmp_path) -> None:
                 os.environ.pop("XLA_FLAGS", None)
                 configure_jax_compilation_cache()
                 paths.append(os.environ["XLA_FLAGS"].split("--xla_gpu_per_fusion_autotune_cache_dir=")[1].split()[0])
-                assert "--xla_gpu_experimental_autotune_cache_mode=AUTOTUNE_CACHE_MODE_READ" in os.environ["XLA_FLAGS"]
+                flags = os.environ["XLA_FLAGS"].split()
+                assert flags.count("--xla_gpu_experimental_autotune_cache_mode=AUTOTUNE_CACHE_MODE_READ") == 1
+                assert flags.count("--xla_gpu_autotune_level=0") == 1
                 if rank == 8:
                     pathlib.Path(root).rename(tmp_path / "remote-offline")
     assert len(set(paths)) == 1
     assert sorted(path.name for path in pathlib.Path(paths[0]).iterdir()) == ["tuned.textproto"]
+    assert not (pathlib.Path(paths[0]).stat().st_mode & 0o222)
+    assert not ((pathlib.Path(paths[0]) / "tuned.textproto").stat().st_mode & 0o222)
     assert (legacy / "leftover.textproto").read_bytes() == b"stale"
 
 
@@ -538,7 +542,7 @@ def test_multigpu_peer_waits_for_local_fetch_and_fetch_failure_fails_closed(tmp_
     snapshot_id = ReadView(root).token.commit_id
     waiting = threading.Event()
     release = threading.Event()
-    actual_sleep = jax_cache_module.time.sleep
+    actual_sleep = timing.time.sleep
 
     def hold_peer(interval):
         if threading.current_thread() is not threading.main_thread():
@@ -554,7 +558,7 @@ def test_multigpu_peer_waits_for_local_fetch_and_fetch_failure_fails_closed(tmp_
         info = _make_job_info(task_index=1, num_tasks=2)
         os.environ[jax_cache_module.IRIS_MULTIGPU_PROCESS_INDEX_ENV] = "9"
         with (
-            patch.object(jax_cache_module.time, "sleep", side_effect=hold_peer),
+            patch.object(timing.time, "sleep", side_effect=hold_peer),
             ThreadPoolExecutor(max_workers=1) as pool,
         ):
             peer = pool.submit(jax_cache_module._enable_shared_autotune_cache, "", info)

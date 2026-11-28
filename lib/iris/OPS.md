@@ -320,9 +320,10 @@ iris task exec /user/job/0 --timeout 15 -- \
 Pass `IRIS_AUTOTUNE_STORE_ROOT` with a regional FineStore file set to use tuned
 inputs. Its path must identify the GPU variant, jaxlib version, and CUDA runtime
 version used for seeding. The submitter reads that store's HEAD once and stamps
-`IRIS_AUTOTUNE_SNAPSHOT_ID` into the job environment; an absent HEAD or omitted
-store root pins `empty`. A caller may set the ID explicitly to select an older
-immutable manifest. Do not change the store root or snapshot ID within a job.
+`IRIS_AUTOTUNE_SNAPSHOT_ID` into the job environment. An absent HEAD selects
+`empty`; if no store root is supplied, workers also use `empty`. A caller may
+set the ID explicitly to select an older immutable manifest. Do not change
+the store root or snapshot ID within a job.
 
 Each task attempt stages that manifest once per node under
 `/cache/xla/per-fusion-autotune/jobs/`, then all local GPU processes read the
