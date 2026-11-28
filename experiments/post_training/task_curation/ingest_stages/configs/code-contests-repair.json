@@ -1,0 +1,12 @@
+{
+  "source_id": "TaskTrove:DCAgent__code-contests-noblock",
+  "upstream": {
+    "repository": "open-athena/task-trove-dcagent-code-contests-noblock-19de283b-retained-20261113-v1",
+    "revision": "d4a32528a6b8c4f02afff8c804c541717b847672",
+    "path": "tasks.parquet"
+  },
+  "intended_use": ["train"],
+  "converter_module": "experiments.post_training.task_curation.datasets.tasktrove.code_contests_repair",
+  "cluster": "cw-us-east-02a",
+  "mode": "repair"
+}

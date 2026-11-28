@@ -120,13 +120,14 @@ def scan(
     sample_size: int = SAMPLE_SIZE,
     *,
     shingle_cache_bytes: int = SHINGLE_CACHE_BYTES,
+    response_receipts: StoragePath | None = None,
 ) -> SourceIdentitySurvey:
     """Measure shortlisted pairs with a separate shingle cache budget per population."""
     fingerprints = {key: value for key, value in survey.fingerprints.items() if value is not None}
     ordered = scan_pairs(survey, changed, top_k, labels)
     expected = {(row["left"], row["right"]): DuplicateLabel(row["expected"]) for row in labels}
     reviews = []
-    responses = StoragePath(str(receipts.with_suffix(".neighbors")))
+    responses = response_receipts or StoragePath(str(receipts.with_suffix(".neighbors")))
     populations = {}
     with receipts.open("w") as output:
         for pair in ordered:

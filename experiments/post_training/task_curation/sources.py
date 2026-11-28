@@ -109,6 +109,7 @@ from experiments.post_training.task_curation.datasets.terminal_lego import tasks
 from experiments.post_training.task_curation.datasets.terminalworld import qualified as terminalworld
 from experiments.post_training.task_curation.derived_contract_tags import bind_derived_contract_tags
 from experiments.post_training.task_curation.grading_binding import bind_grading_census
+from experiments.post_training.task_curation.ingest_registration import registered_sources
 from experiments.post_training.task_curation.lexical_binding import bind_lexical_measurement
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
 from experiments.post_training.task_curation.license_binding import (
@@ -605,7 +606,7 @@ def all_sources() -> dict[str, RlDataSource]:
             "Sources declare no task format; every source registration states exactly one TaskFormat value: "
             + ", ".join(undeclared)
         )
-    return registered
+    return registered_sources(registered)
 
 
 def require_accepted_task_format(source: RlDataSource) -> None:

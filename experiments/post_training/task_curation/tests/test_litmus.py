@@ -10,7 +10,7 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import NormalizedTask, RawRow
 from taskcompendium.runtime.resources import resource_bytes
 
-from experiments.post_training.task_curation.datasets.litmus.convert import convert
+from experiments.post_training.task_curation.datasets.litmus.convert import convert, golden
 
 
 def test_litmus_scores_the_last_formatted_answer_with_the_rows_tolerance(tmp_path: Path, monkeypatch):
@@ -44,3 +44,5 @@ def test_litmus_scores_the_last_formatted_answer_with_the_rows_tolerance(tmp_pat
     assert score("[[0]] corrected to [[5.1]]", contract) == 1.0
     assert score("[[5.1]] corrected to [[0]]", contract) == 0.0
     assert score("5.0", contract) == 0.0
+    assert score(golden(task).event.content, contract) == 1.0
+    assert score("", contract) == 0.0

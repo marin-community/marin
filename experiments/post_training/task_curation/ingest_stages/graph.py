@@ -163,12 +163,12 @@ def verify_built_stages(graph: IngestGraph) -> None:
         load_receipt(artifact.receipt, job.inputs)
 
 
-def run_ingest_graph(graph: IngestGraph) -> StageReceipt:
+def run_ingest_graph(graph: IngestGraph, terminal_stage: IngestStage = IngestStage.DECLARE) -> StageReceipt:
     """Resume valid sealed stages and refuse stale or damaged evidence before work."""
     with artifact_prefix(graph.execution.artifact_root):
         verify_built_stages(graph)
-        run_handles(graph.nodes[-1], max_concurrent=1)
+        terminal = graph.nodes[list(IngestStage).index(terminal_stage)]
+        run_handles(terminal, max_concurrent=1)
         verify_built_stages(graph)
-        terminal = graph.nodes[-1]
         job = cast(StageJob, materialized_config(terminal, graph.execution.artifact_root))
         return load_receipt(StageArtifact.raw_load(terminal.path()).receipt, job.inputs)

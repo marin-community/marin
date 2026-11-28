@@ -21,6 +21,7 @@ from experiments.post_training.task_curation.atlas_deployment import region_depl
 from experiments.post_training.task_curation.backend_census_manifest import seal_manifest
 from experiments.post_training.task_curation.images.build import environment_artifact
 from experiments.post_training.task_curation.ingest_stages.converter_binding import RowConverterBinding, load_converter
+from experiments.post_training.task_curation.ingest_stages.eligibility import require_starting_state
 from experiments.post_training.task_curation.ingest_stages.graph import StageJob, parent_receipt
 from experiments.post_training.task_curation.ingest_stages.ingest_config import IngestMode
 from experiments.post_training.task_curation.ingest_stages.placement import regional_worker
@@ -117,8 +118,8 @@ def converted_outputs(job: StageJob, result: ConversionResult, grader: dict[str,
 def convert_stage(job: StageJob) -> dict[str, ArtifactRef]:
     """Convert staged bytes through QUICK; unsealed attempts cannot mix partial shards."""
     regional_worker(job.execution.policy.cluster, job.execution.artifact_root, job.output_root)
-    if job.execution.policy.mode is not IngestMode.INGEST:
-        raise ValueError("population repairs require their existing-declaration adapter")
+    if job.execution.policy.mode is IngestMode.REPAIR:
+        require_starting_state(job.execution.policy, read_ref(job.inputs.artifacts["starting-declarations"]))
     output = prefix_join(job.output_root, "converted.json")
     target = StoragePath(output)
     if target.exists():

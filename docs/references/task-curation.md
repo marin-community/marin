@@ -642,9 +642,22 @@ and population it checks. Keep the receipt and the failed check when a gate fail
 | <span id="atlas-stage-i">i</span> Admission | Reconcile final census, deduplication, lexical, grading, control and oversight evidence. Clear every source exclusion claim and bind the exact final pin in the declaration and registry together. | [Current admission policy](#current-admission-policy); [source.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/source.py), [declaration_audit.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/declaration_audit.py) |
 | <span id="atlas-stage-j">j</span> Upload | Upload the qualified version only when every applicable gate passes. Default to a private release, preserve its read-back receipt and provenance, and keep previous versions. | [Storage and publication](#storage-and-publication); [remediation_publish.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/remediation_publish.py) |
 
-Start ingestion from a pinned HF dataset row in the candidate intake list
-(`CANDIDATES`). Register it through the [pending source intake](#pending-source-intake)
-and [dataset declaration](#declarations) procedures.
+Use the maintained `atlas-ingest` command for one unknown source, with a reviewed
+config naming its exact HF pin, intended use, converter and regional cluster.
+It refuses sources already present in the catalog or maintained pending intake.
+Use `atlas-repair` for one existing pinned Excluded source with Reasons; it refuses
+all other starting states. Both expose `preflight`, `dry-run` and `run` modes and
+share the sealed stages. See the [command README](https://github.com/marin-community/marin/blob/atlas-env-audit/experiments/post_training/task_curation/ingest_stages/README.md)
+for configs, credentials, exact commands, resume behavior and evidence scope.
+
+New-source work claims its pinned `CANDIDATES` row. Repair claims its existing
+Excluded declaration and Reasons. Neither path permits a config to supply its
+own status, measured counts or acceptance verdicts. Local preflight invokes the
+regional worker's exact argv with small local metadata references; all dataset
+processing stays on in-region interactive CPU jobs. The pinned default SAMPLE reviewer
+runs from a separate GB200 root, and its inconclusive or unavailable result does
+not block admission. Corrupt evidence still fails verification.
+
 It is the only flow that starts every stage from scratch and creates a new source
 identity. Its exit is Available, or Excluded with typed reasons and evidence;
 incomplete work stays Pending where the status rules require it. Private

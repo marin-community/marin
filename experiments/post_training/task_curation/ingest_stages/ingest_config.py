@@ -46,17 +46,10 @@ class IngestConfig(BaseModel):
 
     source_id: SourceId = Field(min_length=1)
     upstream: UpstreamPin
-    intended_use: tuple[IntendedUse, ...] = Field(min_length=1)
+    intended_use: tuple[IntendedUse, ...] = Field(min_length=1, max_length=1)
     converter_module: str
     cluster: str = Field(min_length=1)
     mode: IngestMode
-
-    @field_validator("intended_use")
-    @classmethod
-    def canonical_use(cls, value: tuple[IntendedUse, ...]) -> tuple[IntendedUse, ...]:
-        if len(value) != len(set(value)):
-            raise ValueError("intended_use contains duplicate purposes")
-        return tuple(sorted(value))
 
     @field_validator("converter_module")
     @classmethod

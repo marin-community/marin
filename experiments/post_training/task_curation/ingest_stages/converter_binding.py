@@ -9,7 +9,7 @@ from typing import Protocol, cast
 
 from finestore.rl.curation import TaskFormat
 from taskcompendium.pipeline.inputs import SourceFormat
-from taskcompendium.pipeline.models import Converter
+from taskcompendium.pipeline.models import Controls, Converter
 
 from experiments.post_training.task_curation.environment import Environment
 
@@ -20,6 +20,7 @@ class RowConverterBinding:
     source_format: SourceFormat
     task_format: TaskFormat
     grader: Environment | None
+    controls: Controls
 
 
 class ConverterModule(Protocol):

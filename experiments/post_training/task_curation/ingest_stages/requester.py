@@ -54,14 +54,7 @@ class Requester:
     def __init__(self, session: requests.Session):
         self.session = session
 
-    def pickup(self, claim: QueueClaim) -> Pickup:
-        """Reuse a marker on serial retries; callers must serialize same-policy runs."""
-        selection = claim.selection
-        issue = selection.requester_issue
-        if issue is None:
-            return Pickup(action=PickupAction.NO_ISSUE, issue=None, comment=None)
-        endpoint = issue_api(issue)
-        marker = f"<!-- atlas-ingest:pickup:{selection.policy_sha256} -->"
+    def matching_comments(self, endpoint: str, marker: str) -> list[dict]:
         matches = []
         for page in range(1, MAX_COMMENT_PAGES + 1):
             response = self.session.get(
@@ -83,6 +76,17 @@ class Requester:
             raise ValueError("requester comment history exceeds the bounded pickup scan")
         if len(matches) > 1:
             raise ValueError("requester issue has duplicate pickup markers; reconcile before retry")
+        return matches
+
+    def pickup(self, claim: QueueClaim) -> Pickup:
+        """Reuse a marker on serial retries; callers must serialize same-policy runs."""
+        selection = claim.selection
+        issue = selection.requester_issue
+        if issue is None:
+            return Pickup(action=PickupAction.NO_ISSUE, issue=None, comment=None)
+        endpoint = issue_api(issue)
+        marker = f"<!-- atlas-ingest:pickup:{selection.policy_sha256} -->"
+        matches = self.matching_comments(endpoint, marker)
         if matches:
             return Pickup(action=PickupAction.COMMENT, issue=issue, comment=matches[0]["html_url"])
         response = self.session.get(endpoint, timeout=HTTP_TIMEOUT, allow_redirects=False)
@@ -114,6 +118,38 @@ class Requester:
         if marker not in comment["body"]:
             raise ValueError("GitHub pickup response did not preserve the policy marker")
         return Pickup(action=PickupAction.COMMENT, issue=issue, comment=comment["html_url"])
+
+    def terminal(self, claim: QueueClaim, status: str, receipt: ArtifactRef) -> Pickup:
+        """Post one terminal outcome after landing, recovering a lost HTTP response."""
+        issue = claim.selection.requester_issue
+        if issue is None:
+            return Pickup(action=PickupAction.NO_ISSUE, issue=None, comment=None)
+        endpoint = issue_api(issue)
+        marker = f"<!-- atlas-ingest:terminal:{claim.selection.policy_sha256} -->"
+        matches = self.matching_comments(endpoint, marker)
+        if matches:
+            return Pickup(action=PickupAction.COMMENT, issue=issue, comment=matches[0]["html_url"])
+        try:
+            response = self.session.post(
+                endpoint + "/comments",
+                json={
+                    "body": (
+                        f"🤖 atlas-ingest completed `{claim.selection.source_id}`: {status}. "
+                        f"The landed declaration is bound to receipt `{receipt.sha256}`.\n\n{marker}"
+                    )
+                },
+                timeout=HTTP_TIMEOUT,
+                allow_redirects=False,
+            )
+        except (requests.ConnectionError, requests.Timeout):
+            matches = self.matching_comments(endpoint, marker)
+            if matches:
+                return Pickup(action=PickupAction.COMMENT, issue=issue, comment=matches[0]["html_url"])
+            raise
+        response.raise_for_status()
+        if response.status_code != 201 or marker not in response.json()["body"]:
+            raise ValueError("GitHub terminal comment response did not preserve its outcome marker")
+        return Pickup(action=PickupAction.COMMENT, issue=issue, comment=response.json()["html_url"])
 
 
 def claim_stage(job: StageJob, requester: Requester) -> dict[str, ArtifactRef]:

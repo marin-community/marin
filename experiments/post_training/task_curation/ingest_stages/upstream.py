@@ -64,6 +64,7 @@ class UpstreamInventory(BaseModel):
     input_sha256: str = Field(pattern=SHA256)
     source_id: SourceId
     upstream: UpstreamPin
+    private: bool
     files: tuple[UpstreamFile, ...] = Field(min_length=1)
 
 
@@ -119,6 +120,7 @@ def upstream_inventory(job: StageJob) -> UpstreamInventory:
         input_sha256=job.inputs.digest(),
         source_id=policy.source_id,
         upstream=upstream,
+        private=info.private,
         files=tuple(sorted(selected, key=lambda file: file.path)),
     )
 
@@ -201,6 +203,14 @@ def stage_upstream(job: StageJob) -> dict[str, ArtifactRef]:
         raise ValueError("upstream acquisition requires a permitted source-bound license assessment")
     inventory, reference = checked_inventory(job)
     root = prefix_join(job.output_root, "raw")
+    files = download_inventory(inventory, root)
+    staged = StagedUpstream(inventory=reference, worker_region=region, files=files)
+    manifest = seal_manifest(staged.model_dump(mode="json"), prefix_join(job.output_root, "staged.json"))
+    return {"inventory": reference, "staged": manifest, **{f"raw/{name}": ref for name, ref in files.items()}}
+
+
+def download_inventory(inventory: UpstreamInventory, root: str) -> dict[str, ArtifactRef]:
+    """Stream and verify the already frozen file map in its worker region."""
     plan = checked_download_plan(inventory, root)
     files = {}
     pins = {file.path: file for file in inventory.files}
@@ -210,6 +220,4 @@ def stage_upstream(job: StageJob) -> dict[str, ArtifactRef]:
         relative = path.relative_to(StoragePath(root))
         files[relative] = verified_file(pins[relative], path)
     finish_download(plan)
-    staged = StagedUpstream(inventory=reference, worker_region=region, files=files)
-    manifest = seal_manifest(staged.model_dump(mode="json"), prefix_join(job.output_root, "staged.json"))
-    return {"inventory": reference, "staged": manifest, **{f"raw/{name}": ref for name, ref in files.items()}}
+    return files

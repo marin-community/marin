@@ -31,6 +31,8 @@ from experiments.post_training.task_curation.sample_qc_artifacts import SampleIn
 from experiments.post_training.task_curation.tests.admission_fixtures import (
     isolated_admission_census as isolated_admission_census,
 )
+from experiments.post_training.task_curation.tests.ingest_fixtures import staged_job as staged_job
+from experiments.post_training.task_curation.tests.ingest_storage import remote as remote
 from experiments.post_training.task_curation.tests.license_fixtures import isolated_license_bans as isolated_license_bans
 from experiments.post_training.task_curation.tests.license_fixtures import (
     isolated_license_registry as isolated_license_registry,
