@@ -4,6 +4,7 @@
 """Tests for fsutil's copy semantics and file rendering, over local paths — which
 ``filesystem_for`` routes exactly as it routes an object store."""
 
+import base64
 import bz2
 import gzip
 import hashlib
@@ -215,6 +216,144 @@ def test_verified_copy_rejects_alias_for_source_as_destination(tmp_path):
         verified_copy_prefix(f"file://{source}", str(source), workers=1)
 
     assert source_file.read_bytes() == b"weights"
+
+
+class _GcsRewriteDestination:
+    """Simulate GCS rewrites assigning copied objects fresh ETags."""
+
+    protocol = "gcs"
+
+    def __init__(self, filesystem, md5_hash):
+        self.filesystem = filesystem
+        self.md5_hash = md5_hash
+        self.etags: dict[str, str] = {}
+        self.generations = 0
+        self.reads = 0
+
+    def __getattr__(self, name):
+        return getattr(self.filesystem, name)
+
+    def _new_etag(self, path):
+        self.generations += 1
+        self.etags[path] = f"GENERATION-{self.generations}="
+
+    def _etag_for(self, path):
+        if path not in self.etags:
+            self._new_etag(path)
+        return self.etags[path]
+
+    def cp_file(self, source_path, destination_path, **kwargs):
+        self.filesystem.cp_file(source_path, destination_path, **kwargs)
+        self._new_etag(destination_path)
+
+    def open(self, path, mode, **kwargs):
+        if mode == "rb" and path.endswith("weights.bin"):
+            self.reads += 1
+        return self.filesystem.open(path, mode, **kwargs)
+
+    def _metadata(self, info):
+        info["md5Hash"] = self.md5_hash
+        return info
+
+    def info(self, path):
+        info = self.filesystem.info(path)
+        if info.get("type") != "directory":
+            self._metadata(info)
+            info["etag"] = self._etag_for(path)
+        return info
+
+    def find(self, path, *, detail):
+        found = self.filesystem.find(path, detail=detail)
+        if detail:
+            for name, info in found.items():
+                if info.get("type") != "directory":
+                    self._metadata(info)
+                    info["etag"] = self._etag_for(name)
+        return found
+
+
+def test_verified_copy_promotes_gcs_objects_whose_copy_changes_the_etag(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"abcdefghij")
+
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    original_filesystem_for = verified_copy_module.filesystem_for
+    md5_hash = base64.b64encode(hashlib.md5(b"abcdefghij", usedforsecurity=False).digest()).decode()
+    rewrite_destination = _GcsRewriteDestination(destination_filesystem, md5_hash)
+
+    def routed_filesystem(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(destination):
+            return rewrite_destination, destination_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
+
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert result.copied_files == 1
+    assert (destination / "weights.bin").read_bytes() == b"abcdefghij"
+    manifest = json.loads((destination / COMPLETION_MANIFEST).read_text())
+    assert manifest["files"][0]["sha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
+    assert not (Path(f"{destination}{STAGING_SUFFIX}") / "weights.bin").exists()
+    # The staged object is read back once for its copy-time sha256; the rewrite
+    # preserves md5Hash, so promotion must not download the object again.
+    assert rewrite_destination.reads == 1
+
+
+def test_verified_copy_rejects_corrupted_promotion_when_head_reports_a_null_version(tmp_path, monkeypatch):
+    """Model an S3 HEAD that reports VersionId: "null" (CoreWeave, #11432).
+
+    The listing carries the ETag but no VersionId; the promotion copy writes
+    the wrong bytes. Ranking a version id above the ETag would make both the
+    staged and promoted identities the constant "VersionId=null" and accept the
+    corruption; the ETag-first identity must reject it.
+    """
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"abc")
+
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    def object_info(path, *, with_version):
+        info = destination_filesystem.info(path)
+        result = {"name": path, "size": info["size"], "type": info["type"]}
+        result["ETag"] = f'"{hashlib.md5(Path(path).read_bytes(), usedforsecurity=False).hexdigest()}"'
+        if with_version:
+            result["VersionId"] = "null"
+        return result
+
+    class S3NullVersionDestination:
+        protocol = "s3"
+
+        def __getattr__(self, name):
+            return getattr(destination_filesystem, name)
+
+        def find(self, path, *, detail):
+            if not detail:
+                return destination_filesystem.find(path, detail=detail)
+            return {name: object_info(name, with_version=False) for name in destination_filesystem.find(path)}
+
+        def info(self, path):
+            return object_info(path, with_version=True)
+
+        def cp_file(self, source_path, destination_path, **kwargs):
+            Path(destination_path).write_bytes(b"XYZ")
+
+    def routed_filesystem(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(destination):
+            return S3NullVersionDestination(), destination_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
+
+    with pytest.raises(VerifiedCopyError, match="promoted object does not match"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert not (destination / COMPLETION_MANIFEST).exists()
 
 
 @pytest.mark.parametrize("reverse", [False, True])

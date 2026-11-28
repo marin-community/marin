@@ -505,10 +505,8 @@ def _destination_matches_marker(
         return _sha256(filesystem, path) == marker.staging_identity.removeprefix(SHA256_IDENTITY_PREFIX)
     if destination.identity == marker.staging_identity:
         return True
-    if marker.staging_identity.startswith(ETAG_IDENTITY_PREFIX) and marker.staging_identity.rpartition("-")[2].isdigit():
-        # UploadPartCopy can change a multipart ETag without changing the bytes.
-        return _sha256(filesystem, path) == marker.sha256
-    return False
+    # Store-side copies can change ETags without changing content.
+    return _sha256(filesystem, path) == marker.sha256
 
 
 def _sha256(filesystem: AbstractFileSystem, path: str) -> str:
@@ -664,10 +662,18 @@ def _source_identity(info: dict[str, Any], *, matching: str | None = None) -> st
 
 
 def _destination_identity(info: dict[str, Any]) -> str | None:
+    # Prefer the content-derived digests a store-side copy such as a GCS rewrite
+    # preserves across its generation change; S3 listings carry neither, so S3
+    # keeps its ETag identity. Version ids are not content identities and S3
+    # HEAD can report a constant "null", so they stay behind the ETag.
+    for key in ("md5Hash", "crc32c"):
+        value = info.get(key)
+        if value is not None:
+            return f"{key}={value!s}"
     etag = _etag(info)
     if etag is not None:
         return f"{ETAG_IDENTITY_PREFIX}{etag}"
-    for key in ("ChecksumSHA256", "checksum", "md5Hash", "crc32c", "version_id", "VersionId"):
+    for key in ("ChecksumSHA256", "checksum", "version_id", "VersionId"):
         value = info.get(key)
         if value is not None:
             return f"{key}={value!s}"
