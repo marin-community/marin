@@ -294,6 +294,50 @@ uv run fsutil ls s3://marin-us-east-02a/marin/datakit/
 | `scripts/` | Manual source triggering and synchronization, tier-2 dataset reproduction, and tier-1 output validation |
 | `testbed/` | Sampled-corpus testbed used by the smoke and decon experiments |
 
+## SFT registration receipt
+
+Chat sources use the [chat registration workflow](../../docs/tutorials/add-chat-dataset.md)
+and `marin.datakit.sft_sources.all_sft_sources`. Prepare the required eval corpus
+first. The final SFT workflow builds a five-word Bloom from the same required
+Artificial Analysis, lm-eval, Uncheatable and Atlas-reference binding used by
+Datakit preparation. It then builds full-source decontamination marks, removes
+contaminated conversations and exact token-and-mask duplicates, and writes the
+prepared training Parquet. It does not reuse the PT pipeline's 13-word marks.
+
+```bash
+uv run python -m experiments.datakit.register_sft --request registration-request.json
+uv run python -m experiments.datakit.register_sft --request registration-request.json --run
+```
+
+`SftRegistrationRequest` names the registered source and the exact source ID,
+variant ID, repository and revision. It pins the tokenizer-file manifest and
+chat template with URI/SHA-256 references. Without `--run`, the command prints
+the planned output path. With `--run`, StepRunner builds missing dependencies
+and runs the final check. Run beside the bucket holding the source and training
+data; a full source registration can read the whole corpus.
+
+The producer writes complete input, chat, text, mark and training file manifests.
+The check verifies their file digests and measured row counts. JSONL downloads
+are counted as JSON records; Parquet downloads use footer row counts.
+The receipt separates downloaded `input_rows` from normalized `chat_rows` and
+preserves the producer's `normalization_counters`. Converters can create several
+conversations from one source row; these units are not subtracted from each other.
+Every conversation removed after chat normalization must be eval-contaminated or
+have the same tokens and masks as a retained conversation. The check compares
+retained chats with the original messages and compares their tokens and
+assistant masks with the pinned tokenizer/template.
+
+Success writes `<printed output>/receipt.json` as
+`finestore.sft.SftPreparationReceipt`. A failed check writes no receipt; an
+identical retry preserves the original completion time. The receipt pins the
+variant's observed content, prepared output, all completed stages, file
+manifests and decontamination policy. `training_tokens` and `supervised_tokens`
+count only the retained training population.
+
+Prepare RL-to-SFT conversion as a separate workflow that emits a new dataset
+variant and its lineage receipt. Registration consumes that variant; it does
+not generate teacher responses or change the parent dataset.
+
 ## Running
 
 Submission commands (full and sample mode) live in the `reference_pipeline.py`

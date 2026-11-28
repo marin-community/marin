@@ -119,11 +119,8 @@ from dataclasses import dataclass, field, replace
 from fray.types import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
 from marin.datakit.decon import (
-    BestEffortEvalSuite,
     DeconAttributes,
     DropSetSource,
-    RequiredEvalManifest,
-    RequiredEvalSuite,
     all_source_drop_sets_step,
     build_eval_bloom_step,
     decon_step,
@@ -180,24 +177,11 @@ from experiments.datakit.decontam.config import (
     SOURCE_DF_COMMON_MIN_ABS,
     SOURCE_DF_SAMPLE_DOCS,
 )
-from experiments.datakit.decontam.pinned_references import (
-    COVERAGE_MANIFEST,
-    COVERAGE_RELATIVE,
-    COVERAGE_VERSION,
-    reference_catalog,
-    reference_sources_sha256,
-)
 from experiments.datakit.decontam.prepare_eval_corpus import (
-    AA_BENCHMARK_NAMES,
-    AA_MANIFEST_RELATIVE,
     DECON_EXCLUDED_EVAL_TASKS,
-    EVAL_CORPUS_VERSION,
     EVALS_RELATIVE,
-    LMH_MANIFEST_RELATIVE,
-    UNCHEATABLE_BENCHMARK_NAMES,
-    UNCHEATABLE_MANIFEST_RELATIVE,
-    required_lmh_tasks,
 )
+from experiments.datakit.decontam.required_binding import required_eval_binding
 from experiments.datakit.embeddings.luxical.pipeline import (
     EMBED_DOC_SAMPLE_CHARS,
     EMBEDDING_ATTR_DATA_VERSION,
@@ -813,22 +797,7 @@ def decontamination_steps(
         estimated_doc_count=ESTIMATED_DOC_COUNT,
         false_positive_rate=FALSE_POSITIVE_RATE,
         exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
-        required_eval_suites=(
-            RequiredEvalSuite(f"{eval_root}/{AA_MANIFEST_RELATIVE}", AA_BENCHMARK_NAMES),
-            RequiredEvalSuite(f"{eval_root}/{UNCHEATABLE_MANIFEST_RELATIVE}", UNCHEATABLE_BENCHMARK_NAMES),
-        ),
-        required_eval_corpus_version=EVAL_CORPUS_VERSION,
-        additional_required_eval_manifests=(
-            RequiredEvalManifest(
-                path=prefix_join(prefix_join(marin_prefix(), COVERAGE_RELATIVE), COVERAGE_MANIFEST),
-                version=COVERAGE_VERSION,
-                names=tuple(source.name for source in reference_catalog()),
-                source_catalog_sha256=reference_sources_sha256(reference_catalog()),
-            ),
-        ),
-        best_effort_eval_suite=BestEffortEvalSuite(
-            f"{eval_root}/{LMH_MANIFEST_RELATIVE}", EVAL_CORPUS_VERSION, required_lmh_tasks()
-        ),
+        **required_eval_binding().bloom_options(),
         worker_resources=worker_resources,
         max_workers=scale.pool.n_workers,
         zephyr_context=zephyr_context,
