@@ -124,6 +124,8 @@ class RetainedFormatCensus(BaseModel):
     release: DatasetRelease
     counts: dict[TaskFormat, int]
     evidence: ContentEvidenceReference
+
+
 class RetainedGradingCarry(BaseModel):
     """Retained grading evidence carried forward through verified content identity.
 
