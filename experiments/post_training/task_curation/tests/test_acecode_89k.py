@@ -4,7 +4,7 @@
 import json
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ScriptGrader, Source
@@ -14,6 +14,7 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets import acecode_89k
 
+SUBPROCESS_TIMEOUT = 5
 NATIVE = {
     "id": "acecode-0001",
     "source": "bigcode_python_fns",
@@ -87,14 +88,18 @@ def test_the_assert_cases_are_the_grader_and_the_inferences_stay_out():
 @pytest.fixture
 def staged_grader(tmp_path: Path) -> Path:
     task = converted(NATIVE).task
+    grader = task.grader
+    assert isinstance(grader, ScriptGrader) and grader.answer_path is not None
     for resource in task.resources.verifier:
         (tmp_path / resource.path).write_bytes(resource_bytes(resource))
-    script = tmp_path / "grade.py"
+    entrypoint = PurePosixPath(grader.argv[1])
+    script = tmp_path / entrypoint.name
+    config = entrypoint.with_name("config.json")
     # Map the sandbox's absolute input paths into the test directory.
     script.write_text(
         script.read_text()
-        .replace('"/tests/config.json"', repr(str(tmp_path / "config.json")))
-        .replace('"/app/answer.txt"', repr(str(tmp_path / "answer.txt")))
+        .replace(json.dumps(str(config)), repr(str(tmp_path / config.name)))
+        .replace(json.dumps(grader.answer_path), repr(str(tmp_path / "answer.txt")))
     )
     return script
 
@@ -111,7 +116,9 @@ def staged_grader(tmp_path: Path) -> Path:
         (
             "```python\nraise RuntimeError\n```\n"
             "```python\nprint('debug output', end='')\n"
-            "def staking_simulation(xs, ys, t):\n    return [1500 if t == 1 else 0]\n```",
+            "def staking_simulation(xs, ys, t):\n"
+            "    return [amount if duration <= t else 0 for amount, duration in xs]\n"
+            "```",
             1,
         ),
     ],
@@ -119,7 +126,9 @@ def staged_grader(tmp_path: Path) -> Path:
 )
 def test_shipped_grader_emits_only_its_reward(staged_grader: Path, answer: str, reward: int):
     (staged_grader.parent / "answer.txt").write_text(answer)
-    result = subprocess.run([sys.executable, str(staged_grader)], capture_output=True, text=True, timeout=5)
+    result = subprocess.run(
+        [sys.executable, str(staged_grader)], capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout == f"{reward}\n"
 
@@ -137,7 +146,7 @@ def test_shipped_grader_scores_a_timed_out_case_zero(staged_grader: Path):
         ],
         capture_output=True,
         text=True,
-        timeout=5,
+        timeout=SUBPROCESS_TIMEOUT,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout == "0\n"
@@ -147,7 +156,9 @@ def test_shipped_grader_scores_a_timed_out_case_zero(staged_grader: Path):
 def test_shipped_grader_exits_nonzero_for_invalid_cases(staged_grader: Path, cases: list[str]):
     (staged_grader.parent / "config.json").write_text(json.dumps({"test_cases": cases}))
     (staged_grader.parent / "answer.txt").write_text("def staking_simulation(xs, ys, t):\n    return [0]\n")
-    result = subprocess.run([sys.executable, str(staged_grader)], capture_output=True, text=True, timeout=5)
+    result = subprocess.run(
+        [sys.executable, str(staged_grader)], capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT
+    )
     assert result.returncode != 0
     assert result.stdout == ""
 

@@ -3,7 +3,8 @@
 
 """Grade a code reply against the shipped AceCode assert cases: 1 when every case passes.
 
-The candidate's last fenced block runs in a child process with the row's assert cases.
+The candidate's last fenced block, or the full reply if there is no fence, runs in a
+child process with the row's assert cases.
 Candidate failures and timeouts score 0. Invalid grader inputs exit nonzero.
 """
 
@@ -11,17 +12,24 @@ import json
 import multiprocessing
 import os
 import re
+from contextlib import closing
 from multiprocessing.connection import Connection
 from pathlib import Path
 from types import CodeType
 
 CANDIDATE_TIMEOUT = 30.0  # Leave time for the grader to return a reward before its 330-second timeout.
 CODE_BLOCK = re.compile(r"```(?:\w+)?\n(.*?)```", re.DOTALL)
+PASSED = b"1"
+SETUP_FAILED = b"output redirection failed"
 
 
 def run_candidate(code: str, cases: tuple[CodeType, ...], verdict: Connection, output_fd: int) -> None:
-    os.dup2(output_fd, 1)  # Only the parent writes to the reward stream.
-    os.dup2(output_fd, 2)
+    try:
+        os.dup2(output_fd, 1)  # Only the parent writes to the reward stream.
+        os.dup2(output_fd, 2)
+    except OSError:
+        verdict.send_bytes(SETUP_FAILED)
+        return
     namespace: dict = {}
     try:
         exec(code, namespace)
@@ -30,24 +38,32 @@ def run_candidate(code: str, cases: tuple[CodeType, ...], verdict: Connection, o
     except (Exception, SystemExit, KeyboardInterrupt):
         verdict.send_bytes(b"0")
     else:
-        verdict.send_bytes(b"1")
+        verdict.send_bytes(PASSED)
 
 
 def candidate_passes(code: str, cases: tuple[CodeType, ...], timeout: float) -> bool:
+    """Return whether the candidate completed every case within the budget."""
     context = multiprocessing.get_context("fork")
     receiver, sender = context.Pipe(duplex=False)
     with receiver, sender, open(os.devnull, "wb") as output:
-        with context.Process(target=run_candidate, args=(code, cases, sender, output.fileno())) as child:
+        process = context.Process(target=run_candidate, args=(code, cases, sender, output.fileno()))
+        with closing(process) as child:
             child.start()
             sender.close()
             try:
-                return receiver.poll(timeout) and receiver.recv_bytes() == b"1"
+                if not receiver.poll(timeout):
+                    return False
+                result = receiver.recv_bytes()
             except EOFError:
+                # The candidate process exited before reporting a verdict.
                 return False
             finally:
                 if child.is_alive():
                     child.kill()
                 child.join()
+    if result == SETUP_FAILED:
+        raise OSError("Could not redirect AceCode candidate output")
+    return result == PASSED
 
 
 def main(timeout: float = CANDIDATE_TIMEOUT) -> None:
