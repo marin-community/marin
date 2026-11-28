@@ -60,6 +60,7 @@ from levanter.grug._moe.ep_ring import (
 )
 from levanter.grug._moe.ep_ring_filtered import _moe_mlp_ep_ring_filtered_local
 from levanter.grug._moe.local import _moe_mlp_local
+from levanter.grug._moe.routing_top_k import routing_top_k
 from levanter.grug.sharding import (
     _axis_names,
     _token_spec_from_x,
@@ -312,7 +313,9 @@ class QBRoutedMoE(eqx.Module):
             router_logits = jnp.einsum("td,de->te", x, replicate_keeping_reduced(router)).astype(jnp.float32)
             biased_logits = router_logits + jax.lax.stop_gradient(router_bias)
             router_probs = jax.nn.softmax(router_logits, axis=-1)
-            topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.num_experts_per_token + 1)
+            topk_logits, selected_experts = routing_top_k(
+                biased_logits, self.num_experts_per_token + 1, mesh=mesh, batch_axes=self.batch_axes
+            )
             qb_alpha = topk_logits[:, -1:]
             selected_experts = selected_experts[:, :-1]
             selected_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
