@@ -212,7 +212,7 @@ def bind_sample_result[ConfigT: CatalogConfig](
         cross_pin = not full_match
         method = (
             f"SAMPLE content panel: seed {panel.sample_seed}, {panel.sample_size} selected / "
-            f"{panel.retained_tasks} current tasks; pinned GLM-5.3 v3; execution qualification pending"
+            f"{panel.retained_tasks} current tasks; pinned reviewer; execution qualification pending"
             + (
                 f"; the panel's recorded population digest equals the current pin's actor census "
                 f"digest ({actor.task_specs_sha256[:12]}), so the reviewed bytes are the served "

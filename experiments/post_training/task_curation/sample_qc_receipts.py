@@ -31,7 +31,7 @@ from experiments.post_training.task_curation.sample_qc_binding import (
 )
 
 
-def sample_qc_receipt(path: str) -> SampleQCReceipt:
+def sample_qc_observations(path: str) -> SampleQCReceipt:
     """Recompute counts from immutable observations with the exact pinned panel contracts."""
     record = read_record(path)
     if record is None or record.result is None:
@@ -87,6 +87,12 @@ def sample_qc_receipt(path: str) -> SampleQCReceipt:
         artifact_sha256=file_sha256(StoragePath(path) / RECORD_FILENAME),
         missing_observations=tuple(missing),
     )
+    return receipt
+
+
+def sample_qc_receipt(path: str) -> SampleQCReceipt:
+    """Require the observation-verified panel to clear the standard SAMPLE threshold."""
+    receipt = sample_qc_observations(path)
     require_sample_qualification(receipt)
     return receipt
 

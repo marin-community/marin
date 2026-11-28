@@ -42,7 +42,7 @@ from experiments.post_training.task_curation.review_quality import quality_resul
 from experiments.post_training.task_curation.sample_qc import panel_tasks, review_panel
 from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory, SampleQCReview
 from experiments.post_training.task_curation.sample_qc_binding import bind_sample_result
-from experiments.post_training.task_curation.sample_qc_receipts import sample_qc_receipt
+from experiments.post_training.task_curation.sample_qc_receipts import sample_qc_observations, sample_qc_receipt
 from experiments.post_training.task_curation.source import SourceOrigin, SourceReference
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
@@ -155,13 +155,22 @@ def test_sample_filter_proof_must_cover_unselected_retained_tasks(sample_panel, 
             assert result.sample.oracle_filter_receipt == reference
 
 
-@pytest.mark.parametrize("payload_revision", ["4", "5", "6"])
+@pytest.mark.parametrize(
+    ("reviewer_version", "payload_revision"),
+    [
+        (ReviewerVersion.V3, "4"),
+        (ReviewerVersion.V3, "5"),
+        (ReviewerVersion.V3, "6"),
+        (ReviewerVersion.V4, "6"),
+        (ReviewerVersion.V5, "6"),
+    ],
+)
 def test_sample_review_keeps_full_population_identity_and_reuses_exact_panel_evidence(
-    sample_panel, review_server, tmp_path, payload_revision
+    sample_panel, review_server, tmp_path, reviewer_version, payload_revision
 ):
     reviewer = ChatReviewer(
         OpenAIChatClient(f"http://127.0.0.1:{review_server.server_port}/v1", "unused", timeout=2),
-        local_reviewer(ReviewerVersion.V3, payload_revision=payload_revision),
+        local_reviewer(reviewer_version, payload_revision=payload_revision),
         query_cache_root=str(tmp_path / "cache"),
     )
     output = str(tmp_path / "reviews")
@@ -310,8 +319,9 @@ def test_sample_result_cannot_claim_issue_counts_absent_from_observations(sample
     record = read_record(result.path)
     claimed = SourceQualityResult(reviewed=3, issue_count=1, issues=[], repair_recommendation="Inspect issues")
     write_record(record.model_copy(update={"result": {**record.result, "result": claimed.model_dump(mode="json")}}))
-    with pytest.raises(ValueError, match="differs from its task-level observations"):
-        sample_qc_receipt(result.path)
+    for verify in (sample_qc_observations, sample_qc_receipt):
+        with pytest.raises(ValueError, match="differs from its task-level observations"):
+            verify(result.path)
 
 
 @pytest.mark.parametrize("missing_count", [5, 6])
@@ -410,6 +420,9 @@ def test_sample_missing_tolerance_preserves_frozen_panel_and_missing_evidence(sa
             output_path=result.path, result_type=result_type_name(type(result)), result=result.result_payload()
         )
     )
+    verified = sample_qc_observations(result.path)
+    assert verified.review.result.reviewed == 100 - missing_count
+    assert len(verified.missing_observations) == missing_count
     if missing_count == 6:
         with pytest.raises(ValueError, match="at most 5% missing"):
             sample_qc_receipt(result.path)
