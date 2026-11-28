@@ -14,9 +14,9 @@ Before launching:
 - Local execution needs prepared images and working bubblewrap namespaces. Shellbox
   also needs a writable part of the worker's cgroup v2 tree to contain task processes.
   Launcher preflight cannot check that permission on a remote worker.
-- BixBench and BFCL standalone Pi policies need prepared Pi images. Changed benchmark
+- Standalone Harbor Pi policies need prepared Pi images. Changed benchmark
   policies need a new approved cohort version. See [verified cohorts](https://github.com/marin-community/marin/blob/main/eval_policy/README.md).
-  Historical tasks that install Pi at runtime fail preflight.
+  Historical Harbor tasks that install Pi at runtime fail preflight.
 - Use a new results root if the old root has no recorded evaluator identity.
 
 ## Run a benchmark
@@ -212,8 +212,13 @@ Standalone Pi tasks, including single-container tasks, must declare a digest-pin
 For Daytona, `task.toml`'s `environment.docker_image` must match it. Pi setup writes
 configuration without installing Node or npm packages. If you set `kwargs.version`,
 setup checks it against the installed binary. On local execution, the manifest selects
-the image. A `docker_image` in `task.toml`, if present, must match. This requirement applies
-to the BixBench and BFCL Pi campaign policies and the one-task onboarding ablation.
+the image. A `docker_image` in `task.toml`, if present, must match.
+
+The BFCL and BixBench campaign policies now use curated TaskSpec corpora, which
+install Pi while preparing each task image. The one-task BFCL onboarding probe
+at `experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/model_onboarding/bfcl-one.yaml`
+is a curated selection document. The launcher accepts it at its historical
+`--harbor-config` path; use `--evaluation-config` for new curated selections.
 
 A sidecar declaring `agent_logs: "publish"` has its logs copied into the actor's agent-log
 directory after the agent phase, before verification.

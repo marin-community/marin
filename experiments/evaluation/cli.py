@@ -15,6 +15,7 @@ import logging
 from pathlib import Path
 
 import click
+import yaml
 from evalrecords.records import RECORD_FILE, TaskEvidence, TaskMachineBackend, read_record
 from iris.cli.connect import open_iris_client
 from iris.rpc import job_pb2
@@ -204,7 +205,7 @@ def cli() -> None:
     "--harbor-config",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     multiple=True,
-    help="Harbor JobConfig YAML or JSON. Repeatable and additive with --evals.",
+    help="Harbor JobConfig YAML or JSON, or a curated selection document for migrated policies. Repeatable.",
 )
 @click.option(
     "--retry-unscored-harbor-trials",
@@ -328,8 +329,16 @@ def launch(
     selected_model = resolve_model_config(model, model_config)
     selected_judge = resolve_judge_model_config(judge_model, judge_model_config)
     resolved_platform = Platform(platform) if platform else default_platform(selected_model)
-    configured = [entry for path in evaluation_config for entry in load_evaluations(path)]
-    if evaluation_config and evals_arg:
+    selection_paths = list(evaluation_config)
+    harbor_definitions = []
+    for path in harbor_config:
+        document = yaml.safe_load(path.read_text())
+        if isinstance(document, dict) and "evaluations" in document:
+            selection_paths.append(path)
+        else:
+            harbor_definitions.append(HarborDefinition(name=canonical_served_name(path.stem), config_path=path))
+    configured = [entry for path in selection_paths for entry in load_evaluations(path)]
+    if selection_paths and evals_arg:
         names = {name.strip() for name in evals_arg.split(",") if name.strip()}
         unknown = names - {entry.name for entry in configured}
         if unknown:
@@ -337,15 +346,8 @@ def launch(
                 f"Unknown configured evaluations: {', '.join(sorted(unknown))}", param_hint="--evals"
             )
         configured = [entry for entry in configured if entry.name in names]
-    harbor_definitions = [
-        HarborDefinition(
-            name=canonical_served_name(path.stem),
-            config_path=path,
-        )
-        for path in harbor_config
-    ]
     evals = tuple(configured) + tuple(harbor_definitions)
-    if not evaluation_config and evals_arg is not None:
+    if not selection_paths and evals_arg is not None:
         evals += _resolve_evaluations(evals_arg)
     if not evals:
         evals = _resolve_evaluations("smoke")
@@ -381,10 +383,10 @@ def launch(
         else:
             param_hint = "--evaluation-config/--harbor-config" if evaluation_config or harbor_config else "--evals"
         raise click.BadParameter(str(exc), param_hint=param_hint) from exc
-    _require_coreweave_credentials(batch)
     if dry_run:
         _print_plan(spec, batch)
         return
+    _require_coreweave_credentials(batch)
     with open_iris_client(cluster_name=EVALUATION_CONTROLLER_CLUSTER, workspace=find_project_root()) as client:
         group = launch_group(batch, client)
         click.echo(
