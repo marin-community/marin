@@ -530,18 +530,24 @@ def test_coordinator_memory_raise_leaves_pool_adoption_untouched(tmp_path, monke
     (fixture / "model" / "export-manifest.json").write_bytes(export)
     pools = fixture / "pools"
     pools.mkdir()
-    rows = {label: [{"task_spec": json.dumps({"id": f"{label}-{index}"})} for index in range(60)] for label in mix.sources}
+    rows = {
+        label: [{"task_spec": json.dumps({"id": f"{label}-{index}"})} for index in range(60)] for label in mix.sources
+    }
     curriculum = partition_mix(mix, rows, plain.version).curriculum
     definition = dataclasses.asdict(curriculum)
     definition.pop("fingerprint")
-    (pools / "manifest.json").write_text(json.dumps({
-        "curriculum": curriculum.identity,
-        "curriculum_definition": definition,
-        "validation": validation_payload(curriculum.validation),
-        "composition": {label: 60 for label in mix.sources},
-        "routes": {label: pin["route"] for label, pin in mix.sources.items()},
-        "files": {f"{label}/train.parquet": "c" * 64 for label in mix.sources},
-    }))
+    (pools / "manifest.json").write_text(
+        json.dumps(
+            {
+                "curriculum": curriculum.identity,
+                "curriculum_definition": definition,
+                "validation": validation_payload(curriculum.validation),
+                "composition": {label: 60 for label in mix.sources},
+                "routes": {label: pin["route"] for label, pin in mix.sources.items()},
+                "files": {f"{label}/train.parquet": "c" * 64 for label in mix.sources},
+            }
+        )
+    )
 
     def authored_round(spec, path):
         local = dataclasses.replace(

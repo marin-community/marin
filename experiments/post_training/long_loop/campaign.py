@@ -212,9 +212,7 @@ def apply_coordinator_memory(spec: AdoptedRlRound, memory: str | None) -> Adopte
         return spec
     if memory == spec.rl.execution.get("memory"):
         return spec
-    return dataclasses.replace(
-        spec, rl=dataclasses.replace(spec.rl, execution={**spec.rl.execution, "memory": memory})
-    )
+    return dataclasses.replace(spec, rl=dataclasses.replace(spec.rl, execution={**spec.rl.execution, "memory": memory}))
 
 
 def run_validated(config: SkyRLRunConfig):
