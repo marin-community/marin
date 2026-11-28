@@ -476,7 +476,7 @@ per-fusion autotune results on GPU tasks, because XLA opens that directory from
 C++ and cannot read an object-store URL. Iris warms one local leader per node
 from a FineStore file-set snapshot and has global rank 0 publish newly created
 files in bounded transactions when autotuning is enabled. With
-`--xla_gpu_autotune_level=0` (or `--xla_gpu_autotune_level 0`), rank 0 fetches
+`--xla_gpu_autotune_level=0`, rank 0 fetches
 the snapshot without starting an uploader. XLA can read cached configurations
 before choosing its level-0 fallback. The local directory and remote root
 are keyed by the launch tree hash; the remote root uses 30-day temporary storage.
