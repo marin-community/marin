@@ -420,9 +420,11 @@ class IrisImageBuilder:
         logger.info("submitted build job %s for %s (no wait)", build_job.job_id, destination)
         return BuildSubmitted(str(build_job.job_id), destination, digest, tag)
 
-    async def submit_build(self, build: DockerBuild, repository: str) -> BuildSubmitted:
+    async def submit_build(
+        self, build: DockerBuild, repository: str, *, memory_bytes: int | None = None
+    ) -> BuildSubmitted:
         """The async form of :meth:`submit_build_with_timings`; the event loop stays free."""
-        return await asyncio.to_thread(self.submit_build_with_timings, build, repository)
+        return await asyncio.to_thread(self.submit_build_with_timings, build, repository, memory_bytes=memory_bytes)
 
     def publish_with_timings(self, build: DockerBuild, repository: str) -> Published:
         """Publish ``build`` under ``repository``, blocking until the image is pushed and read back."""
