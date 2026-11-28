@@ -33,6 +33,7 @@ from taskcompendium.pipeline.models import ImportRejection, RawRow
 
 from experiments.post_training.task_curation.datasets.native_harbor import native_task
 from experiments.post_training.task_curation.datasets.openswe import grader
+from experiments.post_training.task_curation.datasets.openswe import grader_repair
 from experiments.post_training.task_curation.datasets.openswe.dockerfile_translation import (
     DockerfileRejected,
     translate_dockerfile,
@@ -67,7 +68,13 @@ class OpenSweRowExcluded(Exception):
         self.detail = detail
 
 
-def _task_toml(row: OpenSweRow, workdir: str, base_group: str | None, declared_bases: tuple[str, ...]) -> str:
+def _task_toml(
+    row: OpenSweRow,
+    workdir: str,
+    base_group: str | None,
+    declared_bases: tuple[str, ...],
+    grader_repair_note: dict | None = None,
+) -> str:
     metadata: dict = {
         "author_name": "OpenSWE (Marin conversion)",
         "author_email": "dataset@GAIR-NLP",
@@ -82,6 +89,8 @@ def _task_toml(row: OpenSweRow, workdir: str, base_group: str | None, declared_b
     }
     if base_group is not None:
         metadata["condensed_base_python"] = base_group
+    if grader_repair_note is not None:
+        metadata["grader_repair"] = grader_repair_note
     config = {
         "metadata": metadata,
         "verifier": {"timeout_sec": VERIFIER_TIMEOUT_SEC},
@@ -119,6 +128,24 @@ def package_files(
             "ungradeable_eval_script",
             "The upstream eval_script never records an OPENSWE_EXIT_CODE verdict",
         )
+    # The no-op grader scan (coordinator ruling 2026-11-27): a grader that
+    # applies the golden patch before testing passes an empty-diff agent — a
+    # broken grader fails closed. Repairable graders drop the golden-patch
+    # application so the agent's diff is what gets tested; unrepairable ones
+    # leave the converted population as typed exclusions.
+    grader_classification = grader_repair.classify_grader(row)
+    if grader_classification.verdict == "unrepairable":
+        raise OpenSweRowExcluded(grader_classification.reason or "grader passes no-op", grader_classification.detail)
+    eval_script = row.eval_script
+    grader_repair_note = None
+    if grader_classification.verdict == "repairable":
+        eval_script = grader_repair.repaired_script(row, grader_classification)
+        grader_repair_note = {
+            "applied": True,
+            "golden_sites": len(grader_classification.golden_sites),
+            "golden_matches": sorted({site.match for site in grader_classification.golden_sites}),
+            "resets_scoped": len(grader_classification.reset_sites),
+        }
     try:
         translation = translate_dockerfile(
             row.dockerfile,
@@ -129,12 +156,15 @@ def package_files(
         )
     except DockerfileRejected as error:
         raise OpenSweRowExcluded("dockerfile_rejected", str(error)) from error
+    task_metadata_extra = None if grader_repair_note is None else grader_repair_note
     files = {
-        "task.toml": _task_toml(row, translation.workdir, translation.base_group, translation.declared_bases).encode(),
+        "task.toml": _task_toml(
+            row, translation.workdir, translation.base_group, translation.declared_bases, task_metadata_extra
+        ).encode(),
         "instruction.md": row.problem_statement.encode(),
         "environment/Dockerfile": translation.text.encode(),
         "tests/test.sh": grader.verifier_script(),
-        "tests/eval_script.sh": row.eval_script.encode(),
+        "tests/eval_script.sh": eval_script.encode(),
         "solution/gold.patch": row.patch.encode(),
         "solution/solve.sh": grader.solve_script(translation.workdir),
     }
