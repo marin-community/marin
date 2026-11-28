@@ -488,7 +488,13 @@ baseline and selection policy are recorded in `best_checkpoint.json` and the
 baseline is restored on resume. Keep metric definitions and the selection policy
 unchanged on resume.
 
+Temporary native checkpoints expire after one day by default. Set
+`SkyRLRetentionPolicy(checkpoint_ttl_days=...)` for a run that needs a longer
+recovery window. Attempt logs use `temporary_storage_ttl_days`. When a preset
+stores checkpoints in the run output, their lifetime follows that output.
 The temporary checkpoint root is derived from the RL artifact name and version.
+To resume from a previously launched run, use its recorded checkpoint root via
+`--resume NAME@VERSION`.
 After runtime changes, use a fresh RL artifact version. Reusing the old
 version with `resume_mode=latest` can load private Torch or distributed state serialized by the old
 runtime. Reuse a version across runtime changes only after establishing checkpoint compatibility or

@@ -61,6 +61,7 @@ _TRAJECTORIES_SUBDIR = "trajectories"
 _CPU_DIAGNOSTIC_BYTES = 64 * 1024
 _LAUNCHER_CANCEL_GRACE_SECONDS = 10
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
+_CHECKPOINT_TTL_DAYS = 1
 _BEST_CHECKPOINT_CALLBACK = "best_checkpoint"
 SKYRL_PROJECT = Path("vendor/skyrl")
 # The SkyRL runtime is packaged separately, so its matching limit is checked there too.
@@ -419,12 +420,15 @@ class SkyRLRetentionPolicy:
     resume_checkpoint_count: int = 2
     temporary_storage_ttl_days: int = SKYRL_TEMPORARY_STORAGE_TTL_DAYS
     checkpoints_in_run_output: bool = False
+    checkpoint_ttl_days: int = _CHECKPOINT_TTL_DAYS
 
     def __post_init__(self) -> None:
         if not 1 <= self.resume_checkpoint_count <= 10:
             raise ValueError("SkyRL resume_checkpoint_count must be between one and ten")
         if self.temporary_storage_ttl_days <= 0:
             raise ValueError("SkyRL temporary_storage_ttl_days must be positive")
+        if self.checkpoint_ttl_days <= 0:
+            raise ValueError("SkyRL checkpoint_ttl_days must be positive")
 
 
 @dataclass(frozen=True)
@@ -1249,13 +1253,16 @@ def skyrl_step(
                 ctx.output_path,
                 ttl_days=spec.retention.temporary_storage_ttl_days,
             )
-        attempts_root = prefix_join(temporary_root, "attempts")
+        if spec.retention.checkpoints_in_run_output:
+            checkpoint_base = ctx.output_path
+        elif ctx.is_fingerprint:
+            checkpoint_base = temporary_root
+        else:
+            checkpoint_base = skyrl_temporary_run_path(ctx.output_path, ttl_days=spec.retention.checkpoint_ttl_days)
         output = SkyRLOutputPaths(
-            checkpoint_root=prefix_join(
-                ctx.output_path if spec.retention.checkpoints_in_run_output else temporary_root, "checkpoints"
-            ),
+            checkpoint_root=prefix_join(checkpoint_base, "checkpoints"),
             export_root=prefix_join(ctx.output_path, EXPORTS_SUBDIRECTORY),
-            attempts_root=attempts_root,
+            attempts_root=prefix_join(temporary_root, "attempts"),
             resolved_config_uri=prefix_join(ctx.output_path, RESOLVED_LAUNCH_FILENAME),
             terminal_manifest_uri=prefix_join(ctx.output_path, TERMINAL_RECEIPT_FILENAME),
         )

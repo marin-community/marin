@@ -777,13 +777,13 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
     )
 
     assert step.name == "users/alice/tests/iceball-rl"
-    assert config.output.checkpoint_root == "s3://temp/ttl=14d/skyrl/users/alice/run/checkpoints"
+    assert config.output.checkpoint_root == "s3://temp/ttl=1d/skyrl/users/alice/run/checkpoints"
     assert config.output.export_root == f"{output_path}/exports"
     launch = yaml.safe_load(config.launch_config_yaml)
     assert launch["run"]["coordinator_iris_job_id"] == "/tests/coordinator"
     assert launch["skyrl"]["trainer"]["callbacks"][0]["initial_model_uri"] == config.model.uri
     assert launch["artifacts"] == {
-        "checkpoint_root": "s3://temp/ttl=14d/skyrl/users/alice/run/checkpoints",
+        "checkpoint_root": "s3://temp/ttl=1d/skyrl/users/alice/run/checkpoints",
         "export_root": f"{output_path}/exports",
         "attempts_root": "s3://temp/ttl=14d/skyrl/users/alice/run/attempts",
         "resolved_config_uri": f"{output_path}/resolved-launch.yaml",
