@@ -5,14 +5,16 @@ name: granite-4.2-30b
 location: ibm-granite/granite-4.2-30b
 revision: 9e668ce1c538387ef24d3644e9b0606647762636
 apply_chat_template: true
+# Served TP4 on 4x H100: with every layer attending globally, TP2 left KV cache for about two sequences of the
+# 131,072-token window, so agent episodes queued past their packages' wall-clock limits.
 resource_hint:
   gpu:
-    H100: 2
+    H100: 4
 # Long reasoning at 131,072 tokens outlasts the default 30-minute request deadline on a loaded server; the reply cap,
 # not the clock, should end a reply. Not part of the launch identity.
 evaluation_request_timeout: 7200
 serve:
-  tensor_parallel_size: 2
+  tensor_parallel_size: 4
   max_model_len: 131072
   reasoning_parser: nemotron_v3
   tool_call_parser: qwen3_coder
