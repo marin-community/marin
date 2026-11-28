@@ -687,45 +687,57 @@ def test_the_next_commit_rewrites_the_manifest_the_previous_holder_published(tmp
     assert manifest.read_text() == "v2"
 
 
+class _HandoffClock:
+    """A fake clock whose every poll sleep lasts ``step`` and passes the lock to a new holder.
+
+    After ``handoffs`` new holders the lock is released. With ``handoffs=None`` it never changes hands.
+    """
+
+    def __init__(self, lock, handoffs: int | None, step: float):
+        self.now = 0.0
+        self._lock = lock
+        self._left = handoffs
+        self._step = step
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        del seconds
+        self.now += self._step
+        if self._left is None:
+            return
+        if self._left == 0:
+            self._lock.unlink()
+            return
+        self._left -= 1
+        handoff = self._lock.with_name("handoff")
+        handoff.write_text(f"holder {self._left}\n")
+        os.replace(handoff, self._lock)
+
+
 def test_a_commit_queued_behind_many_short_holds_waits_past_the_timeout(tmp_path, monkeypatch):
     """The timeout bounds one hold, not a save's whole queue of commits."""
     monkeypatch.setattr(tensorstore_serialization, "_COMMIT_ORDER_TIMEOUT_S", 1.0)
-    order = tensorstore_serialization._CommitOrder(str(tmp_path))
     lock = tmp_path / tensorstore_serialization._COMMIT_ORDER_LOCK_NAME
     lock.write_text("holder 0\n")
-    acquired = threading.Event()
-    errors: list[BaseException] = []
+    # Ten holders 0.2 s apart: 2 s of queue, twice the timeout, with the lock never free.
+    clock = _HandoffClock(lock, handoffs=10, step=0.2)
+    monkeypatch.setattr(tensorstore_serialization, "time", clock)
 
-    def wait_for_lock() -> None:
-        try:
-            order.acquire().release()
-            acquired.set()
-        except BaseException as error:
-            errors.append(error)
+    tensorstore_serialization._CommitOrder(str(tmp_path)).acquire().release()
 
-    waiter = threading.Thread(target=wait_for_lock)
-    waiter.start()
-    # Hand the lock to a new holder every 0.2 s for 2 s in all: two timeouts with no free moment.
-    for holder in range(1, 11):
-        time.sleep(0.2)
-        handoff = tmp_path / f"handoff-{holder}"
-        handoff.write_text(f"holder {holder}\n")
-        os.replace(handoff, lock)
-    assert not errors and not acquired.is_set()
-    lock.unlink()
-    waiter.join(5)
-
-    assert not errors
-    assert acquired.is_set()
+    assert clock.now == pytest.approx(2.2)
 
 
 def test_a_commit_times_out_behind_one_hold_longer_than_the_timeout(tmp_path, monkeypatch):
-    monkeypatch.setattr(tensorstore_serialization, "_COMMIT_ORDER_TIMEOUT_S", 0.3)
-    order = tensorstore_serialization._CommitOrder(str(tmp_path))
-    (tmp_path / tensorstore_serialization._COMMIT_ORDER_LOCK_NAME).write_text("holder 0\n")
+    monkeypatch.setattr(tensorstore_serialization, "_COMMIT_ORDER_TIMEOUT_S", 1.0)
+    lock = tmp_path / tensorstore_serialization._COMMIT_ORDER_LOCK_NAME
+    lock.write_text("holder 0\n")
+    monkeypatch.setattr(tensorstore_serialization, "time", _HandoffClock(lock, handoffs=None, step=0.2))
 
     with pytest.raises(TimeoutError, match="one commit has held"):
-        order.acquire()
+        tensorstore_serialization._CommitOrder(str(tmp_path)).acquire()
 
 
 def test_a_live_remote_writer_keeps_its_lock_file(tmp_path):
