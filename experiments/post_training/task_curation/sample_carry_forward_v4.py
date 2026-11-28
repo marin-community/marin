@@ -46,7 +46,6 @@ def main() -> None:
     receipts = oracle_admitted_release_receipts()
     for source_id, (current_path, result_uri) in CURRENT.items():
         receipt = receipts[source_id]
-        panel = receipt.sample.review.panel
         earlier_population = SourceTextPopulation.raw_load(earlier_population_path(receipt.actor))
         current_population = SourceTextPopulation.raw_load(current_path)
         earlier_identities = population_identities(earlier_population)
@@ -64,11 +63,11 @@ def main() -> None:
         summary = {
             "source_id": source_id,
             "earlier_panel": {
-                "dataset_id": panel.dataset_id,
-                "dataset_revision": panel.dataset_revision,
-                "retained_tasks": panel.retained_tasks,
-                "sample_size": panel.sample_size,
-                "sample_seed": panel.sample_seed,
+                "dataset_id": receipt.sample.review.panel.dataset_id,
+                "dataset_revision": receipt.sample.review.panel.dataset_revision,
+                "retained_tasks": receipt.sample.review.panel.retained_tasks,
+                "sample_size": receipt.sample.review.panel.sample_size,
+                "sample_seed": receipt.sample.review.panel.sample_seed,
             },
             "current_population": {
                 "dataset_id": current_population.dataset_id,
