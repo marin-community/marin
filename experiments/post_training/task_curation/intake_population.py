@@ -20,7 +20,7 @@ from experiments.post_training.task_curation.lexical_artifacts import SourceText
 from experiments.post_training.task_curation.lexical_contamination import RENDERER_VERSION, write_text_population
 from experiments.post_training.task_curation.license_binding import licensed_source
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
-from experiments.post_training.task_curation.sources import PENDING_MEASUREMENT_SOURCES
+from experiments.post_training.task_curation.sources import pending_measurement_sources
 
 
 @dataclass(frozen=True)
@@ -99,7 +99,7 @@ def main() -> None:
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     configure_coreweave_s3()
-    source = licensed_source(next(source for source in PENDING_MEASUREMENT_SOURCES if source.name == args.source))
+    source = licensed_source(next(source for source in pending_measurement_sources() if source.name == args.source))
     dataset = source.dataset
     assert dataset is not None and dataset.revision is not None
     root = StoragePath(args.quick)

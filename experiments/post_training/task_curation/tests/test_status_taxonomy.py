@@ -51,7 +51,7 @@ from experiments.post_training.task_curation.source import (
     population_blocker_reason,
 )
 from experiments.post_training.task_curation.source_policy import CROSSCODE_EVAL_SOURCE_IDS
-from experiments.post_training.task_curation.sources import PENDING_MEASUREMENT_SOURCES, all_sources, configured_sources
+from experiments.post_training.task_curation.sources import all_sources, configured_sources, pending_measurement_sources
 from infra.marina.apps.rl_data_catalog.server.licensing import source_license_ban
 
 APP_DIST = Path("infra/marina/apps/rl_data_catalog/dist")
@@ -186,7 +186,7 @@ def test_every_manual_exclusion_registry_row_is_excluded_with_its_claims():
 @pytest.mark.data_integration
 def test_pending_rows_cover_the_intake_queue():
     rows = source_status.pending_rows()
-    assert {row["id"] for row in rows} == {source.info.id for source in PENDING_MEASUREMENT_SOURCES}
+    assert {row["id"] for row in rows} == {source.info.id for source in pending_measurement_sources()}
     for row in rows:
         assert row["status"] in (SourceStatus.PENDING.value, SourceStatus.EXCLUDED.value)
         # Row payloads carry the enum VALUES (the page renders strings), so the
@@ -228,7 +228,7 @@ def test_status_page_composition_has_unique_ids():
 @pytest.mark.data_integration
 def test_remediation_rows_are_configured_pending_sources():
     remediation = {row["id"]: row for row in source_status.remediation_rows()}
-    intake = {source.info.id for source in PENDING_MEASUREMENT_SOURCES}
+    intake = {source.info.id for source in pending_measurement_sources()}
     configured = {source.info.id for source in all_sources().values()}
     assert set(remediation) <= configured - intake
     for row in remediation.values():

@@ -36,7 +36,7 @@ from experiments.post_training.task_curation.exclusion_registry import manual_ex
 from experiments.post_training.task_curation.metadata_exclusions import metadata_exclusions
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.source_owners import source_owner
-from experiments.post_training.task_curation.sources import PENDING_MEASUREMENT_SOURCES, all_sources
+from experiments.post_training.task_curation.sources import all_sources, pending_measurement_sources
 from infra.marina.apps.rl_data_catalog.server.admission import population_admission_blocker
 from infra.marina.apps.rl_data_catalog.server.methods import variant_projection
 
@@ -126,7 +126,7 @@ def pending_rows() -> list[dict[str, Any]]:
     """
     receipts = receipt_registry_keys()
     rows = []
-    for source in PENDING_MEASUREMENT_SOURCES:
+    for source in pending_measurement_sources():
         decided = manual_exclusion_claims(source.info.id)
         owner = source_owner(source.info.id)
         common = dict(

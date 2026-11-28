@@ -665,3 +665,22 @@ def test_registry_index_reads_the_bundled_file_by_digest(monkeypatch):
         compose_stage.read_bundled_registry_index(ArtifactRef(uri="s3://bucket/fixture-index.json", sha256="0" * 64))
         is sentinel
     )
+
+
+def test_a_fresh_review_without_a_measured_overlap_composes(tmp_path):
+    """The registry's identity documents carry judge verdicts without the content-nn
+    overlap record — no identity document in the system attaches a measurement (the
+    served survey holds none; the admissions' documents hold none) — so an unmeasured
+    fresh review composes like a retained one, its provenance being its digest-pinned
+    registry document. A review that DOES carry a measurement still binds both sides'
+    fingerprint inputs."""
+    unmeasured = _review(PRIOR_IDS[0], TARGETS[0], _fingerprint(PRIOR_IDS[0]), _fingerprint(TARGETS[0]))
+    unmeasured = unmeasured.model_copy(update={"measurement": None})
+    inputs, reader = _build(tmp_path, registry_reviews=[unmeasured])
+    proof = compose_stage.run_identity_backend_compose(
+        inputs, dry_run=False, registry_reader=reader, feeds=_feeds(tmp_path)
+    )
+    identity = json.loads(Path(proof["documents"]["identity_survey"]["uri"]).read_text())
+    composed = [DuplicateReview.model_validate(row) for row in identity["reviews"]]
+    assert unmeasured in composed
+    assert all(row.measurement is not None for row in composed if row != unmeasured)

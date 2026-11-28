@@ -495,12 +495,12 @@ def main() -> None:
     )
     # Registry loading depends on this module once retained receipts are installed.
     from experiments.post_training.task_curation.sources import (  # noqa: PLC0415
-        PENDING_MEASUREMENT_SOURCES,
         all_sources,
+        pending_measurement_sources,
     )
 
     sources = all_sources()
-    pending = {source.info.id: source for source in PENDING_MEASUREMENT_SOURCES}
+    pending = {source.info.id: source for source in pending_measurement_sources()}
     if unknown := set(args.pending_source) - pending.keys():
         raise ValueError(f"Unknown pending source IDs: {sorted(unknown)}")
     original_actors = actor_census_receipts() if args.pending_source else {}

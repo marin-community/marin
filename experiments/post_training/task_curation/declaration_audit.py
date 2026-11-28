@@ -249,10 +249,10 @@ def canonical_layer() -> tuple[CanonicalLayer, dict[str, dict[str, DeclaredPin]]
     )
     from experiments.post_training.task_curation.retirement import retired_admission_source_ids  # noqa: PLC0415
     from experiments.post_training.task_curation.sources import (  # noqa: PLC0415
-        PENDING_MEASUREMENT_SOURCES,
         all_sources,
         bind_measured_receipts,
         configured_sources,
+        pending_measurement_sources,
     )
     from experiments.post_training.task_curation.within_source_binding import (  # noqa: PLC0415
         read_dedup_receipts,
@@ -263,15 +263,15 @@ def canonical_layer() -> tuple[CanonicalLayer, dict[str, dict[str, DeclaredPin]]
     declared = declared_pins(configured)
     selected = selected_pins(sources.values())
     source_ids = {source.info.id for source in sources.values()} | {
-        source.info.id for source in PENDING_MEASUREMENT_SOURCES
+        source.info.id for source in pending_measurement_sources()
     }
-    pending_ids = {source.info.id for source in PENDING_MEASUREMENT_SOURCES}
+    pending_ids = {source.info.id for source in pending_measurement_sources()}
     retired = frozenset(retired_admission_source_ids())
 
     # A pending-intake source is declared at its intake pin: its measurement receipts must
     # match that pin, and a remediated/retained release published for it stays staged for
     # intake until adoption selects it.
-    declared.update(declared_pins(PENDING_MEASUREMENT_SOURCES))
+    declared.update(declared_pins(pending_measurement_sources()))
     # A pending source handed to the next release keeps its verified retained selection,
     # so its receipts at that selected pin are not orphaned (ruling 2026-11-25). A
     # retained receipt that does not verify leaves the configured pin selected, and its
@@ -279,7 +279,7 @@ def canonical_layer() -> tuple[CanonicalLayer, dict[str, dict[str, DeclaredPin]]
     retained_ids = set(retained_release_receipts())
     handed_on = [
         source
-        for source in PENDING_MEASUREMENT_SOURCES
+        for source in pending_measurement_sources()
         if source.info.id in retained_ids and source.info.id not in selected
     ]
     selected.update(selected_pins(bind_measured_receipts(handed_on)))

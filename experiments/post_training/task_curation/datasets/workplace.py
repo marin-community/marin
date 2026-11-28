@@ -3,6 +3,7 @@
 
 """Import Workplace's prepared image and exact-pin native consumer qualification."""
 
+from functools import lru_cache
 from pathlib import Path
 
 from finestore.rl.curation import ConsumerNeed
@@ -17,8 +18,14 @@ QUALIFICATION = Path(__file__).with_suffix(".json")
 CONSUMER_RUNTIME = "e4e00aaa24c46ddc9f63db11e06e55655df73e2c"
 
 
+@lru_cache(maxsize=1)
+def qualification() -> dict:
+    """The pinned qualification record, read once per process at first use."""
+    return read_registry_json(QUALIFICATION)
+
+
 def sources() -> list[RlDataSource[PrebuiltCohort]]:
-    record = read_registry_json(QUALIFICATION)
+    record = qualification()
     info = TypeAdapter(SourceInfo).validate_python(record["info"])
     cohort = TypeAdapter(PrebuiltCohort).validate_python(record["cohort"])
     release, actor, consumer = info.current_release, info.actor_census_input, info.consumer_receipt

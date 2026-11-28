@@ -125,6 +125,38 @@ def test_private_publication_prepares_without_writes_then_checks_uploaded_pin(tm
     assert result.license_check["receipt"]["revision"] == revision
 
 
+def test_hub_license_card_value_maps_unknown_identifiers_to_other():
+    """The Hub's card schema rejects identifiers outside its own taxonomy
+    outright (the OpenSWE taskspec publication's bsd-2-clause-patent
+    evidence); the card's license summary maps them to "other" — the repo
+    ships the upstream LICENSE notice — while the checked receipt keeps the
+    exact set."""
+    value = license_publication.hub_license_card_value(
+        ["apache-2.0", "bsd-2-clause", "bsd-2-clause-patent", "cc0-1.0", "mit"]
+    )
+    assert value == ["apache-2.0", "bsd-2-clause", "cc0-1.0", "mit", "other"]
+    assert license_publication.hub_license_card_value(["mit"]) == "mit"
+    with pytest.raises(ValueError):
+        license_publication.hub_license_card_value(["made-up-licence-1"])
+
+
+def test_publication_card_maps_unknown_identifiers_to_other(tmp_path, monkeypatch):
+    card = (
+        b"---\nlicense:\n  - mit\n  - bsd-2-clause-patent\n---\n# Dataset\n\n## License\n"
+        b"Licensed under MIT and the BSD 2-Clause Patent licence.\n"
+    )
+    snapshot_hub(tmp_path, monkeypatch, {"README.md": card, "LICENSE": b"MIT + BSD-2-Clause-Patent text\n"})
+    receipt = source_receipt(card)
+    publication = license_publication.prepare_license_publication(receipt, tmp_path / "published", use="train")
+    # The card's license summary is Hub-valid: the unknown identifier becomes
+    # "other"; the checked receipt keeps the exact set.
+    assert publication.metadata["license"] == ["mit", "other"]
+    evidence_ids = {identifier for item in receipt.evidence for identifier in item.license_ids}
+    assert "bsd-2-clause-patent" in evidence_ids
+    files = {path.name: path.read_bytes() for path in publication.notice_files}
+    assert files["LICENSE"] == b"MIT + BSD-2-Clause-Patent text\n"
+
+
 def test_publication_states_folder_lineage_license(tmp_path, monkeypatch):
     card = b"---\nlicense: apache-2.0\n---\n# Dataset\n\n## License\nLicensed under Apache License 2.0.\n"
     """The repackager ruling: the card states each included folder's upstream license."""
@@ -605,6 +637,45 @@ def test_private_publication_reuses_its_own_prior_attempt_repo(tmp_path, monkeyp
         def list_repo_tree(self, dataset, *, repo_type, recursive):
             assert dataset == repo and recursive is True
             return [SimpleNamespace(path="README.md")]
+
+        def repo_info(self, dataset, **kwargs):
+            assert dataset == repo
+            return SimpleNamespace(private=True, sha="c" * 40)
+
+        def upload_folder(self, **kwargs):
+            writes.append("upload")
+            return SimpleNamespace(oid="d" * 40)
+
+    monkeypatch.setattr(license_publication, "HfApi", Hub)
+    monkeypatch.setattr(license_publication, "hf_hub_download", lambda repo, name, **kwargs: str(tmp_path / name))
+    monkeypatch.setattr(license_publication, "check_publication", lambda *args, **kwargs: {"verdict": "PASS"})
+    prepared = license_publication.prepare_private_dataset(
+        receipt.source_id, repo, tmp_path, ("README.md", "tasks.parquet"), receipt, use="train"
+    )
+    result = license_publication.publish_private_dataset(prepared)
+    assert writes == ["upload"] and result.revision == "d" * 40
+
+
+def test_private_publication_adopts_an_empty_shell_repo(tmp_path, monkeypatch):
+    """A prior attempt that created the repo and died before its first upload
+    (the OpenSWE 20261127b v8 card refusal) leaves an empty shell: only the
+    Hub's .gitattributes. The adoption adopts it — the empty inventory holds
+    nothing outside this publication."""
+    card = b"---\nlicense: mit\n---\n# Dataset\n"
+    receipt = source_receipt(card)
+    (tmp_path / "README.md").write_bytes(card)
+    (tmp_path / "tasks.parquet").write_bytes(b"frozen source task bytes")
+    repo = "open-athena/fixture-publication"
+    writes = []
+
+    class Hub:
+        def create_repo(self, **kwargs):
+            assert kwargs["exist_ok"] is False
+            raise RuntimeError("409 Conflict: the repo already exists")
+
+        def list_repo_tree(self, dataset, *, repo_type, recursive):
+            assert dataset == repo and recursive is True
+            return [SimpleNamespace(path=".gitattributes")]
 
         def repo_info(self, dataset, **kwargs):
             assert dataset == repo

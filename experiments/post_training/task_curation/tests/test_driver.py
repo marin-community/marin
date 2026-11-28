@@ -65,11 +65,17 @@ from lib.taskcompendium.tests.decontamination_fixtures import decontamination_ev
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
-def test_pending_intake_requires_explicit_selection(monkeypatch):
-    source = source_catalog.PENDING_MEASUREMENT_SOURCES[-1]
+@pytest.fixture(autouse=True)
+def _no_pending_sources(monkeypatch):
+    """The pending-intake catalog reads its registries at call time; tests stub it by default."""
+    monkeypatch.setattr(driver, "pending_measurement_sources", lambda: ())
+
+
+def test_pending_intake_requires_explicit_selection(monkeypatch, tmp_path):
+    source = number_source(tmp_path / "pending", name="pending-source")
     monkeypatch.setattr(driver, "all_sources", lambda: {})
     monkeypatch.setattr(driver, "runnable_sources", lambda: {})
-    monkeypatch.setattr(driver, "PENDING_MEASUREMENT_SOURCES", (source,))
+    monkeypatch.setattr(driver, "pending_measurement_sources", lambda: (source,))
     assert driver._selected_sources((), SourceProcessingMode.QUICK) == {}
     assert driver._selected_sources((source.name,), SourceProcessingMode.QUICK) == {source.name: source}
 

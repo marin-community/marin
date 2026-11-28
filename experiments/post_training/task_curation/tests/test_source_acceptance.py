@@ -131,7 +131,7 @@ def test_new_lean_sources_wait_for_measurement_before_entering_the_atlas_catalog
     """
     monkeypatch.setattr(native_releases, "read_registry_json", lambda path: {"entries": []})
     _inject_offline_prebuilt_registries(monkeypatch)
-    pending = {source.info.id: source for source in source_catalog.PENDING_MEASUREMENT_SOURCES}
+    pending = {source.info.id: source for source in source_catalog.pending_measurement_sources()}
     source = pending[source_id]
     assert source.dataset.name == dataset
     assert source.info.actor_census_input is None
@@ -165,7 +165,7 @@ def test_main_sync_sources_stage_for_r41_intake_outside_the_served_catalog(sourc
     qualifies them — and none is wired into the served declarations (the release
     lane freezes any wired source mid-cut).
     """
-    pending = {source.info.id: source for source in source_catalog.PENDING_MEASUREMENT_SOURCES}
+    pending = {source.info.id: source for source in source_catalog.pending_measurement_sources()}
     source = pending[source_id]
     assert source.info.id in source_catalog.R41_PENDING_SOURCE_IDS
     # Staged declarations bind no admission evidence yet: intake measures them.
@@ -187,7 +187,7 @@ def test_kto_components_are_license_banned_and_stage_nowhere(source_id, monkeypa
     # real registry's decision, so restore it (and its cache) around the check.
     monkeypatch.setattr(licensing, "LICENSE_BANS", license_registry.LICENSE_BANS)
     licensing.license_bans.cache_clear()
-    assert source_id not in {source.info.id for source in source_catalog.PENDING_MEASUREMENT_SOURCES}
+    assert source_id not in {source.info.id for source in source_catalog.pending_measurement_sources()}
     ban = source_license_ban(source_id, None)
     assert ban is not None and ban.classification == "missing"
     with pytest.raises(ValueError, match="License banned"):
