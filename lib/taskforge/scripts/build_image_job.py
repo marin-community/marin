@@ -12,6 +12,7 @@ laptop's ``gcloud`` and hands it to the builder in process; the builder's module
 describes the build and push jobs and where the credential travels.
 """
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -43,6 +44,7 @@ from taskforge.sandbox.images import BUILD_LIMITS, docker_build_from_directory
 @click.option("--priority", type=click.Choice(["batch", "production", "interactive"]), required=True)
 @click.option("--timeout", type=click.IntRange(min=1), required=True, help="Execution deadline in seconds")
 @click.option("--scheduling-timeout", type=click.IntRange(min=1), required=True, help="Scheduling deadline in seconds")
+@click.option("--no-wait", is_flag=True, help="Submit the build job and print its id and destination without waiting")
 def main(
     context: Path,
     repository: str,
@@ -51,6 +53,7 @@ def main(
     priority: str,
     timeout: int,
     scheduling_timeout: int,
+    no_wait: bool,
 ) -> None:
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("httpx").setLevel(logging.WARNING)  # blob redirects carry presigned object-store URLs
@@ -62,6 +65,21 @@ def main(
         scheduling_timeout=Duration.from_seconds(scheduling_timeout),
     )
     builder = IrisImageBuilder(cluster=cluster, target_cluster=target_cluster, credential=credential, policy=policy)
+    if no_wait:
+        submitted = asyncio.run(builder.submit_build(build, repository))
+        print(
+            json.dumps(
+                {
+                    "submitted": True,
+                    "build_job_id": submitted.job_id,
+                    "destination": submitted.destination,
+                    "build_digest": submitted.build_digest,
+                    "tag": submitted.tag,
+                },
+                indent=2,
+            )
+        )
+        return
     published = builder.publish_with_timings(build, repository)
     print(
         json.dumps(

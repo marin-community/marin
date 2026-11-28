@@ -205,6 +205,20 @@ class ImageJobFailed(RuntimeError):
 
 
 @dataclass(frozen=True)
+class BuildSubmitted:
+    """A build job submitted without waiting; nothing is pinned until its push job runs.
+
+    The caller tracks the job through the controller (a watchdog) and drives the push from
+    the finished build's output archive.
+    """
+
+    job_id: str
+    destination: str
+    build_digest: str
+    tag: str
+
+
+@dataclass(frozen=True)
 class Published:
     image: str
     build_digest: str
@@ -356,6 +370,53 @@ class IrisImageBuilder:
         """
         # A publish waits through both declared deadlines; keep the event loop free.
         return (await asyncio.to_thread(self.publish_with_timings, build, repository)).image
+
+    def submit_build_with_timings(self, build: DockerBuild, repository: str) -> BuildSubmitted:
+        """Submit the build job without waiting, for submitters that track completion elsewhere.
+
+        The job's environment and context are exactly the publish path's; nothing waits and
+        nothing is cancelled, so a submit that returned leaves the build running. The push job
+        and the digest pinning continue from the finished build's output archive.
+        """
+        check_build_limits(build, BUILD_LIMITS)
+        if not REPOSITORY.fullmatch(repository):
+            raise ValueError(f"not an OCI repository name: {repository!r}")
+        digest = build_digest(build)
+        run_id = uuid.uuid4().hex[:12]
+        tag = f"build-{digest.removeprefix('sha256:')[:32]}-{run_id}"
+        destination = f"{self.credential.registry}/{repository}:{tag}"
+        with connect_controller(cluster_name=self.cluster, controller_url=self.controller_url) as endpoint:
+            client = IrisClient.remote(endpoint.url, workspace=None, credentials=endpoint.credentials)
+            try:
+                build_job = submit_job(
+                    client,
+                    name=f"taskforge-image-build-{run_id}",
+                    entrypoint=Entrypoint(
+                        command=["bash", "-c", BUILD_SCRIPT],
+                        workdir_files={CONTEXT_FILE: build_context_archive(build)},
+                    ),
+                    image=BUILD_IMAGE,
+                    env={
+                        "CRANE_URL": CRANE_URL,
+                        "CRANE_SHA256": CRANE_SHA256,
+                        "KANIKO_IMAGE": KANIKO_IMAGE,
+                        "CONTEXT_FILE": CONTEXT_FILE,
+                        "DOCKERFILE": "Dockerfile",
+                        "BUILD_SETUP_FAILED_EXIT": str(BUILD_SETUP_FAILED_EXIT),
+                        "DESTINATION": destination,
+                    },
+                    secrets={},
+                    target_cluster=self.target_cluster,
+                    policy=self.policy,
+                )
+            finally:
+                client.shutdown()
+        logger.info("submitted build job %s for %s (no wait)", build_job.job_id, destination)
+        return BuildSubmitted(str(build_job.job_id), destination, digest, tag)
+
+    async def submit_build(self, build: DockerBuild, repository: str) -> BuildSubmitted:
+        """The async form of :meth:`submit_build_with_timings`; the event loop stays free."""
+        return await asyncio.to_thread(self.submit_build_with_timings, build, repository)
 
     def publish_with_timings(self, build: DockerBuild, repository: str) -> Published:
         """Publish ``build`` under ``repository``, blocking until the image is pushed and read back."""
