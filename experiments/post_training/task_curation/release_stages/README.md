@@ -357,6 +357,16 @@ the upstream-witness receipt over the sealed declarations, so it prefights after
   separate `prior-witness-receipt` directory and cannot satisfy the run-mode gate.
   Regional preflights attest the submitted code bundle's revision; the plan keeps
   its population-freeze revision separately.
+  Each stage is gated before downstream handles capture it, so selecting a final
+  node also gates its uncached dependencies. Upstream witnesses hash each
+  dependency's `.artifact.json` record, not its output directory marker.
+  Once upstream records exist, `preflight --stage <node>` checks those current
+  records without re-executing the stage; before then it reports a blocked slice
+  or checks prior-release state where a prior witness is available.
+- Catalog readers remove null struct columns absent from the current typed
+  schema, which Arrow can fill when historical and current records share a table.
+  Unknown non-null fields still fail model validation; map entries and known
+  nullable fields retain their values.
 - Stage alerts: every stage emits start/finish/fail events directly to the ops
   feed / job-watchdog `alerts.jsonl`; each stage submission proposes its own
   watchdog registry entry (the registry stays operator-owned).

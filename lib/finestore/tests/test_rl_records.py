@@ -5,6 +5,7 @@
 
 import json
 
+import pyarrow as pa
 import pytest
 from finestore.rl.curation import (
     INVENTORY,
@@ -29,6 +30,7 @@ from finestore.rl.licenses import (
     check_license,
     require_license,
 )
+from finestore.schema import arrow_schema
 from finestore.store import DataStore
 
 ISSUE_URL = "https://github.com/marin-community/marin/issues/11497"
@@ -227,6 +229,36 @@ def qualified_source():
             "evidence_url": "s3://bucket/dedup.json",
         },
     }
+
+
+@pytest.mark.parametrize("old_dataset_id", [None, "meaningful-old-value"])
+def test_catalog_reader_removes_nested_struct_fill_but_rejects_nonnull_extras(archive_root, old_dataset_id):
+    declaration = QualifiedSourceDeclaration.model_validate(qualified_source())
+    row = SnapshotSource(
+        snapshot_id="nested-fill",
+        id=declaration.id,
+        declaration=declaration,
+        assessment_key=None,
+        latest_attempt_key=None,
+        latest_attempt_status="skipped",
+        reason=None,
+    ).model_dump(mode="json")
+    row["declaration"]["pipeline"]["retired_field"] = old_dataset_id
+    historical = pa.schema(
+        [pa.field("declaration", pa.struct([pa.field("pipeline", pa.struct([pa.field("retired_field", pa.string())]))]))]
+    )
+    schema = pa.unify_schemas([arrow_schema(SnapshotSource), historical])
+    with DataStore.open(archive_root, writer_id="historical") as store:
+        store.table(INVENTORY, primary_key=("snapshot_id", "id"), schema=schema)
+        with store.transaction() as transaction:
+            transaction.table(INVENTORY).add(row)
+    if old_dataset_id is not None:
+        with pytest.raises(ValueError):
+            list(CurationCatalog(archive_root).sources("nested-fill"))
+        return
+    restored = list(CurationCatalog(archive_root).sources("nested-fill"))
+    assert restored[0].declaration == declaration
+    assert restored[0].declaration.pipeline.files == declaration.pipeline.files
 
 
 def test_qualified_source_preserves_current_input_and_rejects_stale_evidence():

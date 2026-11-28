@@ -17,6 +17,7 @@ import pytest
 from fray.types import CpuConfig, GpuConfig
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
 from marin.execution.lazy import StepContext
+from marin.execution.lazy import run as run_handles
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.release_stages import census as census_stage
@@ -28,6 +29,7 @@ from experiments.post_training.task_curation.release_stages.graph import (
     GRAPH_RECEIPT_KIND,
     REPO_ROOT,
     ComposeManifestDocument,
+    PreflightPolicy,
     StageReceipt,
     _execute_stage_node,
     _plan_document_data,
@@ -131,6 +133,44 @@ def test_registry_covers_every_stage_and_the_terminal_closure():
     # The lowered graph adds the sealed plan document ahead of every stage.
     assert {node["name"] for node in graph_nodes(built)} == expected_names | {"atlas-release-testrelease-plan"}
     assert built.terminal is built.stages["exposure_probe"]
+
+
+@pytest.mark.parametrize("refuse_upstream", [False, True])
+def test_selected_document_stage_gates_its_dependencies(tmp_path, monkeypatch, refuse_upstream):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    plan = fixture_plan(release_root=str(tmp_path / "release"))
+    events = []
+
+    def ensure(node):
+        events.append(("preflight", node))
+        if refuse_upstream and node == "declarations":
+            raise ValueError("upstream preflight refused")
+
+    def execute(stage, config):
+        events.append(("execute", stage))
+        ref = {"uri": str(tmp_path / "sealed.json"), "sha256": "a" * 64}
+        if stage == "declarations":
+            return {"release_id": plan.release_id, "declarations": ref}
+        assert stage == "census_inputs"
+        return {**ref, "source_count": 1}
+
+    monkeypatch.setattr(release_graph_module, "_execute_stage", execute)
+    built = release_graph(plan, preflight=PreflightPolicy(ensure=ensure))
+    assert built.terminal is built.stages["exposure_probe"]
+    assert graph_nodes(built) == graph_nodes(release_graph(plan))
+    if refuse_upstream:
+        with pytest.raises(RuntimeError, match="step\\(s\\) failed"):
+            run_handles(built.census_inputs_handle)
+        assert events == [("preflight", "declarations")]
+        return
+    result = run_handles(built.census_inputs_handle)
+    assert result[0].source_count == 1
+    assert events == [
+        ("preflight", "declarations"),
+        ("execute", "declarations"),
+        ("preflight", "census_inputs"),
+        ("execute", "census_inputs"),
+    ]
 
 
 def test_independent_stages_run_as_siblings():

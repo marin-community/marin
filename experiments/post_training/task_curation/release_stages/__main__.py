@@ -200,7 +200,7 @@ def _run_preflight(
     failed: list[str] = []
     witnessed: list[str] = []
     for node in sorted(nodes):
-        if node not in preflight_slices.RUNNABLE_NODES:
+        if node not in preflight_slices.RUNNABLE_NODES and preflight_slices._upstream_witness(node, plan) is None:
             if node in preflight_slices.WITNESS_NODES:
                 try:
                     receipt = preflight_slices.run_prior_witness(node, plan, selection, output_root=output_root)

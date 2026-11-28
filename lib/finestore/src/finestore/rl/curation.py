@@ -13,6 +13,7 @@ from enum import StrEnum
 from typing import Annotated, Any, Literal, get_args, get_origin
 from urllib.parse import urlsplit
 
+import pyarrow as pa
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, model_validator
 
 from finestore.layout import BlobTables, OnConflict, parse_uri
@@ -1762,6 +1763,26 @@ def validate_items(populations: list[AssessmentPopulation], items: list[Assessme
         raise ValueError("Assessment records have different pipeline keys")
 
 
+def _drop_struct_fill(value: Any, data_type: pa.DataType) -> Any:
+    """Remove null columns absent from the reader's typed Arrow struct."""
+    if value is None:
+        return None
+    if isinstance(data_type, pa.StructType) and isinstance(value, dict):
+        fields = {field.name: field.type for field in data_type}
+        return {
+            name: _drop_struct_fill(item, fields[name]) if name in fields else item
+            for name, item in value.items()
+            if name in fields or item is not None
+        }
+    if isinstance(data_type, pa.ListType) and isinstance(value, list):
+        return [_drop_struct_fill(item, data_type.value_type) for item in value]
+    if isinstance(data_type, pa.MapType):
+        if isinstance(value, dict):
+            return {key: _drop_struct_fill(item, data_type.item_type) for key, item in value.items()}
+        return [(key, _drop_struct_fill(item, data_type.item_type)) for key, item in value]
+    return value
+
+
 class CurationCatalog:
     """Read one FineStore view with typed source, assessment and packet access."""
 
@@ -1781,8 +1802,9 @@ class CurationCatalog:
     def _records[T: CatalogRecord](
         self, table: str, model: type[T], where: list[tuple[str, str, object]], context: Any = None
     ) -> Iterator[T]:
+        data_type = pa.struct(arrow_schema(model))
         for row in self.view.iter_rows(table, columns=list(model.model_fields), where=where):
-            yield model.model_validate(row, context=context)
+            yield model.model_validate(_drop_struct_fill(row, data_type), context=context)
 
     def sources(
         self, snapshot_id: str, *, pending_stage_of: Callable[[str], PendingStage | None] | None = None

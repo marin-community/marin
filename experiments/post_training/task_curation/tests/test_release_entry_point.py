@@ -19,6 +19,7 @@ from experiments.post_training.task_curation.release_stages import preflight_sli
 from experiments.post_training.task_curation.release_stages.graph import write_plan
 from experiments.post_training.task_curation.release_stages.plan_derivation import DerivedRelease
 from experiments.post_training.task_curation.tests.release_graph_fixtures import fixture_plan
+from experiments.post_training.task_curation.tests.test_release_graph_registry import _write_dep
 
 EXPECTED_NODE_COUNT = 33
 
@@ -353,6 +354,48 @@ def test_changed_upstream_preflight_appends_evidence_and_reuses_each_context(tmp
     assert third.repo_sha == revision[0] and third != first
     assert legacy.read_bytes() == original
     assert preflight_module.read_receipt(str(root), first.stage, first.repo_sha, first.input_digests) == first
+
+
+def test_upstream_witness_hashes_records_and_detects_a_changed_receipt(tmp_path, monkeypatch):
+    prefix = str(tmp_path / "artifacts")
+    monkeypatch.setenv("MARIN_PREFIX", prefix)
+    plan = fixture_plan(release_root=str(tmp_path / "release"))
+    built = preflight_slices.release_graph(plan)
+    snapshot = built.stages["snapshot_publication"]
+    for dep in snapshot.deps:
+        _write_dep(dep, prefix, "fixture", plan.release_id, {"uri": str(tmp_path / "receipt.json"), "sha256": "a" * 64})
+    first, _ = preflight_slices._upstream_witness("snapshot_publication", plan)
+    assert set(first.values()) != {"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+    changed = built.stages["contract_census"]
+    _write_dep(changed, prefix, "fixture", plan.release_id, {"uri": str(tmp_path / "new.json"), "sha256": "b" * 64})
+    second, _ = preflight_slices._upstream_witness("snapshot_publication", plan)
+    assert first[changed.name] != second[changed.name]
+    assert {key: value for key, value in first.items() if key != changed.name} == {
+        key: value for key, value in second.items() if key != changed.name
+    }
+
+
+def test_preflight_checks_current_upstreams_instead_of_prior_state_when_available(
+    tmp_path, plan_document, monkeypatch, capsys
+):
+    prefix = str(tmp_path / "artifacts")
+    monkeypatch.setenv("MARIN_PREFIX", prefix)
+    plan = entry_point.load_plan(plan_document)
+    built = preflight_slices.release_graph(plan)
+    for dep in built.stages["snapshot_publication"].deps:
+        _write_dep(dep, prefix, "fixture", plan.release_id, {"uri": str(tmp_path / "receipt.json"), "sha256": "a" * 64})
+
+    def no_prior_witness(*args, **kwargs):
+        raise AssertionError("Current upstreams are ready; check them without executing the stage")
+
+    monkeypatch.setattr(preflight_slices, "run_prior_witness", no_prior_witness)
+    assert entry_point.main(_argv(plan_document, "preflight", "--stage", "snapshot_publication")) == 0
+    assert "OK snapshot_publication:" in capsys.readouterr().out
+    digests, _ = preflight_slices._upstream_witness("snapshot_publication", plan)
+    receipt = preflight_module.read_receipt(
+        plan.release_root, "snapshot_publication", entry_point.repo_head(entry_point.REPO_ROOT), digests
+    )
+    assert receipt is not None and receipt.ok and receipt.mode == "upstream"
 
 
 def test_slice_inputs_are_digest_stable(plan_document):

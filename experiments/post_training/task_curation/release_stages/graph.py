@@ -2387,7 +2387,7 @@ class ReleaseGraph:
         return self.stages[stage]
 
 
-def _preflight_wrapped_run(handle: ArtifactStep, node: str, policy: PreflightPolicy) -> Callable[[Any], StageReceipt]:
+def _preflight_wrapped_run(handle: ArtifactStep, node: str, policy: PreflightPolicy) -> Callable[[Any], Artifact | None]:
     """Wrap a stage's run so its fresh preflight receipt is ensured before execution.
 
     ``run`` never enters a fingerprint, so wrapping it after construction keeps every
@@ -2397,12 +2397,9 @@ def _preflight_wrapped_run(handle: ArtifactStep, node: str, policy: PreflightPol
     """
     original = handle.run
 
-    def run(config: dict) -> StageReceipt:
+    def run(config: dict) -> Artifact | None:
         policy.ensure(node)
-        receipt = original(config)
-        if not isinstance(receipt, StageReceipt):
-            raise ValueError(f"graph node {node!r} did not produce a StageReceipt")
-        return receipt
+        return original(config)
 
     return run
 
@@ -2437,83 +2434,66 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
     """
     plan.validate_shape()
     plan_handle = _plan_document_step(plan)
+    stages: dict[str, ArtifactStep] = {}
 
-    declarations = _declarations_step(plan, plan_handle)
-    main_sync = _main_source_sync_step(plan, declarations)
-    drift = _main_grader_drift_step(plan, declarations)
-    census_inputs = _census_inputs_step(plan, declarations)
-    backend_validation = _backend_validation_step(plan, census_inputs)
-    identity_backend = _identity_backend_compose_step(plan, backend_validation)
-    admission_check = _admission_check_step(plan, declarations, identity_backend)
-    census = _census_step(plan, census_inputs)
-    corpus = _corpus_assembly_step(plan, census_inputs, census)
-    embed = _embed_step(plan, corpus, census)
-    compose_manifest = _compose_manifest_step(plan, declarations, embed)
-    compose = _curriculum_compose_step(plan, compose_manifest, census)
-    region_handles = tuple(_text_scan_region_step(plan, compose, region) for region in sorted(plan.scan_regions))
-    text_scans = _text_scan_merge_step(plan, compose, region_handles)
-    history = _history_staging_step(plan)
-    qc_plan = _qc_browse_plan_step(plan, declarations)
-    qc_browse = _qc_browse_copy_step(plan, qc_plan)
-    fresh_qc_index = _fresh_qc_index_step(plan, qc_browse, declarations)
-    contracts = _contract_census_step(plan, census)
-    snapshot = _snapshot_publication_step(plan, census, identity_backend, admission_check, contracts)
-    catalog_stage = _catalog_stage_step(plan, declarations, snapshot, history, qc_browse, fresh_qc_index)
-    catalog_load = _catalog_load_step(plan, catalog_stage)
-    curriculum_load = _curriculum_load_step(plan, compose, text_scans)
+    def stage[T: Artifact](node: str, handle: ArtifactStep[T]) -> ArtifactStep[T]:
+        if preflight is not None:
+            handle = dataclasses.replace(handle, run=_preflight_wrapped_run(handle, node, preflight))
+        stages[node] = handle
+        return handle
 
-    audit_before = _strict_audit_step(
-        plan, declarations, identity_backend, "before", census, catalog_load, curriculum_load
+    declarations = stage("declarations", _declarations_step(plan, plan_handle))
+    stage("main_source_sync", _main_source_sync_step(plan, declarations))
+    stage("main_grader_drift", _main_grader_drift_step(plan, declarations))
+    census_inputs = stage("census_inputs", _census_inputs_step(plan, declarations))
+    backend_validation = stage("backend_validation", _backend_validation_step(plan, census_inputs))
+    identity_backend = stage("identity_backend_compose", _identity_backend_compose_step(plan, backend_validation))
+    admission_check = stage("admission_check", _admission_check_step(plan, declarations, identity_backend))
+    census = stage("census", _census_step(plan, census_inputs))
+    corpus = stage("corpus_assembly", _corpus_assembly_step(plan, census_inputs, census))
+    embed = stage("embed", _embed_step(plan, corpus, census))
+    compose_manifest = stage("compose_manifest", _compose_manifest_step(plan, declarations, embed))
+    compose = stage("curriculum_compose", _curriculum_compose_step(plan, compose_manifest, census))
+    region_handles = tuple(
+        stage(f"text_scan_region[{region}]", _text_scan_region_step(plan, compose, region))
+        for region in sorted(plan.scan_regions)
     )
-    package = _package_preview_step(plan, audit_before, census)
-    check_preflight = _release_check_step(plan, "preflight", package, None, None, None)
-    marina = _marina_release_step(plan, package, check_preflight)
-    check_hosted = _release_check_step(plan, "hosted", None, check_preflight, None, marina)
-    audit_after = _strict_audit_step(plan, declarations, identity_backend, "after", census, origin_handle=marina)
-    hosted = _hosted_check_step(plan, declarations, identity_backend, census, marina)
-    check_postpublish = _release_check_step(plan, "postpublish", None, check_preflight, check_hosted, marina)
-    exposure = _exposure_probe_step(plan, declarations, marina, hosted, check_postpublish, audit_after)
-
-    stages: dict[str, ArtifactStep] = {
-        "declarations": declarations,
-        "main_source_sync": main_sync,
-        "main_grader_drift": drift,
-        "admission_check": admission_check,
-        "census_inputs": census_inputs,
-        "census": census,
-        "corpus_assembly": corpus,
-        "embed": embed,
-        "compose_manifest": compose_manifest,
-        "curriculum_compose": compose,
-        "backend_validation": backend_validation,
-        "fresh_qc_index": fresh_qc_index,
-        "identity_backend_compose": identity_backend,
-        "history_staging": history,
-        "text_scans": text_scans,
-        "qc_browse_plan": qc_plan,
-        "qc_browse": qc_browse,
-        "snapshot_publication": snapshot,
-        "contract_census": contracts,
-        "catalog_stage": catalog_stage,
-        "catalog_load": catalog_load,
-        "curriculum_load": curriculum_load,
-        "strict_audit_before": audit_before,
-        "strict_audit_after": audit_after,
-        "package_preview": package,
-        "release_check_preflight": check_preflight,
-        "release_check_hosted": check_hosted,
-        "release_check_postpublish": check_postpublish,
-        "marina_release": marina,
-        "hosted_check": hosted,
-        "exposure_probe": exposure,
-    }
-    for region, handle in zip(sorted(plan.scan_regions), region_handles, strict=True):
-        stages[f"text_scan_region[{region}]"] = handle
-    if preflight is not None:
-        stages = {
-            key: dataclasses.replace(handle, run=_preflight_wrapped_run(handle, key, preflight))
-            for key, handle in stages.items()
-        }
+    text_scans = stage("text_scans", _text_scan_merge_step(plan, compose, region_handles))
+    history = stage("history_staging", _history_staging_step(plan))
+    qc_plan = stage("qc_browse_plan", _qc_browse_plan_step(plan, declarations))
+    qc_browse = stage("qc_browse", _qc_browse_copy_step(plan, qc_plan))
+    fresh_qc_index = stage("fresh_qc_index", _fresh_qc_index_step(plan, qc_browse, declarations))
+    contracts = stage("contract_census", _contract_census_step(plan, census))
+    snapshot = stage(
+        "snapshot_publication", _snapshot_publication_step(plan, census, identity_backend, admission_check, contracts)
+    )
+    catalog_stage = stage(
+        "catalog_stage", _catalog_stage_step(plan, declarations, snapshot, history, qc_browse, fresh_qc_index)
+    )
+    catalog_load = stage("catalog_load", _catalog_load_step(plan, catalog_stage))
+    curriculum_load = stage("curriculum_load", _curriculum_load_step(plan, compose, text_scans))
+    audit_before = stage(
+        "strict_audit_before",
+        _strict_audit_step(plan, declarations, identity_backend, "before", census, catalog_load, curriculum_load),
+    )
+    package = stage("package_preview", _package_preview_step(plan, audit_before, census))
+    check_preflight = stage("release_check_preflight", _release_check_step(plan, "preflight", package, None, None, None))
+    marina = stage("marina_release", _marina_release_step(plan, package, check_preflight))
+    check_hosted = stage(
+        "release_check_hosted", _release_check_step(plan, "hosted", None, check_preflight, None, marina)
+    )
+    audit_after = stage(
+        "strict_audit_after",
+        _strict_audit_step(plan, declarations, identity_backend, "after", census, origin_handle=marina),
+    )
+    hosted = stage("hosted_check", _hosted_check_step(plan, declarations, identity_backend, census, marina))
+    check_postpublish = stage(
+        "release_check_postpublish",
+        _release_check_step(plan, "postpublish", None, check_preflight, check_hosted, marina),
+    )
+    exposure = stage(
+        "exposure_probe", _exposure_probe_step(plan, declarations, marina, hosted, check_postpublish, audit_after)
+    )
     return ReleaseGraph(
         plan=plan,
         plan_handle=plan_handle,

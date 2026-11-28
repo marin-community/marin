@@ -607,7 +607,7 @@ def _upstream_witness(node: str, plan: ReleasePlan) -> tuple[dict[str, str], dic
     write-once seals. The witness receipt binds those upstream records so a changed
     upstream stales the gate exactly like a changed slice input.
     """
-    from marin.execution.artifact import read_record  # noqa: PLC0415 — beside its only use
+    from marin.execution.artifact import RECORD_FILENAME, read_record  # noqa: PLC0415 — beside its only use
     from rigging.filesystem.cluster_config import marin_prefix  # noqa: PLC0415 — beside its only use
 
     handle = release_graph(plan).stages[node]
@@ -618,7 +618,7 @@ def _upstream_witness(node: str, plan: ReleasePlan) -> tuple[dict[str, str], dic
         record = read_record(path)
         if record is None or record.result is None:
             return None
-        raw = StoragePath(path).read_bytes()
+        raw = (StoragePath(path) / RECORD_FILENAME).read_bytes()
         digests[dep.name] = hashlib.sha256(raw).hexdigest()
         evidence[dep.name] = record.result_type or ""
     return digests, evidence
