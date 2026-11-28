@@ -29,9 +29,12 @@ TARBALL="https://github.com/marin-community/marin/archive/$REVISION.tar.gz"
 curl -fsSL --retry 5 --retry-delay 5 -o "marin-$REVISION.tar.gz" "$TARBALL"
 tar -tzf "marin-$REVISION.tar.gz" > /dev/null
 tar -xzf "marin-$REVISION.tar.gz" -C "$WORKDIR"
-test -f "marin-$REVISION/experiments/post_training/task_curation/sample_qc.py" \
+# GitHub names the archive root after the FULL commit sha even when the ref is
+# short, so derive the extracted root instead of assuming the ref string.
+root=$(tar -tzf "marin-$REVISION.tar.gz" | head -1 | cut -d/ -f1)
+test -f "$root/experiments/post_training/task_curation/sample_qc.py" \
   || { echo "sample qc: the extracted tree is missing the campaign module" >&2; exit 1; }
-cd "marin-$REVISION"
+cd "$root"
 
 # The pod has no s3-capable curl; read the frozen queue through rigging's StoragePath.
 uv run --frozen --with-editable ./lib/taskcompendium[pipeline] python - <<PY
