@@ -93,7 +93,13 @@ def test_unusable_rows_are_rejected_with_the_defect_named(converted, kind, reaso
 
 @pytest.mark.parametrize(
     "answer",
-    [r"67.\overline{3}", r"32 \text{ white}, 16 \text{ black}", r"x = \frac\pi 2 = 2", r"1$ + $2"],
+    [
+        r"67.\overline{3}",
+        r"32 \text{ white}, 16 \text{ black}",
+        r"x = \frac\pi 2 = 2",
+        r"1$ + $2",
+        r"C) \(2\) and A) \(3\).",
+    ],
 )
 def test_math_partial_reference_is_rejected_during_conversion(answer):
     converted = math_answer_task(ROW, prompt="Solve.", answer=answer)
@@ -109,6 +115,13 @@ def test_math_choice_with_undefined_value_converts_and_grades_without_symbolic_c
     assert reward(task, rf"\boxed{{{answer}}}") == 1.0
     assert reward(task, r"\boxed{(C) 9:00\text{ p.m.}}") == 0.0
     assert reward(task, r"\boxed{(B) 8:00\text{ p.m.}}") == 0.0
+
+
+def test_math_choice_with_an_ordered_list_accepts_the_members_without_brackets():
+    task = math_answer_task(ROW, prompt="Pick the ordered list.", answer="(C) [1, 2]")
+
+    assert reward(task, r"\boxed{1, 2}") == 1.0
+    assert reward(task, r"\boxed{2, 1}") == 0.0
 
 
 @pytest.mark.parametrize(

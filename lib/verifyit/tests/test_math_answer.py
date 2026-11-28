@@ -321,6 +321,8 @@ def test_math_reference_unit_chains_ordinals_and_powers_grade_numeric_value(refe
         ),
         (r"\textbf{(A)} \text{ and } \textbf{(C)}", r"\boxed{\textbf{(A)} \text{ and } \textbf{(C)}}", 1.0),
         (r"\textbf{(A)} \text{ and } \textbf{(C)}", r"\boxed{A}", 0.0),
+        (r"B) \( \frac{24}{\sqrt{5}} \).", r"\boxed{B) \( \frac{24}{\sqrt{5}} \).}", 1.0),
+        (r"B) \( \frac{24}{\sqrt{5}} \).", r"\boxed{\frac{24}{\sqrt{5}}}", 1.0),
     ],
 )
 def test_math_labelled_choice_answers(reference, text, reward):

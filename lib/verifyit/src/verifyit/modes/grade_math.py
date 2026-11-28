@@ -6,7 +6,8 @@ r"""Grade mathematical answers, either symbolically or as a number with toleranc
 The default anchored profile takes the last ``\boxed{}`` expression, or the last non-empty line when the output has
 none. References parse as a whole LaTeX expression after removing a multiple-choice label, if present.
 Labelled references accept the matching label or value, and a reply that gives both must match both.
-When a choice value cannot be compared symbolically, it can still match verbatim.
+When a choice value cannot be compared symbolically, the grader compares its text after removing
+outer math delimiters and a trailing period.
 Candidates first use anchored LaTeX (``$...$``), then math-verify's own anchors (``the answer is ...``)
 if that yields nothing. Other profiles retain raw source extraction or require a boxed expression; their
 parser options remain task-controlled.
@@ -95,7 +96,7 @@ _CHOICE_CANDIDATE = re.compile(
     rf"{_CHOICE_FORMATTED_MARKER}|{_CHOICE_FORMATTED_LETTER}|{_CHOICE_MARKER}|{_CHOICE_LETTER}(?={_CHOICE_GAP}|$)"
 )
 _CHOICE_ANSWER_PREFIX = re.compile(r"^(?:the\s+)?(?:final\s+)?answer(?:\s+is\b|\s*:)\s*", re.IGNORECASE)
-_CHOICE_CONNECTOR = rf"(?:{_CHOICE_COMMAND}\s*\{{{TEXT_CONNECTOR_CONTENT}\}}|(?:and|or)\b)"
+_CHOICE_CONNECTOR = rf"(?:{_CHOICE_COMMAND}\s*\{{{TEXT_CONNECTOR_CONTENT}\}}|\b(?:and|or)\b)"
 _CHOICE_LIST_SEPARATOR = re.compile(rf"(?:,(?:{_CHOICE_GAP}*{_CHOICE_CONNECTOR})?|{_CHOICE_CONNECTOR}){_CHOICE_GAP}*")
 _CHOICE_VARIABLE = re.compile(rf"{_CHOICE_LETTER}|\(\s*{_CHOICE_LETTER}\s*\)")
 _INFIX_OPERATOR = re.compile(rf"[+-](?={_CHOICE_GAP}|$)|[*/^=<>]|\\(?:cdot|times|div|leq?|geq?|neq?)\b")
@@ -106,7 +107,7 @@ def _split_choice(text: str, label_pattern: re.Pattern[str]) -> tuple[str, str] 
     if match is None:
         return None
     value = _CHOICE_SPACING.sub("", text[match.end() :])
-    # A spaced operator after a variable still belongs to the expression.
+    # The first operand of an infix expression can look like a choice label.
     if _CHOICE_VARIABLE.fullmatch(match[0]) and _INFIX_OPERATOR.match(value):
         return None
     letter = re.search(_CHOICE_LETTER, match[0])
@@ -114,15 +115,21 @@ def _split_choice(text: str, label_pattern: re.Pattern[str]) -> tuple[str, str] 
     return letter[0], value
 
 
-def _reference_choice(text: str) -> tuple[str, str] | None:
-    choice = _split_choice(text, _CHOICE_REFERENCE)
+def _choice_value_text(text: str) -> str:
+    return strip_math_delimiters(text.strip().removesuffix(".")).removesuffix(".")
+
+
+def math_reference_choice(text: str) -> tuple[str, str] | None:
+    """Return the label and value of a single anchored choice reference."""
+    choice = _split_choice(strip_math_delimiters(text), _CHOICE_REFERENCE)
     if choice is None or not choice[1]:
         return None
-    _, value = choice
-    separator = _CHOICE_LIST_SEPARATOR.match(value)
-    if separator and _CHOICE_CANDIDATE.match(value, separator.end()):
-        return None
-    return choice
+    label, value = choice
+    for separator in _CHOICE_LIST_SEPARATOR.finditer(value):
+        pattern = _CHOICE_CANDIDATE if separator.start() == 0 else _CHOICE_REFERENCE
+        if pattern.match(value, separator.end()):
+            return None
+    return label, _choice_value_text(value)
 
 
 def _math_verify_parse(text: str, extraction_config: Sequence[object] | None = None, **kwargs: Any) -> list:
@@ -615,7 +622,11 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
             if not match and spec.allow_additive_constant:
                 match = _additive_constant_match(expected, parsed)
         return scored(float(match), extracted=candidate, expected=spec.expected)
-    return _grade_anchored_math(spec, candidate)
+    choice = math_reference_choice(spec.expected)
+    if choice is not None:
+        return _grade_math_choice(spec, candidate, choice)
+    references = _parse_anchored_reference(spec, spec.expected)
+    return _grade_parsed_math(spec, candidate, references, extracted=candidate)
 
 
 def _parse_anchored_reference(spec: MathSpec, reference: str) -> list[tuple[list, bool]]:
@@ -635,35 +646,33 @@ def _parse_anchored_reference(spec: MathSpec, reference: str) -> list[tuple[list
     return references
 
 
-def _grade_anchored_math(spec: MathSpec, candidate: str) -> Reward:
-    choice = _reference_choice(strip_math_delimiters(spec.expected))
-    reference = choice[1] if choice else spec.expected
+def _grade_math_choice(spec: MathSpec, candidate: str, choice: tuple[str, str]) -> Reward:
+    label, reference = choice
     try:
         references = _parse_anchored_reference(spec, reference)
     except InvalidTask:
-        if choice is None:
-            raise
         # A single choice label still identifies an option with a prose or undefined value.
         references = None
 
-    answer = candidate
-    if choice:
-        answer = strip_math_delimiters(_CHOICE_ANSWER_PREFIX.sub("", candidate.strip()).removesuffix("."))
-        selection = _split_choice(answer, _CHOICE_CANDIDATE)
-        if selection:
-            label, answer = selection
-            if label != choice[0] or not answer:
-                return scored(float(label == choice[0]), extracted=candidate, expected=spec.expected)
+    answer = strip_math_delimiters(_CHOICE_ANSWER_PREFIX.sub("", candidate.strip()).removesuffix("."))
+    selection = _split_choice(answer, _CHOICE_CANDIDATE)
+    if selection:
+        selected_label, answer = selection
+        if selected_label != label or not answer:
+            return scored(float(selected_label == label), extracted=candidate, expected=spec.expected)
     if references is None:
-        value = strip_math_delimiters(answer).removesuffix(".")
-        match = bool(value) and value == strip_math_delimiters(reference).removesuffix(".")
+        value = _choice_value_text(answer)
+        match = bool(value) and value == reference
         return scored(float(match), extracted=candidate, expected=spec.expected)
+    return _grade_parsed_math(spec, answer, references, extracted=candidate)
 
+
+def _grade_parsed_math(spec: MathSpec, answer: str, references: list[tuple[list, bool]], *, extracted: str) -> Reward:
     expected = [parsed for parsed, _ in references]
     is_list = spec.math_type is MathType.LIST
     candidate_members = _split_members(answer) if is_list else [answer]
     if len(candidate_members) != len(expected):
-        return scored(0.0, extracted=candidate, expected=spec.expected)
+        return scored(0.0, extracted=extracted, expected=spec.expected)
     with _deadline_phase(MATH_DEADLINE_CANDIDATE_PARSE):
         parsed = _candidate_parse(
             lambda: [
@@ -672,7 +681,7 @@ def _grade_anchored_math(spec: MathSpec, candidate: str) -> Reward:
             ]
         )
     if not any(parsed):
-        return scored(0.0, reason="unparsable", extracted=candidate, expected=spec.expected)
+        return scored(0.0, reason="unparsable", extracted=extracted, expected=spec.expected)
 
     with _deadline_phase(MATH_DEADLINE_COMPARISON):
         if is_list:
@@ -683,7 +692,7 @@ def _grade_anchored_math(spec: MathSpec, candidate: str) -> Reward:
                 match = _positive_symbol_match(expected[0], parsed[0], spec.positive_symbols)
         if not match and spec.allow_additive_constant and not is_list:
             match = _additive_constant_match(expected[0], parsed[0])
-    return scored(float(bool(match)), extracted=candidate, expected=spec.expected)
+    return scored(float(bool(match)), extracted=extracted, expected=spec.expected)
 
 
 def math_answer(spec: MathSpec, text: str) -> str:
