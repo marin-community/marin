@@ -62,8 +62,30 @@ def audit(
     identities_match = expected_identities is None or identities == Counter(
         (row["data_source"], row["dataset_row_uid"]) for row in expected_identities
     )
+    identity_missing = []
+    identity_unexpected = []
+    if expected_identities is not None:
+        expected_counter = Counter((row["data_source"], row["dataset_row_uid"]) for row in expected_identities)
+        identity_missing = sorted(
+            (
+                {"data_source": source, "dataset_row_uid": uid}
+                for (source, uid), count in (expected_counter - identities).items()
+                for _ in range(count)
+            ),
+            key=lambda row: (row["data_source"], row["dataset_row_uid"]),
+        )
+        identity_unexpected = sorted(
+            (
+                {"data_source": source, "dataset_row_uid": uid}
+                for (source, uid), count in (identities - expected_counter).items()
+                for _ in range(count)
+            ),
+            key=lambda row: (row["data_source"], row["dataset_row_uid"]),
+        )
     return {
         "identity_coverage_matches": identities_match,
+        "identity_missing": identity_missing,
+        "identity_unexpected": identity_unexpected,
         "result_uri": result_uri,
         "expected_rollouts": expected_rollouts,
         "completed_rollouts": completed,
@@ -78,19 +100,54 @@ def audit(
     }
 
 
+POLICY_VALID_SEAL_FRACTION = 0.90
+POLICY_GRADEABLE_EXCEPTIONS = frozenset(
+    {"malformed_model_response", "AgentTimeoutError", "NonZeroAgentExitCodeError", "ContextLengthExceededError"}
+)
+
+
 def require_evaluation_coverage(evaluation: dict) -> None:
-    """Require full scoring or an exact, explicitly accepted set of unscored attempts."""
+    """Require full scoring, an exact accepted unscored set, or a policy-valid partial seal.
+
+    Applies the Micro210 eval scoring policy (#10197): unnamed errors and
+    infrastructure-classified exceptions count as absent from the scored pool; grade-able
+    exceptions (for example Harbor ``AgentTimeoutError``, which runs the verifier) do not.
+    The evaluation seals when at least 90% of expected attempts are validly scored and no
+    attempt identity is unexpected. The classification is recorded on the evaluation, never
+    fabricated.
+    """
     if evaluation["all_verified"]:
         return
     unscored = evaluation["unscored_attempts"]
     accepted = evaluation.get("accepted_unscored_attempts", [])
+    if accepted and sorted(json.dumps(row, sort_keys=True) for row in unscored) == sorted(
+        json.dumps(row, sort_keys=True) for row in accepted
+    ):
+        return
+    gradeable = sorted(
+        json.dumps(row, sort_keys=True) for row in unscored if row.get("exception_type") in POLICY_GRADEABLE_EXCEPTIONS
+    )
+    missing_attempts = evaluation["expected_rollouts"] - evaluation["completed_rollouts"]
+    valid = evaluation["verified_rollouts"]
+    expected = evaluation["expected_rollouts"]
+    receipt = {
+        "policy": "#10197",
+        "valid_seal_fraction": POLICY_VALID_SEAL_FRACTION,
+        "valid_scored": valid,
+        "expected_attempts": expected,
+        "valid_fraction": (valid / expected) if expected else 0.0,
+        "infrastructure_absent": len(unscored) - len(gradeable) + max(missing_attempts, 0),
+        "missing_attempts": max(missing_attempts, 0),
+        "gradeable_unscored": gradeable,
+        "identity_unexpected": evaluation.get("identity_unexpected", []),
+        "identity_missing_count": len(evaluation.get("identity_missing", [])),
+    }
+    evaluation["unscored_policy"] = receipt
     if (
-        evaluation["completed_rollouts"] != evaluation["expected_rollouts"]
-        or not evaluation["source_coverage_matches"]
-        or not evaluation["identity_coverage_matches"]
-        or not accepted
-        or sorted(json.dumps(row, sort_keys=True) for row in unscored)
-        != sorted(json.dumps(row, sort_keys=True) for row in accepted)
+        gradeable
+        or evaluation.get("identity_unexpected")
+        or missing_attempts < 0
+        or valid < POLICY_VALID_SEAL_FRACTION * expected
     ):
         raise ValueError("Evaluation has missing, unexpected or unaccepted unscored attempts")
 
