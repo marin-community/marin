@@ -936,8 +936,7 @@ class InferenceEngine:
         """Prefill the leading requests that fit the token, slot, and page budgets.
 
         `page_requirements` maps each active or queued request ID to its shared and
-        per-choice KV reservation. Admission accounts for the active choices before
-        reserving pages for the queued requests.
+        per-choice KV reservation.
 
         Returns the prefill decode outputs, or None when no request fits.
         """
