@@ -5,7 +5,9 @@
 
 import json
 import os
+import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -36,7 +38,9 @@ def landing_fixture(tmp_path: Path) -> dict[str, Path]:
     return {"origin": origin, "work": work, "log": tmp_path / "landings.jsonl", "lock": tmp_path / "lock"}
 
 
-def push(landing: dict[str, Path], *, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+def push(
+    landing: dict[str, Path], *, extra_env: dict[str, str] | None = None, proposal: str = ""
+) -> subprocess.CompletedProcess:
     env = {
         **os.environ,
         "ATLAS_PUSH_TARGET": "atlas-env-audit",
@@ -55,6 +59,8 @@ def push(landing: dict[str, Path], *, extra_env: dict[str, str] | None = None) -
             "test-session",
             "--what",
             "test landing",
+            "--registry-update",
+            proposal,
         ],
         cwd=landing["work"],
         capture_output=True,
@@ -159,3 +165,62 @@ def test_linear_landing_rebases_onto_a_moved_target(landing) -> None:
         "target change on another machine"
         in run(["git", "--git-dir", str(landing["origin"]), "log", "-1", "--format=%s", f"{tip}~1"], work).stdout
     )
+
+
+def test_shared_registry_change_without_a_proposal_cannot_reach_origin(landing) -> None:
+    work = landing["work"]
+    before = origin_tip(landing)
+    run(["git", "checkout", "-q", "-b", "worker/registry"], work)
+    path = work / "experiments/post_training/task_curation/source_fingerprint_index.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("{}\n")
+    run(["git", "add", "-A"], work)
+    run(["git", "commit", "-q", "-m", "change the shared selection"], work)
+
+    result = push(landing)
+
+    assert result.returncode == 10, result.stderr
+    assert origin_tip(landing) == before
+    assert not landing["log"].exists()
+
+
+def test_registry_compare_and_swap_rejects_a_moved_pointer_after_rebase(landing, tmp_path) -> None:
+    work = landing["work"]
+    package = work / "experiments/post_training/task_curation"
+    package.mkdir(parents=True)
+    old = {"repo": "fixture/registry", "revision": "a" * 40, "path": "old.json", "sha256": "b" * 64}
+    for name in ("source_fingerprint_index.json", "source_population_locators.json"):
+        (package / name).write_text(json.dumps(old))
+    run(["git", "add", "-A"], work)
+    run(["git", "commit", "-q", "-m", "seed the selected registry pointers"], work)
+    run(["git", "push", "-q", "origin", "HEAD:atlas-env-audit"], work)
+    run(["git", "checkout", "-q", "-b", "worker/registry-cas"], work)
+    pair = {"fingerprints": old, "locators": old}
+    (work / "update.json").write_text(json.dumps({"expected": pair, "proposed": pair}))
+    run(["git", "add", "-A"], work)
+    run(["git", "commit", "-q", "-m", "prepare a registry proposal"], work)
+
+    run(["git", "checkout", "-q", "-b", "other-writer", "atlas-env-audit"], work)
+    newer = {**old, "revision": "c" * 40}
+    (package / "source_fingerprint_index.json").write_text(json.dumps(newer))
+    run(["git", "add", "-A"], work)
+    run(["git", "commit", "-q", "-m", "advance the shared registry pointer"], work)
+    run(["git", "push", "-q", "origin", "HEAD:atlas-env-audit"], work)
+    advanced = origin_tip(landing)
+    run(["git", "checkout", "-q", "worker/registry-cas"], work)
+
+    # Execute the real Python check in the temporary Git repository, using this
+    # test environment in place of uv's project/environment selection boundary.
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    uv = binaries / "uv"
+    uv.write_text(f'#!/bin/bash\nexec {shlex.quote(sys.executable)} "${{@:4}}"\n')
+    uv.chmod(0o755)
+    env = {"PATH": f"{binaries}:{os.environ['PATH']}", "PYTHONPATH": str(SCRIPT.parents[2])}
+
+    result = push(landing, extra_env=env, proposal="update.json")
+
+    assert result.returncode == 10, result.stderr
+    assert origin_tip(landing) == advanced
+    assert run(["git", "merge-base", "--is-ancestor", advanced, "HEAD"], work).returncode == 0
+    assert not landing["log"].exists()

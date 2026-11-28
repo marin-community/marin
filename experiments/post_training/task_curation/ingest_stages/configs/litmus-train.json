@@ -1,0 +1,12 @@
+{
+  "source_id": "Nvidia:Nemotron-RL-litmus-bench-v0.2/train",
+  "upstream": {
+    "repository": "nvidia/Nemotron-RL-litmus-bench-v0.2",
+    "revision": "c180425444ebcc6db8dafdb897e51a94927df62a",
+    "path": "train.jsonl"
+  },
+  "intended_use": ["train"],
+  "converter_module": "experiments.post_training.task_curation.datasets.litmus.convert",
+  "cluster": "cw-us-east-02a",
+  "mode": "ingest"
+}

@@ -55,6 +55,26 @@ Keep the checkout clean at that landed cut. The checker fetches the integration
 branch and proves the checked commit is landed. A later unrelated landing does
 not require rebuilding this cut.
 
+Updates to `source_fingerprint_index.json` or `source_population_locators.json`
+require a committed compare-and-swap proposal. The ingest registry writer uploads
+new documents at paths containing their SHA-256, preserves existing index and
+locator entries, and stages the replacement pointers with their expected prior
+selection. Pass the generated proposal to the landing tool:
+
+```bash
+atlas-push --registry-update <committed-proposal.json> \
+  --test "<affected tests>" --who "<session id>" --what "<change summary>"
+```
+
+Inside its lock, the tool fetches and rebases onto the integration tip, compares
+that tip's selected pointers with the proposal, and verifies the new documents
+preserve every existing entry. A changed selection aborts before publication.
+Rebase, regenerate the union and proposal from the new selected pointers, commit
+them, and retry. Never resolve a shared-pointer conflict by choosing one side or
+uploading over a shared archive name. The maintained tool is
+[`infra/ci/atlas-push`](../../../ci/atlas-push); update the installed copy before
+using the new flag.
+
 Choose a fresh artifact directory outside the checkout. Set `PACKAGE`, `COUNTS`,
 `INVENTORY`, `ARTIFACTS` and `PRODUCTION_HOLD` explicitly. `COUNTS` is the qualified
 current-input count manifest; `INVENTORY` is the full-population oracle inventory

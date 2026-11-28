@@ -22,7 +22,7 @@ LOCK="${ATLAS_PUSH_LOCK:-$HOME/.local/share/atlas-push/lock}"
 LOG="${ATLAS_PUSH_LOG:-$HOME/.local/share/atlas-push/landings.jsonl}"
 mkdir -p "$(dirname "$LOCK")"
 
-test_cmd=""; who=""; what=""; waiver_file=""; wait_s=7200
+test_cmd=""; who=""; what=""; waiver_file=""; registry_update=""; wait_s=7200
 while [[ $# -gt 0 ]]; do
   case $1 in
     --test) test_cmd=$2; shift 2 ;;
@@ -30,6 +30,7 @@ while [[ $# -gt 0 ]]; do
     --what) what=$2; shift 2 ;;
     --wait) wait_s=$2; shift 2 ;;
     --waivers) waiver_file=$2; shift 2 ;;
+    --registry-update) registry_update=$2; shift 2 ;;
     --locked) shift; break ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -38,7 +39,7 @@ done
 
 if [[ -z ${ATLAS_PUSH_LOCKED:-} ]]; then
   echo "waiting for the atlas-push lock (up to ${wait_s}s)..." >&2
-  exec env ATLAS_PUSH_LOCKED=1 /usr/bin/lockf -k -t "$wait_s" "$LOCK" "$0" --test "$test_cmd" --who "$who" --what "$what" --waivers "$waiver_file"
+  exec env ATLAS_PUSH_LOCKED=1 /usr/bin/lockf -k -t "$wait_s" "$LOCK" "$0" --test "$test_cmd" --who "$who" --what "$what" --waivers "$waiver_file" --registry-update "$registry_update"
 fi
 
 top=$(git rev-parse --show-toplevel)
@@ -66,6 +67,20 @@ else
   fi
 fi
 [[ -n $(git rev-list "origin/$TARGET..HEAD") ]] || { echo "nothing to land: HEAD is already on origin/$TARGET" >&2; exit 0; }
+
+shared_registry_changes=$(git diff --name-only "$tip..HEAD" -- \
+  experiments/post_training/task_curation/source_fingerprint_index.json \
+  experiments/post_training/task_curation/source_population_locators.json)
+if [[ -n $shared_registry_changes && -z $registry_update ]]; then
+  echo "ABORTED: shared index and locator changes require --registry-update with a committed proposal" >&2
+  exit 10
+fi
+if [[ -n $registry_update ]]; then
+  echo "== registry pointer compare-and-swap" >&2
+  uv run --no-sync python -m experiments.post_training.task_curation.ingest_stages.registry_update \
+    --base-ref "$tip" --proposal "$registry_update" \
+    || { echo "ABORTED: registry selection changed or would lose entries; rebase and rebuild the update" >&2; exit 10; }
+fi
 
 echo "== lint (branch changes)" >&2
 ./infra/pre-commit.py --changed-files || { echo "ABORTED: lint failed on the landing head" >&2; exit 4; }

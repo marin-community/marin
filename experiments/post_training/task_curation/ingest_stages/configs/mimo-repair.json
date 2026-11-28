@@ -1,0 +1,12 @@
+{
+  "source_id": "FWeindel:validated-tasks/mimo_v1",
+  "upstream": {
+    "repository": "FWeindel/validated-tasks",
+    "revision": "317659ac88c8b706d318020c5fc3813a931fb6ec",
+    "path": "mimo_v1"
+  },
+  "intended_use": ["train"],
+  "converter_module": "experiments.post_training.task_curation.datasets.mimo.repair",
+  "cluster": "cw-us-east-02a",
+  "mode": "repair"
+}
