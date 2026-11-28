@@ -787,3 +787,75 @@ def test_archive_records_omitted_sft_accounting_as_missing_evidence(tmp_path):
     assert revision["loss_metadata"]["sha256"] in missing
     assert plan["provenance"]["sft_data_accounting_future"] == revision["loss_metadata"]
     assert len(plan["provenance"]["marin_commit"]) == 40
+
+
+def test_archive_plan_wandb_block_reaches_the_exporter(tmp_path, monkeypatch):
+    """The plan's wandb block supplies base_url and the sdk pin to the real export config."""
+    consumed = {
+        **LAUNCHER_REQUEST_CONSUMED_CONFIG,
+        "train_config": {
+            **LAUNCHER_REQUEST_CONSUMED_CONFIG["train_config"],
+            "trainer": {
+                **LAUNCHER_REQUEST_CONSUMED_CONFIG["train_config"]["trainer"],
+                "tracker": {"entity": "test-entity", "project": "test", "id": "sft-id"},
+            },
+        },
+    }
+    settings, roots, trained, spec = _externally_stopped_sft_fixture(
+        tmp_path,
+        consumed_config=consumed,
+        selection=EXTERNALLY_STOPPED_SELECTION,
+        rl_telemetry=False,
+    )
+    spec["archive"] = {
+        "sft_data_accounting": {"source_loss_metadata": {"source": "s3://v10.1", "sha256": "6bae"}},
+        "wandb": {
+            "base_url": "https://api.wandb.ai",
+            "sdk_version": "0.31.0",
+            "package": "git+https://github.com/Open-Athena/wandb-archive.git@2e38b721856b67e7a8ee1d7ba6f8b6dccbee7a8a",
+            "include": {"histories": True},
+        },
+    }
+    spec["accounting_pin_revision"] = {"reason": "r", "loss_metadata": {"source": "s3://v10.1", "sha256": "6bae"}}
+    monkeypatch.setenv("WANDB_API_KEY", "fake-for-offline-test")
+    monkeypatch.setenv("WANDB_BASE_URL", "https://api.wandb.ai")
+    monkeypatch.setenv("WANDB_SERVICE", "parent-sdk-service")
+
+    class Run:
+        def download_history_exports(self, directory, require_complete_history):
+            assert require_complete_history
+            raise IncompleteRunHistoryError()
+
+        def scan_history(self):
+            yield from ({"_step": 2, "loss": 0.6},)
+
+    class Client:
+        def __init__(self, *, api_key, overrides):
+            assert api_key == "fake-for-offline-test"
+            assert overrides == {"base_url": "https://api.wandb.ai"}
+
+        def run(self, path):
+            return Run()
+
+    monkeypatch.setattr(archive_stage.wandb, "Api", Client)
+
+    def exporter(args, *, env, **kwargs):
+        config = yaml.safe_load(Path(args[args.index("backup") + 1]).read_text())
+        assert config["source"]["base_url"] == env["WANDB_BASE_URL"] == "https://api.wandb.ai"
+        assert args[args.index("--with") + 1] == "wandb==0.31.0"
+        return subprocess.CompletedProcess(
+            args, 1, stdout=b"", stderr=b"wandb.apis.public.runhistory.downloads.IncompleteRunHistoryError\n"
+        )
+
+    monkeypatch.setattr(archive_stage.subprocess, "run", exporter)
+    plan = derive_archive_plan(
+        output=str(tmp_path / "archive"),
+        settings=settings,
+        resolved_spec=spec,
+        artifacts=roots,
+        trained=trained,
+        evaluated=roots["eval"],
+        completed_report=roots["report"],
+    )
+    status = plan["provenance"]["wandb_runs"][0]
+    assert status["status"] == "scan_history_fallback_verified"
