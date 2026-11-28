@@ -46,7 +46,6 @@ class WindowPageMap(eqx.Module):
 
     @property
     def num_window_pages(self) -> int:
-        """Total number of slots in the window KV pool."""
         return self.window_to_logical.size
 
     def num_available_window_pages(self, sequences: SequenceTable, batch: PageBatchInfo) -> jax.Array:
@@ -58,7 +57,10 @@ class WindowPageMap(eqx.Module):
         return self.init(self.logical_to_window.size, self.num_window_pages, self.window)
 
     def remap(self, sequences: SequenceTable, batch: PageBatchInfo) -> tuple["WindowPageMap", PageBatchInfo]:
-        """Allocate window pages for this batch's writes and translate its metadata."""
+        """Allocate slots for this batch's writes and map its page references.
+
+        The returned page indices and token destinations address the window KV pool.
+        """
         destinations = batch.new_token_dests.array
         valid_destinations = jnp.arange(destinations.size) < batch.num_new_tokens
         write_pages = jnp.where(valid_destinations, destinations // batch.page_size, INVALID)
@@ -109,8 +111,8 @@ class WindowPageMap(eqx.Module):
         live_pages = jnp.where(live_keep, sequences.page_indices.array, INVALID)
 
         batch_lens = batch.seq_lens.array[:, None]
-        queries = jnp.diff(batch.cu_q_lens.array)[:, None]
-        batch_start = jnp.maximum(batch_lens - queries - self.window + 1, 0) // page_size
+        query_counts = jnp.diff(batch.cu_q_lens.array)[:, None]
+        batch_start = jnp.maximum(batch_lens - query_counts - self.window + 1, 0) // page_size
         batch_keep = (jnp.arange(batch_lens.shape[0])[:, None] < batch.num_seqs) & (columns >= batch_start)
         batch_pages = jnp.where(batch_keep, batch.page_indices.array, INVALID)
 

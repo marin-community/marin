@@ -118,18 +118,20 @@ def test_grug_tpu_paged_attention_matches_reference(runtime_scale, kv_heads):
 def test_grug_tpu_paged_attention_with_evicted_window_page():
     page_size, head_dim = 4, 128
     pages = jnp.zeros((2, page_size, 2, head_dim), dtype=jnp.float32)
-    pages = pages.at[1, :, 1].set(jnp.arange(1, 5, dtype=jnp.float32)[:, None])
+    pages = pages.at[1, :, 1].set(jnp.arange(1, page_size + 1, dtype=jnp.float32)[:, None])
     q = jnp.zeros((1, 1, 4, head_dim), dtype=jnp.float32)
-    attend = jax.jit(partial(ragged_paged_attention, sm_scale=head_dim**-0.5, implementation="tpu", sliding_window=4))
+    attend = jax.jit(
+        partial(ragged_paged_attention, sm_scale=head_dim**-0.5, implementation="tpu", sliding_window=page_size)
+    )
     result = attend(
         q,
         pages,
-        jnp.array([8], dtype=jnp.int32),
+        jnp.array([2 * page_size], dtype=jnp.int32),
         jnp.array([[INVALID, 1]], dtype=jnp.int32),
         jnp.array([0, 1], dtype=jnp.int32),
         jnp.asarray(1, dtype=jnp.int32),
     )
-    np.testing.assert_array_equal(result, jnp.full(q.shape, 2.5))
+    np.testing.assert_array_equal(result, jnp.full(q.shape, (page_size + 1) / 2))
 
 
 @pytest.mark.tpu
