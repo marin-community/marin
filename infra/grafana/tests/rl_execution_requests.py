@@ -2,12 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace as Record
 
-from config import ClusterTarget
-from conftest import bridge_config, finelog_sql_for_duckdb, resolved_query_params
+from conftest import duckdb_bridge_app, resolved_query_params
 from rl_execution_fixtures import (
     BASE_EPOCH_MS,
     CLUSTER,
@@ -25,7 +22,6 @@ from rl_execution_observability import (
     RL_EXECUTION_MIN_BUCKET_MS,
 )
 from rl_observability import _DCGM_SERIES
-from server import create_app
 
 EXPECTED_PANELS = json.loads((Path(__file__).parent / "fixtures/rl_execution_panels.json").read_text())
 
@@ -47,13 +43,8 @@ def _target_params(target, *, run=RUN_ID):
 
 def _bridge(database, *, max_rows=1000):
     queries = []
-
-    def query_source(sql, *, max_rows):
-        queries.append(sql)
-        return database.execute(finelog_sql_for_duckdb(sql)).fetch_arrow_table()
-
-    source = Record(target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"), query=query_source)
-    return create_app(replace(bridge_config(), max_rows=max_rows), {"marin": source}, {}, None, None, None), queries
+    app = duckdb_bridge_app(database, max_rows=max_rows, queries=queries)
+    return app, queries
 
 
 REQUEST = {

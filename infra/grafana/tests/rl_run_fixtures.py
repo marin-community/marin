@@ -4,15 +4,13 @@
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
 from typing import NamedTuple
 
 import duckdb
 import pytest
-from config import ClusterTarget
 from conftest import (
-    bridge_config,
     dashboard_panels,
+    duckdb_bridge_app,
     finelog_sql_for_duckdb,
     install_finelog_dialect_macros,
     queried_namespace,
@@ -20,7 +18,6 @@ from conftest import (
 from dashboard_stitch import stitch_all
 from rl_observability import rl_gpu_dataset, rl_overview_dataset
 from rl_producers import collect_producers
-from server import create_app
 from starlette.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -399,11 +396,7 @@ def _panel_sql(title: str) -> str:
 
 
 def _request_rows(rl_run_store, path, params):
-    def query_source(sql, *, max_rows):
-        return rl_run_store.execute(finelog_sql_for_duckdb(sql)).fetch_arrow_table()
-
-    source = SimpleNamespace(target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"), query=query_source)
-    app = create_app(bridge_config(), {"marin": source}, {}, None, None, None)
+    app = duckdb_bridge_app(rl_run_store)
     with TestClient(app) as client:
         response = client.get(f"/finelog/marin{path}", params=params)
         assert response.status_code == 200, response.text

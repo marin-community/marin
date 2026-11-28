@@ -16,7 +16,7 @@
     {
       "type": "timeseries",
       "title": "vLLM token throughput",
-      "description": "Prompt and generated-token throughput summed across inference engines. Rising prompt share can mean more prefill work; compare prefix-cache hit rate and the task\u2019s sampling pattern before calling it inefficient. Rates use reset-aware per-engine counter deltas; requires engine telemetry. Run-wide: this panel ignores the Job and Execution pickers.",
+      "description": "Prompt and generated-token throughput summed across inference engines. Rising prompt share can mean more prefill work; compare prefix-cache hit rate and the task’s sampling pattern before calling it inefficient. Rates use reset-aware per-engine counter deltas; requires engine telemetry. Run-wide: this panel ignores the Job and Execution pickers.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

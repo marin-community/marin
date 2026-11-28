@@ -66,7 +66,7 @@
       "id": 52,
       "type": "timeseries",
       "title": "Staleness of trained groups: tokens per step",
-      "description": "Consumed response tokens by optimizer step and policy staleness. Larger older buckets mean more of the batch\u2019s tokens come from older policies. Token counts differ from group counts when response lengths differ; sync runs show zero only. Requires trainer.training_metrics.",
+      "description": "Consumed response tokens by optimizer step and policy staleness. Larger older buckets mean more of the batch’s tokens come from older policies. Token counts differ from group counts when response lengths differ; sync runs show zero only. Requires trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -124,7 +124,7 @@
     {
       "id": 54,
       "type": "timeseries",
-      "title": "Trainer/vLLM logprob mismatch \u03c1 (staleness 0)",
+      "title": "Trainer/vLLM logprob mismatch ρ (staleness 0)",
       "description": "Trainer/vLLM probability mismatch on staleness-zero loss tokens. Large log-ratio tails or low ESS reveal a mismatch even without policy aging. Missing rollout logprobs leave gaps; sync runs have only the zero-staleness comparison. Requires trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",

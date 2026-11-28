@@ -225,7 +225,7 @@
       "id": 27,
       "type": "table",
       "title": "Megatron phase detail (newest 8 steps)",
-      "description": "Phase walls for each rank\u2019s newest eight observed optimizer steps. Compare the same phase across ranks to find dispatch or synchronization outliers. At most 5,000 phase rows are shown. Megatron phases are CPU wall time around asynchronous CUDA launches (clock_domain=cpu_dispatch_wall), so a phase can end before its GPU work does; requires trainer.policy_train_spans.",
+      "description": "Phase walls for each rank’s newest eight observed optimizer steps. Compare the same phase across ranks to find dispatch or synchronization outliers. At most 5,000 phase rows are shown. Megatron phases are CPU wall time around asynchronous CUDA launches (clock_domain=cpu_dispatch_wall), so a phase can end before its GPU work does; requires trainer.policy_train_spans.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

@@ -4,11 +4,14 @@
 """Shared test helpers: the bridge config, a canned k8s API server, and finelog's SQL dialect."""
 
 import re
+from dataclasses import replace
+from types import SimpleNamespace
 
 import httpx
-from config import BridgeConfig, K8sClusterTarget
+from config import BridgeConfig, ClusterTarget, K8sClusterTarget
 from finelog.errors import StatsError
 from k8s_source import K8sSource
+from server import create_app
 
 pytest_plugins = ("rl_run_fixtures", "rl_execution_fixtures")
 
@@ -39,6 +42,24 @@ def install_finelog_dialect_macros(database) -> None:
 def finelog_sql_for_duckdb(sql: str) -> str:
     """Translate Finelog's ordered aggregate names to DuckDB's names."""
     return re.sub(r"first_value\(", "first(", sql, flags=re.IGNORECASE)
+
+
+def duckdb_bridge_app(database, *, max_rows=None, queries=None):
+    """An app whose finelog source executes against `database`, recording the SQL it runs.
+
+    Bridge tests share one construction: a DuckDB-backed query source addressed as the
+    `marin` cluster. `queries` collects each SQL statement before its DuckDB translation
+    so tests can assert what the routes actually asked for.
+    """
+
+    def query_source(sql, *, max_rows):
+        if queries is not None:
+            queries.append(sql)
+        return database.execute(finelog_sql_for_duckdb(sql)).fetch_arrow_table()
+
+    source = SimpleNamespace(target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"), query=query_source)
+    config = bridge_config() if max_rows is None else replace(bridge_config(), max_rows=max_rows)
+    return create_app(config, {"marin": source}, {}, None, None, None)
 
 
 def bridge_config(cache_ttl: float = 20.0) -> BridgeConfig:

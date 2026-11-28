@@ -43,6 +43,9 @@ PANEL_GROUP_REF_KEY = "panelGroupRef"
 _SQL_TOKEN = re.compile(r"\{\{(\w+)\}\}")
 # Grafana's own dashboard macros inside templating SQL pass through untouched.
 GRAFANA_TEMPLATE_MACROS = frozenset({"from", "to"})
+# The one RL-specific shared token. Importing the names (rather than restating
+# them) is what keeps the pickers' SQL and this token from drifting; every other
+# entry in this module is dashboard-agnostic.
 _SHARED_SQL = {"{{rl_producer_row_names}}": RL_PRODUCER_ROW_NAMES_SQL}
 
 _TIMESERIES_COLUMNS = [

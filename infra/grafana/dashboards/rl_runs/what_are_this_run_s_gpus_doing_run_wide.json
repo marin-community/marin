@@ -1,13 +1,13 @@
 {
   "type": "row",
-  "title": "What are this run\u2019s GPUs doing? (run-wide)",
+  "title": "What are this run’s GPUs doing? (run-wide)",
   "collapsed": true,
   "panels": [
     {
       "id": 122,
       "type": "timeseries",
       "title": "SM and tensor-pipe activity on this run's nodes",
-      "description": "SM-active and tensor-active fractions on this run\u2019s attributed nodes. High SM activity with low tensor activity suggests kernels doing little matrix work. Node-level values include other workloads and ranks; requires node-agent DCGM reporting. Run-wide: this panel ignores the Job and Execution pickers. GPU detail is available for ranges of 7h or less; longer ranges show a zoom message.",
+      "description": "SM-active and tensor-active fractions on this run’s attributed nodes. High SM activity with low tensor activity suggests kernels doing little matrix work. Node-level values include other workloads and ranks; requires node-agent DCGM reporting. Run-wide: this panel ignores the Job and Execution pickers. GPU detail is available for ranges of 7h or less; longer ranges show a zoom message.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

@@ -1,7 +1,7 @@
 {
   "type": "timeseries",
-  "title": "Straggler proxy: rollout wait p99 \u00f7 p50",
-  "description": "Rollout-wait p99 divided by its median in each 30-minute bucket. A ratio near one means similar waits; a large ratio identifies unusually slow steps. This measures step-to-step spread across the run\u2019s executions, and partial buckets use only observations inside the selected window. Run-wide: this panel ignores the Job and Execution pickers.",
+  "title": "Straggler proxy: rollout wait p99 ÷ p50",
+  "description": "Rollout-wait p99 divided by its median in each 30-minute bucket. A ratio near one means similar waits; a large ratio identifies unusually slow steps. This measures step-to-step spread across the run’s executions, and partial buckets use only observations inside the selected window. Run-wide: this panel ignores the Job and Execution pickers.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"
@@ -14,7 +14,7 @@
         "fillOpacity": 8,
         "showPoints": "never",
         "spanNulls": false,
-        "axisLabel": "p99 \u00f7 p50"
+        "axisLabel": "p99 ÷ p50"
       },
       "min": 0,
       "unit": "none",

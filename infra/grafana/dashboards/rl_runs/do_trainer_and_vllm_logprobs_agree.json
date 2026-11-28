@@ -239,7 +239,7 @@
       "id": 46,
       "type": "timeseries",
       "title": "Mean correction weight",
-      "description": "Mean off-policy correction weight over eligible tokens, including masked zeros. A falling mean means correction suppresses more of the batch\u2019s effective contribution. Missing series mean correction is unconfigured or unobserved; requires trainer.training_metrics.",
+      "description": "Mean off-policy correction weight over eligible tokens, including masked zeros. A falling mean means correction suppresses more of the batch’s effective contribution. Missing series mean correction is unconfigured or unobserved; requires trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -413,7 +413,7 @@
     {
       "id": 57,
       "type": "timeseries",
-      "title": "Position dependence of |log \u03c1|",
+      "title": "Position dependence of |log ρ|",
       "description": "Absolute log-ratio drift near the first and last response tokens and in the middle. Larger errors late in responses can reveal position-dependent drift hidden by pooled averages. Serving mismatch and within-update drift have separate series and coverage; requires trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
