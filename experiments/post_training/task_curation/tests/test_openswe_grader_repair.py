@@ -225,10 +225,11 @@ def test_script_that_does_not_parse_fails_closed():
     assert "does not parse" in classification.detail
 
 
-def test_script_that_echoes_the_verdict_multiple_times_fails_closed():
-    """The verifier's ambiguity rule scores any run with several
-    OPENSWE_EXIT_CODE lines 0; a phased script that echoes the verdict per
-    phase can never award 1 (gate v5's pySBOL2/eiffel evidence)."""
+def test_script_that_echoes_the_verdict_on_one_runtime_path_is_not_structurally_excluded():
+    """A structural echo count cannot tell same-path echoes from mutually
+    exclusive branches, and the verifier's ambiguity rule already scores the
+    runtime-ambiguous runs 0 through the behavioral gate — so the count is
+    recorded, never a verdict."""
     script = (
         "#!/bin/bash\ncd /testbed\n"
         f"git apply -v --allow-empty - <<'EOF_114329324912'\n{TEST_PATCH}EOF_114329324912\n"
@@ -236,9 +237,7 @@ def test_script_that_echoes_the_verdict_multiple_times_fails_closed():
         'pytest -q tests/b\necho "OPENSWE_EXIT_CODE=$rc2"\n'
     )
     classification = grader_repair.classify_grader(grader_row(eval_script=script))
-    assert classification.verdict == "unrepairable"
-    assert classification.reason == "ambiguous_exit_code"
-    assert "2 times" in classification.detail
+    assert classification.verdict == "clean"
 
 
 def test_single_exit_marker_stays_repairable():

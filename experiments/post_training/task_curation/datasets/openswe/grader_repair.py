@@ -199,19 +199,13 @@ def classify_grader(row: OpenSweRow) -> GraderClassification:
             "the eval_script does not parse under bash: " + parse.stderr.decode(errors="replace").strip()[-400:]
         )
         return classification
-    # The verifier's ambiguity rule scores a run 0 when more than one
-    # OPENSWE_EXIT_CODE line reaches its output; a script that echoes the
-    # verdict several times (phased upstream scripts do) therefore can never
-    # award 1, whatever the agent does.
-    markers = re.findall(r"^\s*(?:echo|printf)\b[^\n]*OPENSWE_EXIT_CODE", script, re.MULTILINE)
-    if len(markers) > 1:
-        classification.verdict = "unrepairable"
-        classification.reason = "ambiguous_exit_code"
-        classification.detail = (
-            f"the eval_script echoes the OPENSWE_EXIT_CODE verdict {len(markers)} times; the verifier's "
-            "ambiguity rule scores every such run 0"
-        )
-        return classification
+    # A script whose several verdict echoes all sit on one runtime path trips
+    # the verifier's ambiguity rule and scores 0 for every agent state — but a
+    # structural echo count cannot tell same-path echoes from mutually
+    # exclusive branches, and the behavioral gate already catches the
+    # runtime-ambiguous runs through their oracle control (the
+    # pySBOL2/eiffel gate-v5 evidence), so the structural count is not a
+    # verdict here.
     golden_sites: list[DiffSite] = []
     test_sites: list[DiffSite] = []
     unknown_sites: list[DiffSite] = []
