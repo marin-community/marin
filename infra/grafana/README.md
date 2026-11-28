@@ -333,6 +333,7 @@ message and HTTP classification. Grafana's Cloud Run container has 4 GiB.
 ```
 src/server.py          the bridge routes (Starlette): finelog SQL, Iris, GitHub, k8s
 src/finelog_source.py  finelog query over its internal IP (LogClient)
+src/segment_backlog.py finelog hub table segment counts and the backlog alert projection
 src/hero_runs.py       hero-run enrollment from Iris state and Levanter telemetry
 src/hero_health.py     run-health signal scan and the telemetry/optimizer/health projections
 src/iris_source.py     live controller RPCs: jobs, workers, health, federation peers, ad-hoc query
@@ -556,7 +557,8 @@ redeploy.
 
 Critical rules notify operators immediately: an unreachable cluster or
 federation peer, a crash-looping watched component, an admission webhook with no ready endpoints, a
-dead production Iris controller, an unhealthy finelog hub or mirror, CoreWeave
+dead production Iris controller, an unhealthy finelog hub or mirror, a finelog hub
+table with a segment backlog, CoreWeave
 storage above 80 percent of quota, or stalled training, a loss spike, silent
 telemetry, or an unstable optimizer on an enrolled hero run.
 Warning rules remain in Grafana's home alert list without sending email, Slack,
@@ -649,6 +651,14 @@ other execution errors. Finelog alert endpoints convert only retryable service
 failures into valid non-firing results because `FinelogFleetUnhealthy` reports
 that shared failure. The CoreWeave storage rules stay normal when a successful
 query returns no data.
+
+`FinelogSegmentBacklog` fires when a hub table's segment count stays at or above
+`SEGMENT_BACKLOG_THRESHOLD` in `src/segment_backlog.py` for 15 minutes. The bridge
+reads the counts from `ListNamespaces`, a metadata call that opens no segments, so
+the rule keeps evaluating while queries miss their deadlines. The threshold is
+interim: `ListNamespaces` reports the total across compaction levels, and the
+largest healthy tables hold about 3,000 segments. The Clusters dashboard lists the
+current counts under "Finelog hub table segments".
 
 Federation peer reachability comes from `ListPeers` on the Marin controller.
 The controller heartbeat traverses production DNS, TLS, Traefik, the source-IP

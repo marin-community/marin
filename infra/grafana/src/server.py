@@ -26,8 +26,10 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/marin/fleet_health              hub query health + k8s mirror readiness
     GET /finelog/{cluster}/alerts/query          alert SQL; no data when Finelog is unavailable
     GET /finelog/marin/relay_status              direct regional relay heartbeats
+    GET /finelog/marin/table_segments            hub tables + segment, row and byte counts
     GET /finelog/marin/alerts/fleet_health       alert rows: server labels + value(0|1)
     GET /finelog/marin/alerts/relay_status       stale relay/table rows + value(0|1)
+    GET /finelog/marin/alerts/table_segments     hub tables + segment-backlog value(0|1)
     GET /finelog/marin/alerts/training_stalls    active jobs + stalled-progress value(0|1)
     GET /finelog/marin/alerts/loss_spikes        active hero runs + loss-spike value(0|1)
     GET /finelog/marin/alerts/training_telemetry watched hero runs + silent-telemetry value(0|1)
@@ -164,6 +166,7 @@ from rl_execution_observability import rl_execution_dataset
 from rl_observability import recent_rl_runs_dataset, rl_gpu_dataset, rl_overview_dataset
 from rl_producers import check_window, collect_producers
 from runs_observability import runs_overview_dataset
+from segment_backlog import TableStorageStats, segment_backlog_alert_rows, segment_backlog_unavailable_rows
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -1174,6 +1177,23 @@ def create_app(
         except QueryResultTooLargeError as err:
             return JSONResponse({"error": f"{err}; reduce the alert query lookback"}, status_code=400)
 
+    def table_segment_rows() -> tuple[TableStorageStats, ...]:
+        _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
+        return finelog_health_cache.get_or_compute(
+            "table_segments",
+            lambda: finelog_sources[_FINELOG_HUB_CLUSTER].table_segments(),
+        )
+
+    def finelog_table_segments(_: Request) -> JSONResponse:
+        return JSONResponse([asdict(table) for table in table_segment_rows()])
+
+    def finelog_alerts_table_segments(_: Request) -> JSONResponse:
+        return finelog_alert_endpoint(
+            "table_segments",
+            lambda target, _: segment_backlog_alert_rows(target.name, table_segment_rows()),
+            lambda _: segment_backlog_unavailable_rows(_FINELOG_HUB_CLUSTER),
+        )
+
     def finelog_alerts_training_stalls(_: Request) -> JSONResponse:
         def project(target: ClusterTarget, now: datetime) -> list[dict]:
             runs = hero_runs(target, now)
@@ -1508,8 +1528,10 @@ def create_app(
             Route("/finelog/{cluster}/v1/rl/producers", rl_producers),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/relay_status", finelog_relay_status),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/table_segments", finelog_table_segments),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/relay_status", finelog_alerts_relay_status),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/table_segments", finelog_alerts_table_segments),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_stalls", finelog_alerts_training_stalls),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/loss_spikes", finelog_alerts_loss_spikes),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_telemetry", finelog_alerts_training_telemetry),

@@ -591,6 +591,53 @@ groups:
               conditions:
                 - evaluator: { type: gt, params: [0] }
 
+      # ListNamespaces is a metadata call that opens no segments, so this rule keeps
+      # reading while queries miss their deadlines. The bridge applies the threshold
+      # in src/segment_backlog.py and returns one explicit value per table.
+      - uid: finelog-segment-backlog
+        title: FinelogSegmentBacklog
+        condition: C
+        for: 15m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.cluster }}: finelog table {{ $labels.namespace }} is {{ $labels.state }}"
+          description: >-
+            The table's segment count stayed at or above the backlog threshold, so
+            compaction is behind its flushes and reads open every small segment.
+            The threshold is interim: it applies to the total across levels until
+            Finelog reports an L0 count.
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/finelog/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/table_segments
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: namespace, text: namespace, type: string }
+                - { selector: state, text: state, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
   # The hourly collector stores CoreWeave usage and zone quotas in Finelog.
   - orgId: 1
     name: coreweave-storage

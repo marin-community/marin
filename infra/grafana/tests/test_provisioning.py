@@ -8,6 +8,7 @@ Grafana, which is the most expensive place to find out."""
 
 import json
 import re
+from dataclasses import fields
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -25,6 +26,7 @@ from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from k8s_source import K8sFleet
 from relay_health import RelaySenderStatus
+from segment_backlog import TableStorageStats
 from server import create_app
 from starlette.testclient import TestClient
 from training_observability import training_overview_dataset
@@ -206,6 +208,9 @@ class _FakeFinelog:
 
     def relay_status(self) -> tuple[RelaySenderStatus, ...]:
         return ()
+
+    def table_segments(self) -> tuple[TableStorageStats, ...]:
+        return (TableStorageStats(namespace="log", segment_count=40, row_count=9, byte_size=4096),)
 
 
 class _UnavailableFinelog(_FakeFinelog):
@@ -663,6 +668,16 @@ def test_clusters_dashboard_shows_finelog_fleet_health():
     assert panel["datasource"]["uid"] == "finelog-marin"
     selectors = {column["selector"] for column in panel["targets"][0]["columns"]}
     assert {"cluster", "server", "responsive", "ready", "desired", "latency_ms"} <= selectors
+
+
+def test_table_segments_panel_selects_the_columns_the_bridge_serves():
+    (panel,) = [
+        panel
+        for panel in _all_panels(_stitched_dashboards()["clusters.json"])
+        if any(target.get("url") == "/table_segments" for target in panel.get("targets", []))
+    ]
+    selectors = {column["selector"] for column in panel["targets"][0]["columns"]}
+    assert selectors == {field.name for field in fields(TableStorageStats)}
 
 
 def test_clusters_dashboard_shows_finelog_forwarding_failures_and_drops():

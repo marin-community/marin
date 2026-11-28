@@ -52,6 +52,7 @@ from loom_alerts import (
 from loss_spikes import loss_spike_alert_rows, loss_window_query
 from relay_health import RelayNamespaceStatus, RelaySenderStatus
 from rl_producers import RL_PRODUCER_NAMESPACES
+from segment_backlog import SEGMENT_BACKLOG_THRESHOLD, TableStorageStats
 from server import _dataset_source, create_app, workload_overview
 from starlette.testclient import TestClient
 from training_stalls import telemetry_query, training_stall_alert_rows
@@ -83,6 +84,8 @@ class FakeSource:
         raises: Exception | None = None,
         health: FinelogHealth | None = None,
         relay_status: tuple[RelaySenderStatus, ...] = (),
+        table_segments: tuple[TableStorageStats, ...] = (),
+        table_segments_raises: Exception | None = None,
     ) -> None:
         self._table = table if table is not None else pa.table({})
         self._raises = raises
@@ -98,6 +101,8 @@ class FakeSource:
             error="",
         )
         self._relay_status = relay_status
+        self._table_segments = table_segments
+        self._table_segments_raises = table_segments_raises
         self.queries: list[str] = []
 
     @property
@@ -118,6 +123,11 @@ class FakeSource:
 
     def relay_status(self) -> tuple[RelaySenderStatus, ...]:
         return self._relay_status
+
+    def table_segments(self) -> tuple[TableStorageStats, ...]:
+        if self._table_segments_raises is not None:
+            raise self._table_segments_raises
+        return self._table_segments
 
 
 def _client(
@@ -1540,6 +1550,33 @@ def test_finelog_fleet_alert_marks_slow_and_unresponsive_servers():
             "error_class": "readiness",
             "value": 1,
         },
+    ]
+
+
+def test_table_segment_routes_expose_counts_and_flag_only_the_backlogged_table():
+    tables = (
+        TableStorageStats(namespace="log", segment_count=SEGMENT_BACKLOG_THRESHOLD, row_count=9, byte_size=4096),
+        TableStorageStats(namespace="iris.task", segment_count=328, row_count=7, byte_size=2048),
+    )
+    client = _client(FakeSource(table_segments=tables))
+
+    assert client.get("/finelog/marin/table_segments").json()[0] == {
+        "namespace": "log",
+        "segment_count": SEGMENT_BACKLOG_THRESHOLD,
+        "row_count": 9,
+        "byte_size": 4096,
+    }
+    assert client.get("/finelog/marin/alerts/table_segments").json() == [
+        {"cluster": "marin", "namespace": "iris.task", "state": "healthy", "value": 0},
+        {"cluster": "marin", "namespace": "log", "state": "backlogged", "value": 1},
+    ]
+
+
+def test_table_segment_alert_does_not_fire_while_the_hub_is_unavailable():
+    client = _client(FakeSource(table_segments_raises=FinelogUnavailableError("unavailable")))
+
+    assert client.get("/finelog/marin/alerts/table_segments").json() == [
+        {"cluster": "marin", "namespace": "", "state": "unavailable", "value": 0},
     ]
 
 

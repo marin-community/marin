@@ -11,6 +11,7 @@ cluster's controller is down.
 import logging
 import threading
 import time
+from collections.abc import Callable
 from typing import Protocol
 
 import httpx
@@ -25,6 +26,7 @@ from finelog_health import FinelogHealth, FinelogRole
 from google.api_core.exceptions import GoogleAPIError
 from google.api_core.retry import if_transient_error
 from relay_health import RelaySenderStatus, relay_sender_statuses
+from segment_backlog import TableStorageStats
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,8 @@ class MetricSource(Protocol):
     def health(self) -> FinelogHealth: ...
 
     def relay_status(self) -> tuple[RelaySenderStatus, ...]: ...
+
+    def table_segments(self) -> tuple[TableStorageStats, ...]: ...
 
 
 class FinelogSource:
@@ -77,8 +81,11 @@ class FinelogSource:
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
         """Run SQL, classifying discovery and transport failures as retryable."""
+        return self._classifying_unavailability(lambda: self._client.query(sql, max_rows=max_rows))
+
+    def _classifying_unavailability[T](self, call: Callable[[], T]) -> T:
         try:
-            return self._client.query(sql, max_rows=max_rows)
+            return call()
         except StatsError as err:
             cause = err.__cause__
             if isinstance(cause, Exception) and is_retryable_error(cause):
@@ -94,6 +101,19 @@ class FinelogSource:
     def namespaces(self) -> frozenset[str]:
         """Return the namespaces this deployment holds."""
         return frozenset(info.namespace for info in self._client.list_namespaces())
+
+    def table_segments(self) -> tuple[TableStorageStats, ...]:
+        """Return each table's storage statistics from one metadata RPC."""
+        namespaces = self._classifying_unavailability(self._client.list_namespaces)
+        return tuple(
+            TableStorageStats(
+                namespace=info.namespace,
+                segment_count=info.segment_count,
+                row_count=info.row_count,
+                byte_size=info.byte_size,
+            )
+            for info in namespaces
+        )
 
     def health(self) -> FinelogHealth:
         """Probe the query path and return a dashboard-safe health row."""

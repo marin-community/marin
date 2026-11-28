@@ -1066,12 +1066,22 @@
           "panelRef": "finelog_fleet_health"
         },
         {
-          "id": 53,
+          "id": 54,
           "gridPos": {
             "h": 8,
             "w": 24,
             "x": 0,
             "y": 7
+          },
+          "panelRef": "finelog_table_segments"
+        },
+        {
+          "id": 53,
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 15
           },
           "panelRef": "finelog_forwarding_events"
         },
@@ -1088,7 +1098,7 @@
             "h": 9,
             "w": 24,
             "x": 0,
-            "y": 15
+            "y": 23
           },
           "fieldConfig": {
             "defaults": {
@@ -1198,7 +1208,7 @@
             "h": 8,
             "w": 24,
             "x": 0,
-            "y": 24
+            "y": 32
           },
           "fieldConfig": {
             "defaults": {
