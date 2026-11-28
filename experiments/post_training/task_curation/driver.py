@@ -80,9 +80,9 @@ from experiments.post_training.task_curation.local import artifact_prefix, run_l
 from experiments.post_training.task_curation.pipeline import CampaignMachines, CurationRecipe
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
 from experiments.post_training.task_curation.sources import (
-    PENDING_MEASUREMENT_SOURCES,
     all_sources,
     measured_pending_sources,
+    pending_measurement_sources,
     runnable_sources,
 )
 from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURRICULUM
@@ -121,7 +121,7 @@ def _selected_sources(sources: tuple[str, ...], mode: SourceProcessingMode) -> d
             for source in all_sources().values()
             if source.pipeline is not None and not {"deprecated", "excluded"}.intersection(source.info.tags)
         }
-        pending = {source.name: source for source in PENDING_MEASUREMENT_SOURCES if source.name in sources}
+        pending = {source.name: source for source in pending_measurement_sources() if source.name in sources}
         catalog = {**registered, **pending, **catalog}
         # An explicit "<name>-retained" selection runs the pending source's measured
         # retained cohort, whose population and decontamination receipt share one pin.

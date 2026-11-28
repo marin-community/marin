@@ -4,6 +4,7 @@
 """The task catalog: training and evaluation dataset declarations, keyed by name."""
 
 from dataclasses import replace
+from functools import lru_cache
 from pathlib import Path
 
 from finestore.rl.curation import OversightLevel
@@ -241,79 +242,87 @@ R41_PENDING_SOURCE_IDS = (
     }
 )
 
-PENDING_MEASUREMENT_SOURCES = (
-    *(
-        source
-        for source in repair_releases.sources()
-        if source.info.id == "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@sealed-20261124"
-    ),
-    *(source for source in cascade.sources() if source.info.subset not in CASCADE_RETAINED_SUBSETS),
-    *lean_proofs.sources(),
-    *lean_numina.sources(),
-    *swe_rebench_v2.sources(),
-    # The repaired identity-following variant is measured and admission-gated at its
-    # sealed intake pin; it stages here until its release adopts it (R41), so its
-    # registry receipts bind without entering the served declarations.
-    *tasktrove_identity_repair.repaired_sources(),
-    *(source for source in tasktrove_judged.sources() if source.info.id in OUT_OF_REGION_PENDING_IDS),
-    *facet_terminal.sources(),
-    *endless.cohort_source(),
-    *pymethods2test.sources(),
-    *workplace.sources(),
-    *nemo_mcqa.sources(),
-    *hierarchy_intake.sources(),
-    *dolci_precise_if_admitted.sources(),
-    *inverse_ifeval_admitted.sources(),
-    *qa_abstention_admitted.sources(),
-    *edge_websearch_admitted.sources(),
-    *s1_deepresearch_admitted.sources(),
-    *freeform_formatting_admitted.sources(),
-    *citation_formatting_admitted.sources(),
-    *big_math_admitted.sources(),
-    *acecode_89k_admitted.sources(),
-    *leetcode_dataset_admitted.sources(),
-    *structeval_admitted.sources(),
-    *(
-        source
-        for source in campaign_releases.sources()
-        if source.info.id == "TaskTrove:tasktrove-competitive-coding-rebuilt-v1"
-    ),
-    *(
-        source
-        for source in campaign_releases.sources()
-        if source.info.id
-        in {
-            "TaskTrove:tasktrove-code-contests-built-image",
-            "TaskTrove:tasktrove-nl2bash-rebuilt-v1",
-            "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1",
-            "TaskTrove:tasktrove-pymethods2test-rebuilt-v1",
-            "TaskTrove:tasktrove-taco-built-image",
-            "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1",
-            "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1",
-        }
-    ),
-    *(
-        source
-        for source in nemotron_ultra.sources()
-        if source.info.id
-        in {
-            "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
-            "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
-            "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
-        }
-    ),
-    # The two admitted wave-1 renames bind their qualification records; their retained
-    # releases surface at the R41 load.
-    *nemotron_ultra_renames_admitted.sources(),
-    # The main-sync staged sources (2026-11-25): declared on origin/main, absent
-    # from the Atlas r39 cut, staged for R41 intake at their main pins. The
-    # license-banned KTO components never enter this listing.
-    *(source for source in skyrl_preference.sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
-    *(source for source in nemotron_ultra.sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
-    *goedel_lean.sources(),
-    *tasktrove_structured_native.sources(),
-    *(source for source in tasktrove_judged.candidate_sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
-)
+
+@lru_cache(maxsize=1)
+def pending_measurement_sources() -> tuple[RlDataSource, ...]:
+    """The pending-intake declarations the Atlas measures before admission.
+
+    Computed at first call, not at import: a pending source's module may read its
+    pinned registry document, and importing ``sources`` must do no network I/O.
+    """
+    return (
+        *(
+            source
+            for source in repair_releases.sources()
+            if source.info.id == "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@sealed-20261124"
+        ),
+        *(source for source in cascade.sources() if source.info.subset not in CASCADE_RETAINED_SUBSETS),
+        *lean_proofs.sources(),
+        *lean_numina.sources(),
+        *swe_rebench_v2.sources(),
+        # The repaired identity-following variant is measured and admission-gated at its
+        # sealed intake pin; it stages here until its release adopts it (R41), so its
+        # registry receipts bind without entering the served declarations.
+        *tasktrove_identity_repair.repaired_sources(),
+        *(source for source in tasktrove_judged.sources() if source.info.id in OUT_OF_REGION_PENDING_IDS),
+        *facet_terminal.sources(),
+        *endless.cohort_source(),
+        *pymethods2test.sources(),
+        *workplace.sources(),
+        *nemo_mcqa.sources(),
+        *hierarchy_intake.sources(),
+        *dolci_precise_if_admitted.sources(),
+        *inverse_ifeval_admitted.sources(),
+        *qa_abstention_admitted.sources(),
+        *edge_websearch_admitted.sources(),
+        *s1_deepresearch_admitted.sources(),
+        *freeform_formatting_admitted.sources(),
+        *citation_formatting_admitted.sources(),
+        *big_math_admitted.sources(),
+        *acecode_89k_admitted.sources(),
+        *leetcode_dataset_admitted.sources(),
+        *structeval_admitted.sources(),
+        *(
+            source
+            for source in campaign_releases.sources()
+            if source.info.id == "TaskTrove:tasktrove-competitive-coding-rebuilt-v1"
+        ),
+        *(
+            source
+            for source in campaign_releases.sources()
+            if source.info.id
+            in {
+                "TaskTrove:tasktrove-code-contests-built-image",
+                "TaskTrove:tasktrove-nl2bash-rebuilt-v1",
+                "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1",
+                "TaskTrove:tasktrove-pymethods2test-rebuilt-v1",
+                "TaskTrove:tasktrove-taco-built-image",
+                "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1",
+                "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1",
+            }
+        ),
+        *(
+            source
+            for source in nemotron_ultra.sources()
+            if source.info.id
+            in {
+                "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
+                "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
+                "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+            }
+        ),
+        # The two admitted wave-1 renames bind their qualification records; their retained
+        # releases surface at the R41 load.
+        *nemotron_ultra_renames_admitted.sources(),
+        # The main-sync staged sources (2026-11-25): declared on origin/main, absent
+        # from the Atlas r39 cut, staged for R41 intake at their main pins. The
+        # license-banned KTO components never enter this listing.
+        *(source for source in skyrl_preference.sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
+        *(source for source in nemotron_ultra.sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
+        *goedel_lean.sources(),
+        *tasktrove_structured_native.sources(),
+        *(source for source in tasktrove_judged.candidate_sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
+    )
 
 
 def measured_pending_sources(selected: set[str]) -> dict[str, RlDataSource]:
@@ -325,10 +334,11 @@ def measured_pending_sources(selected: set[str]) -> dict[str, RlDataSource]:
     decontamination receipt share one pin. Nothing is read unless a selection names a
     retained cohort.
     """
-    if not selected:
+    cohort_selections = {name for name in selected if name.endswith("-retained")}
+    if not cohort_selections:
         return {}
-    cohort_names = {f"{source.name}-retained": source for source in PENDING_MEASUREMENT_SOURCES}
-    handed_on = [cohort_names[name] for name in selected if name in cohort_names]
+    cohort_names = {f"{source.name}-retained": source for source in pending_measurement_sources()}
+    handed_on = [cohort_names[name] for name in cohort_selections if name in cohort_names]
     if not handed_on:
         return {}
     bound = bind_measured_receipts(handed_on)

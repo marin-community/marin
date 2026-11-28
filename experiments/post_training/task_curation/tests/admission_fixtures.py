@@ -6,21 +6,96 @@
 import hashlib
 import json
 from dataclasses import replace
+from pathlib import Path
 
+import huggingface_hub
 import pytest
 from finestore.rl.curation import (
     ActorCensusInput,
+    ConsumerNeed,
     ConsumerReceipt,
+    DatasetRelease,
     GradingEnvironmentEvidence,
 )
 from finestore.rl.curation import (
     QualifiedSourceDeclaration as SourceDeclaration,
 )
+from finestore.rl.status_taxonomy import DataRestriction
+from pydantic import TypeAdapter
+from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation import registry, retirement
 from experiments.post_training.task_curation.consumer_scope import CONSUMER_RUNTIME_COMMIT
-from experiments.post_training.task_curation.source import RlDataSource
+from experiments.post_training.task_curation.datasets.workplace import CONSUMER_RUNTIME
+from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
+from experiments.post_training.task_curation.source import (
+    RlDataSource,
+    SourceInfo,
+    SourceOrigin,
+    source_identifier,
+)
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
+
+ROOT = Path(__file__).resolve().parents[4]
+
+
+def synthetic_workplace_document() -> dict:
+    """A minimal consistent workplace qualification record for tests that enumerate the
+    pending catalog: the same identity checks ``workplace.sources`` applies, at fixture
+    values, so no test needs the real registry document."""
+
+    dataset = DatasetRelease(
+        repo="open-athena/fixture-workplace",
+        revision="a" * 40,
+        url="https://huggingface.co/datasets/open-athena/fixture-workplace/tree/" + "a" * 40,
+    )
+    sid = source_identifier(SourceOrigin.MARIN, "fixture-workplace", None, None)
+    info = SourceInfo(
+        data_restriction=DataRestriction.OPEN,
+        id=sid,
+        origin=SourceOrigin.MARIN,
+        upstream_dataset="fixture-workplace",
+        upstream_name="Fixture Workplace",
+        build_path="Fixture",
+        count=3,
+        current_release=dataset,
+        actor_census_input=ActorCensusInput(
+            dataset_id=dataset.repo,
+            dataset_revision=dataset.revision,
+            converter_version="fixture-1",
+            converter_revision="b" * 40,
+            measured_tasks=3,
+            task_specs_sha256="c" * 64,
+            evidence_url="https://example.test/census",
+        ),
+        consumer_receipt=ConsumerReceipt(
+            source_id=sid,
+            dataset_id=dataset.repo,
+            dataset_revision=dataset.revision,
+            task_specs_sha256="c" * 64,
+            runtime_commit=CONSUMER_RUNTIME,
+            checked_tasks=3,
+            failed_tasks=0,
+            failures={},
+            evidence_url="https://example.test/consumer",
+            requirements={ConsumerNeed.TOOL_PROVIDER: 3},
+        ),
+        consumer_requirements=(ConsumerNeed.TOOL_PROVIDER,),
+        consumer_runtime_commit=CONSUMER_RUNTIME,
+    )
+    cohort = PrebuiltCohort(
+        name="workplace-assistant",
+        version="fixture-1",
+        repo=dataset.repo,
+        revision=dataset.revision,
+        expected_rows=3,
+        intended_use=IntendedUse.TRAIN,
+    )
+    return {
+        "source_id": info.id,
+        "info": TypeAdapter(SourceInfo).dump_python(info, mode="json"),
+        "cohort": TypeAdapter(PrebuiltCohort).dump_python(cohort, mode="json"),
+    }
 
 
 @pytest.fixture
@@ -30,7 +105,37 @@ def isolated_admission_census(tmp_path_factory, monkeypatch, request):
         return
     root = tmp_path_factory.mktemp("admission-registry")
 
+    workplace_pointer = json.loads(
+        (ROOT / "experiments" / "post_training" / "task_curation" / "datasets" / "workplace.json").read_text()
+    )
+    workplace_document = root / "workplace-qualification.json"
+    workplace_document.write_text(json.dumps(synthetic_workplace_document(), indent=2, sort_keys=True) + "\n")
+    workplace_local_pointer = root / "workplace-pointer.json"
+    workplace_local_pointer.write_text(
+        json.dumps(
+            {
+                "repo": workplace_pointer["repo"],
+                "revision": workplace_pointer["revision"],
+                "path": workplace_pointer["path"],
+                "sha256": hashlib.sha256(workplace_document.read_bytes()).hexdigest(),
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    from experiments.post_training.task_curation.datasets import workplace as workplace_module  # noqa: PLC0415
+
+    monkeypatch.setattr(workplace_module, "QUALIFICATION", workplace_local_pointer)
+    workplace_module.qualification.cache_clear()
+
     def download(**kwargs):
+        if kwargs.get("repo_id") == workplace_pointer["repo"] and kwargs.get("filename") == workplace_pointer["path"]:
+            return str(workplace_document)
+        if kwargs["repo_id"] == "open-athena/marin-rl-data-atlas-registry":
+            # The pending sources' pinned qualification documents are deterministic
+            # registry data; serve them from the pinned revision rather than asking
+            # every pending module's test to stage a synthetic copy.
+            return huggingface_hub.hf_hub_download(**kwargs)
         if kwargs["repo_id"] != "fixture/admission-registry" or kwargs["filename"] != "retirements.json":
             raise AssertionError("Unit tests must inject local registry documents at the download boundary")
         return str(ledger_document)

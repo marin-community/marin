@@ -214,12 +214,12 @@ def build_decision_set(declarations: dict) -> set[str]:
     """
     from experiments.post_training.task_curation.metadata_exclusions import metadata_exclusions  # noqa: PLC0415
     from experiments.post_training.task_curation.retirement import retired_admission_source_ids  # noqa: PLC0415
-    from experiments.post_training.task_curation.sources import PENDING_MEASUREMENT_SOURCES  # noqa: PLC0415
+    from experiments.post_training.task_curation.sources import pending_measurement_sources  # noqa: PLC0415
     from infra.marina.apps.rl_data_catalog.server.licensing import license_bans  # noqa: PLC0415
     from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id  # noqa: PLC0415
 
     decided = {canonical_source_id(source_id) for source_id in declarations}
-    decided |= {canonical_source_id(source.info.id) for source in PENDING_MEASUREMENT_SOURCES}
+    decided |= {canonical_source_id(source.info.id) for source in pending_measurement_sources()}
     decided |= retired_admission_source_ids()
     decided |= set(license_bans())
     decided |= set(metadata_exclusions())
