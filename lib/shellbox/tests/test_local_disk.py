@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -60,6 +61,24 @@ async def test_local_disk_verified_pool_is_shared_by_concurrent_host_requests(tm
     )
     assert first is second
     assert disk_state(first.root) == {"loops": [], "mounts": [], "allocations": []}
+
+
+async def test_local_disk_concurrent_pools_release_their_loop_devices(tmp_path):
+    ready = threading.Barrier(4)
+
+    def allocate(index):
+        pool = LocalDiskPool(tmp_path / str(index))
+        disk = pool.create(64)
+        try:
+            ready.wait(timeout=15)
+            marker = disk.data / "marker"
+            marker.write_text(str(index))
+            assert marker.read_text() == str(index)
+        finally:
+            disk.close()
+        assert disk_state(pool.root) == {"loops": [], "mounts": [], "allocations": []}
+
+    await asyncio.gather(*(asyncio.to_thread(allocate, index) for index in range(4)))
 
 
 async def test_local_disk_command_timeout_releases_spools_before_unmount(tmp_path, executable_oci_image, monkeypatch):

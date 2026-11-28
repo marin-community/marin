@@ -360,6 +360,11 @@ sandbox acquisition. Run `lib/shellbox/tests/test_local_disk.py` explicitly with
 Async callers can await `verified_local_disk_pool(root)` from the same module;
 it runs the probe off the event loop and reuses the pool within a worker process
 and mount namespace. Harbor uses this path before acquiring LOCAL sandboxes.
+Guardians allocate devices explicitly with `losetup --find --show --nooverlap`,
+serializing cooperating pools through `/dev/loop-control`. Mounted devices are
+marked autoclear and released on final unmount. Startup recovery detaches only
+devices associated with released allocations under the pool root; it preserves
+live leases. Allocation errors include the Iris node name when available.
 
 `Command.user` selects the execution user for one command. Docker accepts a
 username or UID string. An omitted user retains the image's user. ShellSim and

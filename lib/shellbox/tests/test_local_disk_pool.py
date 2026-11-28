@@ -103,7 +103,8 @@ def test_startup_recovery_does_not_reclaim_guardian_during_directory_removal(tmp
 
     def command(*args, **kwargs):
         # Exercise real guardian/recovery ownership without privileged mount I/O.
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+        output = "/dev/loop999" if args[0][:3] == ("losetup", "--find", "--show") else ""
+        return SimpleNamespace(returncode=0, stdout=output, stderr="")
 
     def remove_during_recovery(path):
         nonlocal cleaning
@@ -116,7 +117,64 @@ def test_startup_recovery_does_not_reclaim_guardian_during_directory_removal(tmp
         remove(path)
 
     monkeypatch.setattr(disk_lifecycle.subprocess, "run", command)
+    control = tmp_path / "loop-control"
+    control.touch()
+    monkeypatch.setattr(disk_lifecycle, "LOOP_CONTROL", control)
     monkeypatch.setattr(disk_lifecycle.shutil, "rmtree", remove_during_recovery)
     monkeypatch.setattr(disk_lifecycle.sys, "stdin", SimpleNamespace(buffer=io.BytesIO()))
     disk_lifecycle.guard(directory, storage_mb=1)
     assert cleaning and not directory.exists()
+
+
+@pytest.mark.parametrize("mount_fails", [False, True])
+def test_guardian_owns_explicit_loop_through_mount_failure_and_cleanup(tmp_path, monkeypatch, mount_fails):
+    directory = tmp_path / "sandbox-explicit-loop"
+    directory.mkdir()
+    control = tmp_path / "loop-control"
+    control.touch()
+    devices = {"/dev/loop8": "/another-owner/disk.img"}
+    mounts = set()
+    autoclear = set()
+    device = "/dev/loop19"
+
+    def command(argv, **kwargs):
+        output = ""
+        error = ""
+        if argv[0] == "mkfs.ext4":
+            pass
+        elif argv[:3] == ("losetup", "--find", "--show"):
+            devices[device] = str(directory / "disk.img")
+            output = device
+        elif argv[0] == "mount":
+            # The affected worker cannot allocate a loop implicitly through mount.
+            if argv[-2] != device or mount_fails:
+                error = "failed to setup loop device"
+            else:
+                mounts.add(argv[-1])
+        elif argv[:2] == ("losetup", "--detach"):
+            if mounts:
+                autoclear.add(argv[-1])
+            else:
+                devices.pop(argv[-1])
+        elif argv[:2] == ("losetup", "--associated"):
+            output = "\n".join(name for name, image in devices.items() if image == argv[2])
+        elif argv[0] == "umount":
+            mounts.remove(argv[1])
+            for name in autoclear:
+                devices.pop(name)
+        else:
+            raise AssertionError(argv)
+        return SimpleNamespace(returncode=int(bool(error)), stdout=output, stderr=error)
+
+    monkeypatch.setattr(disk_lifecycle, "LOOP_CONTROL", control, raising=False)
+    monkeypatch.setattr(disk_lifecycle.subprocess, "run", command)
+    monkeypatch.setattr(disk_lifecycle.os.path, "ismount", lambda path: str(path) in mounts)
+    monkeypatch.setattr(disk_lifecycle.sys, "stdin", SimpleNamespace(buffer=io.BytesIO()))
+    if mount_fails:
+        with pytest.raises(RuntimeError, match="failed to setup loop device"):
+            disk_lifecycle.guard(directory, storage_mb=1)
+    else:
+        disk_lifecycle.guard(directory, storage_mb=1)
+        assert device in autoclear
+    assert devices == {"/dev/loop8": "/another-owner/disk.img"}
+    assert not mounts and not directory.exists()

@@ -20,13 +20,22 @@ from pathlib import Path
 
 COMMAND_TIMEOUT = 30
 CLEANUP_TIMEOUT = 30
+LOOP_CONTROL = Path("/dev/loop-control")
+NODE_NAME = os.environ.get("IRIS_NODE_NAME", os.uname().nodename)
 
 
 def run(*argv: str) -> str:
     result = subprocess.run(argv, capture_output=True, text=True, timeout=COMMAND_TIMEOUT)
     if result.returncode:
-        raise RuntimeError(f"{argv[0]} failed: {result.stderr.strip()}")
+        raise RuntimeError(f"{argv[0]} failed on node {NODE_NAME}: {result.stderr.strip()}")
     return result.stdout.strip()
+
+
+def attach(image: Path) -> str:
+    """Allocate one loop device, serializing cooperating pools across mount namespaces."""
+    with LOOP_CONTROL.open("rb") as control:
+        fcntl.flock(control, fcntl.LOCK_EX)
+        return run("losetup", "--find", "--show", "--nooverlap", str(image))
 
 
 def reclaim(directory: Path) -> None:
@@ -72,11 +81,18 @@ def guard(directory: Path, storage_mb: int) -> None:
             data = directory / "data"
             data.mkdir()
             (directory / "root").mkdir()
-            run("mount", "-t", "ext4", "-o", "loop,nodev,nosuid,noatime", str(image), str(data))
+            device = attach(image)
+            run("mount", "-t", "ext4", "-o", "nodev,nosuid,noatime", device, str(data))
+            # On a mounted loop, detach sets AUTOCLEAR; the final unmount releases it.
+            # This also preserves namespace-destruction cleanup after guardian death.
+            run("losetup", "--detach", device)
             (data / "shm").mkdir(mode=0o1777)
             (data / "shm").chmod(0o1777)
             print(json.dumps({"ready": True}), flush=True)
             sys.stdin.buffer.read()
+        except Exception as error:
+            error.add_note(f"LOCAL disk guardian node: {NODE_NAME}")
+            raise
         finally:
             reclaim(directory)
 
