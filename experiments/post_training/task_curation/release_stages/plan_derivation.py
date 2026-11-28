@@ -70,6 +70,7 @@ from experiments.post_training.task_curation.release_stages.release_config impor
     config_fingerprint,
 )
 from experiments.post_training.task_curation.source_duplicate_ci import fingerprint_input
+from experiments.post_training.task_curation.source_policy import DELIBERATE_EXCLUSIONS
 from experiments.post_training.task_curation.sources import all_sources
 from infra.marina.apps.rl_data_catalog.server.content_access import content_is_withheld
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
@@ -186,6 +187,8 @@ def reconstruct_prior_surveys(query: Query, load_id: str) -> tuple[dict, dict]:
             if not page:
                 return rows
             rows.extend(page)
+            if len(page) < page_size:
+                return rows
             after = page[-1][order_column]
 
     backend = dict(
@@ -629,7 +632,11 @@ def derive_release_plan(
         for source_id, row in previous.items()
         if source_id in declared and fingerprint_input(row) != fingerprint_input(declared[source_id])
     }
-    targets = tuple(sorted((set(declared_ids) - prior_ids | replacements) - removed_ids))
+    deliberate_ids = set(DELIBERATE_EXCLUSIONS)
+    unknown_deliberate = sorted(deliberate_ids - prior_ids)
+    if unknown_deliberate:
+        raise ValueError(f"deliberate exclusions the prior release never declared: {unknown_deliberate[:5]}")
+    targets = tuple(sorted(((set(declared_ids) - prior_ids | replacements) - removed_ids) - deliberate_ids))
 
     populations: dict[str, str] = {}
     task_counts: dict[str, int] = {}
@@ -749,6 +756,7 @@ def derive_release_plan(
         rebound_tasks=config.rebound_tasks,
         recut=recut,
         removed_sources=tuple(sorted(removed_ids)),
+        deliberate_exclusions=tuple(sorted(deliberate_ids)),
         main_source_sync=config.main_source_sync,
         strict_audit_local=config.strict_audit_local,
         grader_drift_reference=grader_drift_reference,

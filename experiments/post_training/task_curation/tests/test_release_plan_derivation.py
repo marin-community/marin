@@ -388,6 +388,13 @@ def _contract_receipts_factory(measured_tasks: dict[str, int]):
     return lambda: receipts
 
 
+@pytest.fixture(autouse=True)
+def _no_deliberate_exclusions(monkeypatch):
+    """The policy's real deliberate exclusions name production sources the fixtures
+    never declare; tests opt in explicitly."""
+    monkeypatch.setattr(plan_derivation, "DELIBERATE_EXCLUSIONS", {})
+
+
 def test_recut_retains_against_the_served_state(tmp_path, frozen_layer, deployment, monkeypatch):
     """A re-cut (the catalog serves a snapshot this release published, not the config's
     pinned prior snapshot) retains against what is SERVED: the compose and the
@@ -999,3 +1006,192 @@ def test_recut_census_is_incremental(tmp_path, frozen_layer, deployment, monkeyp
     graph_module._execute_census_inputs(config_document)
     assert sorted(seen_census_inputs["declarations"]) == [TARGET_ID]
     assert sorted(seen_census_inputs["populations"]) == [TARGET_ID]
+
+
+def _recut_query(served_declarations: dict[str, dict]):
+    """The applet SQL fakes for a re-cut derivation over the fixture survey documents."""
+    survey = {
+        "catalog_root": "s3://example/catalog",
+        "snapshot_id": "assembly-served-prior-v1",
+        "generated_at": "2026-11-23T00:00:00Z",
+        "git_revision": "c" * 40,
+        "schema_sha256": "0" * 64,
+        "runtime_defaults": {
+            "agent": {
+                "network": "deny",
+                "cpus": 1,
+                "memory_mb": 512,
+                "storage_mb": 1024,
+                "gpus": 0,
+                "user": None,
+                "startup_timeout": 60.0,
+                "cleanup_timeout": 30.0,
+            },
+            "grader": {
+                "network": "deny",
+                "cpus": 1,
+                "memory_mb": 512,
+                "storage_mb": 1024,
+                "gpus": 0,
+                "user": None,
+                "startup_timeout": 60.0,
+                "cleanup_timeout": 30.0,
+            },
+        },
+        "matrix": [
+            {"backend": backend, "requirement": requirement, "support": "supported", "evidence": [], "note": ""}
+            for backend in sorted({b.value for b in Backend} | {"iris"})
+            for requirement in [r.value for r in Requirement]
+        ],
+        "deployment_limits": {},
+        "deployment_classes": {},
+        "sources": [],
+    }
+    identity_survey = {
+        "catalog_root": "s3://example/catalog",
+        "snapshot_id": "assembly-served-prior-v1",
+        "generated_at": "2026-11-23T00:00:00Z",
+        "fingerprints": {},
+        "reviews": [],
+        "groups": [],
+        "judge": None,
+    }
+
+    def query(sql: str, parameters: dict) -> dict:
+        if "FROM atlas_current" in sql:
+            return {"rows": [{"load_id": PRIOR_LOAD_ID}]}
+        if "FROM curriculum_current" in sql:
+            return {"rows": [{"load_id": PRIOR_CURRICULUM_LOAD_ID}]}
+        if "FROM atlas_review_current" in sql:
+            return {"rows": []}
+        if "FROM atlas_sources" in sql:
+            if "declaration->>'status'" in sql:
+                return {"rows": [{"source_id": source_id} for source_id in sorted(served_declarations)]}
+            if "source_fingerprint IS NOT NULL" in sql:
+                return {"rows": []}
+            if "duplicate_group IS NOT NULL" in sql:
+                return {"rows": []}
+            return {"rows": [{"source_id": source_id} for source_id in sorted(served_declarations)]}
+        if "FROM atlas_backend_surveys" in sql:
+            return {"rows": [{"survey": dict(survey), "survey_id": "served-survey"}]}
+        if "FROM atlas_identity_surveys" in sql:
+            return {"rows": [{"metadata": identity_survey, "survey_id": "served-identity"}]}
+        if "FROM atlas_backend_sources" in sql:
+            return {"rows": []}
+        if "FROM atlas_backend_cells" in sql:
+            return {"rows": [{"cell": cell} for cell in survey["matrix"]]}
+        if "FROM atlas_duplicate_reviews" in sql:
+            return {"rows": []}
+        raise AssertionError(f"unexpected derivation query: {sql}")
+
+    return query
+
+
+def test_deliberate_exclusion_is_not_a_target(tmp_path, frozen_layer, deployment, monkeypatch):
+    """A policy-listed deliberate exclusion is neither a target nor a removal: the
+    frozen layer's re-pin is not adopted (the release keeps the served row), the
+    source stays in the expected source count, and the plan records the exclusion."""
+    layer = _source_layer(tmp_path, (RETAINED_ID, TARGET_ID))
+    prior = _prior_pins(tmp_path, _declaration_dump(layer))
+    config = _config(prior, prior_snapshot_id="assembly-config-prior-snapshot-v1")
+    served_declarations = _declaration_dump(layer)
+
+    # the frozen layer re-pins the retained source (the openswe 20261127a situation)
+    drifted = layer[RETAINED_ID].declaration.model_copy(update={"dataset_id": "fixture-drifted"})
+    layer[RETAINED_ID] = SimpleNamespace(info=layer[RETAINED_ID].info, declaration=drifted)
+
+    monkeypatch.setattr(plan_derivation, "DELIBERATE_EXCLUSIONS", {RETAINED_ID: "fixture reason"})
+    monkeypatch.setattr(plan_derivation, "derived_contract_receipts", _contract_receipts_factory({TARGET_ID: 2}))
+    derived = derive_release_plan(
+        config,
+        repo_root=REPO_ROOT,
+        query=_recut_query(served_declarations),
+        sources_fn=lambda: layer,
+        prior_catalog_reader=lambda root, q: read_prior_catalog_state(
+            root,
+            q,
+            # the catalog serves only the retained source: TARGET_ID is a genuine
+            # admission, RETAINED_ID the drifted re-pin the policy excludes
+            catalog_factory=_catalog_factory((RETAINED_ID,), declarations=served_declarations),
+            receipt_keys_fn=lambda: {},
+        ),
+        drift_reference_fn=lambda root, revision, declared: GraderDriftReference(
+            main=MainRecipeReference(revision="e" * 40, merge_base=revision),
+            sources={
+                source_id: SealedRecipeReference(source_id=source_id, converter_revision=revision)
+                for source_id in declared
+            },
+        ),
+    )
+
+    plan = ReleasePlan.model_validate(derived.plan_document)
+    plan.validate_shape()
+    assert plan.deliberate_exclusions == (RETAINED_ID,)
+    assert plan.targets == (TARGET_ID,)
+    assert plan.expected_source_count == 2
+
+
+def test_served_survey_reconstruction_keyset_pages():
+    """The reconstruction's fingerprint read walks the keyset pages: the first page
+    binds no :after, later pages resume after the last row id, and every row lands."""
+    fingerprint_rows = [{"id": f"Marin:source-{index:03d}", "source_fingerprint": None} for index in range(150)]
+    calls: list[tuple[str, dict]] = []
+
+    backend_survey = {
+        "catalog_root": "s3://example/catalog",
+        "snapshot_id": "assembly-served-prior-v1",
+        "generated_at": "2026-11-23T00:00:00Z",
+        "git_revision": "c" * 40,
+        "schema_sha256": "0" * 64,
+        "runtime_defaults": {},
+        "matrix": [
+            {"backend": backend, "requirement": requirement, "support": "supported", "evidence": [], "note": ""}
+            for backend in sorted({b.value for b in Backend} | {"iris"})
+            for requirement in [r.value for r in Requirement]
+        ],
+        "deployment_limits": {},
+        "deployment_classes": {},
+        "sources": [],
+    }
+
+    def query(sql: str, parameters: dict) -> dict:
+        calls.append((sql, dict(parameters)))
+        if "FROM atlas_backend_surveys" in sql:
+            return {"rows": [{"survey": dict(backend_survey), "survey_id": "s"}]}
+        if "FROM atlas_backend_sources" in sql:
+            return {"rows": []}
+        if "FROM atlas_backend_cells" in sql:
+            return {"rows": [{"cell": cell} for cell in backend_survey["matrix"]]}
+        if "FROM atlas_identity_surveys" in sql:
+            return {
+                "rows": [
+                    {
+                        "metadata": {
+                            "catalog_root": "s3://example/catalog",
+                            "snapshot_id": "assembly-served-prior-v1",
+                            "generated_at": "2026-11-23T00:00:00Z",
+                            "judge": None,
+                        },
+                        "survey_id": "i",
+                    }
+                ]
+            }
+        if "source_fingerprint IS NOT NULL" in sql:
+            after = parameters.get("after")
+            rows = [row for row in fingerprint_rows if after is None or row["id"] > after]
+            return {"rows": rows[: parameters["limit"]]}
+        if "FROM atlas_duplicate_reviews" in sql:
+            return {"rows": []}
+        if "duplicate_group IS NOT NULL" in sql:
+            return {"rows": []}
+        raise AssertionError(f"unexpected reconstruction query: {sql}")
+
+    backend, identity = plan_derivation.reconstruct_prior_surveys(query, "load-1")
+
+    fingerprint_calls = [params for sql, params in calls if "source_fingerprint IS NOT NULL" in sql]
+    assert len(fingerprint_calls) == 3
+    assert "after" not in fingerprint_calls[0]
+    assert [params.get("after") for params in fingerprint_calls[1:]] == ["Marin:source-063", "Marin:source-127"]
+    assert all(params["limit"] == 64 for params in fingerprint_calls)
+    assert len(identity["fingerprints"]) == 150
+    assert len(backend["matrix"]) == len(backend_survey["matrix"]) and backend["sources"] == []

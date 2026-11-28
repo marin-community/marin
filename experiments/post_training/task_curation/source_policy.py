@@ -30,3 +30,17 @@ SUPERSEDED_REPLACEMENTS: dict[str, str] = {
     # re-converted.
     "TaskTrove:smartie-calibforge-shared-v2": "TaskTrove:smartie-calibforge-rebuilt-v1",
 }
+
+DELIBERATE_EXCLUSIONS: dict[str, str] = {
+    "TaskTrove:GAIR__OpenSWE__openswe_oss": (
+        "the 20261127a pin carries the golden-patch no-op grader defect; the repaired "
+        "taskspec-20261127b admission is in flight (fidelity gate running) and binds the next release"
+    ),
+}
+"""Sources whose frozen-layer re-pin a release deliberately does not adopt.
+
+A deliberate exclusion is neither a target nor a removal: the release carries the
+source's served declaration unchanged, so no census, compose, or embedding runs
+for it. The exclusions come off when the repair the reason names lands its own
+admission (the frozen layer then pins it, and the normal replacement flow runs).
+"""

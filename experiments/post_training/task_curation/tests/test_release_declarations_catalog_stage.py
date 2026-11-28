@@ -401,3 +401,38 @@ def test_catalog_stage_refusals(tmp_path, monkeypatch):
             dry_run=True,
             feeds=_feeds(tmp_path),
         )
+
+
+def test_deliberate_exclusion_carries_the_served_declaration(tmp_path, monkeypatch):
+    """A deliberate exclusion keeps its served declaration: the release does not adopt
+    the frozen layer's re-pin, and the drift gate tolerates the policy-listed source."""
+    old_a = _declaration("fixture-a")
+    drifted_a = old_a.model_copy(update={"dataset_id": "fixture-drifted"})
+    declarations = {SOURCE_A: drifted_a, SOURCE_B: _declaration("fixture-b")}
+    monkeypatch.setattr(declarations_stage, "require_catalog_declaration", lambda declaration: None)
+    prior = _seal_json(tmp_path, "prior-declarations.json", {SOURCE_A: old_a.model_dump(mode="json")})
+    revision = _init_repo(tmp_path / "repo")
+    inputs = dataclasses.replace(_declaration_inputs(tmp_path, prior, revision), deliberate_exclusions=(SOURCE_A,))
+    proof = declarations_stage.run_declarations(
+        inputs, dry_run=False, repo_root=tmp_path / "repo", sources_fn=_registry(declarations), feeds=_feeds(tmp_path)
+    )
+    document = json.loads((tmp_path / "release" / "declarations" / "declarations.json").read_text())
+    assert set(document) == {SOURCE_A, SOURCE_B}
+    # the release carries the served row: the drifted re-pin is not adopted
+    assert document[SOURCE_A]["dataset_id"] == "fixture"
+    assert document[SOURCE_B]["dataset_id"] == "fixture"
+    assert proof["source_count"] == 2
+
+
+def test_deliberate_exclusion_unknown_to_prior_refuses(tmp_path, monkeypatch):
+    declarations = {SOURCE_A: _declaration("fixture-a"), SOURCE_B: _declaration("fixture-b")}
+    monkeypatch.setattr(declarations_stage, "require_catalog_declaration", lambda declaration: None)
+    prior = _seal_json(tmp_path, "prior-declarations.json", {SOURCE_A: declarations[SOURCE_A].model_dump(mode="json")})
+    revision = _init_repo(tmp_path / "repo")
+    inputs = dataclasses.replace(
+        _declaration_inputs(tmp_path, prior, revision), deliberate_exclusions=("Marin:fixture-unknown",)
+    )
+    with pytest.raises(ValueError, match="deliberate exclusions the prior release never declared"):
+        declarations_stage.run_declarations(
+            inputs, dry_run=True, repo_root=tmp_path / "repo", sources_fn=_registry(declarations), feeds=_feeds(tmp_path)
+        )

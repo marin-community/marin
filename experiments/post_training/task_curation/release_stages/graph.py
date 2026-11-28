@@ -271,6 +271,7 @@ class ReleasePlan(BaseModel):
     rebound_source: str = ""
     rebound_tasks: int = 0
     recut: bool = False
+    deliberate_exclusions: tuple[str, ...] = ()
     removed_sources: tuple[str, ...] = ()
     main_source_sync: main_source_sync_stage.MainSourceSyncPlan | None = None
     strict_audit_local: bool = False
@@ -1346,6 +1347,7 @@ def _declarations_step(plan: ReleasePlan, plan_handle: ArtifactStep) -> Artifact
             "targets": plan.targets,
             "prior_declarations": _ref_dict(plan.pins.prior_declarations),
             "removed_sources": plan.removed_sources,
+            "deliberate_exclusions": plan.deliberate_exclusions,
         }
 
     return _stage_step(
