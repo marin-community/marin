@@ -263,6 +263,22 @@ DS_1000_MINI_200_PACKAGES = frozenset(
     """.split()
 )
 """Registry ds-1000@mini-200: a seeded random 200 of DS-1000's 1,000 problems."""
+DS_1000_INSTRUCTION_END = "- Hidden tests evaluate the submitted file after the agent exits.\n"
+DS_1000_RUN_NOTE = (
+    "Your file is run after the setup code shown above, with that code's variables already set to the test inputs;"
+    " do not redefine them. Write only the code that follows `BEGIN SOLUTION`; where the prompt gives a function"
+    " header, write only its body."
+)
+# DS-1000's grader runs each problem's hidden setup code and then the agent's solution.py, as DS-1000 runs a
+# completion. The packages' instructions keep DS-1000's prompt but ask for a file without saying how it runs, so
+# this edit appends that. A change to the note bumps DS_1000_MINI_200's version.
+DS_1000_EDITS = (
+    PackageEdit(
+        "instruction.md",
+        DS_1000_INSTRUCTION_END,
+        f"{DS_1000_INSTRUCTION_END}\n## How your file is run\n{DS_1000_RUN_NOTE}\n",
+    ),
+)
 DS_1000_MINI_200 = HarborDataset(
     recipe="ds-1000-mini-200",
     benchmark="ds-1000",
@@ -274,8 +290,9 @@ DS_1000_MINI_200 = HarborDataset(
         root="datasets/ds1000",
         packages=DS_1000_MINI_200_PACKAGES,
     ),
-    version="2026.11.25",
+    version="2026.11.28",
     count=200,
+    edits=DS_1000_EDITS,
 )
 BFCL_PARITY_PI = HarborDataset(
     recipe="bfcl-parity-1.0-pi",
