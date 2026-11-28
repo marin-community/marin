@@ -117,7 +117,6 @@ def convert_goedel(row: RawRow, context) -> TaskSpec | type:
         contract,
         first_user,
         {**evidence, "proof": lean_code},
-        memory_mb=LEAN_GRADER_MEMORY_MB,
     )
 
 
