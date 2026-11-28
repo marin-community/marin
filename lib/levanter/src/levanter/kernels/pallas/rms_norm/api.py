@@ -10,13 +10,14 @@ from types import MappingProxyType
 from typing import Literal, TypeAlias
 
 import jax
+import jax.numpy as jnp
 from jaxtyping import Array, Float
 from jax.sharding import NamedSharding
 
 from levanter.kernels.pallas.autotune_utils import sharding_of
 
 from .pallas_tpu import batch_invariant_rms_norm_pallas_tpu
-from .reference import _reference, _validate_inputs
+from .reference import _reference, _sum_hidden_tiles, _validate_inputs
 
 Implementation: TypeAlias = Literal["reference", "pallas_tpu"]
 
@@ -52,7 +53,8 @@ def batch_invariant_rms_norm(
     """Opt-in weighted RMSNorm with row arithmetic independent of surrounding batch.
 
     Accepts positive hidden widths divisible by 128. On a multi-device TPU
-    mesh, shard activations by row and replicate the weight.
+    mesh, shard activations by row and replicate the weight. The TPU path
+    computes gradients in FP32 and returns them in the input dtypes.
     """
     return _forward(x, weight, eps=eps, implementation=implementation)
 
@@ -62,11 +64,30 @@ def _batch_invariant_rms_norm_fwd(x, weight, eps, implementation):
     return y, (x, weight)
 
 
+def _parallel_gradients(x: jax.Array, weight: jax.Array, dy: jax.Array, eps: float) -> tuple[jax.Array, jax.Array]:
+    x32 = x.astype(jnp.float32)
+    dy32 = dy.astype(jnp.float32)
+    weighted_dy = dy32 * weight.astype(jnp.float32)
+    width = x.shape[-1]
+    # Keep the forward's hidden reduction order. Compute all row gradients
+    # together so the scale gradient needs one reduction over the batch.
+    inv_rms = jax.lax.rsqrt(_sum_hidden_tiles(x32)[..., None] / width + eps)
+    normalized = x32 * inv_rms
+    mean_x_dy = jnp.sum(x32 * weighted_dy, axis=-1, keepdims=True) / width
+    dx = (weighted_dy - normalized * mean_x_dy * inv_rms) * inv_rms
+    dw = jnp.sum(dy32 * normalized, axis=tuple(range(x.ndim - 1)))
+    return dx.astype(x.dtype), dw.astype(weight.dtype)
+
+
 def _batch_invariant_rms_norm_bwd(eps, implementation, residual, dy):
-    del implementation
     x, weight = residual
     x_sharding = sharding_of(x)
     dy_aligned = _reshard_to_nonempty_named_mesh(dy, x_sharding)
+    if implementation == "pallas_tpu":
+        dx, dw = _parallel_gradients(x, weight, dy_aligned, eps)
+        return _reshard_to_nonempty_named_mesh(dx, x_sharding), _reshard_to_nonempty_named_mesh(
+            dw, sharding_of(weight)
+        )
 
     def reference(value, scale):
         output = _reference(value, scale, eps=eps)
