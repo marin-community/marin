@@ -858,7 +858,10 @@ class DeploymentConfig:
             github_federations.append(GitHubFederationConfig.parse(value))
         pull_request_rules = config.get_object("githubPullRequestRules")
         if pull_request_rules is not None:
-            settings.append(_pull_request_rule_setting(pull_request_rules, profiles, github_federations))
+            key, value = _pull_request_rule_setting(pull_request_rules, profiles, github_federations)
+            if key in raw_settings:
+                raise ValueError(f"githubPullRequestRules and settings.{key} both declare pull request rules")
+            settings.append((key, value))
         raw_oauth_clients = config.get_object("oauthClients") or {}
         if not isinstance(raw_oauth_clients, dict):
             raise ValueError("oauthClients must be an object")

@@ -569,8 +569,8 @@ config:
       events:
         - actions: *reviewActions
         - actions: [unlabeled]
-          label: agentic-lint
-      excluded_labels: [agentic-lint]
+          label: &agenticLintLabel agentic-lint
+      excluded_labels: [*agenticLintLabel]
       allowed_bots: [*reviewBot]
       run:
         idempotency_key: "agentic-lint:{number}:{head}"

@@ -310,15 +310,23 @@ remain addressable.
 For the initial cutover, roll out and verify webhook delivery before the merge
 that removes the three Actions workflows.
 
-1. In the `loom-oa-dev` GitHub App settings, subscribe to **Pull request** events.
-2. From the reviewed Marin checkout, [roll out the Loom stack](#deploy) using a
+1. Disable the standalone correctness workflow:
+
+   ```sh
+   gh workflow disable ops-loom-review.yaml --repo marin-community/marin
+   ```
+
+   Let in-flight launches and active `pr-review` sessions finish. Loom can
+   then remove the retired profile during rollout.
+2. In the `loom-oa-dev` GitHub App settings, subscribe to **Pull request** events.
+3. From the reviewed Marin checkout, [roll out the Loom stack](#deploy) using a
    Loom build with pull request rule support.
-3. Confirm that an eligible delivery receives HTTP 202 and Loom records the
+4. Confirm that an eligible delivery receives HTTP 202 and Loom records the
    expected runs at the PR head with a link to the PR. While Actions and the
    webhook overlap, verify that both transports resolve to the same run.
    Check a holistic re-review after a push and a lint launch after removing
    the lint label from a head without a prior lint run.
-4. Merge the Marin change to retire the Actions workflows. Apply the GitHub
+5. Merge the Marin change to retire the Actions workflows. Apply the GitHub
    Pulumi stack afterward to remove the retired workflow profile variables.
 
 ## VM permissions
