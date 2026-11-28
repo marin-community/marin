@@ -26,3 +26,13 @@ def test_nonfinite_update_fails_before_next_step():
     }
     with pytest.raises(FloatingPointError):
         _check_step_numerics(metrics, step=1, diagnose_numerics=True)
+
+
+def test_nonfinite_params_fail_without_numeric_diagnostics():
+    metrics = {
+        "train/loss": jnp.array(3.49),
+        "train/params_finite": jnp.array(False),
+        "train/qb_betas_finite": jnp.array(True),
+    }
+    with pytest.raises(FloatingPointError):
+        _check_step_numerics(metrics, step=1, diagnose_numerics=False)
