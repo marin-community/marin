@@ -13,6 +13,7 @@ the recipe declares ``oracle_solutions=False``. The Lean kernel-replay grader
 """
 
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -116,11 +117,14 @@ def convert_goedel(row: RawRow, context) -> TaskSpec | ImportRejection:
     prefix = "\n".join(lines[:statement_start]).strip()
     formal_statement = "\n".join(lines[statement_start:]).strip()
 
-    # No verified golden proof: the target is `sorry`
-    target = "sorry"
+    # The theorem name is the target the Contract replays
+    name_match = re.search(r"(?:theorem|lemma)\s+(\S+)", formal_statement)
+    if not name_match:
+        return _reject("no_theorem_name", "Cannot extract the theorem name from the formal statement")
+    target = name_match.group(1).rstrip(":")
 
     contract = statement_contract(prefix, formal_statement, target)
-    if isinstance(contract, type):
+    if isinstance(contract, ImportRejection):
         return contract
 
     # The informal description is the user's message without the code block
