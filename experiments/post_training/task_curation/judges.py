@@ -151,11 +151,12 @@ class LocalJudgeModel:
     context_window_tokens: int
 
 
-GB200_UNPLACABLE_CLUSTERS = frozenset({"cw-us-east-02a"})
+GB200_UNPLACABLE_CLUSTERS = frozenset({"cw-us-east-02a", "cw-rno2a"})
 """Clusters whose Kueue topology can never place a 4xGB200 serving request.
 
 A serving job queued there does not fail; Kueue silently gates it, so the
-failure only surfaces as a reviewer that never reviews. Only ROOT jobs
+failure only surfaces as a reviewer that never reviews. cw-rno2a is the
+reserved H100 fleet: it places no GB200 at all. Only ROOT jobs
 federate in Iris: a job's whole tree stays on the root's peer, so a
 ``target_cluster`` on the child serving request is ignored and the root's
 placement governs the tree.
