@@ -47,7 +47,7 @@ def checkout(tmp_path):
 
 def test_checkout_and_copied_bundle_share_verified_source_identity(checkout, tmp_path):
     root, policy = checkout
-    execution = derive_execution(root / "config.json", root, ("python", "-m", "worker"))
+    execution = derive_execution(root / "config.json", root, ("python", "-m", "worker"), {})
     witness = checkout_witness(root, policy)
     landing = tmp_path / "landings.jsonl"
     landing.write_text(json.dumps({"sha": execution.source_revision}) + "\n")

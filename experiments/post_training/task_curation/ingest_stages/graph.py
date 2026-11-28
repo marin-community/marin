@@ -38,12 +38,14 @@ class IngestExecution(BaseModel):
     artifact_version: str
     artifact_root: str
     worker_argv: tuple[str, ...] = Field(min_length=1)
+    initial_artifacts: dict[str, ArtifactRef]
 
     def identity(self) -> dict:
         return {
             "policy": self.policy.model_dump(mode="json"),
             "source_revision": self.source_revision,
             "worker_argv": list(self.worker_argv),
+            "initial_artifacts": {name: ref.model_dump() for name, ref in sorted(self.initial_artifacts.items())},
         }
 
 
@@ -94,7 +96,7 @@ def stage_config(
             "dependency": ctx.artifact_path(dependency[1]) if dependency is not None else None,
         }
     dependencies: dict[IngestStage, ArtifactRef] = {}
-    artifacts: dict[str, ArtifactRef] = {}
+    artifacts: dict[str, ArtifactRef] = dict(execution.initial_artifacts)
     if dependency is not None:
         previous_stage, previous_step = dependency
         reference = ctx.resolved(previous_step).receipt

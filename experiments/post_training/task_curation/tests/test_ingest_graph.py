@@ -55,6 +55,7 @@ def execution(tmp_path):
         artifact_version="2026.11.28",
         artifact_root=str(tmp_path / "artifacts"),
         worker_argv=("python", "-m", "worker", "--source-revision", "a" * 40),
+        initial_artifacts={},
     )
 
 
@@ -86,20 +87,27 @@ def test_ingest_graph_refuses_corrupt_upstream_evidence_before_terminal_cache_re
     assert terminal_record.read_bytes() == original
 
 
-def test_changed_policy_builds_a_separate_population_lineage(execution):
+@pytest.mark.parametrize("changed_input", ["policy", "queue-claim"])
+def test_changed_authoritative_input_builds_a_separate_population_lineage(execution, tmp_path, changed_input):
     graph = ingest_graph(execution, dict.fromkeys(IngestStage, persist_stage_progress))
     original = run_ingest_graph(graph)
     changed_policy = execution.policy.model_copy(
         update={"upstream": execution.policy.upstream.model_copy(update={"revision": "b" * 40})}
     )
-    changed_execution = execution.model_copy(update={"policy": changed_policy})
+    update = (
+        {"policy": changed_policy}
+        if changed_input == "policy"
+        else {"initial_artifacts": {"queue-claim": seal_manifest({"claim": "new"}, str(tmp_path / "claim.json"))}}
+    )
+    changed_execution = execution.model_copy(update=update)
     changed_graph = ingest_graph(changed_execution, dict.fromkeys(IngestStage, persist_stage_progress))
 
     changed = run_ingest_graph(changed_graph)
 
     assert read_ref(original.outputs["progress"])["policy"] == execution.policy.digest()
-    assert read_ref(changed.outputs["progress"])["policy"] == changed_policy.digest()
+    assert read_ref(changed.outputs["progress"])["policy"] == changed_execution.policy.digest()
     assert original.outputs["progress"].uri != changed.outputs["progress"].uri
+    assert changed.inputs.artifacts.get("queue-claim") == changed_execution.initial_artifacts.get("queue-claim")
 
 
 def test_ingest_graph_retries_interrupted_work_without_repeating_sealed_predecessors(execution):
