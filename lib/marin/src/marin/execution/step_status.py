@@ -15,7 +15,7 @@ import contextlib
 import logging
 import os
 from collections.abc import Generator
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from time import sleep
 
 from iris.cluster.client.job_info import get_job_info
@@ -59,6 +59,8 @@ class StatusFile:
         self._lock_path = self.path + ".lock"
         self.fs = url_to_fs(self.path, use_listings_cache=False)[0]
         self._lock = create_lock(self._lock_path, worker_id=worker_id)
+        # Serializes refreshes from the heartbeat thread and from the step's ownership checks.
+        self._refresh_guard = Lock()
 
     @property
     def status(self) -> str | None:
@@ -86,7 +88,8 @@ class StatusFile:
         Raises ``LeaseLostError`` if another worker holds the lock, or if the
         lock disappeared before the heartbeat stopped.
         """
-        self._lock.refresh()
+        with self._refresh_guard:
+            self._lock.refresh()
 
     def try_acquire_lock(self) -> bool:
         """Try to acquire the lock using atomic LOCK file."""
@@ -223,6 +226,8 @@ def step_lock(
                 logger.error("Lease lost for %s — step must terminate", output_path, exc_info=True)
                 lease_lost_event.set()
                 return
+            except Exception:
+                logger.warning("Could not refresh the lock for %s; retrying", output_path, exc_info=True)
 
     heartbeat_thread = Thread(target=_heartbeat, daemon=True)
     heartbeat_thread.start()

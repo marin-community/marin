@@ -9,10 +9,12 @@ from threading import Event
 
 import marin.execution.step_runner as step_runner_module
 import pytest
+import rigging.filesystem.distributed_lock as distributed_lock
 from fray.current_client import current_client, set_current_client
 from fray.types import ResourceConfig
 from marin.execution.artifact import (
     FINGERPRINT_KEY,
+    RECORD_FILENAME,
     VERSION_KEY,
     Artifact,
     read_artifact,
@@ -24,7 +26,8 @@ from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_status import StatusFile, worker_id
 from pydantic import BaseModel
-from rigging.filesystem.step_status import STATUS_SUCCESS
+from rigging.filesystem.distributed_lock import LeaseLostError
+from rigging.filesystem.step_status import STATUS_RUNNING, STATUS_SUCCESS
 
 # ---------------------------------------------------------------------------
 # Artifact types
@@ -693,6 +696,38 @@ def test_runner_preserves_underlying_step_exception(tmp_path: Path):
     assert "Step failed: failing_step" in str(step_failure)
     assert isinstance(step_failure.__cause__, ValueError)
     assert "sentinel step failure" in str(step_failure.__cause__)
+
+
+@pytest.mark.parametrize(
+    ("step_fails", "new_owner_status"),
+    [
+        pytest.param(True, STATUS_SUCCESS, id="failure-over-finished-owner"),
+        pytest.param(False, STATUS_RUNNING, id="success-over-running-owner"),
+    ],
+)
+def test_runner_step_that_lost_its_lease_leaves_new_owner_output(
+    tmp_path: Path, monkeypatch, step_fails: bool, new_owner_status: str
+):
+    # Every lease is stale at once, so a second worker can take the lock while the step runs.
+    monkeypatch.setattr(distributed_lock, "HEARTBEAT_TIMEOUT", -1)
+    output_path = (tmp_path / "contested").as_posix()
+
+    def step_overtaken_by_new_owner(_output_path: str) -> dict[str, int]:
+        new_owner = StatusFile(output_path, "new-owner")
+        assert new_owner.try_acquire_lock()
+        new_owner.write_status(new_owner_status)
+        if step_fails:
+            raise ValueError("sentinel step failure")
+        return {"rows": 1}
+
+    step = StepSpec(name="contested", override_output_path=output_path, fn=step_overtaken_by_new_owner)
+
+    with pytest.raises(RuntimeError, match=r"1 step\(s\) failed") as exc_info:
+        StepRunner().run([step])
+
+    assert StatusFile(output_path, "observer").status == new_owner_status
+    assert not (tmp_path / "contested" / RECORD_FILENAME).exists()
+    assert isinstance(exc_info.value.__cause__.__cause__, LeaseLostError)
 
 
 # ---------------------------------------------------------------------------

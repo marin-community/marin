@@ -4,13 +4,15 @@
 import errno
 import logging
 from pathlib import Path
+from threading import Event
 from unittest.mock import AsyncMock, Mock
 
 import marin.execution.step_status as step_status
 import pytest
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
-from marin.execution.step_status import StatusFile, should_run, worker_id
+from marin.execution.step_status import StatusFile, should_run, step_lock, worker_id
+from rigging.filesystem.distributed_lock import LocalFileLease
 from rigging.filesystem.step_status import STATUS_RUNNING, STATUS_SUCCESS
 from s3fs import S3FileSystem
 
@@ -78,3 +80,25 @@ def test_should_run_repeats_active_iris_lock_owner(tmp_path: Path, caplog, monke
     assert len(owner_logs) == 2
     assert all(record.levelno == logging.INFO for record in owner_logs)
     assert all("RUNNING" in record.getMessage() and "active lock" in record.getMessage() for record in owner_logs)
+
+
+def test_step_lock_heartbeat_survives_transient_refresh_error(tmp_path: Path, monkeypatch):
+    refresh_attempts = 0
+    refreshed_after_error = Event()
+
+    class FlakyLease(LocalFileLease):
+        """A local lease whose first refresh fails the way a storage outage would."""
+
+        def refresh(self) -> None:
+            nonlocal refresh_attempts
+            refresh_attempts += 1
+            if refresh_attempts == 1:
+                raise OSError("temporary storage failure")
+            super().refresh()
+            refreshed_after_error.set()
+
+    monkeypatch.setattr(step_status, "create_lock", FlakyLease)
+    monkeypatch.setattr(step_status, "HEARTBEAT_INTERVAL", 0.01)
+
+    with step_lock(str(tmp_path / "step"), "step"):
+        assert refreshed_after_error.wait(timeout=5)
