@@ -34,6 +34,28 @@ MAX_CONSECUTIVE_IDENTICAL_LINES = 256
 _SKIPPED_JSONL_LINES = MappingProxyType({("agentic_v2", "tool_calling"): frozenset({1095})})
 _RESTORED_CHAT_FAMILY = "instruction_following_chat_v3"
 _RESTORED_CHAT_PARTITION = "chat"
+_OPENCODE_FAMILY = "opencode_v1"
+_OPENCODE_PARTITIONS = (
+    "bash_only_tool_skills",
+    "bash_only_tool",
+    "general",
+    "question_tool",
+    "agent_skills",
+    "agent_skills_question_tool",
+)
+# A conversion fix made after TRANSFORM_VERSION adds a repair version to the step hash of the partitions it changes,
+# so every other partition keeps its cache.
+_UNQUOTED_PROMPT_VERSION = "2026.11.11.unquoted-prompt"
+_NO_EMPTY_SYSTEM_VERSION = "2026.11.11.no-empty-system"
+_PARTITION_REPAIR_VERSIONS = MappingProxyType(
+    {
+        **{(_OPENCODE_FAMILY, partition): _UNQUOTED_PROMPT_VERSION for partition in _OPENCODE_PARTITIONS},
+        ("agentic_v1", "tool_calling"): _NO_EMPTY_SYSTEM_VERSION,
+        ("finance_v1", "train"): _NO_EMPTY_SYSTEM_VERSION,
+        ("instruction_following_chat_v2", "reasoning_off"): _NO_EMPTY_SYSTEM_VERSION,
+        ("instruction_following_chat_v2", "reasoning_on"): _NO_EMPTY_SYSTEM_VERSION,
+    }
+)
 _SWE_V2_FAMILY = "swe_v2"
 _SWE_V2_AGENTLESS_PARTITION = "agentless"
 # The source response uses separate reasoning_content, so this wire-format request conflicts with Marin's template.
@@ -75,20 +97,10 @@ NEMOTRON_SFT_V3_REPOSITORIES: Mapping[str, tuple[str, str, Mapping[str, str]]] =
                     "tool_calling": "data/tool_calling.jsonl",
                 },
             ),
-            "opencode_v1": (
+            _OPENCODE_FAMILY: (
                 "nvidia/Nemotron-SFT-OpenCode-v1",
                 "556d5237acff203f3e1a0be49428634c3606cda2",
-                {
-                    split: f"{split}/data.jsonl"
-                    for split in (
-                        "bash_only_tool_skills",
-                        "bash_only_tool",
-                        "general",
-                        "question_tool",
-                        "agent_skills",
-                        "agent_skills_question_tool",
-                    )
-                },
+                {partition: f"{partition}/data.jsonl" for partition in _OPENCODE_PARTITIONS},
             ),
             _SWE_V2_FAMILY: (
                 "nvidia/Nemotron-SFT-SWE-v2",
@@ -263,6 +275,53 @@ def _parse_messages(value: object) -> list[dict]:
     return messages
 
 
+def _opencode_prompt(content: str, question: str) -> str:
+    """Return an OpenCode user prompt without the literal quotes that its generator added.
+
+    A top-level prompt is `"` + the row's question with `"` escaped + its `<note>` blocks + `"`.
+    Sub-agent prompts have no wrapper and differ from the question, so they are returned unchanged.
+    """
+    quoted_question = '"' + question.replace('"', '\\"')
+    if len(content) > len(quoted_question) and content.startswith(quoted_question) and content.endswith('"'):
+        return question + content[len(quoted_question) : -1]
+    return content
+
+
+def _repair_user_prompts(messages: list[dict], row: dict, *, family: str, partition_name: str, counter: str) -> None:
+    """Remove export artifacts from the user prompts of OpenCode and SWE v2 agentless rows, in place."""
+    if family == _OPENCODE_FAMILY:
+        question = row.get("question")
+        for message in messages:
+            content = message.get("content")
+            if message.get("role") == "user" and isinstance(content, str) and isinstance(question, str):
+                message["content"] = _opencode_prompt(content, question)
+                if message["content"] != content:
+                    counters.pipeline.update_counter(f"{counter}/prompt_quotes_removed", 1)
+    if family == _SWE_V2_FAMILY and partition_name == _SWE_V2_AGENTLESS_PARTITION:
+        for message in messages:
+            content = message.get("content")
+            if (
+                message.get("role") == "user"
+                and isinstance(content, str)
+                and content.endswith(_SWE_V2_AGENTLESS_FORMAT_SUFFIX)
+            ):
+                message["content"] = content.removesuffix(_SWE_V2_AGENTLESS_FORMAT_SUFFIX)
+                counters.pipeline.update_counter(f"{counter}/format_suffix_removed", 1)
+
+
+def _source_train_turns(row: dict, message_count: int) -> list[bool] | None:
+    """Return the source's per-message training flags, which must cover every source message."""
+    metadata = row.get("metadata")
+    train_turns = metadata.get("train_turns") if isinstance(metadata, Mapping) else None
+    if train_turns is not None and (
+        not isinstance(train_turns, list)
+        or len(train_turns) != message_count
+        or any(not isinstance(value, bool) for value in train_turns)
+    ):
+        raise ValueError("Source train_turns must contain one boolean per source message")
+    return train_turns
+
+
 def _tool_definitions(value: object) -> list[dict]:
     if value is None:
         return []
@@ -318,16 +377,14 @@ def row_to_chat_doc(row: dict, *, family: str, partition_name: str) -> list[dict
         if not messages:
             counters.pipeline.update_counter(f"{counter}/empty_messages_filtered", 1)
             return []
-        if family == _SWE_V2_FAMILY and partition_name == _SWE_V2_AGENTLESS_PARTITION:
-            for message in messages:
-                content = message.get("content")
-                if (
-                    message.get("role") == "user"
-                    and isinstance(content, str)
-                    and content.endswith(_SWE_V2_AGENTLESS_FORMAT_SUFFIX)
-                ):
-                    message["content"] = content.removesuffix(_SWE_V2_AGENTLESS_FORMAT_SUFFIX)
-                    counters.pipeline.update_counter(f"{counter}/format_suffix_removed", 1)
+        source_train_turns = _source_train_turns(row, len(messages))
+        # The source writes a missing system prompt as an empty first message, which would render as an empty turn.
+        if messages[0].get("role") == "system" and messages[0].get("content") == "":
+            messages = messages[1:]
+            if source_train_turns is not None:
+                source_train_turns = source_train_turns[1:]
+            counters.pipeline.update_counter(f"{counter}/empty_system_message_removed", 1)
+        _repair_user_prompts(messages, row, family=family, partition_name=partition_name, counter=counter)
         if family == _RESTORED_CHAT_FAMILY and partition_name == _RESTORED_CHAT_PARTITION:
             first_user = next((message for message in messages if message.get("role") == "user"), None)
             if first_user is None or not first_user.get("content"):
@@ -352,14 +409,6 @@ def row_to_chat_doc(row: dict, *, family: str, partition_name: str) -> list[dict
         normalized_messages = [Message.from_dict(message) for message in document["messages"]]
         validate_chat_messages(normalized_messages)
         validate_tool_definitions(kwargs.get("tools", []), normalized_messages)
-        metadata = row.get("metadata")
-        source_train_turns = metadata.get("train_turns") if isinstance(metadata, Mapping) else None
-        if source_train_turns is not None and (
-            not isinstance(source_train_turns, list)
-            or len(source_train_turns) != len(messages)
-            or any(not isinstance(value, bool) for value in source_train_turns)
-        ):
-            raise ValueError("Source train_turns must contain one boolean per source message")
         document["source_train_turns"] = source_train_turns
     except (UnicodeError, ValueError) as error:
         counters.pipeline.update_counter(f"{counter}/quarantined/{type(error).__name__}", 1)
@@ -422,13 +471,16 @@ def _transform_chat(input_path: str, output_path: str, *, family: str, partition
 
 
 def _processed_chat_step(download: StepSpec, *, family: str, partition_name: str) -> StepSpec:
+    hash_attrs = {"family": family, "partition": partition_name, "version": TRANSFORM_VERSION}
+    if repair_version := _PARTITION_REPAIR_VERSIONS.get((family, partition_name)):
+        hash_attrs["repair_version"] = repair_version
     return StepSpec(
         name=f"processed-chat/nemotron_sft_v3/{family}/{partition_name}",
         deps=[download],
         fn=lambda output_path: _transform_chat(
             download.output_path, output_path, family=family, partition_name=partition_name
         ),
-        hash_attrs={"family": family, "partition": partition_name, "version": TRANSFORM_VERSION},
+        hash_attrs=hash_attrs,
     )
 
 
