@@ -109,7 +109,14 @@ def _license_ids(text: str, kind: str) -> list[str]:
         metadata = _card_metadata(text)
         value = metadata.get("license")
         if value is None:
-            return ["missing"]
+            # The front matter declares no licence: the card body's own licence
+            # declaration (a "## License" section) is part of the card document.
+            # An unrecognized body scan stays "missing" — the fail-closed gate owns it.
+            body = text.split("---", 2)[2] if text.startswith("---") and text.count("---") >= 2 else text
+            body_ids = _license_ids(body, "license_file")
+            if body_ids in (["missing"], ["custom"]):
+                return ["missing"]
+            return body_ids
         if value == "other" and _license_alias(str(metadata.get("license_name", ""))) == "cc0-1.0":
             return ["cc0-1.0"]
         values = [str(item) for item in value] if isinstance(value, list) else [str(value)]
@@ -217,8 +224,18 @@ def license_evidence(url: str, content: bytes, kind: str) -> LicenseEvidence:
     relevant = lines
     unidentified = []
     if kind == "dataset_card":
-        closing = next((i for i, line in lines[1:] if line.strip() == "---"), 0) if text.startswith("---") else 0
+        front_matter = text.startswith("---")
+        closing = next((i for i, line in lines[1:] if line.strip() == "---"), 0) if front_matter else 0
         relevant = [(i, line) for i, line in lines if i <= closing]
+        if front_matter and not _card_metadata(text).get("license"):
+            # The front matter declares no licence: quote the body's own licence
+            # declaration too, so the evidence points at the actual document text.
+            body_lines = [
+                (i, line)
+                for i, line in _readme_license_lines(scoped_text)
+                if line.strip().lstrip("#").strip().lower() not in LICENSE_SECTION_HEADINGS
+            ]
+            relevant = relevant + body_lines
     elif kind == "readme_license":
         relevant = [
             (i, line)

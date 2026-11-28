@@ -144,6 +144,52 @@ def test_unknown_card_licence_id_fails_closed():
     assert check.rule_id is LicenseCheckRule.MISSING
 
 
+def test_card_body_licence_declaration_is_extracted_when_front_matter_lacks_one():
+    """Regression (the allenai/IFBench_test README at ed7c12452594b7028b15807b86d3938150b663ae):
+    the card's YAML front matter declares no licence while the body's License section
+    declares ODC-BY-1.0 — the card evidence must carry the body declaration, not
+    'missing', so the fail-closed gate passes the actually-declared licence."""
+    document = (
+        b"---\n"
+        b"dataset_info:\n"
+        b"  features:\n"
+        b"  - name: key\n"
+        b"    dtype: string\n"
+        b"---\n"
+        b"# IFBench\n\n"
+        b"## License\n\n"
+        b"This dataset is licensed under ODC-BY-1.0. It is intended for research and educational use.\n"
+    )
+    receipt = fixture_license("Evalchemy:ifbench", "allenai/IFBench_test", "ed" * 20).model_copy(
+        update={
+            "evidence": [
+                license_evidence(
+                    "https://huggingface.co/datasets/allenai/IFBench_test/README.md", document, "dataset_card"
+                )
+            ]
+        }
+    )
+    assert receipt.evidence[0].license_ids == ["odc-by"]
+    assert any("ODC-BY-1.0" in line for line in receipt.evidence[0].quoted_lines)
+    check = check_license(receipt)
+    assert check.verdict is LicenseCheckVerdict.PASS
+    assert check.rule_id is LicenseCheckRule.PERMISSIVE
+    require_license(receipt, "Evalchemy:ifbench", "train", ban=None)
+
+
+def test_card_with_neither_front_matter_nor_body_licence_still_fails_closed():
+    """The body fallback does not loosen the gate: a card with no declaration anywhere
+    still fails F2."""
+    document = b"---\ndataset_info:\n  features:\n  - name: key\n    dtype: string\n---\n# A dataset\n"
+    receipt = fixture_license("Marin:fixture", "fixture/data", "a" * 40).model_copy(
+        update={"evidence": [license_evidence("https://example.test/README.md", document, "dataset_card")]}
+    )
+    assert receipt.evidence[0].license_ids == ["missing"]
+    check = check_license(receipt)
+    assert check.verdict is LicenseCheckVerdict.FAIL
+    assert check.rule_id is LicenseCheckRule.MISSING
+
+
 def test_restrictive_file_overrides_permissive_card_and_affirmative_terms_do_not_restrict():
     card = license_evidence("https://example.test/card", b"---\nlicense: mit\n---\n", "dataset_card")
     terms = license_evidence(
