@@ -16,7 +16,7 @@ from haliax.nn.normalization import LayerNormBase
 from haliax.nn.scan import BlockFoldable, BlockSeq, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter, HFCompatConfig
 from levanter.compat.hf_config import hf_config_from_kwargs, hf_rope_config, hf_rope_parameter_mapping
 from levanter.layers.attention import Attention, AttentionBackend, AttentionConfig, AttentionMask
 from levanter.layers.normalization import LayerNormConfigBase
@@ -181,8 +181,8 @@ class GemmaConfig(HFCompatConfig):
             self.num_heads % self.num_kv_heads == 0
         ), f"num_heads={self.num_heads} not divisible by num_kv_heads={self.num_kv_heads}."
 
-    def hf_checkpoint_converter(self, ref_checkpoint: str = "google/gemma-2b") -> HFCheckpointConverter["GemmaConfig"]:  # type: ignore
-        return HFCheckpointConverter(
+    def hf_checkpoint_converter(self, ref_checkpoint: str = "google/gemma-2b") -> HfLmCheckpointConverter["GemmaConfig"]:  # type: ignore
+        return HfLmCheckpointConverter(
             self,
             reference_checkpoint=ref_checkpoint,
             trust_remote_code=True,
@@ -535,8 +535,8 @@ class Gemma2Config(GemmaConfig):
     # ---------- HF checkpoint helpers ----------
     def hf_checkpoint_converter(  # pyrefly: ignore[bad-override]
         self, ref_checkpoint: str = "google/gemma-2-2b"
-    ) -> HFCheckpointConverter["Gemma2Config"]:  # type: ignore
-        return HFCheckpointConverter(
+    ) -> HfLmCheckpointConverter["Gemma2Config"]:  # type: ignore
+        return HfLmCheckpointConverter(
             self,
             reference_checkpoint=ref_checkpoint,
             trust_remote_code=True,
@@ -854,8 +854,8 @@ class Gemma3Config(Gemma2Config):
     # ---------- HF helpers ----------
     def hf_checkpoint_converter(  # pyrefly: ignore[bad-override]
         self, ref_checkpoint: str = "google/gemma-3-1b-pt"
-    ) -> HFCheckpointConverter["Gemma3Config"]:  # type: ignore
-        return HFCheckpointConverter(
+    ) -> HfLmCheckpointConverter["Gemma3Config"]:  # type: ignore
+        return HfLmCheckpointConverter(
             self,
             reference_checkpoint=ref_checkpoint,
             trust_remote_code=True,

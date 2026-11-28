@@ -31,7 +31,7 @@ from haliax.partitioning import named_jit
 
 from levanter.compat.hf_checkpoints import (
     GenerationConfigDict,
-    HFCheckpointConverter,
+    HfLmCheckpointConverter,
     RepoRef,
     save_hf_checkpoint_callback,
 )
@@ -90,7 +90,7 @@ class AdaptorConfig(abc.ABC, draccus.ChoiceRegistry):
         self,
         *,
         trainer,
-        converter: HFCheckpointConverter | None,
+        converter: HfLmCheckpointConverter | None,
         tokenizer,
         export: AdaptorExportConfig,
     ) -> None:
@@ -117,7 +117,7 @@ def _parse_hf_save_dtype(hf_save_dtype: str | None) -> jnp.dtype | None:
 def _install_full_model_export_hook(
     *,
     trainer,
-    converter: HFCheckpointConverter | None,
+    converter: HfLmCheckpointConverter | None,
     export: AdaptorExportConfig,
 ) -> None:
     """Register the HF export of a complete model; each field in the trainer's ``field_dtype_overrides`` is exported
@@ -167,7 +167,7 @@ class NoAdaptorConfig(AdaptorConfig):
         self,
         *,
         trainer,
-        converter: HFCheckpointConverter | None,
+        converter: HfLmCheckpointConverter | None,
         tokenizer,
         export: AdaptorExportConfig,
     ) -> None:
@@ -216,7 +216,7 @@ class FrozenParameterAdaptorConfig(AdaptorConfig):
         self,
         *,
         trainer,
-        converter: HFCheckpointConverter | None,
+        converter: HfLmCheckpointConverter | None,
         tokenizer,
         export: AdaptorExportConfig,
     ) -> None:
@@ -247,7 +247,7 @@ class LoraAdaptorConfig(LoraConfig, AdaptorConfig):
         self,
         *,
         trainer,
-        converter: HFCheckpointConverter | None,
+        converter: HfLmCheckpointConverter | None,
         tokenizer,
         export: AdaptorExportConfig,
     ) -> None:

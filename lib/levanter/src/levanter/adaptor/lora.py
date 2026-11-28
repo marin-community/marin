@@ -75,7 +75,7 @@ from jax.sharding import PartitionSpec
 from levanter.callbacks import StepInfo
 from levanter.compat.hf_checkpoints import (
     GenerationConfigDict,
-    HFCheckpointConverter,
+    HfLmCheckpointConverter,
     RepoRef,
     _save_tokenizer_pretrained,
     upload_to_hub,
@@ -578,7 +578,7 @@ def save_peft_checkpoint_callback(
 
 def save_merged_hf_checkpoint_callback(
     base_path,
-    converter: HFCheckpointConverter,
+    converter: HfLmCheckpointConverter,
     upload_to_hf: Optional[Union[str, RepoRef]] = None,
     generation_config: Optional[GenerationConfigDict] = None,
     generation_config_defaults: Mapping[str, Any] | None = None,
@@ -640,7 +640,7 @@ def save_merged_hf_checkpoint_callback(
 
 def save_merged_hf_model(
     lora_model: M,
-    converter: HFCheckpointConverter,
+    converter: HfLmCheckpointConverter,
     path: str,
     upload_to_hf: Optional[Union[str, RepoRef]] = None,
     generation_config: Optional[GenerationConfigDict] = None,

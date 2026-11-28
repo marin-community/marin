@@ -24,7 +24,7 @@ import haliax
 import levanter.main.export_lm_to_hf as export_lm_to_hf
 from levanter.testing import tiny_corpus
 from levanter.checkpoint import save_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, SAFE_TENSORS_INDEX_NAME
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter, SAFE_TENSORS_INDEX_NAME
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.snowball import SnowballConfig
 from levanter.utils.jax_utils import is_inexact_arrayish, local_cpu_mesh
@@ -33,8 +33,8 @@ from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
 
 
 class TokenizerlessGpt2Config(Gpt2Config):
-    def hf_checkpoint_converter(self, ref_checkpoint: str | None = None) -> HFCheckpointConverter["Gpt2Config"]:
-        return HFCheckpointConverter(
+    def hf_checkpoint_converter(self, ref_checkpoint: str | None = None) -> HfLmCheckpointConverter["Gpt2Config"]:
+        return HfLmCheckpointConverter(
             self.__class__,
             reference_checkpoint=None,
             HfConfigClass=HfGpt2Config,

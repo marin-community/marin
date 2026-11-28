@@ -47,7 +47,7 @@ torch, not much interesting here given jetstream. focused on batch inference I t
 
 ### Service Architecture
 The inference server is built around a `GenerationService` that encapsulates:
-- Model loading and initialization via `HFCheckpointConverter`
+- Model loading and initialization via `HfLmCheckpointConverter`
 - Tokenizer management
 - JAX device mesh configuration via `TrainerConfig`
 - KV cache management via `PageTable` and `KvPageCache`
@@ -72,7 +72,7 @@ The inference server is built around a `GenerationService` that encapsulates:
 - `levanter.inference.page_table.PageTable`, `levanter.layers.kv_cache.KvPageCache`.
 - `levanter.layers.sampler.Sampler`.
 - `levanter.models.llama.LlamaLMHeadModel` and `levanter.models.lm_model.LmHeadModel`.
-- `levanter.compat.hf_checkpoints.HFCheckpointConverter`, `load_tokenizer`.
+- `levanter.compat.hf_checkpoints.HfLmCheckpointConverter`, `load_tokenizer`.
 - `levanter.trainer.TrainerConfig` and `levanter.utils.jax_utils.use_cpu_device`.
 
 ## Implementation Notes

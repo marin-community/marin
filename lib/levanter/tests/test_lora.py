@@ -39,7 +39,7 @@ from levanter.adaptor.lora import (
 )
 from levanter.callbacks import StepInfo
 from levanter.checkpoint import Checkpointer
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter, RepoRef
 from levanter.field_dtype_overrides import with_field_dtype_overrides
 from levanter.main.lora_lm import load_base_model
 from levanter.layers.attention import AttentionMask
@@ -171,7 +171,7 @@ def test_lora_load_in_peft(local_gpt2_tokenizer_path):
 
     # Local tokenizer keeps converter construction off the Hub; the base model is
     # saved/reloaded from a temp dir so the tokenizer is incidental here.
-    converter: HFCheckpointConverter = replace(
+    converter: HfLmCheckpointConverter = replace(
         Gpt2Config(tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter(),
         reference_checkpoint=None,
     )
@@ -226,7 +226,7 @@ def test_lora_merged_load_in_hf(local_gpt2_tokenizer_path):
 
     # Local tokenizer keeps converter construction off the Hub; the base model is
     # saved/reloaded from a temp dir so the tokenizer is incidental here.
-    converter: HFCheckpointConverter = replace(
+    converter: HfLmCheckpointConverter = replace(
         Gpt2Config(tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter(),
         reference_checkpoint=None,
     )
@@ -286,7 +286,7 @@ def test_lora_merged_load_in_hf_llama():
         gradient_checkpointing=False,
         scan_layers=False,
     )
-    converter: HFCheckpointConverter = config.hf_checkpoint_converter()
+    converter: HfLmCheckpointConverter = config.hf_checkpoint_converter()
     vocab = hax.Axis("vocab", 128)
 
     model = LlamaLMHeadModel.init(vocab, config=config, key=jax.random.PRNGKey(0))

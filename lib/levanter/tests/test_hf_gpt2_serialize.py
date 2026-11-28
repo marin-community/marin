@@ -18,7 +18,7 @@ from transformers import AutoModelForCausalLM
 from transformers import GPT2Config as HfGpt2Config
 from transformers import GPT2LMHeadModel as HfGpt2LMHeadModel
 
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter, RepoRef
 from levanter.layers.attention import AttentionMask
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.lm_model import LmExample, LmHeadModel
@@ -199,7 +199,7 @@ def _compare_gpt2_checkpoint_gradients(model_id, revision, config: Optional[Gpt2
 
 def test_hf_save_to_fs_spec():
     config = Gpt2Config(hidden_dim=16, num_heads=1, num_layers=1)
-    converter = HFCheckpointConverter(Gpt2Config, "gpt2", HfGpt2Config, ignore_prefix="transformer")
+    converter = HfLmCheckpointConverter(Gpt2Config, "gpt2", HfGpt2Config, ignore_prefix="transformer")
 
     with use_test_mesh():
         simple_model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))

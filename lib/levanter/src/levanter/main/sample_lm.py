@@ -18,7 +18,7 @@ import levanter.config
 import levanter.tracker
 from levanter.callbacks import profile_ctx
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, load_tokenizer
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter, RepoRef, load_tokenizer
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.utils import INVALID
@@ -90,7 +90,7 @@ def _load_model(config: SampleLmConfig, Vocab: Axis, *, key) -> LmHeadModel:
         return model
     else:
         assert hasattr(config.model, "hf_checkpoint_converter"), "model config lacks HF loader"
-        converter: HFCheckpointConverter = config.model.hf_checkpoint_converter()
+        converter: HfLmCheckpointConverter = config.model.hf_checkpoint_converter()
         converter = converter.replaced(
             reference_checkpoint=config.hf_checkpoint, tokenizer=load_tokenizer(config.tokenizer)
         )
