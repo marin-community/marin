@@ -202,6 +202,7 @@ _SANDBOX_STORAGE_LIMIT_ANNOTATION = "iris.sandbox_storage_limit_bytes"
 
 # Runtime identifier for pods created by K8sTaskProvider.
 _RUNTIME_LABEL_VALUE = IRIS_KUBERNETES_RUNTIME
+_POD_PHASE_RUNNING = "Running"
 _JOB_SECRET_VOLUME_NAME = "job-secrets"
 _JOB_STORAGE_VOLUME_NAME = "job-storage-secrets"
 
@@ -1514,7 +1515,7 @@ def _task_update_from_pod(
             **identity,
         )
 
-    if phase == "Running":
+    if phase == _POD_PHASE_RUNNING:
         return TaskUpdate(
             attempt_uid=AttemptUid(entry.attempt_uid),
             task_id=task_id,
@@ -2928,9 +2929,18 @@ class K8sTaskProvider:
     ) -> worker_pb2.Worker.ExecInContainerResponse:
         """Execute a command in a running task pod via kubectl exec."""
         command = list(request.command)
-        pod_name = self._live_pod_name(target)
         effective_timeout: float | None = timeout_seconds if timeout_seconds >= 0 else None
         try:
+            pod_name = self._live_pod_name(target)
+            pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
+            phase = pod.get("status", {}).get("phase", "unknown") if pod is not None else "missing"
+            if phase != _POD_PHASE_RUNNING:
+                return worker_pb2.Worker.ExecInContainerResponse(
+                    error=(
+                        f"Task {target.task_id} attempt {target.attempt_id} has no live container "
+                        f"(pod {pod_name}: {phase})"
+                    )
+                )
             result = self.kubectl.exec(pod_name, command, container="task", timeout=effective_timeout)
             return worker_pb2.Worker.ExecInContainerResponse(
                 exit_code=result.returncode,
@@ -3529,7 +3539,7 @@ class K8sTaskProvider:
             )
             updates.append(update)
             phase = pod.get("status", {}).get("phase", "")
-            if phase == "Running":
+            if phase == _POD_PHASE_RUNNING:
                 profile_targets[task_key] = _ProfileTarget(
                     task_id=entry.task_id.to_wire(),
                     attempt_id=entry.attempt_id,
