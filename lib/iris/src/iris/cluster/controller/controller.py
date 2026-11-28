@@ -15,7 +15,7 @@ import threading
 import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 import uvicorn
@@ -230,6 +230,31 @@ def with_task_token(
     stamped.CopyFrom(request)
     stamped.task_token = auth.jwt_manager.create_task_token(job_id)
     return stamped
+
+
+def with_assignments(
+    worker_status: dict[WorkerId, WorkerStatus], assignments: list[Assignment]
+) -> dict[WorkerId, WorkerStatus]:
+    """Add this tick's assignments to a worker snapshot taken before scheduling.
+
+    The autoscaler must see a worker that just received a task as busy, at that task's band.
+    Otherwise idle-first reservation reclaim could pick it as a victim and fail the new task.
+    An assignment without a band adds the ``PRIORITY_BAND_INHERIT`` sentinel, which reclaim never preempts.
+    """
+    if not assignments:
+        return worker_status
+    merged = dict(worker_status)
+    for assignment in assignments:
+        status = merged.get(assignment.worker_id)
+        if status is None:
+            continue
+        band = assignment.priority_band if assignment.priority_band is not None else job_pb2.PRIORITY_BAND_INHERIT
+        merged[assignment.worker_id] = replace(
+            status,
+            running_task_ids=status.running_task_ids | {assignment.task_id.to_wire()},
+            running_bands=status.running_bands | {band},
+        )
+    return merged
 
 
 def backend_observation_request(
@@ -1110,8 +1135,11 @@ class Controller:
         auto_result: AutoscaleResult | None = None
         if run_autoscale:
             residual_demand = sched_result.residual_demand if sched_result is not None else []
+            worker_status = with_assignments(
+                inputs.worker_status, sched_result.assignments if sched_result is not None else []
+            )
             auto_result = self.backend.autoscale(
-                AutoscaleRequest(residual_demand=residual_demand, worker_status=inputs.worker_status)
+                AutoscaleRequest(residual_demand=residual_demand, worker_status=worker_status)
             )
 
         confirmed_promotions = self._commit_tick(
@@ -1125,6 +1153,16 @@ class Controller:
             expired_queued_federation=inputs.expired_queued_federation,
             now=now,
         )
+
+        if auto_result is not None:
+            for reclaim in auto_result.reclaims:
+                self._remove_worker_capacity(
+                    [WorkerId(worker_id) for worker_id in reclaim.worker_ids],
+                    reason=(
+                        f"reservation reclaim in {reclaim.quota_pool} for a band-{reclaim.preemptor_band} "
+                        f"slice of {reclaim.group} ({reclaim.waiting_slice_id})"
+                    ),
+                )
 
         # Charge the reservation ledger only for promotions whose CAS committed, so a
         # promotion raced by a cancel does not hold phantom peer capacity. The sync
@@ -1239,12 +1277,13 @@ class Controller:
         """Build the autoscaler's complete worker view from one controller snapshot."""
         liveness = self._worker_health.all()
         worker_ids = {worker_id for worker_id, state in liveness.items() if state.usability is not WorkerUsability.DEAD}
-        running = reads.running_tasks_by_worker(snap, worker_ids)
+        running = reads.running_task_bands_by_worker(snap, worker_ids)
         return {
             worker_id: WorkerStatus(
                 worker_id=worker_id,
-                running_task_ids=frozenset(task_id.to_wire() for task_id in running.get(worker_id, set())),
+                running_task_ids=frozenset(task_id.to_wire() for task_id in running.get(worker_id, {})),
                 usability=liveness[worker_id].usability,
+                running_bands=frozenset(running.get(worker_id, {}).values()),
             )
             for worker_id in worker_ids
         }

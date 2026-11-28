@@ -511,6 +511,8 @@ class WorkerStatus:
     worker_id: str
     running_task_ids: frozenset[str]
     usability: WorkerUsability = WorkerUsability.HEALTHY
+    # ``job_pb2.PriorityBand`` values of the running tasks; empty when idle.
+    running_bands: frozenset[int] = frozenset()
 
     @property
     def is_idle(self) -> bool:

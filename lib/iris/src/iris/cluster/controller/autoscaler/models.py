@@ -35,6 +35,8 @@ class DemandEntry:
     constraints: list[Constraint]
     resources: job_pb2.ResourceSpecProto
     invalid_reason: str | None = None
+    # The job's ``job_pb2.PriorityBand``; None when the source does not know it.
+    priority_band: int | None = None
 
 
 @dataclass(frozen=True)

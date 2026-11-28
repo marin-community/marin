@@ -793,7 +793,9 @@ def resource_usage_by_worker(tx: Tx) -> dict[WorkerId, WorkerResourceUsage]:
     }
 
 
-_RUNNING_TASKS_BY_WORKER_STMT = select(tasks_table.c.current_worker_id.label("worker_id"), tasks_table.c.task_id).where(
+_RUNNING_TASKS_BY_WORKER_STMT = select(
+    tasks_table.c.current_worker_id.label("worker_id"), tasks_table.c.task_id, tasks_table.c.priority_band
+).where(
     tasks_table.c.current_worker_id.in_(bindparam("worker_ids", expanding=True)),
     tasks_table.c.state.in_(bindparam("states", expanding=True)),
 )
@@ -823,18 +825,23 @@ def building_counts(tx: Tx, worker_ids: Sequence[WorkerId]) -> dict[WorkerId, in
     return {row.worker_id: int(row.cnt) for row in rows}
 
 
-def running_tasks_by_worker(tx: Tx, worker_ids: set[WorkerId]) -> dict[WorkerId, set[JobName]]:
-    """Return the set of currently-running task IDs for each worker."""
+def running_task_bands_by_worker(tx: Tx, worker_ids: set[WorkerId]) -> dict[WorkerId, dict[JobName, int]]:
+    """Return ``{task_id: priority_band}`` of the currently-running tasks for each worker."""
     if not worker_ids:
         return {}
     rows = tx.execute(
         _RUNNING_TASKS_BY_WORKER_STMT,
         {"worker_ids": list(worker_ids), "states": sorted(ACTIVE_TASK_STATES)},
     ).all()
-    running: dict[WorkerId, set[JobName]] = {wid: set() for wid in worker_ids}
+    running: dict[WorkerId, dict[JobName, int]] = {wid: {} for wid in worker_ids}
     for row in rows:
-        running[row.worker_id].add(row.task_id)
+        running[row.worker_id][row.task_id] = int(row.priority_band)
     return running
+
+
+def running_tasks_by_worker(tx: Tx, worker_ids: set[WorkerId]) -> dict[WorkerId, set[JobName]]:
+    """Return the set of currently-running task IDs for each worker."""
+    return {wid: set(tasks) for wid, tasks in running_task_bands_by_worker(tx, worker_ids).items()}
 
 
 # ---------------------------------------------------------------------------

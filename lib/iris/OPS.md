@@ -324,7 +324,10 @@ iris rpc controller get-provider-status
 iris cluster vm status
 ```
 
-See [priority bands](docs/priority-bands.md). Scheduler `running_buckets` and
+See [priority bands](docs/priority-bands.md). On VM/TPU clusters,
+`reservation_reclaim` and `reclaim_blocked` actions in
+`get-autoscaler-status` show reserved-pool reclaims
+([reservation reclaim](docs/priority-bands.md#reservation-reclaim-vmtpu)). Scheduler `running_buckets` and
 separate SQL reads are different snapshots; use one atomic query to diagnose
 assignment leaks. For Kubernetes capacity use `rpc controller list-backends`;
 there is no Iris worker daemon or Iris autoscaler.
