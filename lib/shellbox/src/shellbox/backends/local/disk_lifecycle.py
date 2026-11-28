@@ -21,13 +21,16 @@ from pathlib import Path
 COMMAND_TIMEOUT = 30
 CLEANUP_TIMEOUT = 30
 LOOP_CONTROL = Path("/dev/loop-control")
-NODE_NAME = os.environ.get("IRIS_NODE_NAME", os.uname().nodename)
+
+
+def node_name() -> str:
+    return os.environ.get("IRIS_NODE_NAME", os.uname().nodename)
 
 
 def run(*argv: str) -> str:
     result = subprocess.run(argv, capture_output=True, text=True, timeout=COMMAND_TIMEOUT)
     if result.returncode:
-        raise RuntimeError(f"{argv[0]} failed on node {NODE_NAME}: {result.stderr.strip()}")
+        raise RuntimeError(f"{argv[0]} failed on node {node_name()}: {result.stderr.strip()}")
     return result.stdout.strip()
 
 
@@ -91,7 +94,7 @@ def guard(directory: Path, storage_mb: int) -> None:
             print(json.dumps({"ready": True}), flush=True)
             sys.stdin.buffer.read()
         except Exception as error:
-            error.add_note(f"LOCAL disk guardian node: {NODE_NAME}")
+            error.add_note(f"LOCAL disk guardian node: {node_name()}")
             raise
         finally:
             reclaim(directory)

@@ -170,8 +170,9 @@ def test_guardian_owns_explicit_loop_through_mount_failure_and_cleanup(tmp_path,
     monkeypatch.setattr(disk_lifecycle.subprocess, "run", command)
     monkeypatch.setattr(disk_lifecycle.os.path, "ismount", lambda path: str(path) in mounts)
     monkeypatch.setattr(disk_lifecycle.sys, "stdin", SimpleNamespace(buffer=io.BytesIO()))
+    monkeypatch.setenv("IRIS_NODE_NAME", "gpu-node-proof")
     if mount_fails:
-        with pytest.raises(RuntimeError, match="failed to setup loop device"):
+        with pytest.raises(RuntimeError, match="node gpu-node-proof: failed to setup loop device"):
             disk_lifecycle.guard(directory, storage_mb=1)
     else:
         disk_lifecycle.guard(directory, storage_mb=1)

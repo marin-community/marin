@@ -64,7 +64,10 @@ async def test_local_disk_verified_pool_is_shared_by_concurrent_host_requests(tm
 
 
 async def test_local_disk_concurrent_pools_release_their_loop_devices(tmp_path):
-    ready = threading.Barrier(4)
+    # Match campaign rollout workers and exceed the eight loop nodes present on
+    # the first qualification host; four pools never need an additional device.
+    pool_count = 16
+    ready = threading.Barrier(pool_count)
 
     def allocate(index):
         pool = LocalDiskPool(tmp_path / str(index))
@@ -78,7 +81,7 @@ async def test_local_disk_concurrent_pools_release_their_loop_devices(tmp_path):
             disk.close()
         assert disk_state(pool.root) == {"loops": [], "mounts": [], "allocations": []}
 
-    await asyncio.gather(*(asyncio.to_thread(allocate, index) for index in range(4)))
+    await asyncio.gather(*(asyncio.to_thread(allocate, index) for index in range(pool_count)))
 
 
 async def test_local_disk_command_timeout_releases_spools_before_unmount(tmp_path, executable_oci_image, monkeypatch):
