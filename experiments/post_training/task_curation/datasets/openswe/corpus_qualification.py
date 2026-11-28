@@ -280,6 +280,8 @@ def main() -> None:
     configure_coreweave_s3()
     from experiments.post_training.task_curation.datasets.openswe.fidelity_gate import (  # noqa: PLC0415
         DaytonaDeclarativeMachineFactory,
+    )
+    from experiments.post_training.task_curation.datasets.openswe.release import (  # noqa: PLC0415
         load_gate_evidence,
     )
     from experiments.post_training.task_curation.datasets.openswe.sources import keep_release_rows  # noqa: PLC0415
