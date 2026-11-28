@@ -34,7 +34,7 @@ from iris.cluster.platforms.gcp.controller_bootstrap import (
     build_controller_bootstrap_script_from_config,
 )
 from iris.cluster.platforms.gcp.ssh import OS_LOGIN_METADATA
-from iris.cluster.platforms.protocols import WorkerInfraProvider
+from iris.cluster.platforms.protocols import ControllerRestartNotStarted, WorkerInfraProvider
 from iris.cluster.platforms.types import (
     Labels,
     RemoteWorkerHandle,
@@ -422,15 +422,22 @@ def restart_controller(
     """
     _resolve_image = resolve_image or _identity_resolve_image
     label_prefix = config.platform.label_prefix or "iris"
-    port = _controller_port(config)
 
-    vm = _discover_controller_vm(platform, label_prefix)
-    if vm is None:
-        raise RuntimeError("No existing controller VM found. Use 'iris cluster start' to create one first.")
+    try:
+        port = _controller_port(config)
+        vm = _discover_controller_vm(platform, label_prefix)
+        if vm is None:
+            raise RuntimeError("No existing controller VM found. Use 'iris cluster start' to create one first.")
 
-    logger.info("Restarting controller container in-place on VM %s", vm.vm_id)
+        logger.info("Restarting controller container in-place on VM %s", vm.vm_id)
 
-    bootstrap_script = build_controller_bootstrap_script_from_config(config, resolve_image=_resolve_image)
+        # A failed SSH probe proves the bootstrap script did not run and avoids
+        # updating GCE startup metadata before authorization is checked.
+        if not vm.wait_for_connection(timeout=Duration.from_seconds(90)):
+            raise RuntimeError(f"SSH probe failed on {vm.vm_id}")
+        bootstrap_script = build_controller_bootstrap_script_from_config(config, resolve_image=_resolve_image)
+    except Exception as e:
+        raise ControllerRestartNotStarted(f"Controller restart failed before VM bootstrap: {e}") from e
     vm.bootstrap(bootstrap_script)
 
     address = f"http://{vm.internal_address}:{port}"
