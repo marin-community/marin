@@ -214,14 +214,9 @@ R41_PENDING_SOURCE_IDS = (
         "TaskTrove:tasktrove-taco-built-image",
         "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1",
         "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1",
-        # The five Nemotron lean/rdkit renames: their fresh SAMPLE panels are drawn at
-        # the current pins but await the judge review, so their declarations still
-        # carry the archived-lineage marker (ruling 2026-11-25: timebox expired).
-        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
-        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
-        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
-        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
-        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+        # The five Nemotron lean/rdkit renames: ADMITTED 2026-11-26 (SAMPLE reviews
+        # sealed GOOD, admission packets landed 0ee7a9b052 / 84af24317c / 57abfb47f2)
+        # and released by the 2026-11-29 unfreeze ruling — see UNFROZEN_ADMITTED_IDS.
         # The instruction-hierarchy admission (c42f355d09) also landed after the freeze.
         "Nvidia:Nemotron-System-User-Instruction-Hierarchy-v1",
         "AllenAI:Dolci-Think-SFT-Clean-v2/precise-if",
@@ -236,16 +231,25 @@ R41_PENDING_SOURCE_IDS = (
     }
 )
 
-# The 2026-11-29 unfreeze ruling: these three admitted sources left the R41
-# freeze — "admitted sources are served unless broken" — and serve from their
-# qualification receipts. The v45 release stays pinned to its own freeze
-# revision, so this re-enters them at the next served load. They also leave the
-# pending-intake listing below.
+# The 2026-11-29 unfreeze rulings: these admitted sources left the R41 freeze —
+# "admitted sources are served unless broken" — and serve from their qualification
+# receipts. The three workplace/knowledge-mcqa/structured-outputs admissions
+# completed after the 2026-11-24 freeze ruling; the five Nemotron lean/rdkit
+# renames were admitted 2026-11-26 with their SAMPLE reviews sealed GOOD and the
+# admission packets landed (0ee7a9b052 wave-1 packet; 84af24317c rlvr1-lean +
+# rlvr2-lean; 57abfb47f2 rlvr2-rdkit). The v45 release stays pinned to its own
+# freeze revision, so this re-enters them at the next served load. They also
+# leave the pending-intake listing below.
 UNFROZEN_ADMITTED_IDS = frozenset(
     {
         "Nvidia:Nemotron-RL-agent-workplace_assistant",
         "Nemotron:Nemotron-RL-knowledge-mcqa",
         "TaskTrove:laion__nemotron-gym-structured-outputs-v4",
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
+        "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
     }
 )
 
@@ -334,10 +338,11 @@ def pending_measurement_sources() -> tuple[RlDataSource, ...]:
                 "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
                 "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
             }
+            and source.info.id not in UNFROZEN_ADMITTED_IDS
         ),
-        # The two admitted wave-1 renames bind their qualification records; their retained
-        # releases surface at the R41 load.
-        *nemotron_ultra_renames_admitted.sources(),
+        # The admitted renames bind their qualification records and serve from
+        # their retained receipts (UNFROZEN_ADMITTED_IDS); they are not pending intake.
+        *(source for source in nemotron_ultra_renames_admitted.sources() if source.info.id not in UNFROZEN_ADMITTED_IDS),
         # The main-sync staged sources (2026-11-25): declared on origin/main, absent
         # from the Atlas r39 cut, staged for R41 intake at their main pins. The
         # license-banned KTO components never enter this listing.
@@ -408,7 +413,9 @@ def configured_sources() -> list[RlDataSource]:
         *tasktrove_puzzles.sources(),
         *arc.sources(),
         *reasoning_gym.sources(),
-        *nemotron_ultra.sources(),
+        # The five admitted renames serve from nemotron_ultra_renames_admitted below;
+        # the component declarations here would duplicate them (UNFROZEN_ADMITTED_IDS).
+        *(source for source in nemotron_ultra.sources() if source.info.id not in UNFROZEN_ADMITTED_IDS),
         *nemo_structured.sources(),
         *hierarchy_intake.sources(),
         *dolci_precise_if_admitted.sources(),
