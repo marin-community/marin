@@ -140,6 +140,19 @@ def test_run_mode_gates_on_the_submission_guard(tmp_path, plan_document, monkeyp
     assert "not landed" in capsys.readouterr().err
 
 
+def test_regional_run_finishes_the_data_audit_before_workstation_publication(plan_document, monkeypatch, capsys):
+    captured = []
+    monkeypatch.setenv("ATLAS_RELEASE_SOURCE_REVISION", "a" * 40)
+    monkeypatch.setattr(entry_point, "assert_submission_allowed", lambda *a, **k: None)
+    monkeypatch.setattr(entry_point, "run_handles", lambda *handles, **kwargs: captured.extend(handles))
+
+    assert entry_point.main(_argv(plan_document, "run")) == 0
+    built = release_graph_module.release_graph(entry_point.load_plan(plan_document))
+    assert captured[1].name == built.stages["strict_audit_before"].name
+    assert all(handle.name != built.terminal.name for handle in captured)
+    assert "REGIONAL_DATA_READY testrelease" in capsys.readouterr().out
+
+
 def test_run_mode_is_the_idempotent_verb(tmp_path, plan_document, monkeypatch, capsys):
     """Run is the one verb: it re-runs failed steps (force_run_failed=True).
 

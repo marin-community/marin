@@ -212,8 +212,24 @@ before it executes (a runnable slice runs automatically if the receipt is missin
 or stale; a blocked node without a fresh receipt refuses the stage), and the lazy
 graph builds the release: driver-local stages run in the entry-point process,
 cluster stages submit through `marin.execution.remote` with resources from the
-measured sizing curves. A failed stage stops its downstream stages; fix and use
-`resume`.
+measured sizing curves. A failed stage stops its downstream stages; fix it and run
+the same command again.
+
+An unrestricted run in the submitter-attested regional bundle builds through
+`strict_audit_before`, including composition, scans and the serving loads. It prints
+`REGIONAL_DATA_READY` after that audit succeeds. Packaging, prepublication browser
+checks and app publication require a clean landed workstation checkout with Git,
+Docker and Chromium, so the regional bundle does not execute those stages.
+Continue the same sealed plan from that checkout:
+
+```bash
+MARIN_PREFIX=<regional-artifact-prefix> uv run atlas-release \
+  --version <release-id> --plan <sealed-plan-uri> run
+```
+
+Use the regional root's artifact prefix (for example, the regional bucket's
+`marin` directory) so the completed upstream artifacts remain cached. This is
+the same maintained graph and plan; no stage inputs are reconstructed by hand.
 
 ### Per-source parallelism and sizing
 

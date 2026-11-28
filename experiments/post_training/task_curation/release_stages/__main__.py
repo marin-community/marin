@@ -79,7 +79,11 @@ from experiments.post_training.task_curation.release_stages.graph import (
     load_plan,
     release_graph,
 )
-from experiments.post_training.task_curation.release_stages.guard import assert_submission_allowed, repo_head
+from experiments.post_training.task_curation.release_stages.guard import (
+    assert_submission_allowed,
+    attested_revision,
+    repo_head,
+)
 from experiments.post_training.task_curation.release_stages.paced_query import RetryControl, open_paced_query
 from experiments.post_training.task_curation.release_stages.plan_derivation import (
     derive_release_plan,
@@ -301,9 +305,9 @@ def mode_release(args) -> int:
 def mode_run(args) -> int:
     """The one verb: guard, per-stage preflight gate, then the idempotent graph.
 
-    Every invocation does the same thing: sealed steps skip by fingerprint,
-    missing steps build, failed steps re-run. There is no run/resume choice —
-    a rerun after an interruption is this same command at the same version.
+    Sealed steps skip by fingerprint, missing steps build, failed steps re-run.
+    The regional bundle builds through the prepublication data audit; a landed
+    workstation checkout continues the same graph through publication.
     """
     configure_coreweave_s3()
     plan = _plan_document(args)
@@ -314,12 +318,13 @@ def mode_run(args) -> int:
     graph = release_graph(plan, preflight=policy)
     stages = _selected_nodes(graph, args.stage)
     handles: list = [graph.plan_handle]
+    regional = attested_revision() is not None
     if args.stage:
         handles += [graph.stages[node] for node in stages]
     else:
-        # An unrestricted run builds the terminal stage, which transitively
-        # builds every node; the plan document is its first dependency.
-        handles.append(graph.terminal)
+        # Packaging requires git provenance, Docker and a browser on the
+        # workstation. Keep the regional bundle on the data side of that boundary.
+        handles.append(graph.stages["strict_audit_before"] if regional else graph.terminal)
         # The main-source sync and grader-drift are plan-gated leaves outside the
         # terminal's edges: a plan that opts in runs them on every build; other
         # plans never touch them.
@@ -329,6 +334,12 @@ def mode_run(args) -> int:
             handles.append(graph.stages["main_grader_drift"])
     run_handles(*handles, force_run_failed=True, max_concurrent=args.max_concurrent)
     print(f"RUN {plan.release_id}: {len(handles) - 1} terminal handle(s) built")
+    if regional and not args.stage:
+        print(
+            f"REGIONAL_DATA_READY {plan.release_id}: strict_audit_before completed;"
+            " continue with the same plan and artifact prefix from a clean landed"
+            " workstation checkout using `atlas-release --version <release-id> --plan <plan> run`"
+        )
     return 0
 
 
