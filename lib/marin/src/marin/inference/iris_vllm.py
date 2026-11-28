@@ -24,6 +24,7 @@ from rigging.network import interface_for_ipv4
 from rigging.timing import Duration, ExponentialBackoff
 
 from marin.inference.config import ServingGeometry
+from marin.inference.vllm_cache import RESTORE_DEADLINE_SECONDS, VllmCompilationCache, VllmCompilationCacheReference
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,9 @@ class VllmCoordinatorActor:
         self._vllm_primary_address = vllm_primary_address
         self._state = _GangState.WAITING
         self._stopped_followers: set[int] = set()
+        self._compilation_cache_shared = False
+        self._compilation_cache_reference: str | None = None
+        self._compilation_cache_restores: dict[int, bool] = {}
         self._lock = threading.Lock()
 
     def vllm_primary_address(self) -> str:
@@ -73,6 +77,25 @@ class VllmCoordinatorActor:
     def followers_stopped(self, task_indices: tuple[int, ...]) -> bool:
         with self._lock:
             return all(task_index in self._stopped_followers for task_index in task_indices)
+
+    def share_compilation_cache(self, reference_json: str | None) -> None:
+        """Latch the leader's cache reference JSON; ``None`` tells followers to skip restore."""
+        with self._lock:
+            self._compilation_cache_shared = True
+            self._compilation_cache_reference = reference_json
+
+    def compilation_cache(self) -> tuple[bool, str | None]:
+        """Return whether the leader shared its cache, and the reference JSON if any."""
+        with self._lock:
+            return self._compilation_cache_shared, self._compilation_cache_reference
+
+    def compilation_cache_restored(self, task_index: int, restored: bool) -> None:
+        with self._lock:
+            self._compilation_cache_restores[task_index] = restored
+
+    def compilation_cache_restores(self) -> dict[int, bool]:
+        with self._lock:
+            return dict(self._compilation_cache_restores)
 
 
 class IrisGangIdentity(Protocol):
@@ -268,6 +291,141 @@ def iris_vllm_followers(launch: IrisGangIdentity) -> Iterator[None]:
     )
 
 
+def share_iris_vllm_compilation_cache(
+    launch: IrisGangIdentity,
+    reference: VllmCompilationCacheReference | None,
+    *,
+    timeout_seconds: float = RESTORE_DEADLINE_SECONDS,
+) -> None:
+    """Share the leader's restored cache and wait, bounded, for follower restores.
+
+    The cache only saves compile time, so a timeout or follower failure logs a
+    warning and lets the leader launch vLLM anyway.
+    """
+    if launch.task_index != 0:
+        raise RuntimeError("Only the vLLM leader may share its compilation cache")
+    if launch.num_tasks == 1:
+        return
+    follower_indices = tuple(range(1, launch.num_tasks))
+    restores: dict[int, bool] = {}
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    try:
+        client = _coordinator_client(launch.coordinator_name)
+        reference_json = reference.model_dump_json() if reference is not None else None
+
+        def share() -> bool:
+            client.share_compilation_cache(reference_json)
+            return True
+
+        _wait_until(
+            share,
+            error_message="Timed out sharing the vLLM compilation cache",
+            timeout_seconds=timeout_seconds,
+        )
+        if reference is None:
+            return
+
+        def followers_reported() -> bool:
+            nonlocal restores
+            restores = client.compilation_cache_restores()
+            return all(task_index in restores for task_index in follower_indices)
+
+        _wait_until(
+            followers_reported,
+            error_message="Timed out waiting for vLLM followers to restore the compilation cache",
+            timeout_seconds=max(deadline - time.monotonic(), 0.0),
+        )
+    except Exception as error:
+        missing = [task_index for task_index in follower_indices if task_index not in restores]
+        logger.warning(
+            "Launching vLLM before follower compilation cache restores finished; missing=%s reason=%s",
+            missing,
+            error,
+        )
+        return
+    missed = [task_index for task_index in follower_indices if not restores[task_index]]
+    restored = len(follower_indices) - len(missed)
+    wait_seconds = time.monotonic() - started
+    if missed:
+        logger.warning(
+            "vLLM follower compilation cache restores finished with misses=%s key=%s restored=%d/%d wait=%.1fs",
+            missed,
+            reference.cache_key,
+            restored,
+            len(follower_indices),
+            wait_seconds,
+        )
+        return
+    logger.info(
+        "vLLM followers restored the compilation cache key=%s restored=%d/%d wait=%.1fs",
+        reference.cache_key,
+        restored,
+        len(follower_indices),
+        wait_seconds,
+    )
+
+
+def restore_iris_vllm_compilation_cache(
+    launch: IrisGangIdentity,
+    check_alive: Callable[[], None],
+    *,
+    maximum_poll_seconds: float = _MAX_POLL_SECONDS,
+) -> VllmCompilationCache | None:
+    """Restore the leader's managed cache on this follower host before vLLM launches.
+
+    Wait until the leader shares its cache or requests shutdown, restore it, and
+    acknowledge. The caller closes the returned restore-only cache after vLLM stops.
+    """
+    if launch.task_index == 0:
+        raise RuntimeError("The vLLM leader does not restore a follower compilation cache")
+    client = _coordinator_client(launch.coordinator_name)
+    shared: tuple[bool, str | None] = (False, None)
+    state = _GangState.WAITING
+
+    def refresh() -> bool:
+        nonlocal shared, state
+        check_alive()
+        shared = client.compilation_cache()
+        state = client.state()
+        return True
+
+    polling = ExponentialBackoff(initial=_POLL_SECONDS, maximum=maximum_poll_seconds)
+    while True:
+        _wait_until(refresh, error_message="Timed out contacting the vLLM leader")
+        is_shared, reference_json = shared
+        if is_shared:
+            break
+        if state is _GangState.STOPPING:
+            return None
+        time.sleep(polling.next_interval())
+    if reference_json is None:
+        logger.info("vLLM leader has no managed compilation cache; follower %d skips restore", launch.task_index)
+        return None
+
+    cache: VllmCompilationCache | None = None
+    try:
+        cache = VllmCompilationCache.restore_reference(VllmCompilationCacheReference.model_validate_json(reference_json))
+    except Exception:
+        logger.warning("vLLM follower %d failed to restore the compilation cache", launch.task_index, exc_info=True)
+    restored = cache is not None and cache.restored
+
+    def acknowledge_restore() -> bool:
+        client.compilation_cache_restored(launch.task_index, restored)
+        return True
+
+    try:
+        _wait_until(
+            acknowledge_restore,
+            error_message="Timed out acknowledging the vLLM compilation cache restore",
+        )
+    except BaseException:
+        if cache is not None:
+            cache.close()
+        raise
+    return cache
+
+
 def _build_task_launch(
     job_info: JobInfo,
     *,
@@ -340,6 +498,7 @@ def _wait_until(
     predicate: Callable[[], bool],
     *,
     error_message: str,
+    timeout_seconds: float = _TIMEOUT_SECONDS,
 ) -> None:
     def retry_transient_actor_error() -> bool:
         try:
@@ -353,6 +512,6 @@ def _wait_until(
 
     ExponentialBackoff(initial=_POLL_SECONDS, maximum=_MAX_POLL_SECONDS).wait_until_or_raise(
         retry_transient_actor_error,
-        timeout=Duration.from_seconds(_TIMEOUT_SECONDS),
+        timeout=Duration.from_seconds(timeout_seconds),
         error_message=error_message,
     )

@@ -5,6 +5,7 @@
 
 import argparse
 import contextlib
+import functools
 import logging
 import math
 import threading
@@ -64,6 +65,8 @@ from marin.inference.iris_vllm import (
     iris_vllm_followers,
     iris_vllm_launch,
     notify_iris_vllm_stopped,
+    restore_iris_vllm_compilation_cache,
+    share_iris_vllm_compilation_cache,
     wait_for_iris_vllm_shutdown,
 )
 from marin.inference.model_cache import ModelPreparationError, prepare_hf_models
@@ -635,7 +638,10 @@ def _run_tpu_service(service: IrisServiceConfig) -> None:
                 with _staged_model(model) as model:
                     spec = _vllm_model_spec(model, num_chips, model.tensor_parallel_size)
                     with backend.start(
-                        spec, extra_args=("--distributed-executor-backend", "ray"), subprocess_env=gang.subprocess_env
+                        spec,
+                        extra_args=("--distributed-executor-backend", "ray"),
+                        subprocess_env=gang.subprocess_env,
+                        on_compilation_cache_ready=functools.partial(share_iris_vllm_compilation_cache, gang.identity),
                     ) as environment:
                         with _ready_vllm_dashboard(
                             service,
@@ -652,7 +658,13 @@ def _run_tpu_service(service: IrisServiceConfig) -> None:
                             _block_until_timeout(check_alive, service.timeout_hours)
 
         else:
-            wait_for_iris_vllm_shutdown(gang.identity, gang.check_alive, maximum_poll_seconds=1.0)
+            # Ray workers on this host compile into the leader's deterministic cache path.
+            cache = restore_iris_vllm_compilation_cache(gang.identity, gang.check_alive, maximum_poll_seconds=1.0)
+            try:
+                wait_for_iris_vllm_shutdown(gang.identity, gang.check_alive, maximum_poll_seconds=1.0)
+            finally:
+                if cache is not None:
+                    cache.close()
     if not gang.leader:
         notify_iris_vllm_stopped(gang.identity)
 

@@ -37,6 +37,9 @@ ARCHIVE_FILENAME = "cache.zip"
 _CACHE_TTL_DAYS = 30
 _CACHE_PREFIX = "vllm-compilation-cache"
 _TRANSFER_DEADLINE_SECONDS = 120
+# Time a follower restore may spend past the transfer deadline: poll delay plus extraction.
+RESTORE_MARGIN_SECONDS = 60
+RESTORE_DEADLINE_SECONDS = _TRANSFER_DEADLINE_SECONDS + RESTORE_MARGIN_SECONDS
 _MAX_METADATA_BYTES = 1 << 20
 _MAX_ARCHIVE_BYTES = 20 << 30
 _MAX_EXTRACTED_BYTES = 20 << 30
@@ -107,6 +110,15 @@ class _Manifest(_CacheModel):
     archive_size_bytes: _ArchiveSize
     source_size_bytes: _ExtractedSize
     entry_count: _EntryCount
+
+
+class VllmCompilationCacheReference(_CacheModel):
+    """Serializable pointer that lets another gang host restore a managed cache."""
+
+    cache_key: _Digest
+    remote_cache_dir: StrictStr
+    local_cache_dir: StrictStr
+    identity: _CacheIdentity
 
 
 class _LatestPointer(_CacheModel):
@@ -180,6 +192,14 @@ def _chat_template_cache_key(template: str) -> str:
     return sha256_for_path(path) if path.is_file() else template
 
 
+def _cache_key(identity: _CacheIdentity) -> str:
+    return hashlib.sha256(canonical_json(identity.model_dump(mode="json")).encode()).hexdigest()
+
+
+def _local_entry_dir(cache_key: str) -> Path:
+    return _LOCAL_CACHE_ROOT / f"v{ARCHIVE_SCHEMA_VERSION}" / "entries" / cache_key
+
+
 def _create_local_workspace(cache_key: str) -> tuple[Path, BinaryIO]:
     version_root = _LOCAL_CACHE_ROOT / f"v{ARCHIVE_SCHEMA_VERSION}"
     lock_dir = version_root / "locks"
@@ -191,7 +211,7 @@ def _create_local_workspace(cache_key: str) -> tuple[Path, BinaryIO]:
         lock_file.close()
         raise RuntimeError(f"vLLM compilation cache {cache_key} is already active on this host") from error
 
-    local_temp_dir = version_root / "entries" / cache_key
+    local_temp_dir = _local_entry_dir(cache_key)
     try:
         if local_temp_dir.exists():
             shutil.rmtree(local_temp_dir)
@@ -486,12 +506,14 @@ class VllmCompilationCache:
         *,
         environment: dict[str, str],
         managed_cache: _ManagedCache | None = None,
+        restore_only: bool = False,
     ) -> None:
         self._environment = environment
         self._managed_cache = managed_cache
         self._restored_sha256: str | None = None
         self._closed = False
         self._published = False
+        self._restore_only = restore_only
 
     @classmethod
     def prepare(
@@ -508,15 +530,64 @@ class VllmCompilationCache:
             return cls(environment=child_environment)
 
         identity = _CacheIdentity(launcher=launcher_identity, compile=compile_identity)
-        identity_json = canonical_json(identity.model_dump(mode="json"))
-        cache_key = hashlib.sha256(identity_json.encode()).hexdigest()
+        cache_key = _cache_key(identity)
         remote_cache_dir = str(
             StoragePath(marin_temp_bucket(_CACHE_TTL_DAYS, _CACHE_PREFIX)) / f"v{ARCHIVE_SCHEMA_VERSION}" / cache_key
         )
+        cache = cls._managed(
+            identity=identity,
+            cache_key=cache_key,
+            remote_cache_dir=remote_cache_dir,
+            environment=child_environment,
+            restore_only=False,
+        )
+        cache._restore()
+        return cache
+
+    @classmethod
+    def restore_reference(cls, reference: VllmCompilationCacheReference) -> "VllmCompilationCache | None":
+        """Restore another host's managed cache into this host's identical local path.
+
+        The returned cache never publishes; ``close()`` removes the local files.
+        Return ``None`` when this host would use a different local path, since
+        the vLLM workers on this host would not read restored files there.
+        """
+        if reference.cache_key != _cache_key(reference.identity):
+            raise ValueError("vLLM compilation cache reference key does not match its identity")
+        local_cache_dir = _local_entry_dir(reference.cache_key) / "cache"
+        if str(local_cache_dir) != reference.local_cache_dir:
+            logger.warning(
+                "Skipping vLLM compilation cache restore key=%s: local path %s differs from leader path %s",
+                reference.cache_key,
+                local_cache_dir,
+                reference.local_cache_dir,
+            )
+            return None
+        cache = cls._managed(
+            identity=reference.identity,
+            cache_key=reference.cache_key,
+            remote_cache_dir=reference.remote_cache_dir,
+            environment={},
+            restore_only=True,
+        )
+        cache._restore()
+        return cache
+
+    @classmethod
+    def _managed(
+        cls,
+        *,
+        identity: _CacheIdentity,
+        cache_key: str,
+        remote_cache_dir: str,
+        environment: dict[str, str],
+        restore_only: bool,
+    ) -> "VllmCompilationCache":
         local_temp_dir, lock_file = _create_local_workspace(cache_key)
         local_cache_dir = local_temp_dir / "cache"
         local_cache_dir.mkdir()
 
+        child_environment = dict(environment)
         child_environment.update(
             {
                 "JAX_COMPILATION_CACHE_DIR": str(local_cache_dir / _XLA_CACHE_SUBDIR),
@@ -531,7 +602,7 @@ class VllmCompilationCache:
                 "VLLM_COMPILE_CACHE_SAVE_FORMAT": "binary",
             }
         )
-        cache = cls(
+        return cls(
             environment=child_environment,
             managed_cache=_ManagedCache(
                 local_temp_dir=local_temp_dir,
@@ -541,9 +612,25 @@ class VllmCompilationCache:
                 cache_key=cache_key,
                 identity=identity,
             ),
+            restore_only=restore_only,
         )
-        cache._restore()
-        return cache
+
+    def reference(self) -> VllmCompilationCacheReference | None:
+        """Return a pointer other gang hosts can restore, or ``None`` for caller-managed caches."""
+        managed = self._managed_cache
+        if managed is None:
+            return None
+        return VllmCompilationCacheReference(
+            cache_key=managed.cache_key,
+            remote_cache_dir=managed.remote_cache_dir,
+            local_cache_dir=str(managed.local_cache_dir),
+            identity=managed.identity,
+        )
+
+    @property
+    def restored(self) -> bool:
+        """Whether a published generation was restored into the local cache."""
+        return self._restored_sha256 is not None
 
     def environment(self) -> dict[str, str]:
         """Return a copy of the environment for the managed vLLM child."""
@@ -552,7 +639,7 @@ class VllmCompilationCache:
     def publish(self) -> None:
         """Publish a stable cache generation without failing an otherwise ready server."""
         managed = self._managed_cache
-        if managed is None or self._published:
+        if managed is None or self._published or self._restore_only:
             return
 
         self._published = True
@@ -682,6 +769,11 @@ class VllmCompilationCache:
                 raise ValueError(
                     f"extracted cache size mismatch: expected {manifest.source_size_bytes}, got {extraction.size}"
                 )
+            # Extract beside the live directory, then swap it in only while it is empty.
+            # A follower can finish after the leader stopped waiting and launched vLLM;
+            # Ray workers may already have written into local_cache_dir. Then rmdir()
+            # raises ENOTEMPTY, the except block keeps the workers' files, and the
+            # restore reports a miss. Never extract in place, or this race corrupts them.
             managed.local_cache_dir.rmdir()
             restored_cache_dir.replace(managed.local_cache_dir)
             self._restored_sha256 = manifest.archive_sha256
