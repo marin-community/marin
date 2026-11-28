@@ -12,6 +12,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from finelog.sql import sql_string
+
 _UNRESOLVED_MACRO = re.compile(r"\$\{|\{\{")
 
 
@@ -30,10 +32,6 @@ class DashboardCorpus:
     refresh: str
     sha256: str
     queries: tuple[DashboardQuery, ...]
-
-
-def _sql_string(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
 
 
 def render_sql(
@@ -60,7 +58,7 @@ def render_sql(
             raise ValueError(f"dashboard variable {name!r} must have at least one value")
         replacements.update(
             {
-                f"${{{name}:sqlstring}}": ",".join(_sql_string(value) for value in values),
+                f"${{{name}:sqlstring}}": ",".join(sql_string(value) for value in values),
                 f"${{{name}:csv}}": ",".join(values),
                 f"${{{name}}}": ",".join(values),
             }

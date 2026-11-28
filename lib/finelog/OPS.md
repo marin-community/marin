@@ -939,3 +939,76 @@ event also reports the effective SQLite journal and synchronous modes. Remote
 reconcile runs after the listener binds and reports object listing, footer fetch,
 catalog update, and delete timings separately; a slow remote phase cannot explain
 pre-bind readiness delay.
+
+## Fleet event feed
+
+`ops.events` holds typed fleet events. Producers register the table on their
+first write through `LogClient.get_table`. Each row has an event ID, UTC time,
+source, kind, severity, opaque subject, JSON payload, and origin cluster.
+The desktop CLI defaults to `marin` with cached IAP credentials. Python callers
+pass a destination `LogClient` explicitly. Iris jobs use their regional Finelog route; the
+existing regional forwarder carries this table to `marin`. The `cluster` column
+preserves that origin. This feed needs no server schema change or namespace reset.
+
+Emit an event without personal data or secrets. Use an opaque subject. Do not
+copy raw job paths with owner names, commands, process lists, emails, or logs.
+Reuse a dedup key only for retries of the same logical event:
+
+```bash
+uv run ops-feed emit --source difficulty-reconciler --kind escalation \
+  --severity error --subject entity:opaque --dedup-key escalation:1 \
+  --payload '{"reason":"no-progress"}'
+uv run ops-feed poll --subscriptions scripts/ops/subscriptions.yaml --reader coordinator
+uv run ops-feed ack <event_id>
+```
+
+The Python API is `finelog.ops_feed.emit(source, kind, Severity.ERROR, subject,
+payload, dedup_key="stable-key", client=client)`. It returns the event ID after a successful
+flush. A failed or timed-out flush raises; retry with the same dedup key. In an
+Iris job, pass the task's regional client explicitly:
+
+```python
+from finelog.client import LogClient
+from finelog.ops_feed import Severity, emit
+from iris.runtime.telemetry import resolve
+
+runtime = resolve()
+assert runtime is not None
+client = LogClient.connect(runtime.endpoint, resolver=runtime.resolver)
+try:
+    emit("worker", "failure", Severity.ERROR, "entity:opaque",
+         {"reason": "timeout"}, dedup_key="attempt:1", client=client)
+finally:
+    client.close()
+```
+
+Run the bounded CPU write probe through the hub:
+
+```bash
+uv run iris --cluster marin job run \
+  --cpu 1 --memory 1GB --disk 5GB --timeout 600 --sync-package marin-iris \
+  --job-name ops-feed-cpu-probe -- python scripts/ops/ops_feed_smoke.py
+uv run ops-feed poll --subscriptions scripts/ops/subscriptions.yaml --reader probe
+```
+
+Add `--target-cluster cw-us-east-08a` to test a regional forwarder. CoreWeave
+jobs need the submitter's storage keys; see [secret delivery](../iris/docs/secrets.md).
+
+Subscriptions match exact source names, or `*`, and a minimum severity:
+`info < warning < error < critical`. Each poll scans at most 1,000 rows and
+prints matching events as JSONL. Call it again to drain a backlog, even when a
+page has no matches. It suppresses duplicate event
+IDs and ack rows. An ack closes the event's source, subject, and kind through
+the ack's sequence for every reader. A sequence is Finelog's append order in
+the selected deployment. A later distinct event reopens that condition.
+Delayed copies of events that were closed stay closed.
+
+Each reader advances past filtered, duplicate, and acknowledged rows too.
+Changing subscriptions applies only to subsequent rows; use a new reader name
+to read retained history again. Reader positions and delivered IDs are in
+`~/.local/share/ops-feed/state.sqlite3`. SQLite makes each poll atomic and
+serializes concurrent polls on this Mac. This avoids competing append-only
+cursor writes in Finelog. Share this file only between processes on the same
+host; reader names on different hosts have independent positions. Keep the
+same state file when moving the coordinator. Global `--state` and
+`--deployment` options precede the subcommand.

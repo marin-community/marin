@@ -24,6 +24,7 @@ dependencies = [
 
 [project.scripts]
 finelog = "finelog.deploy.cli:cli"
+ops-feed = "finelog.ops_feed_cli:cli"
 
 [dependency-groups]
 test = [
