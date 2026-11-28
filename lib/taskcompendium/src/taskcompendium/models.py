@@ -1113,8 +1113,11 @@ class TaskSpec(BaseModel):
         )
         task = handler(value)
         if source_json is not None:
-            task._source_json = source_json
-            task._validated_model_json = task.model_dump_json()
+            # Pydantic permits private-attribute writes on frozen models; the
+            # type checker reads frozen fields as read-only.
+            cache_json = task.model_dump_json()
+            object.__setattr__(task, "_source_json", source_json)  # pyrefly: ignore[invalid-assignment]
+            object.__setattr__(task, "_validated_model_json", cache_json)  # pyrefly: ignore[invalid-assignment]
         return task
 
     def source_document(self, *, exclude: frozenset[str] = frozenset()) -> dict[str, Any]:
