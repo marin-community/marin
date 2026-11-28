@@ -36,8 +36,11 @@ verifier steps as the sandbox grader the rollout engine executes:
 
 Everything else stays byte-identical: context, resources, integrity contract.
 Anything the conversion cannot express faithfully is a typed rejection, never a
-silent rewrite: a separate verifier container, a non-root verifier user, a
-multi-step reward strategy, a Windows environment. The declared execution
+silent rewrite: a separate verifier container that declares its own image, a
+non-root verifier user, a multi-step reward strategy, a Windows environment.
+A declared-separate verifier with NO image of its own is the sandbox grader
+itself — a fresh grading machine from the task's own image — so it converts
+(coordinator ruling 2026-11-28, FineEnvs). The declared execution
 limits lift from the source task configuration exactly as the native import
 does, refusing conflicts with an already-measured population.
 
@@ -160,8 +163,9 @@ def _task_environment(data: Mapping[str, Any]) -> dict[str, Any]:
 def _task_verifier(data: Mapping[str, Any]) -> dict[str, Any]:
     """The raw ``[verifier]`` table with Harbor's own defaults."""
     verifier = data.get("verifier") or {}
+    environment = verifier.get("environment")
     environment_mode = verifier.get("environment_mode")
-    has_environment = verifier.get("environment") is not None
+    has_environment = environment is not None
     return {
         "env": dict(verifier.get("env") or {}),
         "user": verifier.get("user"),
@@ -169,6 +173,7 @@ def _task_verifier(data: Mapping[str, Any]) -> dict[str, Any]:
             verifier.get("timeout_sec") if verifier.get("timeout_sec") is not None else HARBOR_VERIFIER_TIMEOUT
         ),
         "environment_mode": environment_mode or ("separate" if has_environment else "shared"),
+        "verifier_image": (environment or {}).get("docker_image"),
         "collect": list(verifier.get("collect") or []),
     }
 
@@ -324,8 +329,14 @@ def convert_cohort_task(task: TaskSpec, *, input_task_sha256: str) -> CohortConv
         raise CohortConversionRejected(f"{task.id}: multi-step tasks keep their Harbor trial strategy")
     if environment["os"] == "windows":
         raise CohortConversionRejected(f"{task.id}: Windows environments stay behind the Harbor runtime")
-    if verifier["environment_mode"] == "separate":
-        raise CohortConversionRejected(f"{task.id}: a separate verifier container stays behind the Harbor runtime")
+    if verifier["environment_mode"] == "separate" and verifier["verifier_image"]:
+        # Coordinator ruling (2026-11-28, FineEnvs): a declared-separate verifier with NO
+        # [verifier.environment] image means a fresh grading machine from the task's own
+        # image — exactly the sandbox grader below, so it converts. A declared-separate
+        # verifier WITH its own distinct image stays behind the Harbor runtime.
+        raise CohortConversionRejected(
+            f"{task.id}: a separate verifier container with its own image stays behind the Harbor runtime"
+        )
     _require_root_user(verifier["user"], f"{task.id}: verifier")
     for block in verifier["collect"]:
         _require_root_user(block.get("user"), f"{task.id}: verifier.collect")
