@@ -269,6 +269,7 @@ def test_deployed_pull_request_rules_preserve_review_run_identity(monkeypatch: p
         for rule in rules
     }
 
+    # These templates and federation names match runs created by the retired workflows.
     assert review_runs == {
         "pr-review": ("pr-review", "pr-review:{number}", None),
         "pr-holistic-review": ("pr-holistic-review", "pr-holistic:{number}:{head}", "pr-holistic:{number}"),

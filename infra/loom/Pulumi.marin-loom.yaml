@@ -572,7 +572,8 @@ config:
       target: {federation: pr-review}
       events:
         - actions: &reviewActions [opened, ready_for_review, reopened]
-      allowed_bots: &reviewBots ["marin-ops-agent[bot]"]
+      allowed_bots: &reviewBots
+        - &reviewBot "marin-ops-agent[bot]"
       run:
         idempotency_key: "pr-review:{number}"
         title: "Correctness review for #{number}"
@@ -584,8 +585,11 @@ config:
       repository_id: *marinRepositoryId
       target: {federation: pr-holistic-review}
       events:
-        - actions: [opened, ready_for_review, reopened, synchronize]
-      allowed_bots: ["marin-ops-agent[bot]", "loom-oa-dev[bot]"]
+        - actions: *reviewActions
+        - actions: [synchronize]
+      allowed_bots:
+        - *reviewBot
+        - "loom-oa-dev[bot]"
       run:
         idempotency_key: "pr-holistic:{number}:{head}"
         channel: "pr-holistic:{number}"
