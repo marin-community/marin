@@ -5,6 +5,7 @@
 
 import json
 import os
+import shlex
 from pathlib import Path
 
 import pytest
@@ -226,6 +227,20 @@ def test_root_command_runs_the_one_idempotent_verb():
     assert script.rstrip().endswith(" run")
 
 
+def test_selected_submission_enters_only_the_requested_graph_stage(plan_document, monkeypatch):
+    plan = entry_point.load_plan(plan_document)
+    script = entry_point._root_command(plan, str(plan_document), ("snapshot_publication",))[-1]
+    arguments = shlex.split(script.split(" exec ", 1)[1])[4:]
+    captured = []
+    monkeypatch.setattr(entry_point, "_attest_revision", lambda *args: None)
+    monkeypatch.setattr(entry_point, "assert_submission_allowed", lambda *args: None)
+    monkeypatch.setattr(entry_point, "run_handles", lambda *handles, **kwargs: captured.extend(handles))
+
+    assert entry_point.main(arguments) == 0
+    assert len(captured) == 2
+    assert captured[-1].name.endswith("-snapshot_publication")
+
+
 def test_interrupted_graph_resumes_and_skips_sealed_nodes(tmp_path, monkeypatch):
     """The auto-resume semantics: a retry runs resume at the same version.
 
@@ -276,7 +291,7 @@ def test_status_mode_reports_missing_state(tmp_path, plan_document, capsys):
     document = json.loads(output)
     assert document["release_id"] == "testrelease"
     nodes = {row["node"]: row for row in document["nodes"]}
-    assert len(nodes) == 31
+    assert len(nodes) == 32
     assert nodes["main_source_sync"]["preflight"] == "missing"
     assert nodes["census"]["preflight"] == "missing"
     assert nodes["census"]["artifact"] in ("absent", "unknown-prefix")

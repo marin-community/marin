@@ -144,7 +144,7 @@ def read_catalog_state(catalog_root: str, inputs: CatalogLoadInputs, publication
     fingerprint_ids = set(identity_document["fingerprints"])
     backend_ids = {row["source_id"] for row in backend_document["sources"]}
     verify_population_coverage(
-        {row.id: row.model_dump(mode="json") for row in snapshot_sources}, fingerprint_ids, backend_ids
+        {row.id: row.declaration.model_dump(mode="json") for row in snapshot_sources}, fingerprint_ids, backend_ids
     )
     if len(snapshot_sources) != inputs.expected_source_count:
         raise ValueError(f"snapshot has {len(snapshot_sources)} sources, expected {inputs.expected_source_count}")

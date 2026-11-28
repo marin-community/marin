@@ -72,6 +72,18 @@ Resuming the same sealed plan preserves upstream census, corpus and embedding
 artifacts. New plan derivations also count the frozen target bindings rather than
 older registry receipts.
 
+Retry an individual stage and its dependencies in the configured region through
+the maintained submitter:
+
+```bash
+uv run atlas-release --version <release-id> --plan <sealed-plan-uri> \
+  submit --cluster <regional-cluster> --stage snapshot_publication
+```
+
+The selected root reuses completed dependency artifacts. A standalone workstation
+`run` has no ambient Iris client, so use `submit` for a stage that needs new regional
+CPU or GPU work.
+
 Everything release-specific lives in one typed JSON document — the release plan.
 Release plans are reviewed configuration: they live in this package at
 `plans/<release>.json`, landed via atlas-push like any other config, and the

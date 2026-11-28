@@ -41,6 +41,7 @@ release-identifying values never appear in stage source (``guard.py`` enforces i
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -281,7 +282,7 @@ def mode_release(args) -> int:
         # Compose the P0 submitter: the sealed plan travels by storage URI, the
         # bundle bundles at the newest landed tip containing the freeze, and the
         # root job auto-resumes at the same version.
-        submission = SimpleNamespace(version=derived.release_id, plan=plan_ref["uri"], cluster=config.cluster)
+        submission = SimpleNamespace(version=derived.release_id, plan=plan_ref["uri"], cluster=config.cluster, stage=[])
         return _submit_root(submission)
     plan = ReleasePlan.model_validate(derived.plan_document)
     plan.validate_shape()
@@ -492,7 +493,7 @@ def _submit_environment() -> dict[str, str]:
     return env
 
 
-def _root_command(plan: ReleasePlan, plan_relative: str) -> list[str]:
+def _root_command(plan: ReleasePlan, plan_relative: str, stages: tuple[str, ...] = ()) -> list[str]:
     """The root job's entrypoint: one idempotent verb on every attempt.
 
     There is no run/resume choice and no attempt-aware mapping: every attempt
@@ -517,6 +518,7 @@ def _root_command(plan: ReleasePlan, plan_relative: str) -> list[str]:
         + " --source-revision "
         + plan.source_revision
         + " run"
+        + "".join(" --stage " + shlex.quote(stage) for stage in stages)
     )
     return ["bash", "-lc", script]
 
@@ -553,6 +555,7 @@ def _submit_root(args) -> int:
         )
     plan = _plan_document(args)
     plan_path = args.plan
+    stages = tuple(_selected_nodes(release_graph(plan), args.stage)) if args.stage else ()
     revision = _bundle_revision(plan, plan_path)
     relative = _plan_argument(plan_path)
 
@@ -572,7 +575,7 @@ def _submit_root(args) -> int:
     subprocess.run(["git", "worktree", "add", "--detach", str(snapshot), revision], cwd=REPO_ROOT, check=True)
     try:
         (snapshot / "atlas-landing-log.jsonl").write_bytes(_bundled_landing_log(landing_log, plan.source_revision))
-        command = _root_command(plan, relative)
+        command = _root_command(plan, relative, stages)
         name = f"atlas-release-{plan.release_id}-{plan.artifact_version}-{uuid.uuid4().hex[:8]}"
         with connect_controller(cluster_name=args.cluster) as endpoint:
             with IrisClient.remote(
@@ -717,6 +720,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     submit_parser = modes.add_parser("submit", help="Submit the release's root job to an in-region cluster")
     submit_parser.add_argument("--cluster", required=True, help="The cluster to submit to (e.g. cw-us-east-02a)")
+    submit_parser.add_argument("--stage", action="append", default=[], help="Build only this node and its dependencies")
     return parser
 
 
