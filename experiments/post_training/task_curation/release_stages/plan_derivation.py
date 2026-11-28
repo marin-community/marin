@@ -132,7 +132,9 @@ def seal_prior_state(declarations: dict[str, dict], query: Query, load_id: str, 
     backend, identity = reconstruct_prior_surveys(query, load_id)
     refs = {}
     for name, document in (
-        ("declarations", {"kind": "atlas-prior-state-declarations", "declarations": declarations}),
+        # The flat source map: every prior-declarations consumer (the declarations
+        # stage, the snapshot drift check, the QC-browse slices) reads this shape.
+        ("declarations", declarations),
         ("backend", backend),
         ("identity", identity),
     ):
@@ -766,6 +768,7 @@ def derive_release_plan(
         recut=recut,
         removed_sources=tuple(sorted(removed_ids)),
         deliberate_exclusions=tuple(sorted(deliberate_ids)),
+        panel_copy_exclusions=tuple(sorted(copy_exclusions)),
         main_source_sync=config.main_source_sync,
         strict_audit_local=config.strict_audit_local,
         grader_drift_reference=grader_drift_reference,

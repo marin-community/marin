@@ -292,7 +292,9 @@ def slice_inputs(node: str, plan: ReleasePlan, selection: SliceSelection) -> dic
         inputs["backend"] = _graph_receipt_document(plan, "identity_backend_compose", "documents.backend_map")
     if node == "qc_browse_plan":
         inputs["expected_panels"] = plan.expected_panels
-        inputs["exclusions"] = list(plan.qc_exclusions)
+        # the plan's measured copy exclusions: the same set the run-mode graph
+        # passes, so the slice's panel count check matches the real run's
+        inputs["exclusions"] = list(plan.panel_copy_exclusions)
         inputs["catalog_target_load_id"] = plan.catalog_target_load_id
     if node == "package_preview":
         inputs["package_output_root"] = plan.package_output_root

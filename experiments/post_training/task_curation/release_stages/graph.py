@@ -272,6 +272,7 @@ class ReleasePlan(BaseModel):
     rebound_tasks: int = 0
     recut: bool = False
     deliberate_exclusions: tuple[str, ...] = ()
+    panel_copy_exclusions: tuple[str, ...] = ()
     removed_sources: tuple[str, ...] = ()
     main_source_sync: main_source_sync_stage.MainSourceSyncPlan | None = None
     strict_audit_local: bool = False
@@ -1733,9 +1734,10 @@ def _text_scan_merge_step(
 
 
 def _qc_browse_inputs(plan: ReleasePlan, declarations_ref: dict) -> dict:
-    current = read_ref(ArtifactRef(**declarations_ref))
-    prior = read_ref(plan.pins.prior_declarations)
-    copy_exclusions = set(plan.qc_exclusions) | qc_browse_stage.changed_review_sources(prior, current)
+    # The derivation measured the copy exclusions against the served state (the
+    # same pair the panel expectation used); recomputing them here against a
+    # different document pair would desynchronize the panel count check.
+    copy_exclusions = set(plan.panel_copy_exclusions)
     return {
         "release_id": plan.release_id,
         "prior_load_id": plan.prior.load_id,

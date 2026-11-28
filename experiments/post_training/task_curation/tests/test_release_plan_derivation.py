@@ -55,6 +55,7 @@ from experiments.post_training.task_curation.release_stages.plan_derivation impo
 from experiments.post_training.task_curation.release_stages.preflight_slices import (
     SliceSelection,
     _snapshot_publication_witness,
+    slice_inputs,
 )
 from experiments.post_training.task_curation.release_stages.release_config import (
     ExcludedSource,
@@ -509,11 +510,9 @@ def test_recut_retains_against_the_served_state(tmp_path, frozen_layer, deployme
     deployment = region_deployment(CLUSTER)
     release_root = f"{deployment.region_prefix}preview-release/testrelease-{FREEZE_ARTIFACT_VERSION}"
     sealed = json.loads(StoragePath(f"{release_root}/prior-state/declarations.json").read_bytes())
-    # the retained prior state carries exactly the served catalog's rows
-    assert sorted(sealed["declarations"]) == sorted(
-        source_id for source_id in served_declarations if source_id in (RETAINED_ID,)
-    )
-    assert sealed["declarations"][RETAINED_ID] == served_declarations[RETAINED_ID]
+    # the flat source map: every prior-declarations consumer reads this shape
+    assert sorted(sealed) == sorted(source_id for source_id in served_declarations if source_id in (RETAINED_ID,))
+    assert sealed[RETAINED_ID] == served_declarations[RETAINED_ID]
     backend = json.loads(StoragePath(f"{release_root}/prior-state/backend.json").read_bytes())
     assert backend["snapshot_id"] == "assembly-served-prior-v1"
     identity = json.loads(StoragePath(f"{release_root}/prior-state/identity.json").read_bytes())
@@ -1329,3 +1328,23 @@ def test_recut_adopts_a_genuine_repin(tmp_path, frozen_layer, deployment, monkey
     plan.validate_shape()
     assert plan.targets == (RETAINED_ID, TARGET_ID)
     assert plan.deliberate_exclusions == ()
+
+
+def test_qc_browse_exclusions_come_from_the_plan_in_slice_and_run(tmp_path):
+    """The qc-browse panel count check uses one exclusion set everywhere: the plan's
+    measured copy exclusions (derived against the served state), both in the run-mode
+    graph inputs and in the preflight slice inputs — the slice's check therefore
+    matches the real run's instead of recomputing against a different document pair."""
+    plan = fixture_plan(panel_copy_exclusions=("Marin:fixture",))
+    document = {"Marin:fixture": {"dataset_id": "fixture", "dataset_revision": "1", "pipeline": None}}
+    raw = (json.dumps(document, sort_keys=True) + "\n").encode()
+    path = tmp_path / "declarations.json"
+    path.write_bytes(raw)
+    ref = {"uri": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
+
+    run_inputs = graph_module._qc_browse_inputs(plan, ref)
+    assert set(run_inputs["exclusions"]) == {"Marin:fixture"}
+
+    slice_document = slice_inputs("qc_browse_plan", plan, SliceSelection())
+    assert set(slice_document["exclusions"]) == {"Marin:fixture"}
+    assert slice_document["expected_panels"] == run_inputs["expected_panels"] == plan.expected_panels

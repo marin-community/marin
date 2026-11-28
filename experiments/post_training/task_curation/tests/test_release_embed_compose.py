@@ -763,3 +763,29 @@ def test_confidence_export_binds_the_release_and_coverage_ids(tmp_path):
     exported = json.loads(Path(ref.uri).read_text())
     assert (exported["release"], exported["coverage"]) == (release_reference, coverage_reference)
     assert validated > 0
+
+
+def test_embed_slice_alerts_carry_the_slice_source(monkeypatch, tmp_path):
+    """The embed stage's dry-run alerts label the bounded slice source the same way
+    the census and corpus stages do."""
+    captured: list[dict] = []
+
+    def capture(release_id, stage, evidence, feeds=None):
+        captured.append(evidence)
+
+    monkeypatch.setattr(embed_stage.alerts, "stage_started", capture)
+    monkeypatch.setattr(embed_stage.alerts, "stage_finished", capture)
+    monkeypatch.setattr(embed_stage.alerts, "stage_failed", capture)
+    inputs = embed_stage.EmbedInputs(
+        release_id="testrelease",
+        source_revision="a" * 40,
+        corpus=ArtifactRef(uri=str(tmp_path / "missing-corpus.json"), sha256="b" * 64),
+        artifact_root=str(tmp_path / "embed"),
+        cache_root=str(tmp_path / "cache"),
+        expected_source_count=1,
+        expected_task_count=1,
+        only="AI-MO:numina_math",
+    )
+    with pytest.raises(FileNotFoundError):
+        embed_stage.run_embed(inputs, dry_run=True)
+    assert captured and captured[0]["only"] == "AI-MO:numina_math"

@@ -765,3 +765,23 @@ def test_corpus_omits_empty_oracle_sources(tmp_path):
     unknown = dataclasses.replace(inputs, output_root=str(tmp_path / "unknown"), targets=("Marin:not-censused",))
     with pytest.raises(ValueError, match="carry no row for targets"):
         corpus_stage.run_corpus_assembly(unknown, dry_run=False, sources_fn=registry, feeds=_feeds(tmp_path))
+
+
+def test_corpus_slice_alerts_carry_the_slice_source(monkeypatch):
+    """The preflight's bounded one-source slices label themselves: the corpus stage's
+    dry-run alerts carry the slice source so an ops-feed sources=1 event reads as the
+    debug slice it is, not as the release's census scope."""
+    captured: list[dict] = []
+
+    def capture(release_id, stage, evidence, feeds=None):
+        captured.append(evidence)
+
+    monkeypatch.setattr(corpus_stage.alerts, "stage_started", capture)
+    monkeypatch.setattr(corpus_stage.alerts, "stage_finished", capture)
+    monkeypatch.setattr(corpus_stage.alerts, "stage_failed", capture)
+    # the alert fires before input validation, so the bare namespace fails validate
+    with pytest.raises(AttributeError):
+        corpus_stage.run_corpus_assembly(
+            SimpleNamespace(release_id="testrelease"), dry_run=True, only="AI-MO:numina_math"
+        )
+    assert captured and captured[0] == {"mode": "dry-run", "only": "AI-MO:numina_math"}
