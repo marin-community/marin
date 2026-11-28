@@ -1,0 +1,22 @@
+experiment: X0273d512
+track: competitive-d512
+runs:
+  seed0:
+    seed: 0
+    variant: row-AdamH embed + matrix decay floor f=0.05
+    flags:
+    - --opt-set
+    - muonc_anneal_decay=0.2
+    - --opt-set
+    - muonc_anneal_adamc=12.5
+    - --opt-set
+    - adamc_adam_decay=0.3
+    - --opt-set
+    - muonc_anneal_embed_row_adamh=True
+    - --opt-set
+    - muonc_anneal_decay_floor_frac=0.05
+  control:
+    seed: 0
+    variant: competitive-d512 control
+    control: true
+    shared: s7n-d512
