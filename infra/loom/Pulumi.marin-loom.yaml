@@ -60,7 +60,7 @@ config:
     scheduled-message:
       agent: codex
       description: Deliver prompt-defined scheduled messages to declared Slack channels
-      model: gpt-6-sol
+      model: &codexModel gpt-6.2-sol
       effort: low
       protocol: acp
       mode: auto
@@ -87,7 +87,7 @@ config:
     default: &interactiveProfile
       agent: codex
       description: Interactive Marin work with repository-owned workflow instructions
-      model: &codexModel gpt-6-sol
+      model: *codexModel
       effort: xhigh
       protocol: acp
       mode: auto
