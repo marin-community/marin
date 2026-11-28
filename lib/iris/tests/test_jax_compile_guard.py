@@ -10,7 +10,7 @@ from threading import Condition
 
 import pytest
 from iris.jax.compile_guard import (
-    _autotune_cache_metadata,
+    _autotune_cache_file_count,
     _optimized_hlo_text,
     check_distributed_compile_fingerprint,
     check_distributed_executable_text,
@@ -93,12 +93,13 @@ def test_distributed_compile_missing_peer_reports_observed_fingerprints() -> Non
         check_distributed_compile_fingerprint(service.client(0), (0, 1), 0, 0, "module-0", timeout_ms=10)
 
 
-def test_distributed_executable_identical_text_continues_and_releases_keys() -> None:
+def test_distributed_executable_identical_text_continues_and_releases_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     service = _FakeCoordinationService()
+    monkeypatch.setattr("iris.jax.compile_guard.os.scandir", lambda _: pytest.fail("autotune directory scanned"))
 
     def check(process_id: int) -> None:
         check_distributed_executable_text(
-            service.client(process_id), (0, 1), process_id, 0, "same-cache-key", "same optimized HLO", "", 0
+            service.client(process_id), (0, 1), process_id, 0, "same-cache-key", "same optimized HLO", "/cache"
         )
 
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -107,9 +108,14 @@ def test_distributed_executable_identical_text_continues_and_releases_keys() -> 
     assert service.values == {}
 
 
-def test_distributed_executable_divergent_text_reports_ranks_and_autotune_inputs() -> None:
+def test_distributed_executable_divergent_text_reports_ranks_and_autotune_inputs(tmp_path: Path) -> None:
     service = _FakeCoordinationService()
     hashes = [hashlib.sha256(f"HLO {process_id}".encode()).hexdigest() for process_id in (0, 1)]
+    cache_dirs = [tmp_path / f"process-{process_id}" for process_id in (0, 1)]
+    for process_id, cache_dir in enumerate(cache_dirs):
+        cache_dir.mkdir()
+        for file_index in range(process_id + 1):
+            (cache_dir / f"{file_index}.textproto").write_text("HLO")
 
     def check(process_id: int) -> str:
         with pytest.raises(RuntimeError) as error:
@@ -120,8 +126,7 @@ def test_distributed_executable_divergent_text_reports_ranks_and_autotune_inputs
                 0,
                 "same-cache-key",
                 f"HLO {process_id}",
-                f"/cache/process-{process_id}",
-                process_id + 1,
+                str(cache_dirs[process_id]),
             )
         return str(error.value)
 
@@ -132,8 +137,8 @@ def test_distributed_executable_divergent_text_reports_ranks_and_autotune_inputs
         assert "same-cache-key" in error
         assert "2 distinct" in error
         assert all(f"{digest}: [{rank}]" in error for rank, digest in enumerate(hashes))
-        assert "/cache/process-0" in error and "file_count=1" in error
-        assert "/cache/process-1" in error and "file_count=2" in error
+        assert str(cache_dirs[0]) in error and "file_count=1" in error
+        assert str(cache_dirs[1]) in error and "file_count=2" in error
 
 
 def test_distributed_executable_unsupported_text_continues_on_all_ranks(caplog: pytest.LogCaptureFixture) -> None:
@@ -148,7 +153,6 @@ def test_distributed_executable_unsupported_text_continues_on_all_ranks(caplog: 
             "same-cache-key",
             None if process_id == 0 else "HLO",
             "",
-            0,
         )
 
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -161,6 +165,30 @@ def test_distributed_executable_unsupported_text_continues_on_all_ranks(caplog: 
         if record.name == "iris.jax.compile_guard" and record.levelno == logging.WARNING
     ]
     assert len(warnings) == 1
+
+
+def test_distributed_executable_extraction_error_fails_all_ranks() -> None:
+    service = _FakeCoordinationService()
+
+    def check(process_id: int) -> RuntimeError:
+        with pytest.raises(RuntimeError, match="extraction failed on processes \\[0\\]") as error:
+            check_distributed_executable_text(
+                service.client(process_id),
+                (0, 1),
+                process_id,
+                0,
+                "same-cache-key",
+                None if process_id == 0 else "HLO",
+                "",
+                ValueError("invalid HLO") if process_id == 0 else None,
+            )
+        return error.value
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        errors = list(executor.map(check, (0, 1)))
+
+    assert isinstance(errors[0].__cause__, ValueError)
+    assert errors[1].__cause__ is None
 
 
 def test_optimized_hlo_text_falls_back_to_modules() -> None:
@@ -189,22 +217,14 @@ def test_optimized_hlo_text_unsupported_backend_returns_none() -> None:
     assert _optimized_hlo_text(Loaded(), RuntimeError) is None
 
 
-def test_autotune_cache_metadata_counts_files_in_active_directory(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_autotune_cache_file_count_counts_files_in_active_directory(tmp_path: Path) -> None:
     (tmp_path / "first.textproto").write_text("first")
     (tmp_path / "second.textproto").write_text("second")
     (tmp_path / "nested").mkdir()
-    monkeypatch.setenv("XLA_FLAGS", f"--xla_gpu_autotune_level=0 --xla_gpu_per_fusion_autotune_cache_dir={tmp_path}")
-
-    assert _autotune_cache_metadata() == (str(tmp_path), 2)
+    assert _autotune_cache_file_count(str(tmp_path)) == 2
 
 
-def test_autotune_cache_metadata_non_directory_path_has_unknown_count(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_autotune_cache_file_count_non_directory_path_has_unknown_count(tmp_path: Path) -> None:
     not_a_directory = tmp_path / "file.textproto"
     not_a_directory.write_text("file")
-    monkeypatch.setenv("XLA_FLAGS", f"--xla_gpu_per_fusion_autotune_cache_dir={not_a_directory}")
-
-    assert _autotune_cache_metadata() == (str(not_a_directory), None)
+    assert _autotune_cache_file_count(str(not_a_directory)) is None

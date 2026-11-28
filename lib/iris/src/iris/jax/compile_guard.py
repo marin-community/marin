@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 _COMPILE_FINGERPRINT_TIMEOUT_MS = 30 * 60_000
 _COMPILE_FINGERPRINT_PREFIX = "iris/compile-fingerprint/v1"
 _EXECUTABLE_TEXT_PREFIX = "iris/compile-executable-hash/v1"
-_XLA_AUTOTUNE_CACHE_DIR_FLAG = "--xla_gpu_per_fusion_autotune_cache_dir="
+_AUTOTUNE_COUNT_PREFIX = "iris/compile-autotune-count/v1"
+_EXECUTABLE_TEXT_FAILURE = "extraction_failed"
 # Warn once per process even if JAX installs a new guard after distributed reset.
 _unsupported_text_warning_lock = threading.Lock()
 _unsupported_text_warned = False
@@ -79,7 +80,6 @@ def _observed_fingerprints(client: _Coordinator, prefix: str) -> dict[int, str]:
 class _ExecutableRecord:
     text_sha256: str | None
     autotune_dir: str
-    autotune_file_count: int | None
 
 
 def check_distributed_executable_text(
@@ -90,14 +90,16 @@ def check_distributed_executable_text(
     cache_key: str,
     executable_text: str | None,
     autotune_dir: str,
-    autotune_file_count: int | None,
+    extraction_error: Exception | None = None,
     timeout_ms: int = _COMPILE_FINGERPRINT_TIMEOUT_MS,
 ) -> None:
     """Fail before execution if participating ranks compiled different optimized HLO."""
     group = "-".join(map(str, process_ids))
     prefix = f"{_EXECUTABLE_TEXT_PREFIX}/{group}/{sequence}/"
     text_sha256 = hashlib.sha256(executable_text.encode("utf-8")).hexdigest() if executable_text is not None else None
-    record = _ExecutableRecord(text_sha256, autotune_dir, autotune_file_count)
+    if extraction_error is not None:
+        text_sha256 = _EXECUTABLE_TEXT_FAILURE
+    record = _ExecutableRecord(text_sha256, autotune_dir)
     client.key_value_set(f"{prefix}{process_id}", json.dumps(asdict(record)))
 
     try:
@@ -116,6 +118,14 @@ def check_distributed_executable_text(
             f"cache key {cache_key}; expected processes {process_ids}; observed {observed}"
         )
 
+    failed = [
+        rank for rank, peer_record in sorted(observed.items()) if peer_record.text_sha256 == _EXECUTABLE_TEXT_FAILURE
+    ]
+    if failed:
+        raise RuntimeError(
+            f"GPU optimized HLO text extraction failed on processes {failed}; cache key {cache_key}"
+        ) from extraction_error
+
     hashes: dict[str, list[int]] = defaultdict(list)
     for rank, peer_record in sorted(observed.items()):
         if peer_record.text_sha256 is not None:
@@ -124,12 +134,17 @@ def check_distributed_executable_text(
     if any(peer_record.text_sha256 is None for peer_record in observed.values()):
         _warn_unsupported_text()
     elif len(hashes) > 1:
+        count_prefix = f"{_AUTOTUNE_COUNT_PREFIX}/{group}/{sequence}/"
+        client.key_value_set(f"{count_prefix}{process_id}", json.dumps(_autotune_cache_file_count(autotune_dir)))
+        client.wait_at_barrier(f"{count_prefix}ready", timeout_ms, process_ids)
+        counts = {
+            int(key.removeprefix(count_prefix)): json.loads(value)
+            for key, value in client.key_value_dir_get(count_prefix)
+        }
         groups = ", ".join(f"{digest}: {ranks}" for digest, ranks in sorted(hashes.items()))
         metadata_parts = []
         for rank, peer_record in sorted(observed.items()):
-            file_count = (
-                "unavailable" if peer_record.autotune_file_count is None else str(peer_record.autotune_file_count)
-            )
+            file_count = "unavailable" if counts[rank] is None else str(counts[rank])
             metadata_parts.append(f"{rank}: {peer_record.autotune_dir!r} file_count={file_count}")
         metadata = ", ".join(metadata_parts)
         raise RuntimeError(
@@ -177,25 +192,16 @@ def _optimized_hlo_text(loaded: object, runtime_error_type: type[Exception]) -> 
     return None
 
 
-def _autotune_cache_metadata() -> tuple[str, int | None]:
-    flags = os.environ.get("XLA_FLAGS", "").split()
-    autotune_dir = next(
-        (
-            flag.removeprefix(_XLA_AUTOTUNE_CACHE_DIR_FLAG)
-            for flag in reversed(flags)
-            if flag.startswith(_XLA_AUTOTUNE_CACHE_DIR_FLAG)
-        ),
-        "",
-    )
+def _autotune_cache_file_count(autotune_dir: str) -> int | None:
     if not autotune_dir:
-        return "", 0
+        return 0
     try:
         with os.scandir(autotune_dir) as entries:
-            return autotune_dir, sum(entry.is_file() for entry in entries)
+            return sum(entry.is_file() for entry in entries)
     except FileNotFoundError:
-        return autotune_dir, 0
+        return 0
     except OSError:
-        return autotune_dir, None
+        return None
 
 
 @dataclass
@@ -269,8 +275,13 @@ def install_gpu_compile_guard() -> None:
         if backend.platform == "gpu" and len(process_ids) > 1:
             # Persistent cache hits load process 0's executable on every rank, so equality
             # here does not establish that every rank had identical compile inputs.
-            executable_text = _optimized_hlo_text(loaded, JaxRuntimeError)
-            autotune_dir, autotune_file_count = _autotune_cache_metadata()
+            extraction_error = None
+            try:
+                executable_text = _optimized_hlo_text(loaded, JaxRuntimeError)
+            except Exception as exc:
+                executable_text = None
+                extraction_error = exc
+            autotune_dir = compile_options.executable_build_options.debug_options.xla_gpu_per_fusion_autotune_cache_dir
             check_distributed_executable_text(
                 client,
                 process_ids,
@@ -279,7 +290,7 @@ def install_gpu_compile_guard() -> None:
                 fingerprint,
                 executable_text,
                 autotune_dir,
-                autotune_file_count,
+                extraction_error,
             )
         return loaded
 
