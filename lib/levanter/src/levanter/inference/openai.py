@@ -13,13 +13,16 @@ import asyncio
 import collections
 import collections.abc
 import logging
+import math
 import queue
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import List, Optional, Union
 
+import grpc
 import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
@@ -37,6 +40,7 @@ from openai.types.chat.chat_completion_chunk import ChoiceLogprobs as ChunkChoic
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_choice import CompletionChoice, Logprobs
+from levanter.inference import inference_pb2, inference_pb2_grpc
 from levanter.inference.engine import (
     InferenceEngine,
     InferenceEngineConfig,
@@ -52,6 +56,7 @@ from levanter.inference.openai_protocol import (
     TokensRequest,
     TokensResponse,
 )
+from levanter.inference.utils import INVALID
 from levanter.models.lm_model import LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.trainer import TrainerConfig
@@ -84,6 +89,8 @@ class InferenceServerConfig:
 
     host: str = "localhost"
     port: int = 0  # auto-assign port
+    grpc_port: int | None = None
+    """Optional exact-token gRPC listener on the same host. Use 0 for an ephemeral port."""
 
 
 @dataclass
@@ -95,7 +102,7 @@ class InferenceRequest:
     max_tokens: int
     temperature: float
     top_p: float | None
-    stop_tokens: List[int] | None
+    stop_tokens: List[List[int]] | None
     seed: int | None
     future: asyncio.Future
     n_generations: int = 1
@@ -141,17 +148,13 @@ def _fetch_all_from_queue(q: queue.Queue, timeout: float) -> List:
     return items
 
 
-def _encode_stop_tokens(stop: Union[str, List[str], None], tokenizer: MarinTokenizer) -> Optional[List[int]]:
-    """Tokenize the OpenAI-style ``stop`` field into a flat list of token ids, or None if unset."""
+def _encode_stop_tokens(stop: Union[str, List[str], None], tokenizer: MarinTokenizer) -> List[List[int]] | None:
+    """Tokenize each stop string as a separate sequence."""
     if not stop:
         return None
     stop_list = [stop] if isinstance(stop, str) else stop
-    stop_tokens: List[int] = []
-    for s in stop_list:
-        stop_ids = tokenizer.encode(s, add_special_tokens=False)
-        if stop_ids:
-            stop_tokens.extend(stop_ids)
-    return stop_tokens
+    sequences = [tokenizer.encode(text, add_special_tokens=False) for text in stop_list]
+    return [seq for seq in sequences if seq] or None
 
 
 class InferenceContext:
@@ -225,7 +228,7 @@ class InferenceContext:
         max_tokens: int,
         temperature: float,
         top_p: float | None,
-        stop_tokens: Optional[List[int]],
+        stop_tokens: List[List[int]] | None,
         seed: int | None,
         future: asyncio.Future,
         n_generations: int = 1,
@@ -337,12 +340,11 @@ class InferenceContext:
             raise RuntimeError("Inference engine is not initialized.")
 
         for i, req in enumerate(requests):
-            # Create stop tokens if specified
             stop_ids = None
             if req.stop_tokens:
-                stop_ids = hax.named(jnp.asarray(req.stop_tokens, dtype=jnp.int32), axis="position").broadcast_axis(
-                    {"stop_seq": 1}
-                )
+                width = max(map(len, req.stop_tokens))
+                padded = [[INVALID] * (width - len(seq)) + seq for seq in req.stop_tokens]
+                stop_ids = hax.named(jnp.asarray(padded, dtype=jnp.int32), ("stop_seq", "position"))
 
             # dumb fallback seed if none provided
             if req.seed is None:
@@ -530,6 +532,20 @@ def _completion_logprobs(
     )
 
 
+def _generation_options_error(
+    config: InferenceEngineConfig, num_choices: int, stops: list[list[int]] | None, vocab_size: int
+) -> str | None:
+    if not 1 <= num_choices <= config.max_seqs:
+        return "Requested choices exceed the configured capacity"
+    if stops and (
+        len(stops) > config.max_stop_seqs
+        or any(not 0 < len(sequence) <= config.max_stop_tokens for sequence in stops)
+        or any(not 0 <= token < vocab_size for sequence in stops for token in sequence)
+    ):
+        return "Stop tokens exceed the configured capacity or vocabulary"
+    return None
+
+
 async def _create_completion(ctx: InferenceContext, request: CompletionRequest) -> Completion:
     """Create a text completion using OpenAI API format."""
     try:
@@ -539,6 +555,9 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
             prompts = request.prompt
 
         stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
+        num_choices = request.n or 1
+        if error := _generation_options_error(ctx.config.service, num_choices, stop_tokens, ctx.model.Vocab.size):
+            raise HTTPException(status_code=400, detail=error)
 
         # Create futures for all prompts
         futures = []
@@ -577,7 +596,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                 stop_tokens=stop_tokens,
                 seed=request.seed,
                 future=future,
-                n_generations=request.n or 1,
+                n_generations=num_choices,
                 echo_logprobs_top_k=echo_logprobs_top_k,
             )
 
@@ -726,6 +745,9 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
         )
 
         stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
+        num_choices = request.n or 1
+        if error := _generation_options_error(ctx.config.service, num_choices, stop_tokens, ctx.model.Vocab.size):
+            raise HTTPException(status_code=400, detail=error)
 
         # Create future and submit request
         future: asyncio.Future = asyncio.Future()
@@ -737,7 +759,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
             stop_tokens=stop_tokens,
             seed=request.seed,
             future=future,
-            n_generations=request.n or 1,
+            n_generations=num_choices,
         )
 
         # Wait for result
@@ -802,6 +824,59 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class _GrpcInference:
+    def __init__(self, inference_context: InferenceContext):
+        self._inference_context = inference_context
+
+    async def Generate(
+        self, request: inference_pb2.GenerateRequest, context: grpc.aio.ServicerContext
+    ) -> inference_pb2.GenerateResponse:
+        ctx = self._inference_context
+        prompt = list(request.prompt_token_ids)
+        max_tokens = request.max_new_tokens
+        temperature = request.temperature if request.HasField("temperature") else 1.0
+        top_p = request.top_p if request.HasField("top_p") else 1.0
+        seed = request.seed if request.HasField("seed") else None
+        num_choices = request.num_choices if request.HasField("num_choices") else 1
+        stops = [list(sequence.token_ids) for sequence in request.stop_sequences]
+
+        config = ctx.engine.config
+        max_prefill_size = config.max_prefill_size or ctx.model.Pos.size
+        if (
+            not prompt
+            or not max_tokens
+            or len(prompt) + max_tokens > config.max_seq_len
+            or len(prompt) > max_prefill_size
+        ):
+            await context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT, "Prompt and generation must fit the configured context"
+            )
+        if not math.isfinite(temperature) or temperature < 0 or not 0 < top_p <= 1:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid temperature or top_p")
+        vocab_size = ctx.model.Vocab.size
+        if any(token >= vocab_size for token in prompt):
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Prompt contains an out-of-vocabulary token")
+        if error := _generation_options_error(config, num_choices, stops, vocab_size):
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, error)
+
+        future = asyncio.get_running_loop().create_future()
+        ctx.submit_request(
+            prompt, max_tokens, temperature, top_p, stops or None, seed, future, n_generations=num_choices
+        )
+        try:
+            # The inference thread completes the queue's future even when the caller disconnects.
+            outputs = await asyncio.shield(future)
+        except ValueError as exc:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+
+        return inference_pb2.GenerateResponse(
+            prompt_token_ids=prompt,
+            choices=[
+                inference_pb2.Choice(token_ids=output.tokens, behavior_logprobs=output.logprobs) for output in outputs
+            ],
+        )
+
+
 class InferenceServer:
     """Wraps a FastAPI server around the inference context.
 
@@ -848,8 +923,25 @@ class InferenceServer:
     @staticmethod
     def _create_app(inference_context: InferenceContext) -> FastAPI:
         """Create and configure the FastAPI application."""
-        app = FastAPI(title="Levanter Inference Service", version="1.0.0")
-        model_name = inference_context.config.model_name
+        config = inference_context.config
+
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
+            if config.grpc_port is None:
+                yield
+                return
+            server = grpc.aio.server()
+            inference_pb2_grpc.add_InferenceServicer_to_server(_GrpcInference(inference_context), server)
+            host = f"[{config.host}]" if ":" in config.host and not config.host.startswith("[") else config.host
+            app.state.grpc_port = server.add_insecure_port(f"{host}:{config.grpc_port}")
+            await server.start()
+            try:
+                yield
+            finally:
+                await server.stop(grace=0)
+
+        app = FastAPI(title="Levanter Inference Service", version="1.0.0", lifespan=lifespan)
+        model_name = config.model_name
 
         # Register routes with thin wrappers that call helper functions
         @app.get("/health")
