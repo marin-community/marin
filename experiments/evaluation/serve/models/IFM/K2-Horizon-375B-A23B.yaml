@@ -22,6 +22,8 @@ resource_hint:
 agent:
   agent_kwargs:
     thinking_format: chat-template
+    # Terminus otherwise resends content-only turns, and K2 stops reasoning as its history fills with empty think blocks.
+    interleaved_thinking: true
 # Long reasoning at 131,072 tokens outlasts the default 30-minute request deadline on a loaded server; the reply cap,
 # not the clock, should end a reply. Not part of the launch identity.
 evaluation_request_timeout: 7200
