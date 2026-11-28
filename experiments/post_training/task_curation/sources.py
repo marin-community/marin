@@ -66,6 +66,7 @@ from experiments.post_training.task_curation.datasets.fineenvs import tasks as f
 from experiments.post_training.task_curation.datasets.full_content_results import full_content_result_bindings
 from experiments.post_training.task_curation.datasets.grading_measurements import grading_census_receipts
 from experiments.post_training.task_curation.datasets.ifbench import tasks as ifbench
+from experiments.post_training.task_curation.datasets.lean import goedel as goedel_lean
 from experiments.post_training.task_curation.datasets.lean import numina as lean_numina
 from experiments.post_training.task_curation.datasets.lean import proofs as lean_proofs
 from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
@@ -309,6 +310,7 @@ PENDING_MEASUREMENT_SOURCES = (
     # license-banned KTO components never enter this listing.
     *(source for source in skyrl_preference.sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
     *(source for source in nemotron_ultra.sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
+    *goedel_lean.sources(),
     *tasktrove_structured_native.sources(),
     *(source for source in tasktrove_judged.candidate_sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
 )

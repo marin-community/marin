@@ -208,6 +208,7 @@ class SourceOrigin(StrEnum):
     PAFITIS = "pafitis"
     SWE_REBENCH = "SWE-rebench"
     YATIN = "Yatin"
+    GOED_LM = "GoedelLM"
 
 
 class DatasetRelease(CatalogRecord):

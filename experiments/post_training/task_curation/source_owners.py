@@ -790,6 +790,14 @@ SOURCE_OWNERS: dict[str, SourceOwner] = {
         owner="atlas-source-coverage · RLVR declarations registry",
         note="admitted at the R41 cut; surfaces at the load",
     ),
+    "GoedelLM:RL_dataset_V2/lean4_revision": SourceOwner(
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
+        note="intake; P1 request-sweep row — Lean RL revision/completion, license PASS",
+    ),
+    "GoedelLM:RL_dataset_V2/lean4_completion": SourceOwner(
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
+        note="intake; P1 request-sweep row — Lean RL revision/completion, license PASS",
+    ),
     "pafitis:hardmath": SourceOwner(
         owner="no lane — license-ban by ruling #11497; lifts only by user ruling",
         note="excluded",
