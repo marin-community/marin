@@ -25,7 +25,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
-from experiments.post_training.task_curation.catalog_identity import canonical_declaration
+from experiments.post_training.task_curation.catalog_identity import canonical_declaration, verify_population_coverage
 from experiments.post_training.task_curation.catalog_snapshot import (
     PublicationSource,
     publish_assembly_snapshot,
@@ -33,7 +33,6 @@ from experiments.post_training.task_curation.catalog_snapshot import (
 from experiments.post_training.task_curation.release_stages.manifest import (
     ArtifactRef,
     sealed_contract_rows,
-    verify_population_coverage,
 )
 from experiments.post_training.task_curation.source import SourceInfo
 from experiments.post_training.task_curation.source_duplicate_ci import fingerprint_input

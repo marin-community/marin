@@ -46,6 +46,7 @@ from experiments.post_training.task_curation.catalog_identity import (
     canonical_identity_survey,
     canonical_snapshot_source,
     identity_survey_payload,
+    verify_population_coverage,
 )
 from experiments.post_training.task_curation.full_content_results import FullContentResultBinding
 from experiments.post_training.task_curation.method_variants import source_variants
@@ -528,6 +529,13 @@ def load_catalog(
             },
         )
     sources = [canonical_snapshot_source(source) for source in served_snapshot_sources(catalog, snapshot.snapshot_id)]
+    if len(sources) != snapshot.source_count:
+        raise ValueError("Catalog inventory does not cover its declared source count")
+    verify_population_coverage(
+        {source.id: source.declaration.model_dump(mode="json") for source in sources},
+        set(identities.fingerprints),
+        {source.source_id for source in backend_map.sources},
+    )
     if retired := {source.id for source in sources} & retired_admission_source_ids():
         raise ValueError(f"Retired sources remain in the selected catalog: {sorted(retired)}")
     previously_available = (
@@ -575,12 +583,6 @@ def load_catalog(
                 sample_pin_stale[source.id] = True
         if pending:
             verification_pending[source.id] = pending
-    if len(sources) != snapshot.source_count:
-        raise ValueError("Catalog inventory does not cover its declared source count")
-    if {source.id for source in sources} != {source.source_id for source in backend_map.sources}:
-        raise ValueError("Backend map does not cover the selected catalog inventory")
-    if {source.id for source in sources} != set(identities.fingerprints):
-        raise ValueError("Source identity map does not cover the selected catalog inventory")
     source_declarations = {source.id: source.declaration for source in sources}
     for index, source in enumerate(sources):
         if source.id not in downgraded:
@@ -612,8 +614,8 @@ def load_catalog(
             {
                 **row.model_dump(mode="json", exclude={"snapshot_id"}),
                 "source_fingerprint": (
-                    identities.fingerprints[row.id].model_dump(mode="json")
-                    if identities.fingerprints[row.id] is not None
+                    fingerprint.model_dump(mode="json")
+                    if (fingerprint := identities.fingerprints.get(row.id)) is not None
                     else None
                 ),
                 "duplicate_group": groups.get(row.id),

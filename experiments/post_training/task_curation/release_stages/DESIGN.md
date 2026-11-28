@@ -162,6 +162,13 @@ history-stage failure (a `sed`ed worker whose target load ID literal was never
 replaced): the worker asserts `planned_target == manifest target` and refuses
 otherwise. Preflight exercises the dry-run path on a small slice.
 
+Identity coverage follows declared populations. An Excluded inventory row with no
+actor-census input may omit its fingerprint-map entry; every populated or
+non-Excluded row still requires an identity-survey entry. Backend surveys cover
+all inventory rows, including Excluded rows. Snapshot publication, catalog staging,
+catalog loading and strict/hosted audits use the same coverage rule. The
+loader preserves an omitted metadata-only fingerprint as SQL NULL.
+
 ## 9. Resume (BRIEF requirement 6)
 
 Reruns skip stages whose artifact record exists with matching input fingerprints

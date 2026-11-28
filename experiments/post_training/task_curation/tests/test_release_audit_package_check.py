@@ -170,6 +170,37 @@ def _audit_fixture(tmp_path: Path, *, local: bool = True, **overrides) -> Simple
     )
 
 
+@pytest.mark.parametrize("has_population", [False, True])
+def test_audit_identity_coverage_distinguishes_excluded_inventory_from_population(tmp_path, has_population):
+    fixture = _audit_fixture(tmp_path)
+    excluded = fixture.declarations[SOURCE_B]
+    excluded["status"] = "Excluded"
+    excluded["actor_census_input"] = actor_census_input("fixture", "1", "1", 2) if has_population else None
+    fixture.served["sources"][1].update(excluded)
+    identity = identity_survey().model_copy(update={"fingerprints": {SOURCE_A: None}, "groups": []})
+    for row in fixture.served["sources"]:
+        row["duplicate_group"] = None
+        row["backend_capabilities"] = strict_audit.served_backend_row(
+            next(
+                source.model_dump(mode="json", exclude_unset=True)
+                for source in fixture.survey.sources
+                if source.source_id == row["id"]
+            ),
+            fixture.declarations[row["id"]],
+        )
+    mismatches = strict_audit.audit_served_population(
+        fixture.served,
+        fixture.declarations,
+        fixture.survey,
+        identity,
+        expected_source_count=2,
+        retained_tasks=4,
+    )
+    assert bool(mismatches) is has_population
+    if has_population:
+        assert SOURCE_B in mismatches["population-coverage"][0]
+
+
 def test_strict_audit_pass_seals_receipt(tmp_path):
     fixture = _audit_fixture(tmp_path)
     proof = strict_audit.run_strict_audit(

@@ -98,3 +98,20 @@ def backend_survey_payload(survey: BackendSurvey) -> dict:
     for source in document["sources"]:
         source["source_id"] = original_source_id(source["source_id"])
     return document
+
+
+def verify_population_coverage(declarations: dict[str, dict], fingerprints: set[str], backend: set[str]) -> None:
+    """Require identity evidence for populations and backend evidence for all inventory."""
+    missing = sorted(
+        source_id
+        for source_id in declarations.keys() - fingerprints
+        if declarations[source_id].get("status") != "Excluded"
+        or declarations[source_id].get("actor_census_input") is not None
+    )
+    extra = sorted(fingerprints - declarations.keys())
+    if missing or extra:
+        raise ValueError(
+            f"identity fingerprints do not cover the declared populations (missing {missing}, extra {extra})"
+        )
+    if backend != declarations.keys():
+        raise ValueError("backend sources do not cover exactly the current declarations")

@@ -24,6 +24,7 @@ from finestore.rl.curation import CurationCatalog
 from rigging.filesystem.storage_path import StoragePath
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
+from experiments.post_training.task_curation.catalog_identity import verify_population_coverage
 from experiments.post_training.task_curation.release_stages.history_staging import (
     DEFAULT_APPLET_ID,
     DEFAULT_SERVICE_URL,
@@ -32,7 +33,6 @@ from experiments.post_training.task_curation.release_stages.manifest import (
     ArtifactRef,
     read_ref,
     sealed_contract_rows,
-    verify_population_coverage,
 )
 from experiments.post_training.task_curation.source_status import served_snapshot_sources
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL

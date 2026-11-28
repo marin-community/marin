@@ -46,6 +46,7 @@ from experiments.post_training.task_curation.catalog_identity import (
     canonical_backend_survey,
     canonical_identity_survey,
     canonical_snapshot_source,
+    verify_population_coverage,
 )
 from experiments.post_training.task_curation.derived_contract_census import DerivedContractReceipt
 from experiments.post_training.task_curation.difficulty.seal import verify_snapshot
@@ -60,7 +61,6 @@ from experiments.post_training.task_curation.release_stages.manifest import (
     ArtifactRef,
     read_ref,
     sealed_contract_rows,
-    verify_population_coverage,
 )
 from experiments.post_training.task_curation.release_stages.paced_query import RetryControl, open_paced_query
 from experiments.post_training.task_curation.release_stages.qc_browse import pin_currency, selected_uri
@@ -319,8 +319,13 @@ def _run_write(
     verify_backend_blocker_reasons(backend)
     identity = canonical_identity_survey(read_ref(ArtifactRef(**publication["identity"])))
     sources = [canonical_snapshot_source(row) for row in served_snapshot_sources(catalog, inputs.snapshot_id)]
-    if len(sources) != inputs.expected_source_count or {row.id for row in sources} != set(identity.fingerprints):
-        raise ValueError("catalog sources and identity fingerprints disagree at write time")
+    if len(sources) != inputs.expected_source_count:
+        raise ValueError(f"snapshot has {len(sources)} sources, expected {inputs.expected_source_count}")
+    verify_population_coverage(
+        {row.id: row.declaration.model_dump(mode="json") for row in sources},
+        set(identity.fingerprints),
+        {row.source_id for row in backend.sources},
+    )
     browse = read_ref(inputs.staging["prior_qc_completion"])
     if browse["status"] != "PASS" or browse["source_count"] != inputs.expected_browse_source_count:
         raise ValueError(

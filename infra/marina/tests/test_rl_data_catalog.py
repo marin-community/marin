@@ -34,6 +34,7 @@ from finestore.rl.curation import (
     Assessment,
     AssessmentItem,
     AssessmentPopulation,
+    AssessmentStatus,
     CatalogSnapshot,
     Confidence,
     ConsumerDecision,
@@ -100,6 +101,8 @@ from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentity
 from experiments.post_training.task_curation import registry, retirement
 from experiments.post_training.task_curation.catalog_identity import backend_survey_payload, canonical_backend_survey
 from experiments.post_training.task_curation.full_content_results import FullContentResultBinding
+from experiments.post_training.task_curation.release_stages.catalog_load import CatalogLoadInputs, run_catalog_load
+from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 from experiments.post_training.task_curation.review_quality import quality_result
 from experiments.post_training.task_curation.review_quality import quality_result as recompute_review_result
 from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory
@@ -1550,6 +1553,152 @@ def test_source_list_reads_materialized_areas_while_statistics_are_locked(catalo
                 assert client.get("/sources").json() == before
         finally:
             event.remove(catalog_database, "begin", bounded_lock_wait)
+
+
+def test_release_load_keeps_unpopulated_excluded_inventory_without_fingerprint(
+    catalog_database, catalog_query, tmp_path
+):
+    root = str(tmp_path / "inventory")
+    publish_sample(root, "population")
+    catalog = CurationCatalog(root)
+    populated = next(catalog.sources("population"))
+    excluded_id = "Marin:metadata"
+    declaration = SourceDeclaration.model_validate(
+        {
+            **populated.declaration.model_dump(mode="json"),
+            "id": excluded_id,
+            "display_name": source_display_name(excluded_id),
+            "upstream_dataset": "metadata",
+            "status": "Excluded",
+            "task_count": 0,
+            "actor_census_input": None,
+            "consumer_receipt": None,
+            "within_source_dedup": (
+                deduplication_evidence(FIXTURE_DATASET, FIXTURE_REVISION, "1", 0).model_dump(mode="json")
+            ),
+            "exclusion_claims": [
+                {
+                    "reason": "environment-artifact-missing",
+                    "evidence": {"kind": "missing-artifact", "message": "No population was published."},
+                }
+            ],
+        }
+    )
+    excluded = populated.model_copy(
+        update={
+            "snapshot_id": "combined",
+            "id": excluded_id,
+            "declaration": declaration,
+            "assessment_key": None,
+            "latest_attempt_key": None,
+            "latest_attempt_status": AssessmentStatus.SKIPPED,
+            "curation": None,
+        }
+    )
+    with DataStore.open(root, writer_id="inventory") as store:
+        register_catalog(store)
+        with store.transaction() as tx:
+            tx.table(INVENTORY).extend(
+                [
+                    populated.model_copy(update={"snapshot_id": "combined"}).model_dump(mode="json"),
+                    excluded.model_dump(mode="json"),
+                ]
+            )
+            tx.table(SNAPSHOTS).add(
+                CatalogSnapshot(
+                    snapshot_id="combined",
+                    created_at="2026-11-28T00:00:00Z",
+                    source_count=2,
+                ).model_dump()
+            )
+            tx.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id="combined").model_dump())
+    catalog = CurationCatalog(root)
+    prior, target = "a" * 32, "b" * 32
+    catalog_query(
+        "INSERT INTO atlas_loads(load_id,catalog_root,snapshot_id,created_at) "
+        "VALUES (:load,'prior','prior','2026-11-27T00:00:00Z')",
+        {"load": prior},
+    )
+    catalog_query("UPDATE atlas_current SET load_id=:load WHERE name='latest'", {"load": prior})
+    backend = catalog_backend_map(catalog)
+    identities = catalog_identity_map(catalog).model_copy(update={"fingerprints": {populated.id: None}})
+
+    def seal(name, document):
+        path = tmp_path / (name + ".json")
+        raw = json.dumps(document).encode()
+        path.write_bytes(raw)
+        return ArtifactRef(uri=str(path), sha256=hashlib.sha256(raw).hexdigest())
+
+    inputs = CatalogLoadInputs(
+        release_id="fixture",
+        prior_load_id=prior,
+        target_load_id=target,
+        snapshot_id="combined",
+        source_revision="test",
+        catalog_root=root,
+        receipt_root=str(tmp_path / "release"),
+        publication=seal(
+            "publication",
+            {
+                "backend": seal("backend", backend.model_dump(mode="json")).model_dump(),
+                "identity": seal("identity", identities.model_dump(mode="json")).model_dump(),
+            },
+        ),
+        staging={
+            "contracts": seal("contracts", {"contracts": []}),
+            "prior_qc_completion": seal(
+                "browse",
+                {
+                    "status": "PASS",
+                    "source_count": 0,
+                    "target_load_id": target,
+                    "source_load_id": prior,
+                    "results": [],
+                },
+            ),
+            "fresh_qc_index": seal("qc", {"load_id": target, "snapshot_id": "combined", "receipts": []}),
+            "history_receipt": seal(
+                "history",
+                {
+                    "load_id": target,
+                    "prior_load_id": prior,
+                    "selected_pointer_changed": False,
+                    "prior_assessment_headers": 0,
+                    "prior_item_count": 1,
+                },
+            ),
+        },
+        expected_source_count=2,
+        expected_contract_count=0,
+        expected_contract_tasks=0,
+        expected_selected_panels=0,
+        expected_browse_source_count=0,
+        measured_module=__file__,
+        measured_revision="test",
+        measured_sha256="a" * 64,
+        measured_schema_sha256=backend.schema_sha256,
+    )
+    result = run_catalog_load(
+        inputs,
+        dry_run=False,
+        query=catalog_query,
+        query_factory=lambda: catalog_query,
+        retain=lambda *args: {},
+        coverage_publisher=lambda *args: {},
+        feeds=(tmp_path / "alerts.jsonl",),
+    )
+    assert result["result"]["counts"]["sources"] == 2
+    assert catalog_query("SELECT load_id FROM atlas_current WHERE name='latest'", {})["rows"] == [{"load_id": target}]
+    row = catalog_query(
+        "SELECT source_fingerprint,declaration->>'status' AS status FROM atlas_sources "
+        "WHERE load_id=:load AND id=:id",
+        {"load": target, "id": excluded_id},
+    )["rows"][0]
+    assert row == {"source_fingerprint": None, "status": "Excluded"}
+    missing_population = identities.model_copy(update={"fingerprints": {}})
+    with pytest.raises(ValueError, match="declared populations"):
+        load_surveyed_catalog(catalog, catalog_query, backend, missing_population)
+    assert catalog_query("SELECT load_id FROM atlas_current WHERE name='latest'", {})["rows"] == [{"load_id": target}]
 
 
 def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(

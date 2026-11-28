@@ -35,6 +35,7 @@ from taskcompendium.backend_requirements import BackendSurvey, backend_schema_sh
 from taskcompendium.source_fingerprints import SourceIdentitySurvey
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
+from experiments.post_training.task_curation.catalog_identity import verify_population_coverage
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref
 from infra.marina.apps.rl_data_catalog.release_browser import evidence_sweep
 from infra.marina.apps.rl_data_catalog.release_check import CatalogReader, browser_checks
@@ -206,13 +207,15 @@ def audit_served_population(
             "backend survey inputs were produced by different survey code:"
             f" survey schema {survey.schema_sha256!r}, release schema {backend_schema_sha256()!r}"
         )
-    if set(identity.fingerprints) != expected_ids:
-        mismatches.setdefault("identity-survey", []).append("identity fingerprints do not cover the release population")
+    backend_rows = _survey_rows(survey)
+    try:
+        verify_population_coverage(declarations, set(identity.fingerprints), set(backend_rows))
+    except ValueError as error:
+        mismatches.setdefault("population-coverage", []).append(str(error))
     if identity.snapshot_id != survey.snapshot_id or identity.catalog_root != survey.catalog_root:
         mismatches.setdefault("identity-survey", []).append(
             "identity survey binds a different catalog snapshot than the backend survey"
         )
-    backend_rows = _survey_rows(survey)
     orphaned = sorted(set(backend_rows) - expected_ids)
     if orphaned:
         mismatches.setdefault("backend-survey", []).append(
