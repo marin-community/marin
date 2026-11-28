@@ -117,7 +117,7 @@ def _parse(text: str, strip_units: bool) -> list:
 
 
 def _parse_whole_expression(text: str, *, strip_units: bool = True) -> tuple[list, bool]:
-    """Parse whole LaTeX and return whether unit stripping preserves the expression."""
+    """Return a whole LaTeX parse and the unit-stripping policy for matching candidates."""
     from math_verify.utils import timeout  # noqa: PLC0415
 
     return timeout(_timeout())(_parse_normalized_expression)(text, strip_units=strip_units)
@@ -175,20 +175,22 @@ def _parse_normalized_expression(text: str, *, strip_units: bool) -> tuple[list,
         use_stripped = strip_units and not symbolic_text_group and normalized == unitless
         normalized = unitless
     # math-verify can match an inner math fragment or retry only the last equation.
-    parsed = latex2sympy(
-        normalized,
-        is_real=not should_treat_as_complex(normalized),
-        convert_degrees=False,
-        normalization_config=None,
-    )
+    is_real = not should_treat_as_complex(normalized)
+    try:
+        parsed = latex2sympy(normalized, is_real=is_real, convert_degrees=False, normalization_config=None)
+    except Exception as error:
+        # latex2sympy reports syntax errors as bare Exception.
+        if type(error) is not Exception:
+            raise
+        return [], False
     return ([parsed] if parsed is not None else []), use_stripped
 
 
 def _parse_reference(text: str) -> tuple[list, bool]:
+    """Parse a reference and return whether to strip units from its candidates."""
     try:
         return _parse_whole_expression(text)
     except Exception as error:
-        # latex2sympy reports syntax errors as bare Exception.
         raise InvalidTask(f"math-verify cannot parse expected {text!r}") from error
 
 
@@ -206,13 +208,7 @@ def _parse_final_expression(text: str, strip_units: bool) -> list:
             from sympy import Rational  # noqa: PLC0415
 
             return [Rational(percentage.numerator, percentage.denominator * 100)]
-    try:
-        parsed, _ = _parse_whole_expression(value, strip_units=strip_units)
-    except Exception as error:
-        # latex2sympy reports syntax errors as bare Exception.
-        if type(error) is not Exception:
-            raise
-        return []
+    parsed, _ = _parse_whole_expression(value, strip_units=strip_units)
     return parsed
 
 
@@ -634,21 +630,6 @@ def _grade_math_candidate(spec: MathSpec, candidate: str, parse_candidate: Calla
     return scored(float(bool(match)), extracted=candidate, expected=spec.expected)
 
 
-def math_answer(spec: MathSpec, text: str) -> str:
-    """Extract the answer according to the task's math profile."""
-    if spec.profile is MathProfile.RAW:
-        return text
-    if BOXED in text:
-        return extract_boxed(text) or ""
-    line = last_line(text) or ""
-    if spec.profile is MathProfile.ANCHORED:
-        sentence = FINAL_SENTENCE.split(line)[-1]
-        claims = list(FINAL_CLAIM.finditer(sentence))
-        line = sentence[claims[-1].end() :] if claims else sentence
-        line = line.strip().removesuffix(".").rstrip()
-    return line
-
-
 def _grade_symbolic(spec: MathSpec, workspace: Path) -> Reward:
     text = read_output(spec, workspace)
     if text is None:
@@ -660,10 +641,19 @@ def _grade_symbolic(spec: MathSpec, workspace: Path) -> Reward:
 
 def grade_math_text_candidate(spec: MathSpec, text: str) -> Reward:
     """Extract math under the task's parsing profile and grade the result."""
-    candidate = math_answer(spec, text)
-    if spec.profile is MathProfile.ANCHORED and BOXED not in text:
-        return _grade_extracted_math(spec, candidate, _parse_final_expression)
-    return grade_math_candidate(spec, candidate)
+    if spec.profile is MathProfile.RAW:
+        return grade_math_candidate(spec, text)
+    if BOXED in text:
+        return grade_math_candidate(spec, extract_boxed(text) or "")
+    line = last_line(text) or ""
+    if spec.profile is not MathProfile.ANCHORED:
+        return grade_math_candidate(spec, line)
+
+    sentence = FINAL_SENTENCE.split(line)[-1]
+    claims = list(FINAL_CLAIM.finditer(sentence))
+    candidate = sentence[claims[-1].end() :] if claims else sentence
+    candidate = candidate.strip().removesuffix(".").rstrip()
+    return _grade_extracted_math(spec, candidate, _parse_final_expression)
 
 
 def grade_numeric_candidate_float(expected: float, value: float | None, *, tolerance_abs: float) -> Reward:
