@@ -52,6 +52,7 @@ from marin.inference.config import (
     normalize_vllm_option,
     vllm_option_flags,
 )
+from marin.inference.runai_streamer import distributed_streamer_environment
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_release import (
     current_vllm_gpu_wheel,
@@ -1077,10 +1078,7 @@ _VLLM_ENV_DEFAULTS: tuple[tuple[str, str], ...] = (
 
 
 def _vllm_env() -> dict[str, str]:
-    """Build the vLLM environment for the native (subprocess) backend.
-
-    Starts from ``os.environ`` and applies the canonical defaults.
-    """
+    """Copy the parent environment and apply native vLLM defaults."""
     env = dict(os.environ)
     env.setdefault("TOKENIZERS_PARALLELISM", "false")
     for key, default in _VLLM_ENV_DEFAULTS:
@@ -1097,6 +1095,7 @@ def _prepare_vllm_compilation_cache(
 ) -> tuple[VllmCompilationCache, dict[str, str]]:
     native_env = _vllm_env()
     native_env.update(launcher.env())
+    native_env = distributed_streamer_environment(extra_cli_args or (), native_env)
     cache = VllmCompilationCache.prepare(
         launcher_identity=launcher.cache_identity(),
         compile_identity=VllmCompileIdentity.from_vllm_args(

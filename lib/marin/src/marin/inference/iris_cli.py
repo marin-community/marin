@@ -1,35 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Iris subcommand for ``marin-serve``.
+"""Submit a serving backend to Iris and expose its dashboard and OpenAI endpoint.
 
-Submits a single Iris job that boots a serving backend on a TPU slice or GPU allocation and
-registers a browser dashboard + OpenAI-compatible endpoint through the controller proxy. The job
-stops itself after ``--timeout-hours`` so a forgotten server frees its slice.
-
-Examples::
-
-    marin-serve iris Qwen/Qwen3-0.6B --cluster marin --tpu v6e-8
-    marin-serve iris Qwen/Qwen3-0.6B --cluster marin --tpu v6e-8 --backend levanter
-    marin-serve iris gs://my-bucket/ckpt --tpu v5litepod-8 --chat-template delphi_v0.jinja2
-    marin-serve iris Qwen/Qwen3-0.6B --cluster marin --gpu H100x8 --target-cluster cw-rno2a
-
-``--backend`` picks the stack that answers requests: ``vllm`` (default) runs vLLM as a
-subprocess, ``levanter`` runs Levanter's inference engine in-process on the slice's chips. Both
-expose the same OpenAI API through the same dashboard, so serving one model under each and
-pointing one client at both endpoints compares them directly.
-
-``--gpu`` and ``--tpu`` are mutually exclusive (the default is TPU ``v6e-8``). On the vLLM GPU
-path CUDA vLLM is provisioned in an isolated ``uv`` tool env — stock PyPI vLLM at ``--vllm-version``,
-or Marin's vLLM fork with ``--vllm-source marin-fork`` (needed for Marin-custom architectures like
-grug_moe); on the vLLM TPU path, vLLM always runs from an isolated ``uv`` tool env holding Marin's
-forked TPU vLLM, so the worker venv only needs the ``tpu`` extra for the serving glue's JAX/libtpu.
-The Levanter backend needs no vLLM at all: it serves from the worker venv's JAX.
-
-``--cluster`` selects the controller to submit to; ``--target-cluster`` federates the job to a
-named peer. The slice's tensor-parallel size and (for clamped-RoPE models) max sequence length are
-inferred automatically; override with ``--tensor-parallel-size`` / ``--max-model-len``. Once the
-endpoint is ready, the command always mints and prints an endpoint-scoped capability URL.
+See docs/tutorials/run-lm-evals.md for launch examples and tokenizer overrides.
 """
 
 import contextlib
@@ -396,6 +370,20 @@ def _wait_and_report_endpoint(
 @click.option("--endpoint-name", default=None, help="Endpoint name to register (default: /serve/<job-name>).")
 @click.option("--chat-template", default=None, help="Jinja chat template: local file path or http(s) URL.")
 @click.option(
+    "--tokenizer",
+    default=None,
+    help=(
+        "Tokenizer source when the weights location carries none (e.g. object-store exports): "
+        "an HF repo id or a repository-relative directory included in the uploaded workspace. "
+        "Also drives the tool chat template resolution."
+    ),
+)
+@click.option(
+    "--tokenizer-revision",
+    default=None,
+    help="Pin an immutable revision of --tokenizer (an HF commit).",
+)
+@click.option(
     "--max-model-len",
     type=int,
     default=None,
@@ -521,6 +509,8 @@ def main(
     name: str | None,
     endpoint_name: str | None,
     chat_template: str | None,
+    tokenizer: str | None,
+    tokenizer_revision: str | None,
     max_model_len: int | None,
     max_num_batched_tokens: int,
     max_seqs: int,
@@ -676,6 +666,8 @@ def main(
     )
     model_config = ServedModelConfig(
         weights=model,
+        tokenizer=tokenizer,
+        tokenizer_revision=tokenizer_revision,
         dtype=dtype,
         max_model_len=max_model_len,
         tensor_parallel_size=tensor_parallel_size,
