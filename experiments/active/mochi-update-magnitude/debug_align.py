@@ -4,22 +4,24 @@
 """Print the expert-axis alignment outcome for the SFT exp3 pair (debug job)."""
 
 import logging
-import sys
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 
-from readers import configure_object_storage
-from registry import CHECKPOINTS, SAMPLE
 import measure
 import registry
-import numpy as np
-from expert_perm import router_expert_permutation, ROUTER_TENSOR
+from expert_perm import ROUTER_TENSOR, router_expert_permutation
+from readers import configure_object_storage
+from registry import CHECKPOINTS, SAMPLE
 
 configure_object_storage()
 lines: list[str] = []
+
+
 def emit(message: str) -> None:
     print(message, flush=True)
     lines.append(message)
+
+
 
 a_ckpt = CHECKPOINTS["hero-base-393491"]
 b_ckpt = CHECKPOINTS["exp3-v5-native-2100"]
@@ -27,8 +29,10 @@ side_a = measure.make_side(a_ckpt, SAMPLE, None)
 side_b = measure.make_side(b_ckpt, SAMPLE, None)
 try:
     alignment = router_expert_permutation(side_a, side_b)
-    emit("ALIGNMENT OK: identity=%s mean_sim=%.4f first=%s" % (
-        alignment["identity"], alignment["mean_similarity"], alignment["perm"][:8].tolist()))
+    emit(
+        "ALIGNMENT OK: identity=%s mean_sim=%.4f first=%s"
+        % (alignment["identity"], alignment["mean_similarity"], alignment["perm"][:8].tolist())
+    )
     remap = None if alignment["identity"] else alignment["perm"]
     side_b2 = measure.make_side(b_ckpt, SAMPLE, None, remap)
     req = [r for r in measure.simple_requests(SAMPLE) if r.tensor == ROUTER_TENSOR][0]
@@ -38,12 +42,34 @@ try:
     emit("ROUTER rel with remap: %.3e" % ((st.sum_d2 / st.sum_w2) ** 0.5))
 except Exception as error:
     import traceback
+
     traceback.print_exc()
     emit("ALIGNMENT FAILED: %r" % (error,))
 
+# Now run the real measure_pair path on the same pair and report its router row.
+try:
+    import registry as _r
+
+    pair = _r.pairs_for("sft", ["sft-exp3-0to2100"])[0]
+    rows, summary = measure.measure_pair(pair, SAMPLE, None, None)
+    for row in summary:
+        if row["pair"] == "sft-exp3-0to2100" and row.get("lands") == "as-stored" and row["group"] == "router":
+            emit("MEASURE_PAIR router rel: %.3e" % row["group_rel_norm"])
+    errs = [r for r in rows if "error" in r]
+    emit("MEASURE_PAIR errors: %d" % len(errs))
+    for e in errs[:2]:
+        emit("  %s: %s" % (e.get("tensor"), e["error"][:90]))
+except Exception as error:
+    import traceback
+
+    traceback.print_exc()
+    emit("MEASURE_PAIR FAILED: %r" % (error,))
+
 import json
 import posixpath
+
 import fsspec
+
 out_uri = posixpath.join(registry.OUTPUT_PREFIX, "inventory", "align-debug.json")
 fs, _ = fsspec.url_to_fs(out_uri)
 with fs.open(out_uri, "wb") as handle:
