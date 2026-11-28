@@ -124,12 +124,6 @@ def _merge_role(total: RoleOutcome, task: RoleOutcome) -> RoleOutcome:
 def _measure_task(envelope: TaskEnvelope, context: _MeasureContext) -> EnvelopeMeasurement:
     """One task's declared machine envelopes, its actor sources and its refusal reasons."""
     task, spec = envelope.task, envelope.spec
-    if spec is None:
-        return EnvelopeMeasurement(
-            converted=1,
-            roles={"agent": {}, "grader": {}},
-            mapping_failures={f"{envelope.task_id}: task is not a valid TaskSpec": 1},
-        )
     native = "harbor" in task.get("tags", ())
     shapes: Mapping[str, Mapping] = {}
     if native:

@@ -6,22 +6,21 @@
 The census is the source-level measurement the catalog declarations rest on: how
 many tasks the converter emits, what each role demands of a machine backend, how
 many distinct Daytona snapshots the population provisions, and which grading
-boundaries and integrity contracts the population declares. Nothing here calls a
-provider: declared environments are mapped through the engine's production
-identity path, and every refusal is recorded rather than repaired.
+boundaries the population declares. Nothing here calls a provider: declared
+environments are mapped through the engine's production identity path, and every
+refusal is recorded rather than repaired.
 
 The engine protocol keeps the machine-identity machinery at the caller side
 (the experiments layer owns Harbor/shellbox lowering); the stage itself reads the
-converted population, joins the measurement with the grading-boundary and
-integrity-contract censuses, and publishes the evidence.
+converted population, joins the measurement with the grading-boundary census and
+the integrity-contract summary, and publishes the evidence.
 """
 
 import hashlib
 import json
-import logging
 from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from finestore.rl.curation import (
@@ -30,36 +29,19 @@ from finestore.rl.curation import (
     DaytonaMeasurement,
     DaytonaUnsafeReason,
     GradingEnvironmentEvidence,
-    IntegrityContractExample,
     IntegrityContractGroup,
     IntegrityContractSummary,
 )
-from pydantic import ValidationError
-from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.grading_environment import (
     assess_grading_environment,
     count_grading_environment,
     grading_environment_census,
 )
-from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 
-logger = logging.getLogger(__name__)
-
 CENSUS_REVISION = "1"
-HARNESS_POLICY_FIELDS = (
-    "harness",
-    "harness_sha256",
-    "protected_root",
-    "agent_uid",
-    "grader_uid",
-    "protected_test_patterns",
-    "pinned_plugins",
-    "plugin_discovery",
-)
 CENSUS_JSON = "census.json"
-CONTRACTS_JSON = "integrity-contracts.json"
 
 
 @dataclass(frozen=True)
@@ -68,7 +50,7 @@ class TaskEnvelope:
 
     task_id: str
     task: dict[str, Any]
-    spec: TaskSpec | None
+    spec: TaskSpec
 
 
 @dataclass
@@ -134,59 +116,6 @@ def unsafe_counts(measurement: EnvelopeMeasurement) -> dict[str, int]:
     return counts
 
 
-@dataclass(frozen=True)
-class ContractGroup:
-    """One integrity-contract descriptor and the cohort sharing it."""
-
-    id: str | None
-    version: int | None
-    dependency_state: str | None
-    native_family: str | None
-    harness_policy: dict[str, Any] | None
-    present: bool
-    count: int
-
-
-@dataclass
-class ContractCensus:
-    """Group the population's declared integrity contracts by their published descriptor."""
-
-    groups: dict[str, ContractGroup] = field(default_factory=dict)
-    example: dict | None = None
-    required_shared: int = 0
-    shared_missing: int = 0
-    task_count: int = 0
-
-    def observe(self, task: dict, *, required_shared: bool) -> None:
-        self.task_count += 1
-        contract = task.get("integrity_contract")
-        self.required_shared += required_shared
-        self.shared_missing += required_shared and contract is None
-        harness_policy = (
-            {name: contract[name] for name in HARNESS_POLICY_FIELDS if name in contract}
-            if contract is not None
-            else None
-        )
-        descriptor = {
-            "id": (contract or {}).get("id"),
-            "version": (contract or {}).get("version"),
-            "dependency_state": (contract or {}).get("dependency_state"),
-            "native_family": ((contract or {}).get("native") or {}).get("family"),
-            "harness_policy": harness_policy,
-            "present": contract is not None,
-        }
-        key = canonical_sha256(descriptor)
-        group = self.groups.get(key)
-        self.groups[key] = (
-            ContractGroup(**descriptor, count=1) if group is None else replace(group, count=group.count + 1)
-        )
-        if self.example is None and contract is not None and len(json.dumps(contract).encode()) <= 16384:
-            self.example = {"task_id": task["id"], "contract": contract}
-
-    def rows(self) -> list[ContractGroup]:
-        return sorted(self.groups.values(), key=lambda group: (-group.count, canonical_sha256(asdict(group))))
-
-
 def population_digest(rows: Iterable[tuple[str, str]]) -> str:
     """The measured population's digest: a SHA-256 chain over ``[task_id, task_json]`` in task-ID order."""
     chained = hashlib.sha256()
@@ -196,49 +125,39 @@ def population_digest(rows: Iterable[tuple[str, str]]) -> str:
 
 
 def contract_summary(
-    census: ContractCensus, evidence_url: str, dataset_id: str, dataset_revision: str, digest: str
+    *,
+    measured_tasks: int,
+    required_shared: int,
+    shared_missing: int,
+    evidence_url: str,
+    dataset_id: str,
+    dataset_revision: str,
+    digest: str,
 ) -> IntegrityContractSummary:
-    """The bounded receipt summary; full contract groups remain in the evidence artifact."""
-    rows = census.rows()
+    """The population's contract summary: one absent group until the contract-bearing
+    stage ports make declared contracts reachable in main's schema."""
     return IntegrityContractSummary(
         groups=[
             IntegrityContractGroup(
-                id=group.id,
-                version=group.version,
-                dependency_state=group.dependency_state,
-                native_family=group.native_family,
-                harness_policy_sha256=canonical_sha256(group.harness_policy) if group.harness_policy else None,
-                present=group.present,
-                count=group.count,
+                id=None,
+                version=None,
+                dependency_state=None,
+                native_family=None,
+                harness_policy_sha256=None,
+                present=False,
+                count=measured_tasks,
             )
-            for group in rows[:64]
         ],
-        distinct_groups=len(rows),
-        absent_contract_tasks=sum(group.count for group in rows if not group.present),
-        required_shared_tasks=census.required_shared,
-        shared_missing_contract_tasks=census.shared_missing,
-        example=(
-            IntegrityContractExample(task_id=census.example["task_id"], contract_json=census.example["contract"])
-            if census.example is not None
-            else None
-        ),
+        distinct_groups=1,
+        absent_contract_tasks=measured_tasks,
+        required_shared_tasks=required_shared,
+        shared_missing_contract_tasks=shared_missing,
+        example=None,
         evidence_url=evidence_url,
         dataset_id=dataset_id,
         dataset_revision=dataset_revision,
         task_specs_sha256=digest,
     )
-
-
-def write_contract_evidence(census: ContractCensus, path: str) -> None:
-    """Publish the complete contract groups beside the bounded receipt summary."""
-    document = {
-        "groups": [asdict(group) for group in census.rows()],
-        "example": census.example,
-        "required_shared_tasks": census.required_shared,
-        "shared_missing_contract_tasks": census.shared_missing,
-        "task_count": census.task_count,
-    }
-    StoragePath(path).write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
 
 
 @dataclass(frozen=True)
@@ -320,21 +239,19 @@ def measure_population(
     converter_revision: str,
     evidence_url: str,
     engine: CensusEngine,
-) -> tuple[CensusEvidence, ContractCensus]:
+) -> CensusEvidence:
     """Measure the complete converted population: machine envelopes, grading boundary and contracts.
 
     ``rows`` yields one normalized converted row per task, with ``task_id``,
     ``task_json``, ``normalization_kind`` and ``normalization_reason``.
     Rejected rows carry no task and are counted by their typed conversion failure.
-    The caller publishes the returned contract census beside the bounded receipt
-    summary so the complete groups stay readable.
     """
-    contracts = ContractCensus()
     grading_counts: Counter[str] = Counter()
     rejections: Counter[str] = Counter()
-    unassessable: Counter[str] = Counter()
     digests: list[tuple[str, str]] = []
     envelopes: list[TaskEnvelope] = []
+    required_shared = 0
+    shared_missing = 0
     for row in rows:
         if row["task_json"] is None:
             rejections[f"{row['normalization_kind']}:{row['normalization_reason']}"] += 1
@@ -342,18 +259,18 @@ def measure_population(
         task_id, task_json = row["task_id"], row["task_json"]
         digests.append((task_id, task_json))
         task = json.loads(task_json)
-        try:
-            spec = TaskSpec.model_validate(task)
-        except ValidationError as error:
-            unassessable[f"{type(error).__name__}: {error}"] += 1
-            spec = None
-        else:
-            assessment = assess_grading_environment(spec)
-            contracts.observe(task, required_shared=assessment.required.value == "shared")
-            count_grading_environment(grading_counts, assessment.model_dump(mode="json"))
+        # The normalize view holds validated TaskSpec serializations; anything
+        # else is exported data corruption, so refuse instead of measuring it.
+        spec = TaskSpec.model_validate(task)
+        assessment = assess_grading_environment(spec)
+        # Main's TaskSpec schema carries no integrity contract, so a required-SHARED
+        # boundary is always missing its contract; the contract-bearing stage ports
+        # bring the declared contracts this census will then group.
+        shared = assessment.required.value == "shared"
+        required_shared += shared
+        shared_missing += shared
+        count_grading_environment(grading_counts, assessment.model_dump(mode="json"))
         envelopes.append(TaskEnvelope(task_id, task, spec))
-    if unassessable:
-        logger.warning("%s: %d tasks are unassessable for the grading census", source_name, sum(unassessable.values()))
 
     measurement = engine.measure(envelopes)
     if measurement.converted != len(digests):
@@ -364,25 +281,30 @@ def measure_population(
         f"native Harbor task.toml or declared environment requirements; "
         f"{engine.describe()}; recipe revision {converter_revision}"
     )
-    return (
-        CensusEvidence(
-            input=CensusInput(
-                dataset_id=dataset_id,
-                dataset_revision=dataset_revision,
-                converter_version=converter_revision,
-                converter_revision=converter_revision,
-                measured_tasks=measurement.converted,
-                task_specs_sha256=digest,
-                evidence_url=evidence_url,
-            ),
-            measurement=_daytona_measurement(measurement, dataset_id, dataset_revision, basis),
-            grading_environment=GradingEnvironmentEvidence(
-                **grading_environment_census(grading_counts),
-                missing_artifact_counts={},
-                evidence_url=evidence_url,
-            ),
-            integrity_contracts=contract_summary(contracts, evidence_url, dataset_id, dataset_revision, digest),
-            rejections=dict(rejections),
+    return CensusEvidence(
+        input=CensusInput(
+            dataset_id=dataset_id,
+            dataset_revision=dataset_revision,
+            converter_version=converter_revision,
+            converter_revision=converter_revision,
+            measured_tasks=measurement.converted,
+            task_specs_sha256=digest,
+            evidence_url=evidence_url,
         ),
-        contracts,
+        measurement=_daytona_measurement(measurement, dataset_id, dataset_revision, basis),
+        grading_environment=GradingEnvironmentEvidence(
+            **grading_environment_census(grading_counts),
+            missing_artifact_counts={},
+            evidence_url=evidence_url,
+        ),
+        integrity_contracts=contract_summary(
+            measured_tasks=measurement.converted,
+            required_shared=required_shared,
+            shared_missing=shared_missing,
+            evidence_url=evidence_url,
+            dataset_id=dataset_id,
+            dataset_revision=dataset_revision,
+            digest=digest,
+        ),
+        rejections=dict(rejections),
     )

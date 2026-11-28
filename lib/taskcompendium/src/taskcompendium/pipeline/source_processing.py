@@ -36,11 +36,9 @@ from taskcompendium.pipeline.audit_schema import (
 )
 from taskcompendium.pipeline.census import (
     CENSUS_JSON,
-    CONTRACTS_JSON,
     CensusEngine,
     CensusEvidence,
     measure_population,
-    write_contract_evidence,
 )
 from taskcompendium.pipeline.controls import GradingMachines, control_suite
 from taskcompendium.pipeline.conversion import (
@@ -112,7 +110,7 @@ from taskcompendium.pipeline.stages import (
 )
 from taskcompendium.pipeline.transforms import admit_converted_row
 
-SOURCE_PIPELINE_REVISION = "14"
+SOURCE_PIPELINE_REVISION = "15"
 PANEL_ROWS_PER_SHARD = 16
 ROWS_PER_SHARD = 1000
 MAX_PREPARATION_SHARDS = 64
@@ -678,7 +676,7 @@ def _census(run: _SourceRun) -> CensusEvidence | None:
     if output.exists():
         output.rmtree()
     with run.telemetry.phase(CENSUS_VIEW):
-        evidence, contracts = measure_population(
+        evidence = measure_population(
             _census_rows(str(run.output / "normalize")),
             source_name=recipe.name,
             dataset_id=recipe.source.dataset,
@@ -689,7 +687,6 @@ def _census(run: _SourceRun) -> CensusEvidence | None:
         )
     with (output / CENSUS_JSON).open("w", auto_mkdir=True) as stream:
         stream.write(json.dumps(evidence.manifest_section(), indent=2, sort_keys=True) + "\n")
-    write_contract_evidence(contracts, str(output / CONTRACTS_JSON))
     return evidence
 
 
@@ -969,7 +966,9 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
     verification_status = SourceVerificationStatus(verification["verification"]["status"])
     _write_download_manifest(run, panel.sample.population_count)
     admissions = _export_sidecars(run, panel, decision, checked, verification_status, expanded=expanded)
-    census = _census(run)
+    # The census is the complete converted population's measurement; a run that
+    # converted only the quality panel cannot bind its counts to the dataset pin.
+    census = _census(run) if (expanded or panel.census) else None
     verification["verification"]["source_path"] = str(run.output / "normalize")
     verification["verification"]["review_path"] = str(run.output / "review")
     status = _source_status(

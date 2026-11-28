@@ -147,13 +147,6 @@ def test_tasks_without_declared_environments_provision_nothing():
     assert measurement.roles["grader"] == {}
 
 
-def test_unvalidatable_tasks_are_reported_not_measured():
-    measurement = DaytonaCensusEngine().measure([TaskEnvelope("broken-fixture", {"id": "broken-fixture"}, None)])
-    assert measurement.converted == 1
-    assert measurement.machine_slots == 0
-    assert measurement.mapping_failures == {"broken-fixture: task is not a valid TaskSpec": 1}
-
-
 def test_native_task_toml_requires_the_delivered_configuration():
     with pytest.raises(ValueError, match=r"no delivered task\.toml"):
         native_task_toml({"resources": {"verifier": []}})

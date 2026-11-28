@@ -4,6 +4,7 @@
 """The census: the stage measures the complete converted population without provider calls."""
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -135,8 +136,6 @@ def test_full_source_measures_the_complete_population_and_records_rejections(tmp
 
     written = json.loads((output / "census" / "census.json").read_text())
     assert written == census
-    contracts = json.loads((output / "census" / "integrity-contracts.json").read_text())
-    assert contracts["task_count"] == 4
     normalize_ids = {row["task_id"] for row in parquet_rows(Path(result.normalize_path)) if row["task_json"]}
     assert census["input"]["measured_tasks"] == len(normalize_ids)
     assert result.census_path == str(output / "census")
@@ -153,6 +152,25 @@ def test_source_without_an_engine_skips_the_census(tmp_path):
     assert manifest["census"] is None
     assert result.census_path is None
     assert "census" not in manifest["datasets"]
+
+
+def test_sample_mode_measuring_only_the_panel_records_no_census(tmp_path):
+    """A panel-only run cannot bind its counts to the dataset pin, so it records no census."""
+    source = tmp_path / "source"
+    write_jsonl(source, source_rows(40, broken=()))
+    output = tmp_path / "output"
+    recipe = fixture_recipe(convert_svamp, rubric=None)
+    config = replace(
+        pipeline_config(SourceProcessingMode.SAMPLE, FixtureCensusEngine()),
+        quality_policy=SourceQualityPolicy(sample_size=8),
+    )
+    result = run_pipeline(recipe, source, output, config)
+
+    manifest = json.loads(Path(result.manifest_path).read_text())
+    assert manifest["census"] is None
+    assert result.census_path is None
+    assert "census" not in manifest["datasets"]
+    assert not (output / "census").exists()
 
 
 def test_declared_agent_environments_count_machine_slots():
@@ -177,7 +195,7 @@ def test_declared_agent_environments_count_machine_slots():
         }
         for task in tasks
     ]
-    evidence, contracts = measure_population(
+    evidence = measure_population(
         iter(rows),
         source_name="fixture",
         dataset_id="fixture",
@@ -192,7 +210,6 @@ def test_declared_agent_environments_count_machine_slots():
     assert evidence.measurement.daytona_execution_failures == 0
     assert evidence.input.measured_tasks == 3
     assert evidence.grading_environment.assessed_tasks == 3
-    assert contracts.task_count == 3
 
 
 def test_stage_refuses_an_engine_measurement_that_loses_rows(tmp_path):
