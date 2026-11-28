@@ -1,6 +1,6 @@
 {
   "cluster": "cw-us-east-02a",
-  "freeze_source_revision": "a9f924054f29bc12d1039d8cefe340d8acefe067",
+  "freeze_source_revision": "843fcbc85d0101b440e9d459b28d4935d88b739f",
   "kind": "atlas-release-config",
   "preview_base_version": 41,
   "prior_release": {
