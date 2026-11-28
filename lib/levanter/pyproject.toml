@@ -52,6 +52,7 @@ dependencies = [
     "wandb>0.24.0",
     "gitpython>=3.2.1",
     "draccus>=0.11.6",
+    "pillow",
     "pyarrow>=23.0.0",
     "zstandard>=0.18.0",
     "datasets>=5.0.1,<6",

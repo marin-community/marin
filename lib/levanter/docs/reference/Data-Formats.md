@@ -209,6 +209,15 @@ Direct datasets are expected to yield `LmExample` instances that already include
 ---
 
 
+## Image captions and conversations
+
+- **Captions** — `ImageCaptionDatasetSourceConfig` reads one `image` and one `text` caption per row. Use `image_key` and `text_key` for other column names.
+- **Conversations** — `ConversationDatasetSourceConfig` reads turns from `messages`. Each `{"type": "image"}` in a turn takes the next image from the row’s `images` list.
+
+Set `id` for a Hugging Face dataset, or list JSON, JSONL, or Parquet files in `train_urls` and `validation_urls`. Do not configure both forms on one source.
+
+Captions work without a chat template. For conversations, wrap assistant replies in `{% generation %}` and `{% endgeneration %}`, or set `mask_prompt: false` to train on all text tokens.
+
 # API
 
 
