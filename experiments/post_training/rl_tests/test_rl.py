@@ -495,9 +495,10 @@ def test_published_init_binds_export_tokenizer(
 )
 def test_draft_opt_out_preserves_other_generator_settings_and_inputs(selection, tmp_path, table, preset_name):
     preset = table.by_name[preset_name]
-    settings = ("generator.speculative_decoding=null",)
     (draft_run,) = snowball.build_experiment(preset, table=table).runs
-    (plain_run,) = snowball.build_experiment(preset, table=table, settings=settings).runs
+    (plain_run,) = snowball.build_experiment(preset, table=table, draft="none").runs
+    assert snowball.build_experiment(preset, table=table, draft=preset.default_draft.name).runs[0].name == draft_run.name
+    snowball.build_experiment(preset, table=table, settings=("generator.speculative_decoding.num_speculative_tokens=2",))
     draft = yaml.safe_load(materialized_config(draft_run, str(tmp_path)).launch_config_yaml)
     plain = yaml.safe_load(materialized_config(plain_run, str(tmp_path)).launch_config_yaml)
 
@@ -532,6 +533,11 @@ def test_mochi_three_rack_launch_configures_evaluation_without_model_exports(sel
     assert "evaluation" in callbacks
     assert callbacks.isdisjoint({"checkpoint", "best_checkpoint", "hf_model_save"})
 
+    (drafted,) = snowball.build_experiment(preset, table=MOCHI, draft="dspark-two-layer").runs
+    path.write_text(materialized_config(drafted, str(tmp_path)).launch_config_yaml)
+    (drafted_config,) = gate.compose_configs([str(path)], validate_driver=True)
+    assert drafted_config["skyrl"]["generator"]["speculative_decoding"]["method"] == "dspark"
+
     docs = (recipe.REPO_ROOT / "docs/dev-guide/skyrl.md").read_text()
     section = docs.split("`mochi-inference.yaml`", 1)[1]
     fragment = yaml.safe_load(section.split("```yaml\n", 1)[1].split("```", 1)[0])
@@ -549,6 +555,8 @@ def test_snowball_omits_default_draft_for_an_alternate_initializer(selection, tm
     config = yaml.safe_load(materialized_config(alternate, str(tmp_path)).launch_config_yaml)
 
     assert config["skyrl"]["generator"].get("speculative_decoding") is None
+    with pytest.raises(click.BadParameter, match="trained for"):
+        snowball.build_experiment(preset, table=table, init=initializer, draft="dspark-dr-doom")
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):
@@ -1275,6 +1283,8 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
         ("--set", 'trainer={"algorithm":{"off_policy_correction":"none"}}'),
         ("--set", "trainer.policy.optimizer_config.lr=wrong"),
         ("--require", "typo>=0"),
+        ("--set", "generator.speculative_decoding=null"),
+        ("--draft", "typo"),
     ],
 )
 def test_refusals_use_exit_four(selection, arguments, capsys, tmp_path, request):

@@ -175,6 +175,15 @@ def test_compare_validates_staged_model_and_tokenizer_bindings(recorded_runs):
     assert invalid["verdict"] == "invalid" and "skyrl.trainer.policy.model.tokenizer_path" in invalid["reason"]
 
 
+def test_compare_rebuilds_a_draft_opt_out_against_drafted_controls(recorded_runs):
+    preset = "speed-short"
+    controls(recorded_runs, preset)
+    recorded_runs(preset, "users/test/plain-decoding", speed=102, inputs=RunInputs(preset_name=preset, draft="none"))
+    report = compare(preset, "--candidate", "users/test/plain-decoding")
+    assert report["verdict"] == "pass", report
+    assert any(key.startswith("skyrl.generator.speculative_decoding") for key in report["run"]["config_changes"])
+
+
 def test_compare_checks_hf_draft_mirror_against_the_requested_revision(recorded_runs):
     preset = "speed-short"
     control_roots = controls(recorded_runs, preset)

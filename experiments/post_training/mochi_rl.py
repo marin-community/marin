@@ -25,6 +25,7 @@ from experiments.post_training.rl_presets import (
     SAMPLED_TRAJECTORIES,
     STOP_TOKEN_IDS,
     UPDATE_SECONDS_METRIC,
+    Draft,
     Evaluation,
     Layout,
     Metric,
@@ -224,7 +225,7 @@ _TRAIN_LONG = Preset(
     data_settings=frozenset({"shuffle"}),
     tasks="snowball-100k@2026.11.25.1",
     model=_MODEL,
-    speculative_decoding_model=_DSPARK,
+    default_draft=Draft("dspark-two-layer", target=_MODEL.step, model=_DSPARK),
     held_out_tasks="eval-lite@2026.11.25.1",
     evaluations=(_EVALUATION,),
     seed=20261020,
@@ -238,7 +239,8 @@ _TRAIN_LONG_3RACK = replace(
     _TRAIN_LONG,
     name="train-long-3rack",
     recipe=replace(_TRAIN_LONG.recipe, layout=THREE_RACK, config=_ONE_TURN.merge(_THREE_RACK_PATCH)),
-    speculative_decoding_model=None,
+    default_draft=None,
+    optional_drafts=(_TRAIN_LONG.default_draft,),
 )
 _TRAIN_MEDIUM = replace(
     _TRAIN_LONG.with_updates(2),

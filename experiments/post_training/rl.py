@@ -223,6 +223,7 @@ def build_experiment(
     sft_preset: str | None = None,
     resume: presets.StoredResume | None = None,
     settings: tuple[str, ...] = (),
+    draft: str | None = None,
     replicates: int = 1,
     control: str | None = None,
     requirements: tuple[str, ...] = (),
@@ -246,7 +247,7 @@ def build_experiment(
         raise click.BadParameter("this preset does not accept --init")
     if (not preset.gated and replicates != 1) or (control and not preset.gated):
         raise click.BadParameter(f"{preset.name} does not accept this replicate or control selection")
-    if control and (settings or tasks is not None or init is not None or resume is not None or requirements):
+    if control and (settings or requirements or any(value is not None for value in (tasks, init, resume, draft))):
         raise click.BadParameter("controls use the preset's default inputs")
     if requirements and not preset.gated:
         raise click.BadParameter("--require needs a gated candidate preset")
@@ -273,7 +274,14 @@ def build_experiment(
             raise click.BadParameter("candidate tasks must record the full held-out selection in recipe.exclusions")
     initializer = recipe.stored_initializer(init, preset=preset) if init is not None else None
     spec = recipe.run_spec(
-        preset, name="rl-config", tasks=tasks, init=init, resume=resume, settings=settings, model_name=table.model
+        preset,
+        name="rl-config",
+        tasks=tasks,
+        init=init,
+        resume=resume,
+        settings=settings,
+        draft=draft,
+        model_name=table.model,
     )
     evaluation_inputs = [
         (evaluation.name, source.name, source.version)
@@ -291,6 +299,8 @@ def build_experiment(
         changes["resume"] = resume.model_dump(mode="json", exclude_none=True)
     if sft_preset is not None:
         changes["sft_preset"] = sft_preset
+    if draft not in (None, getattr(preset.default_draft, "name", presets.NO_DRAFT)):
+        changes["draft"] = draft
     options = RunOptions.from_preset(preset)
     if options != RunOptions.from_preset(table.by_name[preset.name]):
         changes["run_options"] = options.model_dump(mode="json")
@@ -306,6 +316,7 @@ def build_experiment(
         options=options,
         sft_preset=sft_preset,
         preset=preset,
+        draft=changes.get("draft"),
     )
     runs = []
     for replicate in range(replicates):
@@ -984,6 +995,7 @@ def command(
         "Only presets that accept initial weights. The initial weights are evaluated too, so the report shows "
         "the gain.",
     )
+    @click.option("--draft", "draft_name", metavar="NAME", help=f"Preset draft to serve, or {presets.NO_DRAFT!r}.")
     @click.option(
         "--replicates",
         type=click.IntRange(1, 5),
@@ -1009,6 +1021,7 @@ def command(
         settings: tuple[str, ...],
         tasks_name: str | None,
         init_name: str | None,
+        draft_name: str | None,
         resume_name: str | None,
         replicates: int,
         control: str | None,
@@ -1089,6 +1102,7 @@ def command(
             tasks=recipe.selection_artifact(tasks_name) if tasks_name else None,
             init=recipe.published_model(init_name, preset=preset) if init_name else initializer,
             sft_preset=sft_name,
+            draft=draft_name,
             resume=recipe.recovery_checkpoint(resume_name, preset=preset) if resume_name is not None else None,
             replicates=replicates,
             control=control,

@@ -258,24 +258,25 @@ Learning and train-long can change task sampling, optimizer, schedule and batch 
 Data presets require `--tasks` and refuse `--set`.
 
 Snowball generation and disaggregated training presets using the pinned 09.21 Datakit initializer
-load the frozen Dr. Doom DSpark draft.
-DSpark uses probabilistic drafting and standard verification. Use
-`--set generator.speculative_decoding=null` for plain decoding on presets that accept settings.
+load the frozen Dr. Doom DSpark draft, `dspark-dr-doom`.
+DSpark uses probabilistic drafting and standard verification. Use `--draft none` for plain decoding.
+A `--draft` value other than the preset's default is a recorded input, like `--init`.
 Snowball uses four proposals. The `speed-short` burst preset uses a 0.80 vLLM GPU memory
 fraction. The other presets use 0.75.
-To compare another draft against the same policy, set `generator.speculative_decoding.model` to a
-JSON object with `source_uri` and `source_identity`. For `hf://` sources, use the full Hub commit SHA.
+To compare another draft against the same policy, pass `--draft none` and set the complete
+`generator.speculative_decoding` block. For `hf://` sources, use the full Hub commit SHA.
 Use `--set generator.speculative_decoding.num_speculative_tokens=N` to sweep proposal count.
 With an alternate initializer, set the complete `generator.speculative_decoding` block to use its
 compatible draft. Online draft training remains EAGLE3-only.
 
 Mochi one-rack presets using the pinned step-400407 initializer default to a
-766M two-layer DSpark draft with four proposals. An alternate initializer can
+766M two-layer DSpark draft, `dspark-two-layer`, with four proposals. An alternate initializer can
 supply a compatible draft through `generator.speculative_decoding`. The
 one-rack vLLM memory fraction of 0.775 gave
-about 119,400 KV tokens per inference GPU in the five-update trial. Use `--set generator.speculative_decoding=null`
+about 119,400 KV tokens per inference GPU in the five-update trial. Use `--draft none`
 to run plain decoding. Also set `--set generator.gpu_memory_utilization=0.75` to
-reproduce the previous one-rack serving budget. Three-rack presets use plain decoding.
+reproduce the previous one-rack serving budget. Three-rack presets decode plain unless run with
+`--draft dspark-two-layer`.
 
 Set `TASK_SELECTION` to a published `NAME@VERSION`. Custom selections must use the default development panel (`recipe.heldout`)
 and record the complete frozen EvalLite in their recipe's `exclusions`. The builder checks those recorded inputs.

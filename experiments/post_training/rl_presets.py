@@ -401,6 +401,16 @@ def validate_agentic_recipe(config: RecipePatch) -> None:
 
 
 CheckpointPolicy = Literal["none", "latest", "best"]
+NO_DRAFT = "none"
+
+
+@dataclass(frozen=True)
+class Draft:
+    """A speculative-decoding draft and the initializer it was trained to propose for."""
+
+    name: str
+    target: ArtifactStep
+    model: sections.SpeculatorModel
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -424,7 +434,8 @@ class Preset:
     data_settings: frozenset[str] = frozenset()
     tasks: str
     model: ArtifactHfModel
-    speculative_decoding_model: sections.SpeculatorModel | None = None
+    default_draft: Draft | None = None
+    optional_drafts: tuple[Draft, ...] = ()
     evaluations: tuple[Evaluation, ...]
     seed: int
     sample_namespace: str

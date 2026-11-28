@@ -188,8 +188,8 @@ The promoted wheel needs the upstream fix for that verification path.
 [ShortConv verifier fix](https://github.com/marin-community/vllm/pull/140)
 
 The Mochi fit stage publishes a SkyRL-ready checkpoint under `MARIN_PREFIX`
-and prints a JSON object with its `source_uri` and `source_identity`. Pass that
-object as `generator.speculative_decoding.model`. Use the verifier that supplied
+and prints a JSON object with its `source_uri` and `source_identity`. Pass `--draft none` and a complete
+`generator.speculative_decoding` block whose `model` is that object. Use the verifier that supplied
 the teacher activations and its policy tokenizer. [RL launch options](rl-experiments.md)
 
 ## Submit the Snowball Iris job

@@ -82,6 +82,8 @@ def run_label(inputs: RunInputs) -> str:
         parts.append(f"tasks={inputs.tasks}")
     if inputs.init:
         parts.append(f"init={inputs.init.artifact_name}@{inputs.init.artifact_version}")
+    if inputs.draft:
+        parts.append(f"draft={inputs.draft}")
     return " ".join(parts)
 
 
