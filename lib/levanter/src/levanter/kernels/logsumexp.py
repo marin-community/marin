@@ -114,8 +114,8 @@ def _shifted_normalizer_jvp(primals, tangents):
 def batch_invariant_logsumexp(logits: jax.Array) -> jax.Array:
     """Return the FP32 log-sum-exp over the final vocabulary axis.
 
-    Explicit meshes fix the reduction order across batch shapes and preserve
-    leading-axis sharding. Auto meshes delegate partitioning to JAX.
+    The reduction order is fixed across batch shapes on explicit meshes only.
+    Leading-axis sharding is preserved on explicit meshes.
     """
     return _batch_invariant_shifted_normalizer(logits.astype(jnp.float32)).logsumexp
 
