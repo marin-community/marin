@@ -208,6 +208,14 @@ SOURCE_OWNERS: dict[str, SourceOwner] = {
         owner="R41 self-executing · ses_deccb722",
         note="release readmission from sealed receipts / disk_root / host-image routes",
     ),
+    "Nvidia:Nemotron-RL-litmus-bench-v0.2/train": SourceOwner(
+        owner="ingest C · ses_de69f162affe",
+        note="qualified on the #12304 feature branch; ingest C takes over the checklist (coordinator ruling 2026-11-27)",
+    ),
+    "Nvidia:Nemotron-RL-litmus-bench-v0.2/validation": SourceOwner(
+        owner="ingest C · ses_de69f162affe",
+        note="qualified on the #12304 feature branch; ingest C takes over the checklist (coordinator ruling 2026-11-27)",
+    ),
     "Nemotron:Nemotron-RL-knowledge-mcqa": SourceOwner(
         owner="ingest B · Codex 01a1e039",
         note="admitted R41 intake; surfaces at the load",
