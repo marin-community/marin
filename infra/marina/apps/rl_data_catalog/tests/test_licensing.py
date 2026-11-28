@@ -109,8 +109,10 @@ def test_source_ban_follows_the_receipt_resolved_source(rulings):
     assert licensing.source_license_ban("Other:source", "example/test-dataset", typed) is not None
 
 
+@pytest.mark.data_integration
 def test_committed_reference_resolves_the_published_rulings():
     """The pinned revision still carries the published ruling bytes (network)."""
+
     document = licensing.license_bans()
     assert document
     assert all(ban.issue_url.startswith("https://github.com/marin-community/marin/issues/") for ban in document.values())
