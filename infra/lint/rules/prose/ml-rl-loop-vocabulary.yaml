@@ -1,0 +1,39 @@
+schema_version: 1
+code: ml-rl-loop-vocabulary
+lane: prose
+title: RL loop name conflicts with the current glossary
+minimum_confidence: 0.7
+inputs:
+- pr_text
+- rl_glossary
+prompt: |-
+  **Why it's bad:** The RL loop has many closely related concepts, and the RL
+  Loop Glossary gives each one a single name. A name that means something else
+  in the glossary makes code and pull request descriptions harder to review and
+  can hide an incorrect boundary.
+
+  The review runner reads the glossary from its public Google Doc at review time
+  and appends it to this lane's prompt as **Current RL Loop Glossary**. Use that
+  text as the source of truth, including its proposed renames, written
+  `~~OldName~~NewName`. Do not use a memorized or older copy. Check new or
+  changed identifiers, metrics, comments, documentation, and the supplied PR
+  title and description. Confirm the underlying concept from the change before
+  emitting a finding. State the glossary term and the conflicting term in the
+  message.
+
+  In CI the runner also appends the published PR title and description as
+  untrusted data. Cite a title finding at `PR_TITLE:1` and a description finding
+  at `PR_BODY:<line>`, with 1-indexed description lines. The reporter posts these
+  virtual paths in its PR comment instead of as file comments.
+
+  **When allowed:** Generic terms in unrelated code; a physical table or tensor
+  `row`; a `prompt` that really is the input to one inference request; a quoted
+  old name in a migration explanation or example; unchanged legacy names outside
+  the diff. The glossary's proposed names are advisory, so do not flag a choice
+  merely because it differs from a proposal when the change explains a distinct
+  concept or an explicit naming decision.
+
+  **Bad examples:** A new class or metric takes a name that the glossary strikes
+  through, for the concept that the glossary gives the replacement name. A PR
+  description counts one glossary concept as another, as when it reports the
+  attempts in its example as inference requests.

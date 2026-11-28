@@ -7,6 +7,9 @@ Run the `infra/lint/` catalog review (`./infra/pre-commit.py --review`)
 over a pull request's branch diff and surface every finding — as `file:line`
 inline review comments where the finding's line is available, and as a
 single fallback comment for the rest.
+The prose lane reads the current RL Loop Glossary from its public Google Doc
+and checks the PR title and description fetched by the review runner. A CI run
+fails if it cannot read the glossary; do not report such a run as clean.
 
 ## Your contract
 
@@ -70,7 +73,7 @@ unforgivable error; so is fabricating one.
    here regardless.)
 
 5. **Post inline comments.** With `--comment` and findings present, for **each**
-   finding post one inline review comment on the head commit, using the GitHub
+   finding with a repository file path, post one inline review comment on the head commit, using the GitHub
    tools available in your session, at the finding's `path` and `line`, with a
    body of exactly this shape:
 
@@ -85,7 +88,9 @@ unforgivable error; so is fabricating one.
    The `<message>` is copied verbatim from the finding. Post one comment per
    finding; never post two comments for the same finding.
 
-6. **Handle un-anchorable findings.** GitHub rejects an inline comment on a line
+6. **Handle PR text and un-anchorable findings.** `PR_TITLE:1` and
+   `PR_BODY:<line>` findings refer to the PR title and description; include them
+   in the fallback comment. GitHub rejects an inline comment on a line
    that is not part of the PR diff. A finding can land
    on such a line — e.g. the holistic `meta` lane anchors on context outside the
    added hunks. When a post fails for that reason, **do not abort**: record that
@@ -98,8 +103,8 @@ unforgivable error; so is fabricating one.
    ```
    🤖 Lint review:
 
-   These infra/lint findings anchor on lines not in the PR diff, so they could not
-   be attached inline.
+   These infra/lint findings refer to the PR text or lines outside the PR diff,
+   so they could not be attached inline.
 
    - <path>:<line>: ml-<code> (<confidence>) <message>
    - ...

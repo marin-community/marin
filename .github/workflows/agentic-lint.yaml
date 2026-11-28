@@ -1,10 +1,10 @@
 name: Agentic lint
 
-# Best-effort Loom lint review. The `agentic-lint` label records that a PR has
-# had a lint pass, either from the author's local `--review` run (the commit
-# skill applies the label at PR creation) or from this workflow. Reviews start
-# only while the label is absent, so pushes to a reviewed PR do not trigger
-# another pass; removing the label requests a fresh review of the current head.
+# Best-effort Loom lint review of a published PR's branch, title and
+# description. The `agentic-lint` label records that this workflow has reviewed
+# the PR. Reviews start only while the label is absent, so pushes and PR text
+# edits do not trigger another pass; removing the label requests a fresh review
+# of the current head.
 on:
   pull_request_target:
     types: [opened, ready_for_review, reopened, unlabeled]

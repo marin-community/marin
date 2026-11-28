@@ -794,3 +794,23 @@ def test_rule_probe_records_failure_and_rejects_idempotency_key_reuse(
     assert stored is not None
     assert stored.status == review_store.ProbeStatus.FAILED
     assert "model unavailable" in str(stored.error)
+
+
+def test_rule_probe_rejects_a_rule_with_review_time_inputs(engine: sqlalchemy.Engine) -> None:
+    run = _sync(engine)
+    bundle = _bundle(24)
+    review_store.store_bundles(engine, run.sync_id, (bundle,), observed_at=NOW)
+    _complete(engine, run)
+    context = review_store.review_context(engine, bundle.events[0].event_id)
+
+    with pytest.raises(ValueError, match="review-time inputs"):
+        rule_probe.run_rule_probe(
+            engine,
+            load_catalog(),
+            context,
+            rule_code="ml-rl-loop-vocabulary",
+            model="gpt-5.6-luna",
+            effort="low",
+            idempotency_key="glossary-probe-24",
+        )
+    assert review_store.stored_probe(engine, "glossary-probe-24") is None

@@ -111,7 +111,7 @@ shared_prompt: |-
   <path>:<line>: <code> (<confidence>) <message>
   ```
 
-  - `<path>` — repo-relative, forward slashes.
+  - `<path>` — repo-relative, forward slashes, or `PR_TITLE` / `PR_BODY` for PR text.
   - `<line>` — 1-indexed in the file as it exists post-change.
   - `<code>` — the `ml-...` code from the catalog.
   - `<confidence>` — two decimals, e.g. `0.82`.
@@ -247,6 +247,7 @@ lanes:
   include_complexity_leads: false
   min_diff_lines: 0
   rules:
+  - ml-rl-loop-vocabulary
   - ml-utils-module
   - ml-misleading-name
   - ml-vestigial-qualifier

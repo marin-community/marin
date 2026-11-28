@@ -148,6 +148,9 @@ def _probe_identity(
     if effort not in SUPPORTED_EFFORTS:
         raise ValueError(f"unsupported effort {effort!r}; choose from {sorted(SUPPORTED_EFFORTS)}")
     rule = catalog.rule(rule_code)
+    if rule.inputs:
+        inputs = ", ".join(sorted(rule.inputs))
+        raise ValueError(f"{rule.code} needs review-time inputs ({inputs}) that rule probes cannot replay")
     return rule, ProbeIdentity(
         event_id=context.event.event_id,
         context_sha=context.context_sha,
