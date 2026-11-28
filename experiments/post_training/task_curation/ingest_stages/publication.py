@@ -4,6 +4,7 @@
 """Publish through the maintained retention path and remeasure the private pin."""
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import uuid4
@@ -51,7 +52,7 @@ from experiments.post_training.task_curation.oversight_binding import bind_deriv
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref
 from experiments.post_training.task_curation.remediation_binding import PublicationReceipt, RetainedReleaseReceipt
-from experiments.post_training.task_curation.remediation_publish import ReleasePlan, publish_plan
+from experiments.post_training.task_curation.remediation_publish import RawSourceArchive, ReleasePlan, publish_plan
 from experiments.post_training.task_curation.retained_census import census_release
 from experiments.post_training.task_curation.retained_grading import RetainedGradingReceipt, grading_receipt
 from experiments.post_training.task_curation.sample_qc_binding import SampleQCReceipt
@@ -192,17 +193,15 @@ def retention_plan(
     )
 
 
-def declare_stage(job: StageJob) -> dict[str, ArtifactRef]:
-    """Publish, remeasure and seal a qualification for host-side Git landing."""
-    regional_worker(job.execution.policy.cluster, job.execution.artifact_root, job.output_root)
-    parent_receipt(job.execution, IngestStage.SAMPLE_QC, job.inputs.dependencies[IngestStage.SAMPLE_QC])
-    complete = StoragePath(job.output_root) / "completed.json"
-    if complete.exists():
-        previous = DeclarationOutputs.model_validate_json(complete.read_bytes())
-        if previous.input_sha256 != job.inputs.digest():
-            raise ValueError("Completed publication belongs to another stage input")
-        verify_evidence(list(previous.outputs.values()))
-        return previous.outputs
+@dataclass(frozen=True)
+class QualifiedPublication:
+    retained: RetainedReleaseReceipt
+    population: SourceTextPopulation
+    archive: RawSourceArchive | None
+
+
+def publication_root(job: StageJob) -> str:
+    """Recover the fixed publication attempt for these exact stage inputs."""
     attempt_path = StoragePath(job.output_root) / "attempt.json"
     if attempt_path.exists():
         attempt = json.loads(attempt_path.read_bytes())
@@ -213,6 +212,11 @@ def declare_stage(job: StageJob) -> dict[str, ArtifactRef]:
     else:
         root = prefix_join(job.output_root, f"attempts/{uuid4().hex}")
         seal_manifest({"input_sha256": job.inputs.digest(), "root": root}, str(attempt_path))
+    return root
+
+
+def publish_retained(job: StageJob, root: str) -> QualifiedPublication:
+    """Publish the selected private pin and measure its retained actor and grader contracts."""
     original = source_conversion(job)
     population = SourceTextPopulation.model_validate(read_ref(job.inputs.artifacts["dedup/population"]))
     plan, measurement = retention_plan(job, population, root)
@@ -259,6 +263,62 @@ def declare_stage(job: StageJob) -> dict[str, ArtifactRef]:
         original_info=original.info,
         retained_dedup=census["dedup"],
     )
+    return QualifiedPublication(retained, SourceTextPopulation.model_validate(census["population"]), archive)
+
+
+def publication_fingerprint(
+    job: StageJob, qualified: QualifiedPublication, declaration: dict, root: str
+) -> dict[str, ArtifactRef]:
+    """Reuse overlap only for unchanged bytes; otherwise remeasure the retained population."""
+    retained = qualified.retained
+    source_id = retained.source_id
+    population = SourceTextPopulation.model_validate(read_ref(job.inputs.artifacts["dedup/population"]))
+    population_ref = seal_manifest(qualified.population.model_dump(mode="json"), prefix_join(root, "population.json"))
+    measured = fingerprint_population(
+        source_id, retained.actor.input, population_ref, region_prefix=job.execution.artifact_root
+    )
+    if measured.population.task_specs_sha256 == population.task_specs_sha256:
+        previous = canonical_identity_survey(read_ref(job.inputs.artifacts["fingerprint-overlap/survey"]))
+        survey = previous.model_copy(update={"fingerprints": {**previous.fingerprints, source_id: measured.fingerprint}})
+        survey_ref = seal_manifest(survey.model_dump(mode="json"), prefix_join(root, "survey.json"))
+        locations = PopulationLocations.model_validate(read_ref(job.inputs.artifacts["fingerprint-overlap/locators"]))
+        prepared = locations.prepared[source_id].model_copy(
+            update={"inputs_sha256": canonical_sha256(measured.fingerprint.inputs)}
+        )
+        locations = measured.locations.model_copy(update={"prepared": {source_id: prepared}})
+    else:
+        baseline, locations = baseline_survey(job, read_ref(job.inputs.artifacts["catalog-declarations"]))
+        reviewed = review_population(job, measured, baseline, locations, prefix_join(root, "retained-overlap"))
+        survey_ref = reviewed["survey"]
+        locations = PopulationLocations.model_validate(read_ref(reviewed["locators"]))
+    fingerprint_ref = FingerprintReference(
+        uri=survey_ref.uri,
+        sha256=survey_ref.sha256,
+        input_sha256=canonical_sha256(fingerprint_input(declaration).model_dump(mode="json")),
+    )
+    return {
+        "population": population_ref,
+        "fingerprint-reference": seal_manifest(
+            fingerprint_ref.model_dump(mode="json"), prefix_join(root, "fingerprint-reference.json")
+        ),
+        "locators": seal_manifest(locations.model_dump(mode="json"), prefix_join(root, "locators.json")),
+    }
+
+
+def declare_stage(job: StageJob) -> dict[str, ArtifactRef]:
+    """Publish, remeasure and seal a qualification for host-side Git landing."""
+    regional_worker(job.execution.policy.cluster, job.execution.artifact_root, job.output_root)
+    parent_receipt(job.execution, IngestStage.SAMPLE_QC, job.inputs.dependencies[IngestStage.SAMPLE_QC])
+    complete = StoragePath(job.output_root) / "completed.json"
+    if complete.exists():
+        previous = DeclarationOutputs.model_validate_json(complete.read_bytes())
+        if previous.input_sha256 != job.inputs.digest():
+            raise ValueError("Completed publication belongs to another stage input")
+        verify_evidence(list(previous.outputs.values()))
+        return previous.outputs
+    root = publication_root(job)
+    qualified = publish_retained(job, root)
+    retained = qualified.retained
     outcome = QCOutcome.model_validate(read_ref(job.inputs.artifacts["sample-qc/outcome"]))
     sample = None
     if outcome.sample_passed:
@@ -277,43 +337,15 @@ def declare_stage(job: StageJob) -> dict[str, ArtifactRef]:
             key for key in set(starting or {}) | set(declaration) if (starting or {}).get(key) != declaration.get(key)
         ),
     }
-    population_ref = seal_manifest(census["population"], prefix_join(root, "population.json"))
-    measured = fingerprint_population(
-        admission.source_id, retained.actor.input, population_ref, region_prefix=job.execution.artifact_root
-    )
-    if measured.population.task_specs_sha256 == population.task_specs_sha256:
-        previous = canonical_identity_survey(read_ref(job.inputs.artifacts["fingerprint-overlap/survey"]))
-        survey = previous.model_copy(
-            update={"fingerprints": {**previous.fingerprints, admission.source_id: measured.fingerprint}}
-        )
-        survey_ref = seal_manifest(survey.model_dump(mode="json"), prefix_join(root, "survey.json"))
-        locations = PopulationLocations.model_validate(read_ref(job.inputs.artifacts["fingerprint-overlap/locators"]))
-        prepared = locations.prepared[admission.source_id].model_copy(
-            update={"inputs_sha256": canonical_sha256(measured.fingerprint.inputs)}
-        )
-        locations = measured.locations.model_copy(update={"prepared": {admission.source_id: prepared}})
-    else:
-        baseline, locations = baseline_survey(job, read_ref(job.inputs.artifacts["catalog-declarations"]))
-        reviewed = review_population(job, measured, baseline, locations, prefix_join(root, "retained-overlap"))
-        survey_ref = reviewed["survey"]
-        locations = PopulationLocations.model_validate(read_ref(reviewed["locators"]))
-    fingerprint_ref = FingerprintReference(
-        uri=survey_ref.uri,
-        sha256=survey_ref.sha256,
-        input_sha256=canonical_sha256(fingerprint_input(declaration).model_dump(mode="json")),
-    )
+    plan, publication, archive = qualified.retained.publication.plan, qualified.retained.publication, qualified.archive
     outputs = {
+        **publication_fingerprint(job, qualified, declaration, root),
         "selection": ArtifactRef(
             uri=plan.combined_drop_manifest_uri, sha256=file_sha256(StoragePath(plan.combined_drop_manifest_uri))
         ),
         "changes": seal_manifest(changes, prefix_join(root, "changes.json")),
         "admission": seal_manifest(admission.model_dump(mode="json"), prefix_join(root, "admission.json")),
         "declaration": seal_manifest(declaration, prefix_join(root, "declaration.json")),
-        "population": population_ref,
-        "fingerprint-reference": seal_manifest(
-            fingerprint_ref.model_dump(mode="json"), prefix_join(root, "fingerprint-reference.json")
-        ),
-        "locators": seal_manifest(locations.model_dump(mode="json"), prefix_join(root, "locators.json")),
         "private-tasks": ArtifactRef(
             uri=str(StoragePath(publication.specs_output_dir) / "part-000000.parquet"),
             sha256=publication.tasks_parquet_sha256,

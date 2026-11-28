@@ -14,11 +14,13 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ConversationInput, NoGrader, ResourceGroups, TaskSpec, TextMessage
-from taskcompendium.pipeline.models import IntendedUse
+from taskcompendium.pipeline.inputs import ConversionContext
+from taskcompendium.pipeline.models import IntendedUse, RawRow
 from taskcompendium.source_fingerprints import SourceIdentitySurvey
 
 from experiments.post_training.task_curation.atlas_deployment import region_deployment
 from experiments.post_training.task_curation.backend_census_manifest import seal_manifest
+from experiments.post_training.task_curation.datasets.tasktrove import code_contests_repair
 from experiments.post_training.task_curation.ingest_stages import qc, submission
 from experiments.post_training.task_curation.ingest_stages.conversion import convert_stage
 from experiments.post_training.task_curation.ingest_stages.licensing import LicenseAssessment
@@ -230,3 +232,24 @@ def test_retention_adapter_drops_only_training_overlap_after_quick_dedup(measure
     assert bound.input.task_specs_sha256 == population.task_specs_sha256
     assert bound.use.value == use and bound.measurement.contaminated_tasks == int(flagged)
     assert retention_plan(job, population, str(tmp_path / "retention")) == (plan, bound)
+
+
+def test_repair_preserves_contracts_but_refuses_floating_workspace_dependencies(measured_job):
+    population = SourceTextPopulation.model_validate(read_ref(measured_job.inputs.artifacts["dedup/population"]))
+    row = pq.read_table(next(Path(population.specs_output_dir).glob("*.parquet"))).to_pylist()[0]
+    original = TaskSpec.model_validate_json(row["task_spec"])
+    context = ConversionContext(inputs={}, grader_environment=None)
+    raw = RawRow(id="repaired", source=original.source, data={"task_spec": original.model_dump_json()})
+    converted = code_contests_repair.convert(raw, context)
+    assert converted.task.grader == original.grader and converted.task.resources == original.resources
+    assert {change.field for change in converted.changes} == {"id"}
+    floating = original.model_copy(
+        update={
+            "environment_requirements": original.environment_requirements.model_copy(
+                update={"setup_commands": ("python3 -m pip install requests",)}
+            )
+        }
+    )
+    raw = replace(raw, data={"task_spec": floating.model_dump_json()})
+    with pytest.raises(ValueError, match="hashed dependency locks"):
+        code_contests_repair.convert(raw, context)

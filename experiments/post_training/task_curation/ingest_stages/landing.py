@@ -162,6 +162,8 @@ def commit_qualification(execution: IngestExecution, report: ArtifactRef, checko
             str(Path.home() / ".local/bin/atlas-push"),
             "--test",
             f"{check} && {tests}",
+            "--waivers",
+            "experiments/post_training/task_curation/declaration-projection-waivers.json",
             "--who",
             "atlas-ingest",
             "--what",
