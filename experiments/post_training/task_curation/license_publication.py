@@ -40,6 +40,48 @@ from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned,
 
 NOTICE_FILENAME = re.compile(r"^(?:notice|attribution|copyright)(?:[._-].*)?$", re.IGNORECASE)
 LICENSE_FIELDS = ("license", "license_name", "license_link")
+# The identifiers the Hub's dataset-card schema accepts in the ``license``
+# field (https://huggingface.co/docs/hub/repositories-licenses). An identifier
+# outside this taxonomy becomes "other" in the card metadata — the hub rejects
+# unknown ids outright (the OpenSWE taskspec publication's bsd-2-clause-patent
+# evidence) — while the checked receipt and the card body keep the exact set.
+HUB_LICENSE_IDS = frozenset(
+    {
+        "afl-3.0", "agpl-3.0", "apache-2.0", "apple-amlr", "apple-ascl", "artistic-2.0",
+        "bigcode-openrail-m", "bigscience-bloom-rail-1.0", "bigscience-openrail-m", "bsd",
+        "bsd-2-clause", "bsd-3-clause", "bsd-3-clause-clear", "bsl-1.0", "c-uda", "cc",
+        "cc-by-2.0", "cc-by-2.5", "cc-by-3.0", "cc-by-4.0", "cc-by-nc-2.0", "cc-by-nc-3.0",
+        "cc-by-nc-4.0", "cc-by-nc-nd-3.0", "cc-by-nc-nd-4.0", "cc-by-nc-sa-2.0",
+        "cc-by-nc-sa-3.0", "cc-by-nc-sa-4.0", "cc-by-nd-4.0", "cc-by-sa-3.0", "cc-by-sa-4.0",
+        "cc0-1.0", "cdla-permissive-1.0", "cdla-permissive-2.0", "cdla-sharing-1.0",
+        "creativeml-openrail-m", "deepfloyd-if-license", "ecl-2.0", "epl-1.0", "epl-2.0",
+        "etalab-2.0", "eupl-1.1", "eupl-1.2", "fair-noncommercial-research-license", "gemma",
+        "gfdl", "gpl", "gpl-2.0", "gpl-3.0", "grok2-community", "h-research",
+        "intel-research", "isc", "lgpl", "lgpl-2.1", "lgpl-3.0", "lgpl-lr", "llama2",
+        "llama3", "llama3.1", "llama3.2", "llama3.3", "llama4", "lppl-1.3c", "mit",
+        "mpl-2.0", "ms-pl", "ncsa", "odbl", "odc-by", "ofl-1.1", "openmdw-1.0",
+        "openmdw-1.1", "openrail", "osl-3.0", "other", "pddl", "postgresql", "unknown",
+        "unlicense", "wtfpl", "zlib",
+    }
+)
+
+
+def hub_license_card_value(identifiers: list[str]) -> str | list[str]:
+    """The card's ``license`` value for a checked identifier set.
+
+    Recognized Hub identifiers ride verbatim; anything outside the Hub's
+    taxonomy becomes ``other`` (the repo carries the upstream LICENSE notice
+    file, which is the hub's requirement for that spelling). The checked
+    receipt keeps the exact identifiers; only the card summary maps.
+    """
+    known = sorted(identifier for identifier in identifiers if identifier in HUB_LICENSE_IDS)
+    if not known:
+        raise ValueError(f"no checked licence identifier is in the Hub's taxonomy: {sorted(identifiers)}")
+    if len(known) != len(identifiers) and "other" not in known:
+        known.append("other")
+    return known[0] if len(known) == 1 else known
+
+
 
 
 @dataclass(frozen=True)
@@ -263,7 +305,7 @@ def _prepare_package_publication(receipt: LicenseReceipt, evidence: LicenseEvide
     # HF's card schema accepts its own lowercase identifier spellings.
     identifiers = [identifier.lower() for identifier in identifiers]
     metadata = {
-        "license": identifiers[0] if len(identifiers) == 1 else identifiers,
+        "license": hub_license_card_value(identifiers),
         "license_source": {"dataset_id": receipt.dataset_id, "revision": receipt.revision, "url": wheel_url},
         "license_evidence_urls": [evidence.url],
         "license_input": {"dataset_id": receipt.dataset_id, "revision": receipt.revision},
@@ -432,14 +474,14 @@ def prepare_license_publication(
             )
             if not identifiers:
                 raise ValueError("Publication has no checked permissive license evidence for its resolved source")
-            metadata["license"] = identifiers[0] if len(identifiers) == 1 else identifiers
+            metadata["license"] = hub_license_card_value(identifiers)
         elif "license" not in metadata:
             identifiers = sorted(
                 {identifier for item in source_evidence for identifier in item.license_ids} - {"missing"}
             )
             if license_verdict(tuple(identifiers)) is not LicenseVerdict.ALLOWED:
                 raise ValueError("Checked grant supplies no publishable permissive license identifier")
-            metadata["license"] = identifiers[0] if len(identifiers) == 1 else identifiers
+            metadata["license"] = hub_license_card_value(identifiers)
         metadata["license_evidence_urls"] = sorted(
             {
                 item.url

@@ -125,6 +125,38 @@ def test_private_publication_prepares_without_writes_then_checks_uploaded_pin(tm
     assert result.license_check["receipt"]["revision"] == revision
 
 
+def test_hub_license_card_value_maps_unknown_identifiers_to_other():
+    """The Hub's card schema rejects identifiers outside its own taxonomy
+    outright (the OpenSWE taskspec publication's bsd-2-clause-patent
+    evidence); the card's license summary maps them to "other" — the repo
+    ships the upstream LICENSE notice — while the checked receipt keeps the
+    exact set."""
+    value = license_publication.hub_license_card_value(
+        ["apache-2.0", "bsd-2-clause", "bsd-2-clause-patent", "cc0-1.0", "mit"]
+    )
+    assert value == ["apache-2.0", "bsd-2-clause", "cc0-1.0", "mit", "other"]
+    assert license_publication.hub_license_card_value(["mit"]) == "mit"
+    with pytest.raises(ValueError):
+        license_publication.hub_license_card_value(["made-up-licence-1"])
+
+
+def test_publication_card_maps_unknown_identifiers_to_other(tmp_path, monkeypatch):
+    card = (
+        b"---\nlicense:\n  - mit\n  - bsd-2-clause-patent\n---\n# Dataset\n\n## License\n"
+        b"Licensed under MIT and the BSD 2-Clause Patent licence.\n"
+    )
+    snapshot_hub(tmp_path, monkeypatch, {"README.md": card, "LICENSE": b"MIT + BSD-2-Clause-Patent text\n"})
+    receipt = source_receipt(card)
+    publication = license_publication.prepare_license_publication(receipt, tmp_path / "published", use="train")
+    # The card's license summary is Hub-valid: the unknown identifier becomes
+    # "other"; the checked receipt keeps the exact set.
+    assert publication.metadata["license"] == ["mit", "other"]
+    evidence_ids = {identifier for item in receipt.evidence for identifier in item.license_ids}
+    assert "bsd-2-clause-patent" in evidence_ids
+    files = {path.name: path.read_bytes() for path in publication.notice_files}
+    assert files["LICENSE"] == b"MIT + BSD-2-Clause-Patent text\n"
+
+
 def test_publication_states_folder_lineage_license(tmp_path, monkeypatch):
     card = b"---\nlicense: apache-2.0\n---\n# Dataset\n\n## License\nLicensed under Apache License 2.0.\n"
     """The repackager ruling: the card states each included folder's upstream license."""
