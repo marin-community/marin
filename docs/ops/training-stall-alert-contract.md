@@ -39,6 +39,8 @@ SELECT
   to_timestamp_millis(timestamp_ms) AS observed_at
 FROM "levanter.metrics"
 WHERE run_id = '<hero-run-id>'
+  AND COALESCE(NULLIF(cluster, ''), 'unknown') = '<cluster>'
+  AND process_index = 0
   AND name IN ('phase', 'progress_time_seconds')
   AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '30 minutes') * 1000 AS BIGINT)
 ORDER BY timestamp_ms DESC, seq DESC

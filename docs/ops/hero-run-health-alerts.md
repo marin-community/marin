@@ -9,13 +9,14 @@ Pushover monitor applies.
 |---|---|---|
 | `TrainingTelemetryGone` | `notification=hero-run`: Slack, a Loom triage session, email | `telemetry_gone`, `run_down` |
 | `TrainingOptimizerUnstable` | `notification=hero-run` | `loss_jump`, `grad_norm_high`, `steps_skipped` |
-| `TrainingRunHealthDegraded` | `notification=slack`: Slack, no triage session | `token_drops`, `router_entropy`, `router_bias`, `throughput_low`, `mfu_low`, `eval_regressed`, `iris_state_stale`, `task_retried` |
+| `TrainingRunHealthDegraded` | `notification=slack`: Slack and a Loom session on the default `operator` channel | `token_drops`, `router_entropy`, `router_bias`, `throughput_low`, `mfu_low`, `eval_regressed`, `iris_state_stale`, `task_retried` |
 
 Each rule evaluates once a minute and stays pending for five. Each firing check is its own alert
 instance labeled with its `reason`; the hero-run route groups them by logical run.
 The `notification=slack` route groups `TrainingRunHealthDegraded` by alert name and
-cluster, so one Slack notification may contain checks from several runs. Open each
-firing alert instance to identify its run and reason.
+cluster, so one Slack notification may contain checks from several runs. Its
+bridge opens a Loom session on the default `operator` channel for the firing group.
+Open each alert instance to identify its run and reason.
 Every `notification=hero-run` group, including `TrainingProgressStalled` and
 `TrainingLossSpike`, carries `operator_behavior=hero`. The bridge resolves that
 trusted behavior to the `operator:hero` channel on Loom's shared `ops` profile,
@@ -136,21 +137,28 @@ reports the shared query-path failure. Grafana's `noDataState: Alerting` and
    attempt a fresh 45-minute initialization window. Inspect Iris attempt events during a restart;
    [critical coverage during retries](https://github.com/marin-community/marin/issues/10048) is still open.
 
-Verify what a rule saw with a bounded Finelog query:
+Inspect recent training telemetry for the alert's cluster and run with a bounded Finelog query:
 
 ```sql
 SELECT
+  execution_uid,
   name,
   value,
   to_timestamp_millis(timestamp_ms) AS observed_at
 FROM "levanter.metrics"
 WHERE run_id = '<hero-run-id>'
+  AND COALESCE(NULLIF(cluster, ''), 'unknown') = '<cluster>'
+  AND process_index = 0
   AND name IN ('phase', 'grad_norm_total', 'optim_skipped_step', 'moe_drop_fraction',
                'train_router_routing_entropy_mean', 'throughput_mfu')
   AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '15 minutes') * 1000 AS BIGINT)
 ORDER BY timestamp_ms DESC, seq DESC
 LIMIT 50;
 ```
+
+Compare `execution_uid` with the newest `phase` row before interpreting a retried run.
+For `telemetry_gone`, extend the phase query to 24 hours. Evaluation history comes
+from W&B; Iris state and retry events come from their own Finelog tables.
 
 ## Tuning
 
