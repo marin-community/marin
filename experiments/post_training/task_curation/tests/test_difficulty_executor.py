@@ -9,12 +9,14 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from threading import Event
+from types import SimpleNamespace
 
 import pytest
-from finestore.rl.difficulty import Solver
+from finestore.rl.difficulty import SOLVER_MODELS, Solver
 from iris.resources.state import JobState
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.task_curation.difficulty import controller, runtime
 from experiments.post_training.task_curation.difficulty.budget import campaign_budget
 from experiments.post_training.task_curation.difficulty.campaign import identity_bundle
 from experiments.post_training.task_curation.difficulty.executor import (
@@ -49,6 +51,7 @@ from experiments.post_training.task_curation.difficulty.state import (
     Outcome,
     cell_state,
 )
+from experiments.post_training.task_curation.difficulty_protocol import PINS
 from experiments.post_training.task_curation.tests.test_difficulty_reconciler import SOURCE, blocked, row
 
 
@@ -458,3 +461,68 @@ def test_rolling_controllers_share_the_lease_without_duplicate_submission(tmp_pa
     backend.submit = submit
     assert reconcile_once(*args)["submitted"] == []
     assert len(list((tmp_path / "jobs").glob("*.json"))) == 4
+
+
+@pytest.mark.parametrize("drain_large", [True, False])
+def test_tpu_controller_provider_filter_drains_large_without_stopping_other_solvers(
+    tmp_path, monkeypatch, review_server, drain_large
+):
+    ledger = str(tmp_path / "ledger")
+    pools = tmp_path / "pools"
+    pools.mkdir()
+    version = tmp_path / "ledger/v1"
+    (version / "imports").mkdir(parents=True)
+    (version / "imports/fixture.json").write_text("{}")
+    identity = identity_bundle()
+    (version / "campaign.json").write_text(
+        json.dumps({"identity": identity, "campaign_id": digest(identity), "holds": []})
+    )
+    for solver, chips in ((Solver.SMALL, 64), (Solver.SNOWBALL, 64), (Solver.LARGE, 128)):
+        (pools / (solver.value + ".json")).write_text(
+            json.dumps(
+                {
+                    "solver": solver.value,
+                    "model": SOLVER_MODELS[solver],
+                    "platform": "tpu",
+                    "region": "us-central2",
+                    "chip_count": chips,
+                    "gpu_count": 0,
+                    "revision": PINS[solver].revision,
+                    "ready_at": "2026-01-01T00:00:00+00:00",
+                    "endpoint_name": "/serve/" + solver.value,
+                }
+            )
+        )
+    review_server.model_ids[:] = list(SOLVER_MODELS.values())
+    scheduler = JobStore(str(tmp_path / "jobs"))
+    context = SimpleNamespace(
+        client=SimpleNamespace(resolve_endpoint=lambda name: f"http://127.0.0.1:{review_server.server_port}"),
+        job_id="/owner/controller",
+    )
+    monkeypatch.setattr(controller, "iris_ctx", lambda: context)
+    monkeypatch.setattr(runtime, "iris_ctx", lambda: context)
+    monkeypatch.setattr(controller, "IrisBackend", lambda *args: scheduler)
+    monkeypatch.setattr(controller, "require_secret", lambda name: "fixture-refresh")
+    monkeypatch.setattr(controller, "served_catalog", lambda *args, **kwargs: [SOURCE])
+
+    def end_iteration(seconds):
+        raise StopIteration
+
+    monkeypatch.setattr(controller.time, "sleep", end_iteration)
+    allowed = frozenset({Solver.SMALL, Solver.SNOWBALL, Solver.HOSTED})
+    with pytest.raises(StopIteration):
+        controller.run_controller(
+            ledger,
+            "fixture",
+            False,
+            allowed if drain_large else frozenset(),
+            None,
+            str(pools),
+            excluded_sources=frozenset(),
+        )
+    submitted = {json.loads(path.read_text())["solver"] for path in (tmp_path / "jobs").glob("*.json")}
+    expected = allowed if drain_large else frozenset(Solver)
+    assert submitted == {solver.value for solver in expected}
+    rows = read_rows(ledger)
+    assert {row.solver for row in rows if row.outcome == Outcome.SUBMITTED} == expected
+    assert {row.solver for row in rows if row.outcome == Outcome.COST} == expected - {Solver.HOSTED}

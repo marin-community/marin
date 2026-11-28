@@ -134,7 +134,7 @@ def run_controller(
         available = available_artifact_uris(cells)
         waiting = any(gap.reason == GapReason.PROVIDER_CAPACITY_WAIT for cell in cells for gap in cell.gaps)
         capacity = (
-            qualified
+            (qualified & providers if providers else qualified)
             if qualified is not None
             else (
                 frozenset(Solver)

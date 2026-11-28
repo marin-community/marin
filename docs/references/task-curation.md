@@ -3076,6 +3076,13 @@ Harbor consumes its usage-report JSON.
 New DATA attempts have distinct action identities; existing EVAL receipts remain
 valid, and in-flight children drain before a controller replacement.
 
+For a TPU campaign, repeated `--provider-available` arguments restrict new
+attempts to the listed solvers whose pools qualify. Omitting the arguments admits
+all qualified solvers. To drain Large before replacing its serving owner, list
+`small`, `snowball` and `hosted`; existing Large children continue, and the Large pool
+receipt and frozen solver identity stay intact. Restore `large` in the next
+controller launch after the replacement pool qualifies.
+
 An unavailable original artifact recipe, unknown judge
 route, unsupported compose document, network policy violation or protocol
 budget issue is escalated without excluding its source. Escalations are retained
