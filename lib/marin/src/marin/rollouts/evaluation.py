@@ -89,7 +89,7 @@ from taskcompendium.evaluation.spec import (
     PiAgent,
     TextGeneration,
 )
-from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     EnvironmentRequirements,
@@ -157,6 +157,10 @@ RETRYABLE_ERRORS = (
     TmuxSessionEndedError,
     ModelAuthenticationError,
 )
+
+
+# Grading failures in which the grader outlasted the verifier deadline or its own command timeout.
+VERIFIER_TIMEOUTS = frozenset({GradingFailure.TIMEOUT, GradingFailure.GRADER_TIMEOUT})
 
 
 class EvaluationInfrastructureError(RuntimeError):
@@ -835,24 +839,35 @@ async def _score_rollout(
 
     failure_evidence = None
     permanent_error = None
-    agent_broke_machine = False
+    # Harbor scores a trial whose agent fails as a failed attempt. Its agent failing includes filling its machine's
+    # disk or removing what its commands need, a provider rejecting a later request of its episode, and a verifier,
+    # which runs what the agent left, outlasting its timeout.
+    failed_attempt = False
+    interrupted = None
     try:
         result = await engine.run_task(spec, policy_model)
         rollout, grade = result.rollout, result.grade
     except GradedRolloutInterrupted as error:
+        interrupted = error.operation
         rollout, grade = error.rollout, error.grade
         cause = error.__cause__
         if isinstance(cause, ModelResponseError):
             failure_evidence = {"response": cause.response, "response_json": cause.response_json}
         elif isinstance(cause, APIError):
             failure_evidence = {"provider_error": cause.body}
-        agent_broke_machine = (
-            isinstance(cause, MachineDiskFull | CommandOutputLost) and error.operation is not RolloutOperation.START
-        )
-        if agent_broke_machine:
-            # As Harbor scores a trial whose agent filled its machine's disk or removed what its commands need,
-            # the attempt is a failed submission.
+        if isinstance(cause, MachineDiskFull | CommandOutputLost) and error.operation is not RolloutOperation.START:
+            failed_attempt = True
             grade = GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, f"The task machine failed during the episode: {cause}")
+        # A rejection of an episode's first request is a configuration error that every attempt would meet.
+        elif (
+            isinstance(operation, AgentEpisode)
+            and _permanent_api_error(cause)
+            and any(conversation.steps for conversation in rollout.conversations)
+        ):
+            failed_attempt = True
+            grade = GradeResult(
+                Outcome.SUBMISSION_FAILURE, 0.0, f"The provider rejected a request of the episode: {cause}"
+            )
         # Machine creation, setup and backend failures before the harness starts are retryable infrastructure.
         elif (
             cause is not None
@@ -860,7 +875,15 @@ async def _score_rollout(
             and (_permanent_api_error(cause) or not isinstance(cause, RETRYABLE_ERRORS))
         ):
             permanent_error = cause
-    if agent_broke_machine:
+    # A verifier timeout fails the attempt; a machine lost during grading stays infrastructure.
+    if (
+        isinstance(operation, AgentEpisode)
+        and interrupted in (None, RolloutOperation.GRADE)
+        and grade.failure in VERIFIER_TIMEOUTS
+    ):
+        failed_attempt = True
+        grade = dataclasses.replace(grade, status=Outcome.SUBMISSION_FAILURE, reward=0.0)
+    if failed_attempt:
         outcome = Outcome.SUBMISSION_FAILURE
     elif rollout.failure is not None or grade.status in (Outcome.INFRA_ERROR, Outcome.UNAVAILABLE):
         outcome = Outcome.INFRA_ERROR

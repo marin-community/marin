@@ -48,7 +48,17 @@ from rolloutengine.likelihood import VllmLikelihood
 from rolloutengine.models import ModelRequest, ModelTurn, Prompt, RolloutLimits, TokenUsage
 from rolloutengine.test_support import machine_runtime
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Command, CommandOutputLost, MachineDiskFull, MachineSpec, NetworkPolicy, PackageSpec
+from shellbox.machine import (
+    Command,
+    CommandOutputLost,
+    ExitReason,
+    MachineDiskFull,
+    MachineSpec,
+    MachineTerminated,
+    NetworkPolicy,
+    PackageSpec,
+    Result,
+)
 from taskcompendium.convert.answers import answer_task, exact_answer_task, source_evidence
 from taskcompendium.evaluation.corpus import chat_item, evaluation_cases, evaluation_protocol
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE
@@ -76,6 +86,7 @@ from taskcompendium.evaluation.spec import (
     TrialPolicy,
 )
 from taskcompendium.models import (
+    AgentMachine,
     CommandSemantics,
     ConversationInput,
     EnvironmentRequirements,
@@ -1288,7 +1299,7 @@ def convert_episode_row(row: RawRow, _context: ConversionContext):
     return task.model_copy(update={"tags": ("eval",), "environment_requirements": environment})
 
 
-def episode_item(task, agent=ShellAgent()):
+def episode_item(task, agent=ShellAgent(), verifier_timeout=None):
     limits = EpisodeLimits(
         max_turns=4,
         max_total_tokens=None,
@@ -1302,7 +1313,12 @@ def episode_item(task, agent=ShellAgent()):
         task_id=task.id,
         source_row=task.source.row,
         operation=AgentEpisode(harness=agent, limits=limits),
-        episode=EpisodeInputs(agent_timeout=0.5 if stalls else None, memory_mb=512, network=NetworkPolicy.DENY),
+        episode=EpisodeInputs(
+            agent_timeout=0.5 if stalls else None,
+            verifier_timeout=verifier_timeout,
+            memory_mb=512,
+            network=NetworkPolicy.DENY,
+        ),
     )
 
 
@@ -1314,7 +1330,7 @@ def convert_keyed_episode_row(row: RawRow, context: ConversionContext):
     return task.model_copy(update={"environment_requirements": environment})
 
 
-def publish_episodes(tmp_path, questions, agent, convert=convert_episode_row):
+def publish_episodes(tmp_path, questions, agent, convert=convert_episode_row, verifier_timeout=None):
     source = tmp_path / "episodes"
     source.mkdir()
     (source / "rows.jsonl").write_text("".join(json.dumps({"question": question}) + "\n" for question in questions))
@@ -1342,7 +1358,7 @@ def publish_episodes(tmp_path, questions, agent, convert=convert_episode_row):
     client = LocalClient()
     try:
         with ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
-            item = partial(episode_item, agent=agent)
+            item = partial(episode_item, agent=agent, verifier_timeout=verifier_timeout)
             publish_evaluation_corpus(recipe, protocol, item, context, str(source), str(output))
     finally:
         client.shutdown()
@@ -1739,6 +1755,117 @@ async def test_a_broken_machine_is_retried_only_when_it_broke_before_the_agent_r
 
     finished = [row for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
     assert [row["outcome"] for row in finished] == outcomes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rejected_request", [1, 0], ids=["after-an-answer", "first-request"])
+async def test_a_rejected_episode_request_fails_its_attempt_unless_it_is_the_first(
+    tmp_path, run_config, rejected_request
+):
+    corpus = publish_episodes(tmp_path, ("episode/rejected", "episode/solve"), ShellAgent())
+    provider_error = {"message": "Assistant message must have a string or a list of tool calls", "code": 400}
+
+    async def model(request):
+        observations = sum(message["role"] == "tool" for message in request.messages)
+        if request.messages[0]["content"] == "episode/rejected" and observations == rejected_request:
+            response = httpx.Response(400, request=httpx.Request("POST", "http://fixture.test/v1/chat/completions"))
+            raise openai.BadRequestError("rejected", response=response, body=provider_error)
+        if observations:
+            return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(5, 2))
+        call = {"id": "write", "type": "function", "function": {"name": "shell", "arguments": '{"command": "echo"}'}}
+        message = {"role": "assistant", "content": "", "tool_calls": [call]}
+        return ModelTurn(message, (), (), None, "tool_calls", usage=TokenUsage(5, 2))
+
+    config = run_config.model_copy(update={"source_limit": None, "task_machine": machine_runtime(backend="shellsim")})
+    arguments = {
+        "machine_factories": {"shellsim": ShellSimMachineFactory()},
+        "harnesses": {"shell": lambda _agent, _budget: ShellHarness(command_timeout=None)},
+    }
+    output = str(tmp_path / "results")
+    if rejected_request == 0:
+        with pytest.raises(ExceptionGroup) as stopped:
+            await run_evaluation((corpus,), output, config, model, **arguments)
+        assert stopped.value.subgroup(openai.BadRequestError) is not None
+        return
+    await run_evaluation((corpus,), output, config, model, **arguments)
+
+    reader = ReadView(output)
+    finished = {
+        row["outcome"]: json.loads(reader.read_blob(row["result_blob"]))
+        for row in reader.iter_rows(ATTEMPTS_TABLE)
+        if row["phase"] == "finished"
+    }
+    assert finished.keys() == {"submission_failure", "graded"}
+    assert finished["submission_failure"]["grade"]["reward"] == 0.0
+    assert finished["submission_failure"]["failure_evidence"] == {"provider_error": provider_error}
+
+
+GRADER_ARGV = ("sh", "-c", "echo 1")
+
+
+def convert_machine_graded_episode_row(row: RawRow, context: ConversionContext):
+    task = convert_episode_row(row, context)
+    return task.model_copy(update={"grader": ScriptGrader(argv=GRADER_ARGV, cwd=None, placement=AgentMachine())})
+
+
+class StuckGraderFactory(ShellSimMachineFactory):
+    """ShellSim machines whose first grader command hangs, outlasts its timeout or loses its machine."""
+
+    def __init__(self, failure):
+        super().__init__()
+        self.failure = failure
+
+    async def create(self, spec):
+        machine = await super().create(spec)
+        run = machine.run
+
+        async def grade(command):
+            if command.argv != GRADER_ARGV or self.failure is None:
+                return await run(command)
+            failure, self.failure = self.failure, None
+            if failure == "hang":
+                await asyncio.Future()
+            if failure == "command-timeout":
+                return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+            raise MachineTerminated("The sandbox was deleted")
+
+        machine.run = grade
+        return machine
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "outcomes"),
+    [
+        ("hang", ["submission_failure"]),
+        ("command-timeout", ["submission_failure"]),
+        ("machine-lost", ["infra_error", "graded"]),
+    ],
+)
+async def test_an_episode_whose_verifier_times_out_fails_without_a_retry(tmp_path, run_config, failure, outcomes):
+    corpus = publish_episodes(
+        tmp_path, ("episode/solve",), ShellAgent(), convert=convert_machine_graded_episode_row, verifier_timeout=0.5
+    )
+
+    async def model(request):
+        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(5, 2))
+
+    config = run_config.model_copy(update={"source_limit": None, "task_machine": machine_runtime(backend="shellsim")})
+    arguments = {
+        "machine_factories": {"shellsim": StuckGraderFactory(failure)},
+        "harnesses": {"shell": lambda _agent, _budget: ShellHarness(command_timeout=None)},
+    }
+    output = str(tmp_path / "results")
+    if failure == "machine-lost":
+        with pytest.raises(EvaluationInfrastructureError):
+            await run_evaluation((corpus,), output, config, model, **arguments)
+    await run_evaluation((corpus,), output, config, model, **arguments)
+
+    reader = ReadView(output)
+    finished = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert [row["outcome"] for row in finished] == outcomes
+    rewards = [json.loads(reader.read_blob(row["result_blob"]))["grade"]["reward"] for row in finished]
+    assert rewards[-1] == (1.0 if failure == "machine-lost" else 0.0)
 
 
 @pytest.mark.asyncio

@@ -63,10 +63,11 @@ Harbor's agents retry such a request up to nine times, and the inference proxy a
 backs off between retries, and the session's model-turn timeout bounds them all.
 """
 # Records carry these as agent provenance, keyed by agent kind. Bump a harness's revision when its prompts,
-# parsing, tools or options change, so its runs get new identities instead of resuming older episodes.
+# parsing, tools or options change, and every revision when episode scoring changes, so runs get new identities
+# instead of resuming older episodes; chat runs do not carry them.
 # tests/evaluation/test_harness_revisions.py pins each revision to a digest of its harness's sources.
 EPISODE_HARNESS_REVISIONS: Mapping[str, str] = MappingProxyType(
-    {"shell": "2026.11.23.1", "terminus-2": "2026.11.23.1", PI_HARNESS: "2026.11.24.1", "mini-swe-agent": "2026.11.23.1"}
+    {"shell": "2026.11.28.1", "terminus-2": "2026.11.28.1", PI_HARNESS: "2026.11.28.1", "mini-swe-agent": "2026.11.28.1"}
 )
 
 logger = logging.getLogger(__name__)
