@@ -690,6 +690,7 @@ class BasePPOExp:
                             asyncio.run(trainer.shutdown())
                         except Exception as error:
                             logger.warning("Error shutting down trainer: {}", error)
+                        trainer.start_exit_watchdog()
         finally:
             if trainer is not None:
                 elapsed = time.monotonic() - started - trainer.evaluation_wall_time
@@ -710,6 +711,8 @@ class BasePPOExp:
                         runtime.get("attempt_id", "unknown"),
                         type(error).__name__,
                     )
+                finally:
+                    trainer.stop_exit_watchdog()
 
 
 @ray.remote(num_cpus=1, max_retries=0)

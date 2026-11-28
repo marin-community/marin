@@ -1,14 +1,12 @@
 """Tracker cleanup preserves the workload result when final uploads time out."""
 
 import os
-from contextlib import nullcontext
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
 import pytest
 import wandb
 from finestore.rl.run_records import RunIndexIdentity
-from finestore.rl.run_records import read_attempt
 from loguru import logger
 from omegaconf import OmegaConf
 
@@ -16,6 +14,7 @@ from omegaconf import OmegaConf
 os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
 
 import ray
+from skyrl_train import trainer as trainer_module
 from skyrl_train.entrypoints import main_base
 from skyrl_train.entrypoints.main_base import BasePPOExp
 from skyrl_train.utils.tracking import Tracking
@@ -141,27 +140,43 @@ def test_close_preserves_workload_result_and_reports_upload_timeout(
     assert len(warnings) == int(slow_role is not None)
 
 
-def test_failed_training_keeps_attempt_timing(tmp_path, monkeypatch):
+def test_training_exit_renews_watchdog_for_records_and_timing(tmp_path, monkeypatch):
+    events = []
     times = iter((100.0, 125.0))
     monkeypatch.setattr(main_base, "time", SimpleNamespace(monotonic=lambda: next(times)))
-    failure = RuntimeError("training failed")
-
-    async def train():
-        raise failure
-
-    async def shutdown():
-        pass
-
-    trainer = SimpleNamespace(train=train, shutdown=shutdown, evaluation_wall_time=7.0)
     config = OmegaConf.create(
         {
-            "trainer": {"export_path": str(tmp_path)},
-            "runtime": {"run_id": "native-run", "attempt_id": "native-attempt"},
+            "trainer": {"export_path": str(tmp_path), "project_name": "test", "run_name": "run", "logger": ["records"]},
+            "runtime": {"run_id": "run", "attempt_id": "attempt"},
         }
     )
-    experiment = SimpleNamespace(cfg=config, get_tracker=nullcontext, _setup_trainer=lambda tracker: trainer)
-    with pytest.raises(RuntimeError) as raised:
+    trainer = trainer_module.RayPPOTrainer.__new__(trainer_module.RayPPOTrainer)
+    trainer.evaluation_wall_time = 7.0
+
+    async def train():
+        trainer.start_exit_watchdog()
+        raise RuntimeError("training failed")
+
+    async def shutdown():
+        events.append("shutdown")
+
+    trainer.train, trainer.shutdown = train, shutdown
+    monkeypatch.setattr(trainer, "start_exit_watchdog", lambda: events.append("start"))
+    monkeypatch.setattr(trainer, "stop_exit_watchdog", lambda: events.append("stop"))
+    experiment = SimpleNamespace(cfg=config, _setup_trainer=lambda _: trainer)
+    tracker = BasePPOExp.get_tracker(experiment)
+    experiment.get_tracker = lambda: tracker
+    store = tracker.logger["records"].store
+    close = store.close
+
+    def close_records():
+        events.append("close")
+        close()
+
+    monkeypatch.setattr(store, "close", close_records)
+    monkeypatch.setattr(
+        main_base, "write_attempt", lambda _, attempt: events.append(attempt.elapsed_excluding_eval_seconds)
+    )
+    with pytest.raises(RuntimeError, match="training failed"):
         BasePPOExp._run(experiment)
-    assert raised.value is failure
-    assert (attempt := read_attempt(str(tmp_path), "native-attempt")) is not None
-    assert attempt.elapsed_excluding_eval_seconds == 18.0
+    assert events == ["start", "shutdown", "start", "close", 18.0, "stop"]

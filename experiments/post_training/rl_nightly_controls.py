@@ -8,22 +8,42 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Sequence
 from html import escape
 from pathlib import Path
 
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from finestore.rl.rl_progress import completed_controls
+from iris.cli.connect import open_iris_client
+from iris.client.client import IrisClient
+from iris.cluster.backends.k8s.tasks import POD_DELETED_TERMINAL_REASON
+from iris.cluster.client.job_info import resolve_job_user
+from iris.cluster.types import JobName
+from iris.resources.state import JobState, TaskState, is_job_finished
+from marin.execution.remote import sanitize_job_name
+from marin.rl.skyrl import IRIS_HUB_CLUSTER_CONFIG
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training import rl_compose, rl_gate, rl_index
+from experiments.post_training import rl, rl_compose, rl_gate, rl_index, rl_publication
 from experiments.post_training.mochi_rl import MOCHI
 from experiments.post_training.rl_presets import Preset
 from experiments.post_training.snowball_rl import SNOWBALL
+
+_TABLES = {table.model: table for table in (SNOWBALL, MOCHI)}
+_ACTIVE_STATES = (JobState.PENDING, JobState.BUILDING, JobState.RUNNING)
+_DEFAULT_STATE_DIR = "s3://marin-us-east-08a/marin/ci/rl-controls/pending"
+
+
+def _active_jobs(client: IrisClient, prefix: str) -> set[JobName]:
+    return {job.job_id for state in _ACTIVE_STATES for job in client.list_jobs(state=state, prefix=prefix)}
 
 
 def select_presets(selection: str) -> list[tuple[str, Preset]]:
     gated = {
         f"{table.model}/{preset.name}": (table.model, preset)
-        for table in (SNOWBALL, MOCHI)
+        for table in _TABLES.values()
         for preset in table.presets
         if preset.gated
     }
@@ -72,6 +92,101 @@ def dispatch_comment(event_path: Path) -> None:
     subprocess.check_output([*api, f"{repository}/issues/{number}/comments", "-f", f"body={reply}"])
 
 
+def _was_interrupted(client: IrisClient, state: str | None, job_id: str | None) -> bool:
+    if state not in (JobState.WORKER_FAILED, JobState.KILLED) or job_id is None:
+        return False
+    name = JobName.from_wire(job_id)
+    job = client.job_status(name)
+    if job.task_state_counts.get(TaskState.FAILED):
+        return False
+    return bool(job.task_state_counts.get(TaskState.PREEMPTED)) or any(
+        attempt.terminal_reason == POD_DELETED_TERMINAL_REASON
+        for task in client.list_tasks(name)
+        for attempt in task.attempts
+        if attempt.attempt_number == task.current_attempt_number
+    )
+
+
+def _run_controls(batch: str, selected: Sequence[tuple[str, Preset]], state_dir: StoragePath) -> int:
+    configure_coreweave_s3()
+    failed = False
+    blocked = set()
+    owner = resolve_job_user()
+    with open_iris_client(config_file=Path(IRIS_HUB_CLUSTER_CONFIG), workspace=rl_compose.REPO_ROOT) as client:
+        for model, preset in select_presets(""):
+            target = (model, preset.name)
+            path = state_dir / f"{model}-{preset.name}.json"
+            try:
+                try:
+                    submission = rl_publication.ControlSubmission.model_validate_json(path.read_text())
+                except FileNotFoundError:
+                    continue
+                job = JobName.from_wire(submission.job)
+                try:
+                    state = client.job_state(job)
+                except ConnectError as error:
+                    if error.code != Code.NOT_FOUND:
+                        raise
+                    state = None
+                if state is not None and not is_job_finished(state):
+                    blocked.add(target)
+                    published = set()
+                    for output in submission.outputs:
+                        rl_publication.publish_running(output, preset, _TABLES[model], submission.job, None, published)
+                    continue
+                result = rl_publication.publish_runs(
+                    submission.outputs,
+                    preset,
+                    table=_TABLES[model],
+                    coordinator=submission.job,
+                    interrupted=True,
+                    allow_unprepared=True,
+                )
+                print(result.model_dump_json(), flush=True)
+                if result.unserved_records:
+                    raise RuntimeError(f"Publication remains pending for {submission.job}")
+                check_coordinator = len(result.attempts) < len(submission.outputs)
+                for attempt in result.ineligible_controls:
+                    native = attempt.native.result
+                    if native.state.is_terminal:
+                        failed |= not _was_interrupted(client, native.iris_job_state, native.iris_job_id)
+                    else:
+                        check_coordinator = True
+                failed |= check_coordinator and not _was_interrupted(client, state, submission.job)
+                path.rm()
+            except Exception as error:
+                print(f"{model}/{preset.name}: {error}", file=sys.stderr)
+                blocked.add(target)
+                failed = True
+        records = rl_index.list_attempts()
+        for model, preset in selected:
+            try:
+                target = f"{model}/{preset.name}"
+                if (model, preset.name) in blocked:
+                    print(f"Skipping {target}: pending record")
+                    continue
+                prefix = sanitize_job_name(rl.control_name_prefix(preset, _TABLES[model])) + "-"
+                if _active_jobs(client, f"/{owner}/{prefix}"):
+                    print(f"Skipping {target}: active coordinator")
+                    continue
+                version = rl_gate.config_version(rl_gate.compose_preset(preset))
+                cohort = completed_controls(records, model=model, preset=preset.name, version=version)
+                count = max(1, rl_gate.CONTROL_COUNT - len(cohort))
+                path = state_dir / f"{model}-{preset.name}.json"
+                module = [sys.executable, "-m", f"experiments.post_training.{model}_rl"]
+                options = ["--preset", preset.name, "--control", batch, "--replicates", str(count)]
+                options += ["--control-handoff", str(path)]
+                result = subprocess.run(
+                    [*module, *options, "--version", rl_compose.RUN_ARTIFACT_VERSION, "--run"],
+                    check=False,
+                )
+                failed |= result.returncode != 0
+            except (ValueError, OSError, RuntimeError, ConnectError) as error:
+                print(f"{model}/{preset.name}: {error}", file=sys.stderr)
+                failed = True
+    return int(failed)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -79,6 +194,11 @@ def main() -> int:
     source.add_argument("--comment-event", type=Path, help="GitHub issue_comment event payload.")
     source.add_argument("--check-presets", help="Validate a selector list before launch setup.")
     parser.add_argument("--presets", default="", help="Space-separated models or model/preset selectors.")
+    parser.add_argument(
+        "--state-dir",
+        default=_DEFAULT_STATE_DIR,
+        help="Shared directory for pending control batches.",
+    )
     args = parser.parse_args()
     try:
         if args.comment_event is not None:
@@ -90,43 +210,9 @@ def main() -> int:
         selected = select_presets(args.presets)
     except ValueError as error:
         parser.error(str(error))
-    configure_coreweave_s3()
-    records = rl_index.list_attempts()
-    started = []
-    failed = False
-    for model, preset in selected:
-        try:
-            version = rl_gate.config_version(rl_gate.compose_preset(preset))
-            cohort = completed_controls(records, model=model, preset=preset.name, version=version)
-            count = max(1, rl_gate.CONTROL_COUNT - len(cohort))
-            print(
-                json.dumps({"model": model, "preset": preset.name, "version": version, "requested": count}), flush=True
-            )
-            started.append(
-                subprocess.Popen(
-                    [
-                        sys.executable,
-                        "-m",
-                        f"experiments.post_training.{model}_rl",
-                        "--preset",
-                        preset.name,
-                        "--control",
-                        args.batch,
-                        "--replicates",
-                        str(count),
-                        "--version",
-                        rl_compose.RUN_ARTIFACT_VERSION,
-                        "--run",
-                        "--wait",
-                    ]
-                )
-            )
-        except (ValueError, OSError, RuntimeError) as error:
-            print(f"{model}/{preset.name}: {error}", file=sys.stderr)
-            failed = True
-    for child in started:
-        failed |= child.wait() != 0
-    return int(failed)
+    if not args.state_dir:
+        parser.error("--state-dir cannot be empty")
+    return _run_controls(args.batch, selected, StoragePath(args.state_dir))
 
 
 if __name__ == "__main__":

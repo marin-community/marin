@@ -23,9 +23,9 @@ from iris.cluster.backends.k8s.tasks import (
     _LABEL_TASK_HASH,
     _LABEL_TASK_ID,
     _MANAGED_POD_LABELS,
-    _POD_DELETED_TERMINAL_REASON,
     _POD_UNRESOLVED_GRACE_CYCLES,
     _RUNTIME_LABEL_VALUE,
+    POD_DELETED_TERMINAL_REASON,
     K8sTaskProvider,
     PeriodicProfiler,
     _lookup_pod,
@@ -507,8 +507,8 @@ def test_sync_pod_not_found_marks_worker_failed(provider, k8s):
     result = provider.sync(batch)
     assert len(result) == 1
     assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
-    assert result[0].terminal_reason == _POD_DELETED_TERMINAL_REASON
-    assert result[0].error == _POD_DELETED_TERMINAL_REASON
+    assert result[0].terminal_reason == POD_DELETED_TERMINAL_REASON
+    assert result[0].error == POD_DELETED_TERMINAL_REASON
 
 
 @pytest.mark.parametrize("phase", ["", "Unknown"])
@@ -685,7 +685,7 @@ def test_sync_ignores_legacy_pod_for_an_attempt_this_process_dispatched(provider
 
     result = provider.sync(batch)
     assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
-    assert result[0].error == _POD_DELETED_TERMINAL_REASON
+    assert result[0].error == POD_DELETED_TERMINAL_REASON
 
 
 _EVICTION_REASON = "WorkloadEvictedDueToPreempted: Preempted to accommodate a higher priority Workload"
@@ -757,7 +757,7 @@ def test_sync_does_not_charge_a_new_incarnation_with_the_previous_eviction(provi
 
     result = provider.sync(batch)
     assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
-    assert result[0].terminal_reason == _POD_DELETED_TERMINAL_REASON
+    assert result[0].terminal_reason == POD_DELETED_TERMINAL_REASON
 
 
 def test_pod_not_found_grace_period(provider, k8s):

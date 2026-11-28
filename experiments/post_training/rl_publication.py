@@ -63,12 +63,18 @@ from experiments.post_training.rl_measurements import (
 logger = logging.getLogger(__name__)
 
 
+class ControlSubmission(BaseModel, frozen=True):
+    job: str
+    outputs: tuple[str, ...] = Field(min_length=1)
+
+
 class PublicationOutcome(BaseModel):
     served_records: list[tuple[str, str]] = Field(default_factory=list)
     unserved_records: list[tuple[str, str] | str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     urls: dict[str, str] = Field(default_factory=dict)
     attempts: dict[str, AttemptRecord] = Field(default_factory=dict, exclude=True)
+    ineligible_controls: list[AttemptRecord] = Field(default_factory=list, exclude=True)
     gate_path: str | None = Field(default=None, exclude=True)
     retry: str | None = None
 
@@ -421,6 +427,7 @@ def publish_runs(
     cached_attempts: Mapping[str, str] | None = None,
     interrupted: bool = False,
     submitted_gate: gate.GateAddress | None = None,
+    allow_unprepared: bool = False,
 ) -> PublicationOutcome:
     """Rebuild and upsert terminal or interrupted attempts, isolating publication failures."""
     if coordinator is None and issue is not None and (len(outputs) != 1 or attempt_id is None):
@@ -463,6 +470,8 @@ def publish_runs(
         if current_id in attempts:
             result.attempts[path] = attempts[current_id]
         if attempt_id is None and current_id not in attempts:
+            if allow_unprepared and not attempts:
+                continue
             result.unserved_records.append(path)
             result.errors.append(f"No stored native receipt at {path} for current attempt {current_id}")
         selected = (
@@ -514,6 +523,7 @@ def publish_runs(
                     and record.is_control
                     and record.status != "succeeded"
                 ):
+                    result.ineligible_controls.append(receipt)
                     result.errors.append(
                         f"Control {record.run_id}/{record.attempt_id} is ineligible: {', '.join(record.failed_facts)}"
                     )
