@@ -483,11 +483,32 @@ def derive_archive_plan(
     revision = resolved_spec["marin_revision"]
     if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
         raise ValueError("Source revision must be an exact commit")
-    inputs, documents, limitations, blockers = [], {}, [], []
+    inputs, documents, limitations, blockers, missing = [], {}, [], [], {}
     sft_accounting = None
     if "sft_data_accounting" in roots:
         accounting_inputs, sft_accounting = sft_accounting_inputs(roots["sft_data_accounting"])
         inputs.extend(vars(item) for item in accounting_inputs)
+    else:
+        accounting_settings = resolved_spec.get("archive", {}).get("sft_data_accounting")
+        if accounting_settings is not None:
+            # The graph omitted the step because the round's accounting settings cannot support
+            # it; record the accounting as missing evidence with the exact reasons and the
+            # pointer for a future complete accounting.
+            revision = resolved_spec.get("accounting_pin_revision") or {}
+            loss = accounting_settings.get("source_loss_metadata") or {}
+            reason = revision.get("reason") or (
+                "the round's pinned source-loss metadata did not cover the consumed mixture"
+            )
+            future = revision.get("loss_metadata") or {}
+            missing["sft_data_accounting"] = (
+                "SFT data accounting was omitted: the round's accounting settings cannot support it "
+                f"({reason}; no measured step seconds was pinned). "
+                "The source-loss metadata for a future complete accounting is "
+                f"{future.get('source') or loss.get('source')} "
+                f"(sha {future.get('sha256') or loss.get('sha256')})."
+            )
+            blockers.append(missing["sft_data_accounting"])
+            limitations.append(missing["sft_data_accounting"])
     if "finalization" in roots:
         inputs.append(_input(prefix_join(roots["finalization"], "finalization.json"), "finalization.json", "provenance"))
     for stage, entries in settings["stage_files"].items():
@@ -634,7 +655,6 @@ def derive_archive_plan(
     sft_telemetry = sft.get("native_telemetry_root")
     rl_telemetry = trainer.get("native_telemetry_root")
     externally_stopped_sft = "training_completion" not in selection
-    missing = {}
     timing_coverage = {}
     if (sft_telemetry is None) != (rl_telemetry is None):
         if sft_telemetry is None and externally_stopped_sft:
@@ -748,6 +768,11 @@ def derive_archive_plan(
             "final_sft_checkpoint": final_sft_checkpoint,
             "sft_consumed_config_shape": consumed_config_shape,
             "sft_externally_stopped": externally_stopped_sft,
+            "sft_data_accounting_future": (
+                (resolved_spec.get("accounting_pin_revision") or {}).get("loss_metadata")
+                if "sft_data_accounting" not in roots and resolved_spec.get("archive", {}).get("sft_data_accounting")
+                else None
+            ),
             "evaluation_complete": evaluation["all_verified"],
             "wandb_runs": wandb_status,
             "missing_evidence": missing,

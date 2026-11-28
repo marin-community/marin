@@ -94,6 +94,15 @@ def verify_inputs(*, output: str, manifests: dict) -> None:
     (StoragePath(output) / "verified.json").write_text(json.dumps(verified, indent=2))
 
 
+def sft_accounting_supported(settings: dict) -> bool:
+    """The accounting step replays the consumed mixture and needs the pinned measured step time.
+
+    Recovery-lineage rounds inherit accounting settings without one; the archive records the
+    accounting as missing evidence for those instead of failing the round.
+    """
+    return settings.get("measured_step_seconds") is not None
+
+
 def build_spec_graph(
     resolved: dict,
     version: str,
@@ -447,7 +456,13 @@ def build_spec_graph(
         learned,
     )
     accounting_artifacts = {}
-    if "sft_data_accounting" in resolved["archive"]:
+    accounting_settings = resolved["archive"].get("sft_data_accounting")
+    if accounting_settings is not None and not sft_accounting_supported(accounting_settings):
+        # The recovery lineage inherits accounting settings that cannot support the step (no
+        # measured step seconds was pinned); the archive records the accounting as missing
+        # evidence instead of failing the round.
+        accounting_settings = None
+    if accounting_settings is not None:
         accounting = timed(
             apply(
                 f"{name}/sft-data-accounting",
@@ -460,7 +475,7 @@ def build_spec_graph(
                 version=version,
                 output=OUT,
                 trained=sft_pin["uri"] if sft_pin else trained,
-                settings=resolved["archive"]["sft_data_accounting"],
+                settings=accounting_settings,
             )
         )
         accounting = after_checkpoint(replace(accounting, deps=(*accounting.deps, report)), learned)

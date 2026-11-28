@@ -742,3 +742,47 @@ def test_archive_falls_back_for_externally_stopped_sft_telemetry(tmp_path):
     assert plan["provenance"]["sft_externally_stopped"] is True
     assert "metric_history" in plan["provenance"]["missing_evidence"]
     assert any("externally stopped" in limitation for limitation in plan["provenance"]["limitations"])
+
+
+def test_archive_records_omitted_sft_accounting_as_missing_evidence(tmp_path):
+    """A structurally unsupported accounting step is recorded, with the future pointer."""
+    settings, roots, trained, spec = _externally_stopped_sft_fixture(
+        tmp_path,
+        consumed_config=LAUNCHER_REQUEST_CONSUMED_CONFIG,
+        selection=EXTERNALLY_STOPPED_SELECTION,
+        rl_telemetry=False,
+    )
+    revision = {
+        "reason": (
+            "the recovery plan inherited the exp6 round6 accounting settings (the V9 source_loss metadata); "
+            "the consumed V10.1 mixture adds sft/source/balanced_reasoning/v1"
+        ),
+        "loss_metadata": {
+            "source": (
+                "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.25-v10-1-balanced-toolconv/release-v10.1/source_loss.json"
+            ),
+            "sha256": "6bae0724b8083d06bbebbfbfcc54fdbb42af2c522f0c58e73c9a967c0ff0d4fa",
+        },
+    }
+    spec["archive"] = {
+        "sft_data_accounting": {
+            "source_loss_metadata": revision["loss_metadata"],
+            "pinned_evidence": {},
+        }
+    }
+    spec["accounting_pin_revision"] = revision
+    plan = derive_archive_plan(
+        output=str(tmp_path / "archive"),
+        settings=settings,
+        resolved_spec=spec,
+        artifacts=roots,
+        trained=trained,
+        evaluated=roots["eval"],
+        completed_report=roots["report"],
+    )
+    missing = plan["provenance"]["missing_evidence"]["sft_data_accounting"]
+    assert "balanced_reasoning/v1" in missing
+    assert "no measured step seconds was pinned" in missing
+    assert revision["loss_metadata"]["source"] in missing
+    assert revision["loss_metadata"]["sha256"] in missing
+    assert plan["provenance"]["sft_data_accounting_future"] == revision["loss_metadata"]
