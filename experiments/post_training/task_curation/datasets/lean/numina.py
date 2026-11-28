@@ -45,6 +45,7 @@ from experiments.post_training.task_curation.datasets.lean.lean_grade import TAR
 from experiments.post_training.task_curation.datasets.lean.proofs import (
     LEADING_OPTIONS,
     LEAN_GRADER_MEMORY_MB,
+    LEAN_GRADER_STORAGE_MB,
     proof_task,
     statement_contract,
 )
@@ -204,7 +205,7 @@ def human_proof(task: TaskSpec) -> Reply:
     return answer_reply(task, f"```lean4\n{proof}\n```")
 
 
-NUMINA_CONTROLS = Controls(golden=human_proof, memory_mb=LEAN_GRADER_MEMORY_MB)
+NUMINA_CONTROLS = Controls(golden=human_proof, memory_mb=LEAN_GRADER_MEMORY_MB, storage_mb=LEAN_GRADER_STORAGE_MB)
 
 
 def prime_list_source(name: str) -> UrlSource:

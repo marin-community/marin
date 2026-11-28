@@ -681,6 +681,11 @@ that probe, a compiler timeout or a failed compiler process without a diagnostic
 for the submitted proof is an infrastructure error. Invalid proofs and `sorry`
 score zero.
 
+ProofNet-Verified and NuminaMath-LEAN controls run the kernel grader with 8 GiB of
+memory and 20 GiB of disk, set through `Controls.storage_mb`; the grader image
+unpacks to about 15 GB, more than a Daytona sandbox's default disk. Grade them
+with `--image-backend daytona`.
+
 Reasoning Gym's native VerifyIt mode and Nemotron grader share
 `verifyit.modes.extract.extract_markdown_answer`. It extracts the last `# Answer`
 heading (one to six `#` characters), stopping at the next heading, horizontal
@@ -927,7 +932,11 @@ concurrent graders on one host build it once.
 Image grading requires `--image-backend gvisor` or `--image-backend daytona`.
 The gvisor backend (Iris SANDBOX jobs) uses the enclosing Iris job's controller, or
 `--controller-url` outside a job, to create sandbox jobs. Daytona creates remote
-sandboxes through its API.
+sandboxes through its API, using the account that `DAYTONA_API_KEY` selects. Install
+`./lib/shellbox[daytona]` in the coordinator's environment and set that variable in it;
+the Zephyr workers inherit both. Each distinct image and machine size becomes one
+snapshot in that account, so check its snapshot quota first, as
+[the Daytona runbook](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#snapshot-preflight-and-reclamation) describes.
 Neither path requires a Docker daemon in the Zephyr worker. Without an image backend,
 controls can still use package locks through Local or explicit simulator requirements
 through ShellSim. Programmatic callers pass grading machines through `RecipeSettings.machines`.

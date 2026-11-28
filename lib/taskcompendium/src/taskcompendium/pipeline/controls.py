@@ -62,8 +62,13 @@ class GradingMachines(Protocol):
         """Backends, worker image and other settings that can change a control's outcome."""
         ...
 
-    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        """A selected factory and specification for ``environment``, with network access denied."""
+    def machine(
+        self, environment: EnvironmentRequirements, memory_mb: int, storage_mb: int | None
+    ) -> tuple[MachineFactory, MachineSpec]:
+        """A selected factory and specification for ``environment``, with network access denied.
+
+        ``storage_mb`` sizes an image machine's disk; ``None`` leaves it to the backend.
+        """
         ...
 
 
@@ -102,6 +107,8 @@ def controls_identity(controls: Controls) -> dict[str, Any]:
         "negative": callable_identity(controls.negative) if controls.negative is not None else None,
         "negative_reward": callable_identity(controls.negative_reward) if controls.negative_reward is not None else None,
         "memory_mb": controls.memory_mb,
+        # Omitted at its default so existing sources keep their control identity.
+        **({"storage_mb": controls.storage_mb} if controls.storage_mb is not None else {}),
     }
 
 
@@ -177,7 +184,8 @@ async def _control_checks(
         sandbox = _Sandbox(
             machines,
             controls.memory_mb,
-            _selected_machine(machines, environment, controls.memory_mb),
+            controls.storage_mb,
+            _selected_machine(machines, environment, controls.memory_mb, controls.storage_mb),
         )
     golden = controls.golden(task) if controls.golden is not None else None
     if golden is not None:
@@ -193,10 +201,10 @@ async def _control_checks(
 
 
 def _selected_machine(
-    machines: GradingMachines, environment: EnvironmentRequirements, memory_mb: int
+    machines: GradingMachines, environment: EnvironmentRequirements, memory_mb: int, storage_mb: int | None
 ) -> tuple[MachineFactory, MachineSpec]:
     """Validate a selected machine without building its environment."""
-    factory, spec = machines.machine(environment, memory_mb)
+    factory, spec = machines.machine(environment, memory_mb, storage_mb)
     validate_machine_spec(environment, factory, spec)
     return factory, spec
 
@@ -207,6 +215,7 @@ class _Sandbox:
 
     machines: GradingMachines
     memory_mb: int
+    storage_mb: int | None
     grader: tuple[MachineFactory, MachineSpec]
 
 
@@ -232,7 +241,7 @@ async def _control(
         if sandbox is None:
             raise ValueError("An oracle command requires a sandbox grader")
         environment = _oracle_environment(task)
-        factory, spec = _selected_machine(sandbox.machines, environment, sandbox.memory_mb)
+        factory, spec = _selected_machine(sandbox.machines, environment, sandbox.memory_mb, sandbox.storage_mb)
         try:
             attempt = await _oracle_attempt(task, submission, factory, spec, environment)
         except OracleFailed as error:

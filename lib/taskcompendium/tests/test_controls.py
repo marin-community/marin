@@ -38,7 +38,7 @@ from taskcompendium.models import (
     Source,
     TaskSpec,
 )
-from taskcompendium.pipeline.controls import answer_reply, control_suite, reference_reply
+from taskcompendium.pipeline.controls import answer_reply, control_suite, controls_identity, reference_reply
 from taskcompendium.pipeline.models import CheckStatus, Controls, OracleCommand, RawRow, Reply, WorkspaceFiles
 from taskcompendium.runtime.local import LocalGraderMachines
 from taskcompendium.runtime.resources import inline_resource
@@ -89,9 +89,11 @@ class RecordingImages(DockerMachineFactory):
 
     backend = Backend.DOCKER
     created: list[ImageMachine] = field(default_factory=list)
+    specs: list[MachineSpec] = field(default_factory=list)
 
     async def create(self, spec: MachineSpec) -> ImageMachine:
         assert isinstance(spec.source, DockerImage)
+        self.specs.append(spec)
         machine = ImageMachine(await ShellSimImages().create(spec), spec.source.reference)
         self.created.append(machine)
         return machine
@@ -176,6 +178,16 @@ def test_sandbox_golden_is_graded_in_a_fresh_grader_machine(task, golden):
     assert checks(task, Controls(golden=golden), FixtureGradingMachines()) == {"golden": PASS}
 
 
+def test_control_disk_size_reaches_every_machine_and_keys_only_sources_that_set_it():
+    images = RecordingImages()
+    controls = Controls(golden=lambda _: OracleCommand("bash /solution/solve.sh"), storage_mb=20480)
+    assert checks(file_task(), controls, FixtureGradingMachines(images)) == {"golden": PASS}
+    # The oracle and the grader each get a fresh machine.
+    assert [spec.storage_mb for spec in images.specs] == [20480, 20480]
+    assert "storage_mb" not in controls_identity(Controls())
+    assert controls_identity(Controls(storage_mb=20480))["storage_mb"] == 20480
+
+
 @pytest.mark.parametrize(
     "task,oracle",
     [
@@ -253,7 +265,7 @@ def test_oracle_runs_in_the_agent_image_and_otherwise_in_the_grader_image(agent_
 class OracleMachines(FixtureGradingMachines):
     """Provide image machines and a simulator, leaving lock preparation unsupported."""
 
-    def machine(self, environment: EnvironmentRequirements, memory_mb: int):
+    def machine(self, environment: EnvironmentRequirements, memory_mb: int, storage_mb: int | None):
         if environment.command_semantics == CommandSemantics.SHELL_SIMULATOR:
             return ShellSimMachineFactory(), MachineSpec(PackageSpec(), memory_mb=memory_mb)
         return self.factory, MachineSpec(DockerImage(environment.docker_image or GRADER_IMAGE), memory_mb=memory_mb)

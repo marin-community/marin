@@ -55,6 +55,8 @@ LEAN_SCORER_TIMEOUT = DEADLINE_SECONDS + 30.0
 """Above the grade script's own deadline for its four steps."""
 LEAN_GRADER_MEMORY_MB = 8192
 """``lean-verify`` loads Mathlib next to the replayed proof; it peaked near 6 GB on a small proof."""
+LEAN_GRADER_STORAGE_MB = 20480
+"""The grader image unpacks to about 15 GB, more than a Daytona sandbox's default disk."""
 
 LEADING_OPTIONS = r"(?:(?:set_option\s+\S+\s+\S+|open(?:[ \t]+(?!in\b)\S+)+)\s+in\s+)*(?:@\[[^\]]*\]\s*)*"
 """``set_option ... in`` and ``open ... in`` before a declaration, and its attributes; an ``open`` clause is
@@ -172,7 +174,7 @@ def sorry_proof(task: TaskSpec) -> Reply:
     return answer_reply(task, "```lean4\nby\n  sorry\n```")
 
 
-LEAN_PROOF_CONTROLS = Controls(negative=sorry_proof, memory_mb=LEAN_GRADER_MEMORY_MB)
+LEAN_PROOF_CONTROLS = Controls(negative=sorry_proof, memory_mb=LEAN_GRADER_MEMORY_MB, storage_mb=LEAN_GRADER_STORAGE_MB)
 
 
 def sources() -> list[RlDataSource[CurationRecipe]]:

@@ -146,7 +146,7 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     monkeypatch.setattr(LocalRuntime, "ensure_built", lambda self: self.root.mkdir(parents=True))
     machines = CampaignMachines()
     requirements = environment_requirements(environment, artifact)
-    factory, spec = machines.machine(requirements, 2048)
+    factory, spec = machines.machine(requirements, 2048, None)
     spec = prepare_machine_spec(requirements, factory, spec, {})
     runtime = local_runtime(artifact.lock_url)
     request.addfinalizer(lambda: shutil.rmtree(runtime.root, ignore_errors=True))
@@ -366,7 +366,9 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
 
 def test_shell_only_campaign_does_not_load_ports_catalog(tmp_path):
     machines = CampaignMachines(simulator_catalog=(tmp_path / "absent-catalog.json").as_uri())
-    factory, spec = machines.machine(EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR), 2048)
+    factory, spec = machines.machine(
+        EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR), 2048, None
+    )
 
     async def check():
         machine = await factory.create(spec)

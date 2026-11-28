@@ -75,7 +75,9 @@ class LocalGraderMachines:
     def identity(self) -> dict:
         return {"backend": Backend.DOCKER.value, "image": self.image}
 
-    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[LocalGraderFactory, MachineSpec]:
+    def machine(
+        self, environment: EnvironmentRequirements, memory_mb: int, storage_mb: int | None
+    ) -> tuple[LocalGraderFactory, MachineSpec]:
         if environment.packages_lock is not None:
             return LocalGraderFactory(Backend.LOCAL, self.image), MachineSpec(HostImage(), memory_mb=memory_mb)
         assert environment.docker_image is not None
@@ -105,7 +107,7 @@ def grade(
         attempt = GradingAttempt(trace, dict(submission.files))
     environment = grader_environment(task.grader)
     assert environment is not None
-    return asyncio.run(sandbox_grade(task, attempt, *machines.machine(environment, memory_mb)))
+    return asyncio.run(sandbox_grade(task, attempt, *machines.machine(environment, memory_mb, None)))
 
 
 def with_verifier_file(task: TaskSpec, replacement: TaskResource) -> TaskSpec:

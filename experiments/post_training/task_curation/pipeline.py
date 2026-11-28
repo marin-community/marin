@@ -390,12 +390,14 @@ class CampaignMachines:
             "network": NetworkPolicy.DENY.value,
         }
 
-    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
+    def machine(
+        self, environment: EnvironmentRequirements, memory_mb: int, storage_mb: int | None
+    ) -> tuple[MachineFactory, MachineSpec]:
         if environment.command_semantics == CommandSemantics.SHELL_SIMULATOR:
             packages = environment.package_spec or PackageSpec()
             return self._simulator_factory, MachineSpec(packages, network=NetworkPolicy.DENY, memory_mb=memory_mb)
         if environment.packages_lock is not None or environment.package_spec is not None:
-            return self.local.machine(environment, memory_mb)
+            return self.local.machine(environment, memory_mb, storage_mb)
         if environment.docker_image is None:
             raise UnsupportedMachineSpec("Native campaign execution requires a pinned image or package lock")
         if self.image_factory is None:
@@ -404,6 +406,7 @@ class CampaignMachines:
             RegistryImage(environment.docker_image),
             network=NetworkPolicy.DENY,
             memory_mb=memory_mb,
+            storage_mb=storage_mb,
             cpus=self.image_cpus,
         )
 
