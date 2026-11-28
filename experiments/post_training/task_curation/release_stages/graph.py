@@ -1445,7 +1445,10 @@ def _corpus_assembly_step(
             "inputs": {"uri": inputs_doc.uri, "sha256": inputs_doc.sha256},
             "census_receipt": _resolved_receipt(ctx, census),
             "output_root": stage_output_root(plan, "corpus"),
-            "expected_sources": plan.expected_source_count,
+            # A re-cut's census-inputs document is scoped to the new admissions, and
+            # the re-cut census receipt carries exactly those results — the expected
+            # count flows from the document, not the release's full source count.
+            "expected_sources": inputs_doc.source_count,
             "targets": plan.targets,
             "workers": sizing.workers,
             "slice_output_root": plan.slice_output_root or None,

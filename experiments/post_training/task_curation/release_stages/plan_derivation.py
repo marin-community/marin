@@ -626,6 +626,15 @@ def derive_release_plan(
 
     prior_curriculum = _verify_prior_pin(prior_pins["composed_release"], "prior_release.composed_release")
     prior_inventory = {canonical_source_id(row["id"]): row for row in prior_curriculum["inventory"]}
+    if recut:
+        # The release re-cuts its own served state: the frozen layer's post-publish
+        # re-pins (conversion reruns, follow-up releases) bind the NEXT release, so
+        # targeting drifts against what is SERVED, not against the config's older
+        # pinned documents. A re-pinned retained source the release does adopt must be
+        # policy-listed (DELIBERATE_EXCLUSIONS keeps it explicit); silent drift
+        # adoption is not a re-cut behavior.
+        prior_declarations = prior.declarations
+        prior_inventory = {}
     replacements = {
         source_id
         for previous in (prior_declarations, prior_inventory)

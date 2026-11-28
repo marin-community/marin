@@ -1195,3 +1195,137 @@ def test_served_survey_reconstruction_keyset_pages():
     assert all(params["limit"] == 64 for params in fingerprint_calls)
     assert len(identity["fingerprints"]) == 150
     assert len(backend["matrix"]) == len(backend_survey["matrix"]) and backend["sources"] == []
+
+
+def test_recut_corpus_expects_the_scoped_census(tmp_path, frozen_layer, deployment, monkeypatch):
+    """The corpus step's expected source count flows from the census-inputs document:
+    a re-cut's scoped document (the new admissions' rows only) and its census receipt
+    (exactly those results) must satisfy the corpus stage's row checks."""
+    layer = _source_layer(tmp_path, (RETAINED_ID, TARGET_ID))
+    prior = _prior_pins(tmp_path, _declaration_dump(layer))
+    config = _config(prior, prior_snapshot_id="assembly-config-prior-snapshot-v1")
+    served_declarations = _declaration_dump(layer)
+
+    monkeypatch.setattr(plan_derivation, "derived_contract_receipts", _contract_receipts_factory({TARGET_ID: 2}))
+    derived = derive_release_plan(
+        config,
+        repo_root=REPO_ROOT,
+        query=_recut_query(served_declarations),
+        sources_fn=lambda: layer,
+        prior_catalog_reader=lambda root, q: read_prior_catalog_state(
+            root,
+            q,
+            catalog_factory=_catalog_factory((RETAINED_ID,), declarations=served_declarations),
+            receipt_keys_fn=lambda: {},
+        ),
+        drift_reference_fn=lambda root, revision, declared: GraderDriftReference(
+            main=MainRecipeReference(revision="e" * 40, merge_base=revision),
+            sources={
+                source_id: SealedRecipeReference(source_id=source_id, converter_revision=revision)
+                for source_id in declared
+            },
+        ),
+    )
+    plan = ReleasePlan.model_validate(derived.plan_document)
+    assert plan.recut is True
+    assert plan.targets == (TARGET_ID,)
+
+    lowered = release_graph(plan)
+    census_inputs_step = lowered.stages["census_inputs"]
+
+    class _Ctx:
+        is_fingerprint = False
+
+        def resolved(self, handle):
+            if handle is census_inputs_step:
+                return SimpleNamespace(uri="census-inputs", sha256="digest", source_count=1)
+            return SimpleNamespace(receipt=SimpleNamespace(model_dump=lambda mode="json": {"ok": True}))
+
+    config = lowered.stages["corpus_assembly"].build_config(_Ctx())
+    assert config["expected_sources"] == 1
+    assert config["targets"] == (TARGET_ID,)
+
+
+def test_recut_targets_against_the_served_state(tmp_path, frozen_layer, deployment, monkeypatch):
+    """On a re-cut, targeting drifts against what is SERVED: a retained source the
+    config's pinned prior documents describe staleness for (its served row matches the
+    frozen layer) is not a target — the frozen layer's post-publish drift binds the
+    next release, not this one."""
+    layer = _source_layer(tmp_path, (RETAINED_ID, TARGET_ID))
+    served_declarations = _declaration_dump(layer)
+    stale_pin_dump = {
+        **served_declarations,
+        RETAINED_ID: {**served_declarations[RETAINED_ID], "dataset_id": "fixture-pinned-old"},
+    }
+    prior = _prior_pins(tmp_path, stale_pin_dump)
+    config = _config(prior, prior_snapshot_id="assembly-config-prior-snapshot-v1")
+
+    monkeypatch.setattr(plan_derivation, "derived_contract_receipts", _contract_receipts_factory({TARGET_ID: 2}))
+    derived = derive_release_plan(
+        config,
+        repo_root=REPO_ROOT,
+        query=_recut_query(served_declarations),
+        sources_fn=lambda: layer,
+        prior_catalog_reader=lambda root, q: read_prior_catalog_state(
+            root,
+            q,
+            catalog_factory=_catalog_factory((RETAINED_ID,), declarations=served_declarations),
+            receipt_keys_fn=lambda: {},
+        ),
+        drift_reference_fn=lambda root, revision, declared: GraderDriftReference(
+            main=MainRecipeReference(revision="e" * 40, merge_base=revision),
+            sources={
+                source_id: SealedRecipeReference(source_id=source_id, converter_revision=revision)
+                for source_id in declared
+            },
+        ),
+    )
+
+    plan = ReleasePlan.model_validate(derived.plan_document)
+    plan.validate_shape()
+    assert plan.targets == (TARGET_ID,)
+    assert RETAINED_ID not in plan.targets
+    assert plan.deliberate_exclusions == ()
+    assert plan.expected_source_count == 2
+
+
+def test_recut_adopts_a_genuine_repin(tmp_path, frozen_layer, deployment, monkeypatch):
+    """A retained source the frozen layer genuinely re-pins past its served row is a
+    re-cut target: the tip is the source of truth, so the re-pin ships (its data
+    stages run) while every other retained source stays cache-skipped."""
+    layer = _source_layer(tmp_path, (RETAINED_ID, TARGET_ID))
+    prior = _prior_pins(tmp_path, _declaration_dump(layer))
+    config = _config(prior, prior_snapshot_id="assembly-config-prior-snapshot-v1")
+    served_declarations = _declaration_dump(layer)
+
+    # the frozen layer re-pins the retained source past its served row
+    repinned = layer[RETAINED_ID].declaration.model_copy(update={"dataset_id": "fixture-repinned"})
+    layer[RETAINED_ID] = SimpleNamespace(info=layer[RETAINED_ID].info, declaration=repinned)
+
+    monkeypatch.setattr(
+        plan_derivation, "derived_contract_receipts", _contract_receipts_factory({RETAINED_ID: 2, TARGET_ID: 2})
+    )
+    derived = derive_release_plan(
+        config,
+        repo_root=REPO_ROOT,
+        query=_recut_query(served_declarations),
+        sources_fn=lambda: layer,
+        prior_catalog_reader=lambda root, q: read_prior_catalog_state(
+            root,
+            q,
+            catalog_factory=_catalog_factory((RETAINED_ID,), declarations=served_declarations),
+            receipt_keys_fn=lambda: {},
+        ),
+        drift_reference_fn=lambda root, revision, declared: GraderDriftReference(
+            main=MainRecipeReference(revision="e" * 40, merge_base=revision),
+            sources={
+                source_id: SealedRecipeReference(source_id=source_id, converter_revision=revision)
+                for source_id in declared
+            },
+        ),
+    )
+
+    plan = ReleasePlan.model_validate(derived.plan_document)
+    plan.validate_shape()
+    assert plan.targets == (RETAINED_ID, TARGET_ID)
+    assert plan.deliberate_exclusions == ()
