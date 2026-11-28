@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from marin.inference import vllm_cache
 from marin.inference.config import VllmCompilationCacheMode
 from marin.inference.vllm_cache import (
     ARCHIVE_FILENAME,
@@ -306,6 +307,36 @@ def test_follower_restores_reference_without_publishing(local_marin_prefix: Path
     assert len(list((remote_cache_dir / GENERATIONS_DIR).iterdir())) == 1
     follower.close()
     assert not follower_dir.exists()
+
+
+def test_follower_restore_keeps_files_workers_wrote_after_leader_timeout(
+    local_marin_prefix: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    leader = _prepare_cache()
+    _write_compiler_cache_entries(leader)
+    leader.publish()
+    reference = leader.reference()
+    assert reference is not None
+    leader.close()
+
+    worker_file = Path(reference.local_cache_dir) / "xla" / "worker-entry.bin"
+    real_extract = vllm_cache._extract_archive
+
+    def extract_while_workers_write(archive_path, destination):
+        # The leader timed out and launched vLLM; its Ray workers write here mid-restore.
+        worker_file.parent.mkdir(parents=True)
+        worker_file.write_bytes(b"worker entry")
+        return real_extract(archive_path, destination)
+
+    monkeypatch.setattr(vllm_cache, "_extract_archive", extract_while_workers_write)
+    follower = VllmCompilationCache.restore_reference(reference)
+    assert follower is not None
+    try:
+        assert not follower.restored
+        assert worker_file.read_bytes() == b"worker entry"
+        assert sorted(p.name for p in Path(reference.local_cache_dir).rglob("*")) == ["worker-entry.bin", "xla"]
+    finally:
+        follower.close()
 
 
 def test_follower_reference_rejects_mismatched_key_and_path(local_marin_prefix: Path) -> None:

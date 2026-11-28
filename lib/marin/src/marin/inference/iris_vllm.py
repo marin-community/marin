@@ -24,7 +24,7 @@ from rigging.network import interface_for_ipv4
 from rigging.timing import Duration, ExponentialBackoff
 
 from marin.inference.config import ServingGeometry
-from marin.inference.vllm_cache import VllmCompilationCache, VllmCompilationCacheReference
+from marin.inference.vllm_cache import RESTORE_DEADLINE_SECONDS, VllmCompilationCache, VllmCompilationCacheReference
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +32,6 @@ _TIMEOUT_SECONDS = 30 * 60.0
 _POLL_SECONDS = 1.0
 _MAX_POLL_SECONDS = 30.0
 _MASTER_PORT = 29500
-# A follower restore downloads one archive under a 120 s transfer deadline, then extracts it.
-_CACHE_SHARE_TIMEOUT_SECONDS = 180.0
 _VLLM_HOST_IP_ENV = "VLLM_HOST_IP"
 _GLOO_SOCKET_IFNAME_ENV = "GLOO_SOCKET_IFNAME"
 
@@ -297,7 +295,7 @@ def share_iris_vllm_compilation_cache(
     launch: IrisGangIdentity,
     reference: VllmCompilationCacheReference | None,
     *,
-    timeout_seconds: float = _CACHE_SHARE_TIMEOUT_SECONDS,
+    timeout_seconds: float = RESTORE_DEADLINE_SECONDS,
 ) -> None:
     """Share the leader's restored cache and wait, bounded, for follower restores.
 
@@ -347,14 +345,24 @@ def share_iris_vllm_compilation_cache(
         )
         return
     missed = [task_index for task_index in follower_indices if not restores[task_index]]
+    restored = len(follower_indices) - len(missed)
+    wait_seconds = time.monotonic() - started
     if missed:
-        logger.warning("vLLM followers %s missed the compilation cache key=%s", missed, reference.cache_key)
+        logger.warning(
+            "vLLM follower compilation cache restores finished with misses=%s key=%s restored=%d/%d wait=%.1fs",
+            missed,
+            reference.cache_key,
+            restored,
+            len(follower_indices),
+            wait_seconds,
+        )
+        return
     logger.info(
         "vLLM followers restored the compilation cache key=%s restored=%d/%d wait=%.1fs",
         reference.cache_key,
-        len(follower_indices) - len(missed),
+        restored,
         len(follower_indices),
-        time.monotonic() - started,
+        wait_seconds,
     )
 
 

@@ -37,6 +37,9 @@ ARCHIVE_FILENAME = "cache.zip"
 _CACHE_TTL_DAYS = 30
 _CACHE_PREFIX = "vllm-compilation-cache"
 _TRANSFER_DEADLINE_SECONDS = 120
+# Time a follower restore may spend past the transfer deadline: poll delay plus extraction.
+RESTORE_MARGIN_SECONDS = 60
+RESTORE_DEADLINE_SECONDS = _TRANSFER_DEADLINE_SECONDS + RESTORE_MARGIN_SECONDS
 _MAX_METADATA_BYTES = 1 << 20
 _MAX_ARCHIVE_BYTES = 20 << 30
 _MAX_EXTRACTED_BYTES = 20 << 30
@@ -766,6 +769,11 @@ class VllmCompilationCache:
                 raise ValueError(
                     f"extracted cache size mismatch: expected {manifest.source_size_bytes}, got {extraction.size}"
                 )
+            # Extract beside the live directory, then swap it in only while it is empty.
+            # A follower can finish after the leader stopped waiting and launched vLLM;
+            # Ray workers may already have written into local_cache_dir. Then rmdir()
+            # raises ENOTEMPTY, the except block keeps the workers' files, and the
+            # restore reports a miss. Never extract in place, or this race corrupts them.
             managed.local_cache_dir.rmdir()
             restored_cache_dir.replace(managed.local_cache_dir)
             self._restored_sha256 = manifest.archive_sha256
