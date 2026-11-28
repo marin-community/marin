@@ -209,7 +209,9 @@ def verify_survey_alignment(inputs: SnapshotPublicationInputs, current: dict[str
     )
     extra = sorted(fingerprints - set(current))
     if missing or extra:
-        raise ValueError(f"identity fingerprints do not cover the declared populations (missing {missing}, extra {extra})")
+        raise ValueError(
+            f"identity fingerprints do not cover the declared populations (missing {missing}, extra {extra})"
+        )
     if {row["source_id"] for row in backend["sources"]} != set(current):
         raise ValueError("backend sources do not cover exactly the current declarations")
     expected = (inputs.catalog_root, inputs.snapshot_id)
