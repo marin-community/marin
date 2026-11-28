@@ -23,6 +23,7 @@ from marin.inference.config import (
     VllmEngineConfig,
     VllmLauncherType,
 )
+from marin.inference.vllm_cache import VllmCompilationCacheReference
 
 
 def _config(cpu: float = 8):
@@ -46,8 +47,8 @@ def test_failed_ray_supervisor_reports_its_log(tmp_path):
         gang.check_alive()
 
 
-@pytest.mark.parametrize("transient", [False, True])
-def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch, transient):
+def _run_tpu_follower(monkeypatch, coordinator: MagicMock) -> tuple[list[dict], MagicMock]:
+    """Run a follower ``run_iris_service`` with a fake coordinator and no real Ray."""
     config = _config(cpu=6.5)
     service = serving.IrisServiceConfig(
         model=config.model, engine=config.engine, iris=config.iris, endpoint_name="/serve/test"
@@ -61,15 +62,7 @@ def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch
     )
     registry = MagicMock()
     context = SimpleNamespace(registry=registry, resolver=object())
-    coordinator = MagicMock()
     coordinator.vllm_primary_address.return_value = "127.0.0.1:12000"
-    stopping = iris_vllm._GangState.STOPPING
-    coordinator.state.side_effect = (
-        [ConnectError(Code.UNAVAILABLE, "temporary outage"), stopping] if transient else [stopping]
-    )
-    coordinator.follower_stopped.side_effect = (
-        [ConnectError(Code.NOT_FOUND, "temporary resolver gap"), None] if transient else [None]
-    )
     monkeypatch.setattr(iris_vllm, "_POLL_SECONDS", 0.001)
     process = MagicMock()
     process.poll.return_value = None
@@ -105,6 +98,24 @@ def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch
     monkeypatch.setattr(iris_tpu_vllm.subprocess, "Popen", start_process)
 
     serving.run_iris_service(service)
+    registry.registered.assert_not_called()
+    return commands, process
+
+
+@pytest.mark.parametrize("transient", [False, True])
+def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch, transient):
+    coordinator = MagicMock()
+    # The leader has no managed compilation cache, so the follower skips restore.
+    coordinator.compilation_cache.return_value = (True, None)
+    stopping = iris_vllm._GangState.STOPPING
+    coordinator.state.side_effect = (
+        [ConnectError(Code.UNAVAILABLE, "temporary outage"), stopping, stopping] if transient else [stopping, stopping]
+    )
+    coordinator.follower_stopped.side_effect = (
+        [ConnectError(Code.NOT_FOUND, "temporary resolver gap"), None] if transient else [None]
+    )
+
+    commands, process = _run_tpu_follower(monkeypatch, coordinator)
 
     assert len(commands) == 1
     ray_start = tpu_ray_runtime.ray_start_command(
@@ -112,10 +123,47 @@ def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch
     )
     # Ray gets the CPUs Iris granted (6.5 rounded down), not a fixed count.
     assert ray_start[ray_start.index("--num-cpus") + 1] == "6"
-    registry.registered.assert_not_called()
+    coordinator.compilation_cache_restored.assert_not_called()
     assert coordinator.follower_stopped.call_count == (2 if transient else 1)
     coordinator.follower_stopped.assert_called_with(1)
     process.terminate.assert_called()
+
+
+def test_iris_follower_restores_leader_cache_before_acknowledging(monkeypatch):
+    events: list[str] = []
+    reference = VllmCompilationCacheReference(
+        cache_key="0" * 64,
+        remote_cache_dir="gs://bucket/cache",
+        local_cache_dir="/tmp/cache",
+        identity={"launcher": "tpu", "compile": {"model_name_or_path": "m", "extra_cli_args": []}},
+    )
+    coordinator = MagicMock()
+    # Not shared on the first poll, then shared: the follower keeps polling.
+    coordinator.compilation_cache.side_effect = [(False, None), (True, reference.model_dump_json())]
+    coordinator.compilation_cache_restored.side_effect = lambda *_: events.append("ack")
+
+    def state():
+        # The first two state reads happen while polling for the cache reference.
+        events.append("state")
+        return iris_vllm._GangState.WAITING if len(events) < 2 else iris_vllm._GangState.STOPPING
+
+    coordinator.state.side_effect = state
+    coordinator.follower_stopped.side_effect = lambda *_: events.append("stopped")
+    cache = MagicMock(restored=True)
+    cache.close.side_effect = lambda: events.append("close")
+
+    def restore_reference(received):
+        assert received == reference
+        events.append("restore")
+        return cache
+
+    monkeypatch.setattr(iris_vllm.VllmCompilationCache, "restore_reference", restore_reference)
+    monkeypatch.setattr(iris_vllm.time, "sleep", lambda _: None)
+
+    _run_tpu_follower(monkeypatch, coordinator)
+
+    coordinator.compilation_cache_restored.assert_called_once_with(1, True)
+    assert events == ["state", "state", "restore", "ack", "state", "close", "stopped"]
 
 
 def test_ray_head_failure_interrupts_blocked_initialization(monkeypatch, tmp_path):

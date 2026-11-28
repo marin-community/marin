@@ -15,6 +15,7 @@ from marin.inference.vllm_cache import (
     LATEST_FILENAME,
     MANIFEST_FILENAME,
     VllmCompilationCache,
+    VllmCompilationCacheReference,
     VllmCompileIdentity,
 )
 
@@ -266,3 +267,56 @@ def test_invalid_cache_entry_skips_publication(
     cache.close()
 
     assert not list((local_marin_prefix / _REMOTE_CACHE_PREFIX).rglob(LATEST_FILENAME))
+
+
+def test_cache_reference_round_trips_and_is_none_when_caller_managed(local_marin_prefix: Path) -> None:
+    caller_managed = _prepare_cache(mode=VllmCompilationCacheMode.CALLER_MANAGED)
+    assert caller_managed.reference() is None
+    caller_managed.close()
+
+    cache = _prepare_cache()
+    try:
+        reference = cache.reference()
+        assert reference is not None
+        assert reference.local_cache_dir == str(_local_cache_dir(cache))
+        assert VllmCompilationCacheReference.model_validate_json(reference.model_dump_json()) == reference
+    finally:
+        cache.close()
+
+
+def test_follower_restores_reference_without_publishing(local_marin_prefix: Path) -> None:
+    leader = _prepare_cache()
+    expected = _write_compiler_cache_entries(leader)
+    leader.publish()
+    reference = leader.reference()
+    assert reference is not None
+    remote_cache_dir = _only_remote_cache_dir(local_marin_prefix)
+    # Leader and follower are different hosts; free this host's lock for the follower.
+    leader.close()
+
+    follower = VllmCompilationCache.restore_reference(reference)
+    assert follower is not None
+    assert follower.restored
+    follower_dir = _local_cache_dir(follower)
+    assert str(follower_dir) == reference.local_cache_dir
+    _assert_compiler_cache_entries(follower, expected)
+
+    (follower_dir / "xla" / "follower-only.bin").write_bytes(b"new follower entry")
+    follower.publish()
+    assert len(list((remote_cache_dir / GENERATIONS_DIR).iterdir())) == 1
+    follower.close()
+    assert not follower_dir.exists()
+
+
+def test_follower_reference_rejects_mismatched_key_and_path(local_marin_prefix: Path) -> None:
+    leader = _prepare_cache()
+    reference = leader.reference()
+    assert reference is not None
+    leader.close()
+
+    with pytest.raises(ValueError, match="key does not match"):
+        VllmCompilationCache.restore_reference(reference.model_copy(update={"cache_key": "0" * 64}))
+    assert (
+        VllmCompilationCache.restore_reference(reference.model_copy(update={"local_cache_dir": "/elsewhere/cache"}))
+        is None
+    )

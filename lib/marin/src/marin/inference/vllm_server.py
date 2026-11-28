@@ -52,7 +52,7 @@ from marin.inference.config import (
     normalize_vllm_option,
     vllm_option_flags,
 )
-from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
+from marin.inference.vllm_cache import VllmCompilationCache, VllmCompilationCacheReference, VllmCompileIdentity
 from marin.inference.vllm_release import (
     current_vllm_gpu_wheel,
     vllm_gpu_wheel_provenance,
@@ -818,6 +818,10 @@ def _router_data_parallel_size(extra_cli_args: Sequence[str]) -> int:
     return topology.data_parallel_size
 
 
+CompilationCacheReadyHook = Callable[[VllmCompilationCacheReference | None], None]
+"""Called after cache restore and before the vLLM process launches."""
+
+
 class VllmEnvironment:
     """Manage native vLLM and an optional router.
 
@@ -839,6 +843,7 @@ class VllmEnvironment:
         router: VllmRouterConfig | None = None,
         router_port: int | None = None,
         wait_for_ready: bool = True,
+        on_compilation_cache_ready: CompilationCacheReadyHook | None = None,
     ) -> None:
         validate_vllm_mode_env()
         self.model_name_or_path, self.model = resolve_model_name_or_path(model)
@@ -851,6 +856,7 @@ class VllmEnvironment:
         # GPU-fork serving pass an isolated uvx launcher.
         self.launcher: VllmLauncher = launcher or PreinstalledVllm()
         self.compilation_cache_mode = compilation_cache_mode
+        self.on_compilation_cache_ready = on_compilation_cache_ready
         self.extra_metric_families = extra_metric_families
         self.router_config = router
         self.router_port = router_port
@@ -957,6 +963,7 @@ class VllmEnvironment:
             launcher=self.launcher,
             compilation_cache_mode=self.compilation_cache_mode,
             log_prefix="vllm_server_",
+            on_compilation_cache_ready=self.on_compilation_cache_ready,
         )
 
     def _report_failure_and_close(self, message: str) -> None:
@@ -1264,6 +1271,7 @@ def _start_vllm_native_process(
     launcher: VllmLauncher,
     compilation_cache_mode: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED,
     log_prefix: str,
+    on_compilation_cache_ready: CompilationCacheReadyHook | None = None,
 ) -> tuple[VllmServerHandle, list[str]]:
     """Start ``vllm serve`` without imposing an HTTP readiness policy."""
     extra_cli_args = _guard_vllm_eager_args(extra_cli_args)
@@ -1282,6 +1290,13 @@ def _start_vllm_native_process(
         launcher=launcher,
         mode=compilation_cache_mode,
     )
+    try:
+        if on_compilation_cache_ready is not None:
+            on_compilation_cache_ready(cache.reference())
+    except Exception:
+        cache.close()
+        shutil.rmtree(log_dir, ignore_errors=True)
+        raise
     try:
         return (
             _launch_vllm_process(

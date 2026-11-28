@@ -21,6 +21,7 @@ from marin.inference.config import (
 from marin.inference.model_preparation import read_tool_chat_template
 from marin.inference.vllm_router import available_port
 from marin.inference.vllm_server import (
+    CompilationCacheReadyHook,
     IsolatedCudaVllm,
     IsolatedTpuVllm,
     PreinstalledVllm,
@@ -128,8 +129,12 @@ class VllmBackend:
         *,
         extra_args: Sequence[str] = (),
         subprocess_env: Mapping[str, str] | None = None,
+        on_compilation_cache_ready: CompilationCacheReadyHook | None = None,
     ) -> Iterator[VllmEnvironment]:
-        """Yield a VllmEnvironment; call ``wait_until_ready()`` before using its endpoint."""
+        """Yield a VllmEnvironment; call ``wait_until_ready()`` before using its endpoint.
+
+        ``on_compilation_cache_ready`` receives the restored cache reference before vLLM launches.
+        """
         chat_template_content = _resolved_chat_template(spec)
         resolved_port = available_port(self.host) if self.port is None or self.config.router is not None else self.port
         model = self._model_config(spec)
@@ -151,6 +156,7 @@ class VllmBackend:
                 router=self.config.router,
                 router_port=self.port,
                 wait_for_ready=False,
+                on_compilation_cache_ready=on_compilation_cache_ready,
             ) as environment:
                 yield environment
 
