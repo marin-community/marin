@@ -187,10 +187,16 @@ class SourceOrigin(StrEnum):
     PROJECT_NUMINA = "project-numina"
     REASONING_GYM = "Reasoning Gym"
     RST = "RST"
+    NEWFACADE = "Newfacade"
+    SCIENCE_ONE = "ScienceOne"
+    SYNTHLABS = "SynthLabs"
+    TIGER_LAB = "Tiger-lab"
     TRL = "TRL"
     TASKTROVE = "TaskTrove"
     TEVATRON = "Tevatron"
     TERMINALWORLD = "TerminalWorld"
+    OPEN_REASONER_ZERO = "Open-Reasoner-Zero"
+    QASPER = "QASPER"
     AGENTICA_ORG = "agentica-org"
     CYBENCH = "CyBench"
     DI_ZHANG_FDU = "di-zhang-fdu"
@@ -201,6 +207,8 @@ class SourceOrigin(StrEnum):
     OPENGCUA = "OpenGCUA"
     PAFITIS = "pafitis"
     SWE_REBENCH = "SWE-rebench"
+    YATIN = "Yatin"
+    GOED_LM = "GoedelLM"
 
 
 class DatasetRelease(CatalogRecord):
@@ -923,9 +931,9 @@ def consumer_decision_status(
     findings: Sequence[ConsumerReason],
     *,
     runtime_commit: str,
-) -> Literal["Pending", "Excluded"] | None:
+) -> Literal["Excluded"] | None:
     """Apply a user decision only to its source, runtime, population and current finding."""
-    if decision is None or binding is None:
+    if decision is None or binding is None or decision.status == "Pending":
         return None
     if (decision.source_id, decision.runtime_commit, decision.task_specs_sha256) != (
         source_id,
@@ -1432,6 +1440,9 @@ _SNAPSHOT_CORE_FIELDS = (
 )
 # A field whose presence marks the full (receipt-bearing) declaration forms.
 _FULL_FORM_MARKERS = ("actor_census_input", "current_release", "quality_result")
+# Stage values the current taxonomy keeps; a served Pending row carrying any other
+# stage value belongs to the stage-cleanup era and recomputes from receipt evidence.
+_CURRENT_STAGE_VALUES = frozenset(stage.value for stage in PendingStage)
 
 
 class PreLineageSnapshotDeclaration(BaseModel):
@@ -1482,16 +1493,20 @@ def snapshot_declaration_generation(declaration: dict) -> str:
 
     ``qualified-v2`` is the current schema; ``qualified-v1`` is the same full form
     before the typed-status and naming schema — a Pending row without a computed
-    stage, a row still carrying the removed free-text ``name`` field, or a row whose
-    exclusion claims use reasons the pre-ruling taxonomy had — which is what every
-    served full-form snapshot through the r39-era cuts carries. ``pre-lineage`` is
-    everything older, which has no receipt-bearing fields to convert.
+    stage, a row still carrying the removed free-text ``name`` field, a row whose
+    exclusion claims use reasons the pre-ruling taxonomy had, or (the stage-cleanup
+    era) a Pending row whose stage value the current taxonomy removed — which is
+    what every served full-form snapshot through the r39-era cuts carries.
+    ``pre-lineage`` is everything older, which has no receipt-bearing fields to
+    convert.
     """
     if not isinstance(declaration, dict):
         return SNAPSHOT_SCHEMA_PRE_LINEAGE
     if not any(marker in declaration for marker in _FULL_FORM_MARKERS):
         return SNAPSHOT_SCHEMA_PRE_LINEAGE
-    if declaration.get("status") == "Pending" and "stage" not in declaration:
+    if declaration.get("status") == "Pending" and (
+        "stage" not in declaration or declaration.get("stage") not in _CURRENT_STAGE_VALUES
+    ):
         return SNAPSHOT_SCHEMA_PRE_STAGE
     if "name" in declaration:
         return SNAPSHOT_SCHEMA_PRE_STAGE
@@ -1506,7 +1521,7 @@ def snapshot_declaration_generation(declaration: dict) -> str:
 def normalize_snapshot_declaration(
     declaration: dict,
     *,
-    pending_stage_of: Callable[[str], PendingStage] | None = None,
+    pending_stage_of: Callable[[str], PendingStage | None] | None = None,
 ) -> dict:
     """Normalize one served declaration document to the current schema.
 
@@ -1567,7 +1582,7 @@ def _current_reason_values() -> frozenset:
 _CURRENT_REASON_VALUES = _current_reason_values()
 
 
-def _normalize_pre_stage_form(declaration: dict, pending_stage_of: Callable[[str], PendingStage]) -> dict:
+def _normalize_pre_stage_form(declaration: dict, pending_stage_of: Callable[[str], PendingStage | None]) -> dict:
     """The qualified-v1 → current conversion, one named step per removed field.
 
     ``name`` — dropped: the schema removed the free-text field and derives the
@@ -1581,8 +1596,11 @@ def _normalize_pre_stage_form(declaration: dict, pending_stage_of: Callable[[str
     normalized["display_name"] = source_display_name(normalized["id"])
     claims = normalized.get("exclusion_claims") or []
     normalized["exclusion_claims"] = [_normalize_legacy_claim(claim) for claim in claims]
-    if normalized.get("status") == "Pending" and "stage" not in normalized:
-        normalized["stage"] = pending_stage_of(normalized["id"]).value
+    if normalized.get("status") == "Pending" and normalized.get("stage") not in _CURRENT_STAGE_VALUES:
+        stage = pending_stage_of(normalized["id"])
+        normalized["stage"] = stage.value if stage else None
+        if stage is None:
+            normalized["status"] = SourceStatus.AVAILABLE.value
     return normalized
 
 
@@ -1767,7 +1785,7 @@ class CurationCatalog:
             yield model.model_validate(row, context=context)
 
     def sources(
-        self, snapshot_id: str, *, pending_stage_of: Callable[[str], PendingStage] | None = None
+        self, snapshot_id: str, *, pending_stage_of: Callable[[str], PendingStage | None] | None = None
     ) -> Iterator[SnapshotSource]:
         """The snapshot's typed sources, read through the versioned snapshot reader.
 

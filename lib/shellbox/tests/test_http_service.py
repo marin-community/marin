@@ -76,6 +76,36 @@ def available_port() -> int:
         return listener.getsockname()[1]
 
 
+def test_http_capability_assigns_distinct_ports_and_keeps_handlers_separate():
+    async def check():
+        first, second = ProcessMachine(), ProcessMachine()
+
+        async def first_handler(request):
+            return HttpResponse(200, b"first:" + request.body)
+
+        async def second_handler(request):
+            return HttpResponse(200, b"second:" + request.body)
+
+        async with (
+            asyncio.TaskGroup() as service_tasks,
+            serve_http(first, first_handler, task_group=service_tasks, port=0) as first_url,
+            serve_http(second, second_handler, task_group=service_tasks, port=0) as second_url,
+            httpx.AsyncClient(trust_env=False) as client,
+        ):
+            responses = await asyncio.gather(
+                client.post(first_url + "/score", content=b"one"),
+                client.post(second_url + "/score", content=b"two"),
+            )
+            assert first_url != second_url
+            assert [(response.status_code, response.content) for response in responses] == [
+                (200, b"first:one"),
+                (200, b"second:two"),
+            ]
+        assert all(process.returncode is not None for machine in (first, second) for process in machine.processes)
+
+    asyncio.run(check())
+
+
 def test_http_capability_serves_concurrent_requests_and_hides_provider_errors(caplog):
     async def check():
         blocked = asyncio.Event()
@@ -130,7 +160,7 @@ def test_http_capability_rejects_malformed_guest_body_before_host_dispatch(body)
         async def open_process(self, command):
             script = (
                 "import sys\n"
-                'print(\'{"type":"ready"}\', flush=True)\n'
+                'print(\'{"type":"ready","port":1}\', flush=True)\n'
                 f"print({frame!r}, flush=True)\n"
                 "sys.stdin.buffer.read()\n"
             )
@@ -288,7 +318,7 @@ def test_http_capability_rejects_oversized_guest_frames_and_reaps_process():
     class OversizedFrameMachine(ProcessMachine):
         async def open_process(self, command):
             script = (
-                'import os\nos.write(1, b\'{"type":"ready"}\\n\')\n'
+                'import os\nos.write(1, b\'{"type":"ready","port":1}\\n\')\n'
                 f"os.write(1, b'x' * {http_service.WIRE_LIMIT + 1})\n"
             )
             return await super().open_process(replace(command, argv=("python3", "-u", "-c", script)))

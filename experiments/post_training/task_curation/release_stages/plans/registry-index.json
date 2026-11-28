@@ -1,5 +1,5 @@
 {
-  "revision": "accff9c43857bd850ab8a1541aadcfd39e0128f2",
+  "revision": "699339ac74e10834fd0a7e6305889e3fd2b37690",
   "sources": {
     "AI-MO:numina_math": {
       "input_sha256": "56b745a538dad1c11afd3f5f954f73c43605435b08d296a75836ae5b8a0b1849",
@@ -11,18 +11,43 @@
       "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
     },
+    "AllenAI:Dolci-Think-SFT-Clean-v2/precise-if": {
+      "input_sha256": "c2a1faf7a5f219833978804f525d60ba72720bc8e24e77535130c78528ade066",
+      "sha256": "de12049321f1d84140c357772373d3bdebec2b1fc2093e039faf2fa27104f675",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/dolci-precise-if/2026.11.25.1/admission-evidence-v1/source-identities.json"
+    },
     "AllenAI:IF_multi_constraints_upto5": {
       "input_sha256": "3979435bc92fa17b5241825ed81f2bb6a3b5b550cad0f6ce8a3bcb6e997b0ac0",
       "sha256": "9b2684a3676be606af7d26d67f36230b44a10a85552652cc00b6cf880286c1de",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261116-r20-v1/overlap/full-index-with-new.json"
     },
     "AllenAI:rlvr_ifeval": {
-      "input_sha256": "1a3b2a01e22b4d44083e9c44206911f6abd150e46c9f6fa963684a170a41372c",
-      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+      "input_sha256": "1a33508995535673fc8cbc51f36f1dc99290850f366866ab7f1956815150ea55",
+      "sha256": "8f3fd8168d246bdb5b3d6e29b6ada9e34b72e1979ca8262d8b0d155cf7136b73",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/grader-reseal-20261126/rlvr-ifeval/source-identities.json"
     },
     "AllenAI:rlvr_math": {
       "input_sha256": "6844bc8b219fdb35a0ac4919beb09b5895b5434a361e788ab46ea5eb192b7a07",
+      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+    },
+    "Anthropic:hh_rlhf/harmless-base": {
+      "input_sha256": "e4a725b694c62b7ded3088a32ddba6ae93f2829798580873940ad7b99207e77d",
+      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+    },
+    "Anthropic:hh_rlhf/helpful-base": {
+      "input_sha256": "58152804652dea01f33c7f4d0a3ec1815a64db0eb35bf0e5d57b647977ac0b85",
+      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+    },
+    "Anthropic:hh_rlhf/helpful-online": {
+      "input_sha256": "ee3e1a5b1282163b5ab187445cc22529e5735364f06572c5bfd3c409418fafeb",
+      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+    },
+    "Anthropic:hh_rlhf/helpful-rejection-sampled": {
+      "input_sha256": "d3d467c93eaf8c423bcdfc0d2946acea5797ba7efc0cd57181b89094a01cdf16",
       "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
     },
@@ -526,6 +551,16 @@
       "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
     },
+    "FACET-Terminal:FACET-Terminal/FACET-Terminal-Tasks-6k": {
+      "input_sha256": "48a2c1d471bc4af8faca8ea769a67cd249fc9958e2e20440a8ecd2d0eb4539c3",
+      "sha256": "173f84660255cedb04adde336c923456c6c538811378f4b050af85d559a1eca8",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.20.1/ingest-a-fingerprints-v1/source-identities.json"
+    },
+    "FWeindel:validated-tasks/endless": {
+      "input_sha256": "c640df0e1560fa64f4291a0a649b986995aa36eaafb02c5a64646fdd14b7111b",
+      "sha256": "173f84660255cedb04adde336c923456c6c538811378f4b050af85d559a1eca8",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.20.1/ingest-a-fingerprints-v1/source-identities.json"
+    },
     "FWeindel:validated-tasks/facet_v2": {
       "input_sha256": "3fd133a8d96d7df898844882d8f71f7e52b19bb4cf8d02a0869aa8e834f83bbc",
       "sha256": "58bd0cdb9e2bdc3b001cb076bd058790c2e8ce72d0a1ee67dc5eaa66f1579583",
@@ -611,6 +646,11 @@
       "sha256": "88d3376353e7079a6ff4cf9f1225003d70904de9712f73ef4229e82206eabbb8",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/nemo-gym-remaining/2026.11.24.1/structured-neighbor-survey-v1/source-identities.json"
     },
+    "Nemotron:Nemotron-RL-knowledge-mcqa": {
+      "input_sha256": "8a370d6692c4164e1ad8f0aa6e7323a513d42daea2ff5840f0e1adb4dc5e56b3",
+      "sha256": "fef9ab8e7c730c0300a7ec010539f29d219cc0c4c623d60ed2c58f8f6c8dbb92",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/nemo-gym-remaining/2026.11.24.1/knowledge-mcqa-prepared-admission-evidence-v1/source-identities.json"
+    },
     "Nemotron:nemotron_if": {
       "input_sha256": "8fffde34fde662c8ff688fa003a138e5d29401f4dd127f492fe97a68f6f16837",
       "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
@@ -623,6 +663,41 @@
     },
     "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2": {
       "input_sha256": "6c87edadc26ad5ac632b59687b1dd3c922cac1e9c74ec011f640c3962dd89ee2",
+      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+    },
+    "Nemotron:nemotron_ultra_mopd/hs3_en": {
+      "input_sha256": "39f4051f941048cb3d45373c46c097ec98d7dac7202fa86f6ad9ae6c4be3333e",
+      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+    },
+    "Nemotron:nemotron_ultra_mopd/hs3_multi": {
+      "input_sha256": "da396b3dced49208139eb96360924e04147d0cf3ca26de028c9ff3188f90c957",
+      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+    },
+    "Nemotron:nemotron_ultra_mopd/hs3_multiturn": {
+      "input_sha256": "5a1ca7b8b51b5f137eb559471da19786bb11391f9855c46dbf79c8465fcc05f6",
+      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+    },
+    "Nemotron:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train": {
+      "input_sha256": "dcc86753a940311c0337b056372ac3d32098b51a6cd93d2eb944074d0ac8773a",
+      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+    },
+    "Nemotron:nemotron_ultra_mopd/safety_en": {
+      "input_sha256": "1e160d22252f81b0a22386a114ca26599f89d7935e42c9e19df506705f4bcb20",
+      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+    },
+    "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym": {
+      "input_sha256": "c0d64eea039e5d4f1035f114da319d19369070c469e1ca4a74bb7a898b4b14cc",
+      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+    },
+    "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2": {
+      "input_sha256": "9fda9516cbfcacf428f515bda38abe1383eef462f73d03da0d1ff97e08e2daab",
       "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
     },
@@ -651,6 +726,11 @@
       "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
     },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean": {
+      "input_sha256": "7dce2f1aaa6654c14eb1936d3bf29a4e7cc17840b8cc58f644fa32d0d60b8f81",
+      "sha256": "84714aed68bada208751f8f7e94cb30dc63e2f2a902c7dcb3cc45d4f12041e40",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/pending-burndown/20261123-lexical-v1/fingerprints/retained-20261123-v1-b/survey.json"
+    },
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_cot": {
       "input_sha256": "6b8b5cfecaba678ac283e86e307922d8f9d4a4512e036850a7a3215c436b9cc3",
       "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
@@ -676,10 +756,15 @@
       "sha256": "57f808b53b05dd6a7aa38213c291ded8277be567a02ee3aaca60ef649341903c",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-57f808b53b05dd6a.json"
     },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit": {
+      "input_sha256": "0cf18b9a1a0eb9bd958d543bebd7e10c2be48262267176b2ca5ef37ff4db036e",
+      "sha256": "84714aed68bada208751f8f7e94cb30dc63e2f2a902c7dcb3cc45d4f12041e40",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/pending-burndown/20261123-lexical-v1/fingerprints/retained-20261123-v1-b/survey.json"
+    },
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_reasoning_gym": {
-      "input_sha256": "262a6a26bb68f2b73468a1755a109277515aecdac61e85c88484dca4f40c7355",
-      "sha256": "ff9526c6f784d044f4a1bd33cee63ef086e9571149b6501d3cd6fd419ea99ba2",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-ff9526c6f784d044.json"
+      "input_sha256": "0b62a6360c0e282167bf4447268c9f3ead77cc0bc0f8f19a7dc23c93eba07600",
+      "sha256": "85190c3c5fff8e1c8a25a5543441b65366aeca01912683bf5706418c75d13254",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/grader-reseal-2-20261126/ultra-reasoning-gym/source-identities.json"
     },
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa": {
       "input_sha256": "96514b73d13079196ad39c6449b88f32b9ca2bcf31a639a276d3f38227b4e8ba",
@@ -716,6 +801,16 @@
       "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
     },
+    "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym": {
+      "input_sha256": "65fe5f97e62ca32c667e1c4aded8ebc181452d198cbb53c5bb85ba40a88479ad",
+      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": {
+      "input_sha256": "3d2cc3fc7557281ffd1a0160660855f39490cf13ec836a9545a0697d9814c461",
+      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+    },
     "Nemotron:nemotron_ultra_rlvr1/language_mixing_hs3_ultra_genrm_fmt": {
       "input_sha256": "a832bbc77de12d0f9dbebb352dfaa5a6c5cf5f8c09c540027b0d21160f27c6e0",
       "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
@@ -746,6 +841,11 @@
       "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
     },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean": {
+      "input_sha256": "83baa58bd426f7edcd89a029ec352e4e7792d551d1cecb3ece3075358e053a15",
+      "sha256": "84714aed68bada208751f8f7e94cb30dc63e2f2a902c7dcb3cc45d4f12041e40",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/pending-burndown/20261123-lexical-v1/fingerprints/retained-20261123-v1-b/survey.json"
+    },
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_cot": {
       "input_sha256": "a3085d949984d8bda3e083b68007a7e722b2452e85f79892551b818631f6e500",
       "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
@@ -772,9 +872,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-57f808b53b05dd6a.json"
     },
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym": {
-      "input_sha256": "201358bac6ccdfef95fdd4501a160f215bd8ca24acb3e684c0963834016e1828",
-      "sha256": "2bc6c1596c7edf9c893f53ae8fca7727f3cae4c37a694bc3fd9fba514b04d62a",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2bc6c1596c7edf9c.json"
+      "input_sha256": "6fcf01800b3e9e5eabf42ec7c7946bd48bfcf259fe5ca8d8ef6b4daa4471453b",
+      "sha256": "85190c3c5fff8e1c8a25a5543441b65366aeca01912683bf5706418c75d13254",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/grader-reseal-2-20261126/ultra-reasoning-gym/source-identities.json"
     },
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa": {
       "input_sha256": "279d25a3f12e091c019b08f765989d1f182661c412c109be855322c9c1d8ab01",
@@ -851,6 +951,11 @@
       "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
     },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean": {
+      "input_sha256": "26107e846072de78469befd3a6520d705b7bcbd6d661311e7d990777f006d13b",
+      "sha256": "84714aed68bada208751f8f7e94cb30dc63e2f2a902c7dcb3cc45d4f12041e40",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/pending-burndown/20261123-lexical-v1/fingerprints/retained-20261123-v1-b/survey.json"
+    },
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_cot": {
       "input_sha256": "0d81fc487dec016ff0babc978d5f0f8796be22396d90ad97bf00fb51c3ee0a96",
       "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
@@ -876,10 +981,15 @@
       "sha256": "57f808b53b05dd6a7aa38213c291ded8277be567a02ee3aaca60ef649341903c",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-57f808b53b05dd6a.json"
     },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit": {
+      "input_sha256": "85b0d37549cd9080fa4e570028ae16b0df21e6156d536e19a7c0d40f9e043f2a",
+      "sha256": "84714aed68bada208751f8f7e94cb30dc63e2f2a902c7dcb3cc45d4f12041e40",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/pending-burndown/20261123-lexical-v1/fingerprints/retained-20261123-v1-b/survey.json"
+    },
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_reasoning_gym": {
-      "input_sha256": "c122335bd8cbdc0b6d488c205568e85715d5d44cc13025f754122c35544600af",
-      "sha256": "ff9526c6f784d044f4a1bd33cee63ef086e9571149b6501d3cd6fd419ea99ba2",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-ff9526c6f784d044.json"
+      "input_sha256": "76e5fcea36f8c9f08564d81a07f561b036c75a7d6ef1b71d218856183004ea06",
+      "sha256": "85190c3c5fff8e1c8a25a5543441b65366aeca01912683bf5706418c75d13254",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/grader-reseal-2-20261126/ultra-reasoning-gym/source-identities.json"
     },
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa": {
       "input_sha256": "cc954951cb9c93a34572d4f6b7fc9145c59596d38d7f190fbfcedbbe1fff661c",
@@ -930,6 +1040,41 @@
       "input_sha256": "1fdb2b49b8ddbdae05d1f52ee7cc2b8c5c108342e372a7a384009d3e3b53d542",
       "sha256": "2065d4bb0ca453cf3ac8eae3f2ca087f3622f0079c9f72e041a8e70be3b25076",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2065d4bb0ca453cf.json"
+    },
+    "Newfacade:LeetCodeDataset": {
+      "input_sha256": "983af40e24ee6465066bfc7b4777ecff0bf989171dfdcf043e25567d462d120a",
+      "sha256": "0c4c38d792caf64e92dcc44f7fe8797f1857c5b96a04bde0fe660bdf289708ec",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/pending-cleanup-admission-20261127-v1/Newfacade_LeetCodeDataset.json"
+    },
+    "Nvidia:Nemotron-RL-Instruction-Following-Citation-Formatting-v1": {
+      "input_sha256": "a979e4210fea0bdf62514a124c5c41ab6b625faa8e91e604f2c53adee3420c4e",
+      "sha256": "5ca78c72e7e21987a809edac8cb5678f62603663644d5fdb7c9af8bf04025a3c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/formatting/2026.11.26.1/overlap-disposition-v6/source-identities-citation.json"
+    },
+    "Nvidia:Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1": {
+      "input_sha256": "9ded525798e51c81b9f178d9166fbd38b51249f945705002f30ef015009d32dc",
+      "sha256": "faba00c13396056228f8d193e74bfd2da30c7cee7b58fe0935b8a0330df7f239",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/formatting/2026.11.26.1/overlap-disposition-v6/source-identities-freeform.json"
+    },
+    "Nvidia:Nemotron-RL-InverseIFEval-v1": {
+      "input_sha256": "aace4cee98596e1bf3ecb4644d598ef3ecf96301ab156076cfc9e9b8170738ce",
+      "sha256": "f9fc8033c51a2a04fd5738affbbd83988772a8ad2778a585906cfe3083310920",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/nemotron-inverse-ifeval/2026.11.25.1/admission-evidence-v1/overlap-disposition-v1/source-identities.json"
+    },
+    "Nvidia:Nemotron-RL-QA-Abstention-v1": {
+      "input_sha256": "2f7cd081c24286c66fbc6e0f54eac8c0404d174b319ba7f3b41e61ae82fcf388",
+      "sha256": "3ec21c19a8317bbcd363e1ba9b806e210201f26aa98609aab070afa2413a7193",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/qa-abstention/2026.11.26.1/admission-evidence-v1/overlap-disposition-v1/source-identities.json"
+    },
+    "Nvidia:Nemotron-RL-agent-workplace_assistant": {
+      "input_sha256": "ddd5f2acabbebeef7adb1f7b4f021c462c331864f3676dcf0fcd9262627458e6",
+      "sha256": "66636b00abce317255b70dbdc0051d2509fa24e75589434e8dcae6c0ff70bd60",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/nemotron-workplace/2026.11.23.1/prepared-final-pin-neighbors-native-binding-v1/source-identities.json"
+    },
+    "Nvidia:Nemotron-System-User-Instruction-Hierarchy-v1": {
+      "input_sha256": "bcc1fd1df79021b9f2aca7ff3efc846034cc75bdac57adf9fbe4f9acecc84ff1",
+      "sha256": "e2c9e5dee9efd38bf66b544a388e94a46e76e9960d6e13aa622363eb06f69483",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/nemotron-system-user-instruction-hierarchy/2026.11.25.1/admission-evidence-v1/source-identities.json"
     },
     "Open-R1:verifiable_code": {
       "input_sha256": "eb85463c33f87892df6c0c3757782c385a9c0a33dd2acbb725f0a38b107cdf8a",
@@ -992,14 +1137,44 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.17.1/rst-final-admission-preseal-v1/1e0af0ebe59e0eb380bf/fingerprints.json"
     },
     "Reasoning Gym:reasoning_gym": {
-      "input_sha256": "8a95b73de42b057b2d63c36cde46bbecc6f4a496783545ddcc5b44c8118c9c07",
-      "sha256": "57f808b53b05dd6a7aa38213c291ded8277be567a02ee3aaca60ef649341903c",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-57f808b53b05dd6a.json"
+      "input_sha256": "60089135ed6904697a8ad3bd1c678c20454f5948240aa4cd68b1fbe8073ecda5",
+      "sha256": "dea0b8098eb49c8df5707cced4fee21f3af6e9acb10d9a0cfa0a822ecd50b96a",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/grader-reseal-2-20261126/reasoning-gym/source-identities.json"
     },
     "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@repaired-20261119": {
       "input_sha256": "3fbdb53666b7ba87d727e4e48820fcd615f9ab138eae7fc961f3aa82f1e6af51",
       "sha256": "9e9d7c9d56dc7be78d542a27dd16fa7d0e4df0be341ea67e984533bc16645d3b",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/swe-repair/2026.11.20.1/measurements/source-identity/swe-repair-survey/source-identities-content-nn-v4.json"
+    },
+    "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@sealed-20261124": {
+      "input_sha256": "c871d638ea7364ff955618917dc8e0fb7fa36490816159acb5a6510ef8b90036",
+      "sha256": "2dd3a26ccb24242710f3636d4285fc8185c7c2d9273ae6889b34928737f20255",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/swe-repair-sealed-20261127/source-identities-content-nn-v4.json"
+    },
+    "ScienceOne:S1-DeepResearch-15k": {
+      "input_sha256": "33f2a0d5c894e167f67bba0d1f454335fcc46929d64b1da09b33599fe6f087d0",
+      "sha256": "6c8b1abde6fd59de3e184f5291e60b3b67e70d34a448687c8ef4e3d40f68fcb3",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/s1-deepresearch/2026.11.26.1/admission-evidence-v1/source-identities.json"
+    },
+    "SynthLabs:Big-Math-RL-Verified": {
+      "input_sha256": "3311c4453660375787b8e87172fc1659585e315396adef6689cd9ed95931ba42",
+      "sha256": "249dbcc56e18137ceb3ebf8442e959388171b806545c08a62e8d9508ad103548",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261127-v1/bigmath-refresh-v1/overlap-v2/output/source-identities-content-nn-v4.json"
+    },
+    "TRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized": {
+      "input_sha256": "1f31f4a251af446d7403e3ff44cb0f4f1fc583402e0fc6d317f236ede9bbffa8",
+      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+    },
+    "TRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs": {
+      "input_sha256": "1db932d4da078ae4797ba2d3fd86fe81564d0f6fd6659797c5c501f0e22a96fd",
+      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+    },
+    "TRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned": {
+      "input_sha256": "79df8740ecc3691d18d59dc73646fa8ecc31c67f9d725d6ca050551d31d3618c",
+      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
     },
     "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2": {
       "input_sha256": "fed037d9b596cd1650c78eda770558cba650be20d93d16a44c32a0075382dc67",
@@ -1017,9 +1192,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
     },
     "TaskTrove:DCAgent__exp_rle_adversarial-v6": {
-      "input_sha256": "10c32ff21a4f7384f6fde851f4429122ac13d9b76c7f282d9975664f51863fa7",
-      "sha256": "2bc6c1596c7edf9c893f53ae8fca7727f3cae4c37a694bc3fd9fba514b04d62a",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2bc6c1596c7edf9c.json"
+      "input_sha256": "beeefdbfff14ff7e814e6135721e08b4b679c468a2adaa80fd77f67605c5fff9",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:DCAgent__exp_rpt_curriculum-easy": {
       "input_sha256": "7fb216c3419b26f28544de33d72b9406b05f1a682e9b62afe57508b640ad55cb",
@@ -1047,9 +1222,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2bc6c1596c7edf9c.json"
     },
     "TaskTrove:DCAgent__exp_rpt_nemotron-cpp": {
-      "input_sha256": "daa4ee9a8876660d5b953f57be8fbf41b7b0df83a6c021d84c2425b814f9897b",
-      "sha256": "2bc6c1596c7edf9c893f53ae8fca7727f3cae4c37a694bc3fd9fba514b04d62a",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2bc6c1596c7edf9c.json"
+      "input_sha256": "511050a5b56cab69afc08b2e857e8651f9491713db16969e5e630a4be7c3afd9",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2": {
       "input_sha256": "9d5ab567fe48a4b710c750aaa3f65a92cbb470a270d83bb3c5a1ab5571211184",
@@ -1057,7 +1232,7 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261115/settled-code-puzzles-v1/source-identities-82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8.json"
     },
     "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@backfilled-20261122": {
-      "input_sha256": "812819e023817492956072dd243a9c5dc5a411b31e0d1488d362a6ae0237f217",
+      "input_sha256": "b14085f7204c6db89658322e95fe6785a3c7adcae4126fb611d55818259f8504",
       "sha256": "f5d8c6194c3a388fbf26660fec107e70090bfc1ffce901ba77bca7ceb8ee9105",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/requirement-backfill/neighbors/backfilled-20261122-r3/source-identities-content-nn-v4.json"
     },
@@ -1082,7 +1257,7 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261115/settled-code-puzzles-v1/source-identities-82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8.json"
     },
     "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2@backfilled-20261122": {
-      "input_sha256": "95fee6cafe3b21885fcc4caa98c89cd01c83de6ce2cefc136dd1cfce41b0dab1",
+      "input_sha256": "e70dc611f4a0587794602028f84f3f354d07fbaf1318bf537e2a996fd8f114ef",
       "sha256": "f5d8c6194c3a388fbf26660fec107e70090bfc1ffce901ba77bca7ceb8ee9105",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/requirement-backfill/neighbors/backfilled-20261122-r3/source-identities-content-nn-v4.json"
     },
@@ -1092,9 +1267,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261115/settled-code-puzzles-v1/source-identities-82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8.json"
     },
     "TaskTrove:DCAgent__inferredbugs-sandboxes-verifier": {
-      "input_sha256": "53be0d0c012d36b27119f1c649c0ed204e0f791cfff902507474c073e0823b84",
-      "sha256": "3747d2ddadf7f450e7b40182419c08d09161bf6fca6087db4f5b8b4533908ae2",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-3747d2ddadf7f450.json"
+      "input_sha256": "701b5c6bfed4162e98b14d8e32302b438ddbf572b9cc497381605015c0b5f267",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:DCAgent__mix_h4_binary_easy": {
       "input_sha256": "cfbe51adbfec3a5651e832b9b0c06580fa6e1fb6fa80e477b7ee152ddb7550c5",
@@ -1127,9 +1302,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/empty-fingerprints/2026.11.14.1/fingerprints.json"
     },
     "TaskTrove:SWE-Gym__SWE-Gym": {
-      "input_sha256": "17a472315c49536ff10f4945e787e81fb3465840c302b2880201c241b6e3f619",
-      "sha256": "c57017ca626a8895ee1ffa77740e239734f4696a14560cb4543bca0fdddbdb6e",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/empty-fingerprints/2026.11.14.1/fingerprints.json"
+      "input_sha256": "c741a5a5f832ac798a0bf02227cc01f4480f4030a8559e90a876c08c6cc93e8e",
+      "sha256": "2ec722df51769df864f819c74dccf01d58dd3ddb82375cb9f81b5fe0f9d7fd80",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/native-taskspec-repin-20261126/source-identities-content-nn-v4.json"
     },
     "TaskTrove:SankalpKJ__nemotron-code-oracle-filtered": {
       "input_sha256": "65f2a48e8ff68804ef8de9fad891df761e98d7c448e79ae54804ff1b6213f5f5",
@@ -1157,9 +1332,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
     },
     "TaskTrove:laion__codeelo-v2": {
-      "input_sha256": "37b5db1363ba2e1246d15a267651b08273ec146af0b5b2ab359c9b33daafa02b",
-      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+      "input_sha256": "1b3ef59f3d79405fbb6efb03ef42781947d82d4403758d3d412483aef3d22c4c",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:laion__codeforces-v3": {
       "input_sha256": "941390b593a8c8a4442d4c938bc406cc3dda778a66aa5adcf7a78c303d1d7ff8",
@@ -1177,14 +1352,14 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261115/settled-code-puzzles-v1/source-identities-82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8.json"
     },
     "TaskTrove:laion__exp_rpt_crosscodeeval-csharp-v4": {
-      "input_sha256": "4e8343ebd58f4901994722364aea91b770fb08a4b589eafd836b9b4434dfa955",
-      "sha256": "82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261115/settled-code-puzzles-v1/source-identities-82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8.json"
+      "input_sha256": "f1e222f924ce1ad92478260025e68282b8e2cad6137a4f6edf7b3a862bedb3b9",
+      "sha256": "9f1e195d69d04214596ece13074cc04a6cc5eebec283f60dd6a0365b7ecd3ec1",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261127-v1/crosscode-tier-refresh-v1/source-identity-v1/source-identities-content-nn-v4.json"
     },
     "TaskTrove:laion__exp_rpt_crosscodeeval-java-v3": {
-      "input_sha256": "9c4efb73217a7f62b504a8f7458cfe82d473498294fc86bd9e63f9df9f8566b1",
-      "sha256": "82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261115/settled-code-puzzles-v1/source-identities-82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8.json"
+      "input_sha256": "654c2d89ad8a648330cfb4dce4dc2726870133ac5364be080909c3ef2b95cda1",
+      "sha256": "39b75240e04f3dc0ca54805b7b4e99107600e38071cbec6f2fe39e943e2af709",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261127-v1/crosscode-refresh-v1/source-identity-v2/source-identities-content-nn-v4.json"
     },
     "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2": {
       "input_sha256": "1c3e8d07809e008be9996a9ad8f47b89608b9d4ac4b7b318a55bb4b82c521a2e",
@@ -1192,14 +1367,14 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261115/settled-code-puzzles-v1/source-identities-82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8.json"
     },
     "TaskTrove:laion__exp_rpt_crosscodeeval-typescript-v2": {
-      "input_sha256": "9e20f73b56e4c266bf165a6be04fb12fe9fcc02a5943bc492e32940f7e706790",
-      "sha256": "82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261115/settled-code-puzzles-v1/source-identities-82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8.json"
+      "input_sha256": "ea5657a3e0f75fc5a1e11436877163348e7675a6008245cd09124a81a4d99d28",
+      "sha256": "9f1e195d69d04214596ece13074cc04a6cc5eebec283f60dd6a0365b7ecd3ec1",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261127-v1/crosscode-tier-refresh-v1/source-identity-v1/source-identities-content-nn-v4.json"
     },
     "TaskTrove:laion__exp_rpt_ghactions-v3": {
-      "input_sha256": "a0b9547469aa55c6e281e55c455e2208dc13979b9643fa23ca2e1ac2719df30a",
-      "sha256": "3747d2ddadf7f450e7b40182419c08d09161bf6fca6087db4f5b8b4533908ae2",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-3747d2ddadf7f450.json"
+      "input_sha256": "1ebd3a0e0b1ba5a4a0731ab1de64026c83db822b85b194499a12e5cbf8a7c57a",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:laion__exp_rpt_methods2test-large-v4": {
       "input_sha256": "63697f9e36dffe8908156e40cf170d1dff66f04e669dfcc645d8827f3b1d07d5",
@@ -1212,34 +1387,34 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-57f808b53b05dd6a.json"
     },
     "TaskTrove:laion__exp_rpt_scaffold-v3": {
-      "input_sha256": "ebca494efb8301eadc36a1bd478559fdf68e47f1f7aa80e201aa0c4dc1462ea4",
-      "sha256": "2bc6c1596c7edf9c893f53ae8fca7727f3cae4c37a694bc3fd9fba514b04d62a",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2bc6c1596c7edf9c.json"
+      "input_sha256": "42d3bc5cd0e8330ac50b71b5430bc38410c008eb28339cbc453e84d44c2078aa",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:laion__exp_rpt_stack-cpp-v4": {
-      "input_sha256": "85f02844129d5e1d89fb850c138198212d91e734de4e26e8402e17788057cd40",
-      "sha256": "2bc6c1596c7edf9c893f53ae8fca7727f3cae4c37a694bc3fd9fba514b04d62a",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2bc6c1596c7edf9c.json"
+      "input_sha256": "81be3db6e5dbfef056a3b4327efb4fd42c2ce739c21e720545079cea46d3ab98",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:laion__exp_rpt_stack-dockerfile-gpt5mini-v7": {
-      "input_sha256": "1ff364a11f92c32a1e7fd718c937295a61a634def00e389df905bfc6bca1f0e2",
-      "sha256": "57f808b53b05dd6a7aa38213c291ded8277be567a02ee3aaca60ef649341903c",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-57f808b53b05dd6a.json"
+      "input_sha256": "0e5bfd445a9099c3ca6e4e67e02af33e3fdc8eb96172768cc1b144f5fe86ca8f",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:laion__exp_rpt_stack-go-v5": {
-      "input_sha256": "f91589c6f1127ce15d4d9e55fd2e1a4990853dc14381c13bf4573f731d9aa726",
-      "sha256": "2bc6c1596c7edf9c893f53ae8fca7727f3cae4c37a694bc3fd9fba514b04d62a",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2bc6c1596c7edf9c.json"
+      "input_sha256": "6c913d92899610a393d68209b4be4919ae31719998e7533f16ba3c4774db63d4",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:laion__exp_rpt_stack-jest-v5": {
-      "input_sha256": "7962c32183a46cb26a2f817ee38eb23f7f63b5d10c0705061cea39e5f5cd3fc5",
-      "sha256": "57f808b53b05dd6a7aa38213c291ded8277be567a02ee3aaca60ef649341903c",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-57f808b53b05dd6a.json"
+      "input_sha256": "ad94f5cd7086371e99b1cb961e96e5d6a35735d251db229c9e876ce43f13e9ed",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:laion__exp_rpt_stack-junit-v6": {
-      "input_sha256": "60ae1d913d40cf04f754dc42382f5010507f5b74e8d41eac39e47ed84baf3653",
-      "sha256": "57f808b53b05dd6a7aa38213c291ded8277be567a02ee3aaca60ef649341903c",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-57f808b53b05dd6a.json"
+      "input_sha256": "1014fa381ac48b1ee8ba049988e8e96c0aa03664c26ec58ed441f96c13643fb8",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:laion__exp_rpt_stack-php-large-v9": {
       "input_sha256": "ca18692438959088b0ff11267ba04fa36e11acf770fca1747b041557a3180d95",
@@ -1247,14 +1422,14 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-57f808b53b05dd6a.json"
     },
     "TaskTrove:laion__exp_rpt_stack-pytest-large-v3": {
-      "input_sha256": "957205cebbdb09718fe192eede7ba2dbc3aecf5691aba7cc8720279a554e3c9e",
-      "sha256": "57f808b53b05dd6a7aa38213c291ded8277be567a02ee3aaca60ef649341903c",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-57f808b53b05dd6a.json"
+      "input_sha256": "b3f28986cb365dc220ccbc6c339e6b7c0d9696087644c4c234406605dcbf5604",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:laion__exp_rpt_stack-rspec-v4": {
-      "input_sha256": "20a20dc3c7396c920a84236b043c638a141bad75c408b6dd8147071ad0b68dfc",
-      "sha256": "2bc6c1596c7edf9c893f53ae8fca7727f3cae4c37a694bc3fd9fba514b04d62a",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2bc6c1596c7edf9c.json"
+      "input_sha256": "81759508d13cea5fbbdead81a0fff542367bc9d895abc0d375020ffa50570ead",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:laion__exp_rpt_taco-v2": {
       "input_sha256": "d3a4b2989fe09dc30816424be7a1e5059bf644dcb356279dbd358c07bc87320f",
@@ -1267,9 +1442,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
     },
     "TaskTrove:laion__mix_h10_reward_proportional-v2": {
-      "input_sha256": "e360826ba80c10a7e7f08e47c98b3e3cefcdb68c053ba412ea1d8571d7ad158c",
-      "sha256": "2bc6c1596c7edf9c893f53ae8fca7727f3cae4c37a694bc3fd9fba514b04d62a",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2bc6c1596c7edf9c.json"
+      "input_sha256": "a164150f9f71390d4f59cdadca9a08d6c68cdb80a30aa42360dc6c6177e02369",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:laion__mix_h11_single_skill_only-v2": {
       "input_sha256": "edf2b85a1a2710c0097be38dfd58cddfce7375a9e58e3f90b9cf9ed71380ec11",
@@ -1292,9 +1467,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261115/settled-code-puzzles-v1/source-identities-82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8.json"
     },
     "TaskTrove:laion__nemotron-gym-agentic-function-calling-pivot-v3": {
-      "input_sha256": "4820f6bdb2ccceac4939c492c499175ac6c952c4f82e992067e97e0eb5d6b216",
-      "sha256": "3747d2ddadf7f450e7b40182419c08d09161bf6fca6087db4f5b8b4533908ae2",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-3747d2ddadf7f450.json"
+      "input_sha256": "42752cb4fa36e42cdcdb5f6f42d18fd43a34823c1ddfbd1ccd7c15af573ce415",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:laion__nemotron-gym-agentic-indirect-prompt-injection-v3": {
       "input_sha256": "d267c7cd4354e9fb705633ed7603c2ab17d21050540ed0d7837abcb3719badc6",
@@ -1331,6 +1506,11 @@
       "sha256": "2065d4bb0ca453cf3ac8eae3f2ca087f3622f0079c9f72e041a8e70be3b25076",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2065d4bb0ca453cf.json"
     },
+    "TaskTrove:laion__nemotron-gym-identity-following-v4@repaired-20261123": {
+      "input_sha256": "73f7263ef20e542e963ecd08b767d10317f2b435e4ed257066c0628881967dd8",
+      "sha256": "aa4be36bef02ba1a4f21d31c9434cba7d831ff4a391c5e75adbd32bf958c89b1",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/identity-following-repair/20261124/neighbors/source-identities-content-nn-v4.json"
+    },
     "TaskTrove:laion__nemotron-gym-instruction-following-adversarial-v5": {
       "input_sha256": "b8a9cb1200ec7c293cbaad2681660421cddf22e5074850af8c4186c8d861df4b",
       "sha256": "ff9526c6f784d044f4a1bd33cee63ef086e9571149b6501d3cd6fd419ea99ba2",
@@ -1342,14 +1522,14 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261115/filtered-final-pins-v1/source-identities-12b7ab9dcb23aa3030a287166d92021587212bd84ab43d2ec7aedac998fdaad2.json"
     },
     "TaskTrove:laion__nemotron-gym-instruction-following-citation-v2": {
-      "input_sha256": "8f275816e2657350f57f84ef491b23e19b4e38511a69de0f240613155fe4f1a1",
-      "sha256": "3747d2ddadf7f450e7b40182419c08d09161bf6fca6087db4f5b8b4533908ae2",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-3747d2ddadf7f450.json"
+      "input_sha256": "82c864bd49f5a9be06f0c5ae87142594659bf6c4a2ff9c38df311ad302bf7a14",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:laion__nemotron-gym-instruction-following-freeform-v2": {
-      "input_sha256": "b7b6383ac0398e75247b60a979c13c038729b62491f8ba7b0d439093d66d8ae1",
-      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+      "input_sha256": "2a8af010da571e2ab569a143e11961c3784885efdcc1fb7dab27993a7410f3ab",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:laion__nemotron-gym-instruction-following-multiturnchat-v4": {
       "input_sha256": "5dbdaf8f8f3094fa9bb5e48730a83713956b99b024469f43fb054866c221bfe0",
@@ -1387,14 +1567,14 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2bc6c1596c7edf9c.json"
     },
     "TaskTrove:laion__nemotron-gym-litmus-bench-v2": {
-      "input_sha256": "566239905311ce4722a4182112004d1e8947e015692c4f5e0479b86f75259088",
-      "sha256": "2bc6c1596c7edf9c893f53ae8fca7727f3cae4c37a694bc3fd9fba514b04d62a",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2bc6c1596c7edf9c.json"
+      "input_sha256": "de63d9927d0c9e4a4fa099893aeb3a92bfb3fd0f31c454a9782f837cb56435b3",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:laion__nemotron-gym-math-advanced-calculations-v4": {
-      "input_sha256": "e1c30da546718639aacae280515c20f54f08c6bf4c817efb629ded6c72f242cf",
-      "sha256": "2bc6c1596c7edf9c893f53ae8fca7727f3cae4c37a694bc3fd9fba514b04d62a",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2bc6c1596c7edf9c.json"
+      "input_sha256": "113940afaf7c95b794dbf07f87b702865e58196cdb2c81b57786645f36bba456",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:laion__nemotron-gym-math-openmathreasoning-v2": {
       "input_sha256": "13baf0a0e70f5a3ac0d7f619d9e3ca63e7f4847c5003869145f0cef80875e368",
@@ -1417,9 +1597,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-ff9526c6f784d044.json"
     },
     "TaskTrove:laion__nemotron-gym-multichallenge-vanilla-v3": {
-      "input_sha256": "a0dafcd35330fc7b740ae5bc66597650f8cced27de7fff756894fdb2205f8f2f",
-      "sha256": "ff9526c6f784d044f4a1bd33cee63ef086e9571149b6501d3cd6fd419ea99ba2",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-ff9526c6f784d044.json"
+      "input_sha256": "a3950efbddfcbbf50992327f52942b6525be93a53ced4094833d26a3c213990a",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
     },
     "TaskTrove:laion__nemotron-gym-qa-abstention-v4": {
       "input_sha256": "ca5f0f38eeaded2ce5f43d31f85fd33f3df15c0b4b882ec66bbfcf9d9523ac5d",
@@ -1441,6 +1621,11 @@
       "sha256": "2065d4bb0ca453cf3ac8eae3f2ca087f3622f0079c9f72e041a8e70be3b25076",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2065d4bb0ca453cf.json"
     },
+    "TaskTrove:laion__nemotron-gym-structured-outputs-v4": {
+      "input_sha256": "cca98829d7909c7933f5e14e5eb794c704aaf2b66e45e53d70d159dd3ad99592",
+      "sha256": "51ca8d6644652e1914c86cb74cc6da2aca9098571846ff033045ce25d06f72b8",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/tasktrove-declared/2026.11.24.1/native-structured-qualified-admission-evidence-v1/overlap-disposition-v1/source-identities.json"
+    },
     "TaskTrove:laion__nemotron-gym-sysbench-v4": {
       "input_sha256": "3d4521400310a907869616f42f59a4193a67bd875826564b6620135ee3a16ca1",
       "sha256": "ff9526c6f784d044f4a1bd33cee63ef086e9571149b6501d3cd6fd419ea99ba2",
@@ -1452,14 +1637,34 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/empty-fingerprints/2026.11.14.1/fingerprints.json"
     },
     "TaskTrove:laion__r2egym-patched-full-oracle-v3": {
-      "input_sha256": "ec16aef2e4c6c2e9da2a139bf08de353cada0936639b189788ad264ee6f253c3",
-      "sha256": "c57017ca626a8895ee1ffa77740e239734f4696a14560cb4543bca0fdddbdb6e",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/empty-fingerprints/2026.11.14.1/fingerprints.json"
+      "input_sha256": "f57a65a3215e216959ec5218da6d2aa2598e7e3e9f5a8021a3bb8e7ab1499132",
+      "sha256": "2ec722df51769df864f819c74dccf01d58dd3ddb82375cb9f81b5fe0f9d7fd80",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/native-taskspec-repin-20261126/source-identities-content-nn-v4.json"
+    },
+    "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2": {
+      "input_sha256": "afb3577c75c8a2f4429ee735d38a176886fe306b8e8dad71b2faa77aa41cb518",
+      "sha256": "01d559117b56f9fe2d0f39c7da8ac9577d721ff81025d93d240652d19e42d8f9",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/census-repair/2026.11.17.1/source-identities.json"
+    },
+    "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2": {
+      "input_sha256": "c4045666fe66dc0b77492b018b8245ec8398c213f495db77ce424ef81ac17d92",
+      "sha256": "01d559117b56f9fe2d0f39c7da8ac9577d721ff81025d93d240652d19e42d8f9",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/census-repair/2026.11.17.1/source-identities.json"
+    },
+    "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2": {
+      "input_sha256": "d40922ff8e94e5c1a8291d45ae5bec936ca59e1091366a5db3115fd1abbccaf5",
+      "sha256": "01d559117b56f9fe2d0f39c7da8ac9577d721ff81025d93d240652d19e42d8f9",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/census-repair/2026.11.17.1/source-identities.json"
+    },
+    "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2": {
+      "input_sha256": "4495334f561bbb8d39622de66b9e9035d8326d278d490e8f9ab55a65dca09889",
+      "sha256": "01d559117b56f9fe2d0f39c7da8ac9577d721ff81025d93d240652d19e42d8f9",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/census-repair/2026.11.17.1/source-identities.json"
     },
     "TaskTrove:laion__swegym-tasks-patched-validated-v5": {
-      "input_sha256": "a55d222af225a2ff3f90a1b8b9e376d0e463ec4165d0fbdd212ccd4418619ac8",
-      "sha256": "c57017ca626a8895ee1ffa77740e239734f4696a14560cb4543bca0fdddbdb6e",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/empty-fingerprints/2026.11.14.1/fingerprints.json"
+      "input_sha256": "23abd3eb61c2ec6223d40ab8fe9e8e7ff39853c3262bb707f897f13be0a749ad",
+      "sha256": "2ec722df51769df864f819c74dccf01d58dd3ddb82375cb9f81b5fe0f9d7fd80",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/native-taskspec-repin-20261126/source-identities-content-nn-v4.json"
     },
     "TaskTrove:laion__swesmith-oracle-filtered-v2": {
       "input_sha256": "d78281f1edc3bdf1eda7e70dfb9e22724d40814fe7513986ae916b62fed8b444",
@@ -1475,6 +1680,11 @@
       "input_sha256": "95aa8062a4453fbe2f52f160ce2c9be5af84e4660169758b5f83b7a2bc3cb558",
       "sha256": "82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261115/settled-code-puzzles-v1/source-identities-82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8.json"
+    },
+    "TaskTrove:laion__wizardlm-orca-v4": {
+      "input_sha256": "3144f1e0db1d9bd8850c924ba87617f80693b9bb0a324674fc5174ff0b1e3bf3",
+      "sha256": "01d559117b56f9fe2d0f39c7da8ac9577d721ff81025d93d240652d19e42d8f9",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/census-repair/2026.11.17.1/source-identities.json"
     },
     "TaskTrove:smartie-calibforge-rebuilt-v1": {
       "input_sha256": "969d642c229dbbf4b1244d56525c04a3eb7179214d74dcdd06adf15a9ac60b49",
@@ -1492,14 +1702,24 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
     },
     "TaskTrove:swesmith-verifier-repaired-v5": {
-      "input_sha256": "37ab014a180ac156cacd0b241094302829b7f655a451d9b88c593f7c8abb4a12",
-      "sha256": "2bc6c1596c7edf9c893f53ae8fca7727f3cae4c37a694bc3fd9fba514b04d62a",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2bc6c1596c7edf9c.json"
+      "input_sha256": "2b6162aa371e24fd235a6829733050f32aadbf2fb3a67230dd7c8ba345bb2036",
+      "sha256": "a076735b7baf39a8eadd140a85ade3ab198d7567b725a639a1953cbd020e070c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/taskspec-repin-20261126/source-identities-a076735b7baf39a8.json"
+    },
+    "TaskTrove:tasktrove-code-contests-built-image": {
+      "input_sha256": "3a0c74f56ef8334381f0362d98cb88381b0c46712850242279043640c03ac3ee",
+      "sha256": "9b2684a3676be606af7d26d67f36230b44a10a85552652cc00b6cf880286c1de",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261116-r20-v1/overlap/full-index-with-new.json"
     },
     "TaskTrove:tasktrove-codeforces-rebuilt-v1": {
       "input_sha256": "b760b9b554a870aacb042ed13d7f540b1d0dda6115af46f593242074743d6c22",
       "sha256": "2ec057b7f631e110d07941c4eef475f2d2c9385cba0e8b6171f7161ea1fda248",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/central/codeforces/2026.11.16.5/source-identities.json"
+    },
+    "TaskTrove:tasktrove-competitive-coding-rebuilt-v1": {
+      "input_sha256": "449fd6ebfdf958e2fb5dafdfd96e00a0c944a36576f4b1757f45b570280a0828",
+      "sha256": "9b2684a3676be606af7d26d67f36230b44a10a85552652cc00b6cf880286c1de",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261116-r20-v1/overlap/full-index-with-new.json"
     },
     "TaskTrove:tasktrove-curriculum-easy-rebuilt-v1": {
       "input_sha256": "07eaa39d0b0bdc8cf3b451e86f61e3606d30ab0ace066ed8e9860f86caf41b7f",
@@ -1556,10 +1776,25 @@
       "sha256": "9b2684a3676be606af7d26d67f36230b44a10a85552652cc00b6cf880286c1de",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261116-r20-v1/overlap/full-index-with-new.json"
     },
+    "TaskTrove:tasktrove-nl2bash-rebuilt-v1": {
+      "input_sha256": "fd892504f28a4855275d83f530bc1cdd631833e878c98f0c312f2f585dd10f64",
+      "sha256": "9b2684a3676be606af7d26d67f36230b44a10a85552652cc00b6cf880286c1de",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261116-r20-v1/overlap/full-index-with-new.json"
+    },
     "TaskTrove:tasktrove-puzzles-qa": {
       "input_sha256": "3fe3302eb6f59900e638fc6283f855271797ab43ee228844641f6e2ced148097",
       "sha256": "2bc6c1596c7edf9c893f53ae8fca7727f3cae4c37a694bc3fd9fba514b04d62a",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2bc6c1596c7edf9c.json"
+    },
+    "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1": {
+      "input_sha256": "2ade126ebcaf4fe4fd7dffb66851f5ad4cd72e05690bdb951b96f6dca6f3b8c2",
+      "sha256": "9b2684a3676be606af7d26d67f36230b44a10a85552652cc00b6cf880286c1de",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261116-r20-v1/overlap/full-index-with-new.json"
+    },
+    "TaskTrove:tasktrove-pymethods2test-rebuilt-v1": {
+      "input_sha256": "dfc3749193e64095884cb4ee6d1b0e3f33c3f4d468f26cec900cae2720dbb9cd",
+      "sha256": "9b2684a3676be606af7d26d67f36230b44a10a85552652cc00b6cf880286c1de",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261116-r20-v1/overlap/full-index-with-new.json"
     },
     "TaskTrove:tasktrove-safety-qa": {
       "input_sha256": "81ea4f86b5128bdcc97f4c6abd5b4c4b7a4ef307d06d1c912c8f608f0ff2e44b",
@@ -1576,10 +1811,40 @@
       "sha256": "9b2684a3676be606af7d26d67f36230b44a10a85552652cc00b6cf880286c1de",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261116-r20-v1/overlap/full-index-with-new.json"
     },
+    "TaskTrove:tasktrove-taco-built-image": {
+      "input_sha256": "1a9b766f69a6e665b458af342de68e2947d580dbfabd390108f6daf10ba600dc",
+      "sha256": "9b2684a3676be606af7d26d67f36230b44a10a85552652cc00b6cf880286c1de",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261116-r20-v1/overlap/full-index-with-new.json"
+    },
+    "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1": {
+      "input_sha256": "d201e00a600247ff98fdb4863047e5ceb1b3b5ff77d69140e2509d2a3d916b89",
+      "sha256": "9b2684a3676be606af7d26d67f36230b44a10a85552652cc00b6cf880286c1de",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261116-r20-v1/overlap/full-index-with-new.json"
+    },
+    "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1": {
+      "input_sha256": "b20551a4c666ba04f46800fc5b1e1100f04706562b05c7af0fe0921756d1f222",
+      "sha256": "9b2684a3676be606af7d26d67f36230b44a10a85552652cc00b6cf880286c1de",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261116-r20-v1/overlap/full-index-with-new.json"
+    },
     "TerminalWorld:TerminalWorld": {
       "input_sha256": "2e4237e857f1c7ec631055e727c4b34a27780b325e2a7955efbe7b9e0301077e",
       "sha256": "758cc2a90d510a013d91e13d9dfa434734bd4f6c8685c091b86b1edd45e1f575",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/litecoder-terminalworld/2026.11.22.1/terminalworld-seven-neighbor-survey-v1/source-identities.json"
+    },
+    "Tiger-lab:AceCode-89K": {
+      "input_sha256": "0d00fd7512a243713293c71f0771a15989ff494a3a4cdbdfda3bdaf45dd9b960",
+      "sha256": "2d651e6e33693dff07db90822af5d03ff92f443e0712a65d95fb50ecc98df041",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/pending-cleanup-admission-20261127-v1/Tiger-lab_AceCode-89K.json"
+    },
+    "Tiger-lab:StructEval": {
+      "input_sha256": "be279bddc74841e8c60bc6a1e8a2f166853ee8cd52f9a3719e04c13e443c20a8",
+      "sha256": "46e2078fe009469447b26077f5533f4fd6d98c2921d680b1b86cfcb152f6f0c1",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/pending-cleanup-admission-20261127-v1/Tiger-lab_StructEval.json"
+    },
+    "Yatin:Edge-Agent-Reasoning-WebSearch-260K": {
+      "input_sha256": "c4cdb95a3be3db8d3dc5cd7323e09efbab13d154f24ed2d14c5fbb2d02ea3190",
+      "sha256": "3f2e277d59d6f84d3a4c6df346147262e989115bb6bbbe42035e8d125d06bf0e",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/edge-websearch/2026.11.26.1/admission-evidence-v1/source-identities.json"
     },
     "agentica-org:deepscaler": {
       "input_sha256": "6748f8b98f2a59545360c465f31d89f655e19d4ffb817185a24550d0dd935e25",
@@ -1602,9 +1867,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
     },
     "pafitis:hardmath@rhs": {
-      "input_sha256": "2c4524b0182c79a62fe8a1df321b1ba8c8744933f57d1dc670f4d50d388cdcd7",
-      "sha256": "afd415b55a32f67e028f85260d124140a5dc0405a9b2d3b23c20c736b3466d33",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261118/hardmath-rhs-remediation-v1/source-identities-acknowledged-32a146d85691cdfe75e5c71504f287672bd322461dad6f0ee53717f0da05a944.json"
+      "input_sha256": "9836adda5ca55c7fc148bb3571d7ad0f4bb937bd3f2ffdb78ace799519fa6d1f",
+      "sha256": "bc162481daca718c74eb55ef25864c4504ed378c5a2d8a945d4725c4d4a6263f",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261127-v1/hardmath-v2-refresh-v1/source-identity-v1/source-identities-content-nn-v4.json"
     }
   }
 }

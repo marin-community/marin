@@ -13,6 +13,7 @@ from collections import Counter
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from threading import Event
 from types import ModuleType
@@ -116,6 +117,7 @@ from experiments.post_training.task_curation.tests.license_fixtures import isola
 from infra.marina.apps.rl_data_catalog.confidence import confidence_rows
 from infra.marina.apps.rl_data_catalog.load import (
     CatalogDisplayPolicy,
+    ensure_curriculum_analyze_settings,
     full_review_pipeline_key,
 )
 from infra.marina.apps.rl_data_catalog.load import (
@@ -152,7 +154,7 @@ from infra.marina.apps.rl_data_catalog.server.evidence_content import pack_conte
 from infra.marina.apps.rl_data_catalog.server.methods import rl_variant
 from infra.marina.apps.rl_data_catalog.server.quality import result
 from infra.marina.apps.rl_data_catalog.server.review_content import task_request_evidence
-from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
+from infra.marina.apps.rl_data_catalog.server.schema import CURRICULUM_ANALYZED_TABLES, SCHEMA_SQL
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.difficulty_fixtures import difficulty_measurement
@@ -434,13 +436,17 @@ def test_retained_rows_require_a_user_decision_before_consumer_status_changes(
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         table = {row["id"]: row for row in client.get("/sources", params={"projection": "table"}).json()["sources"]}
         compact = {row["id"]: row for row in client.get("/source-statuses").json()["sources"]}
-    assert table["Marin:bespoke"]["status"] == compact["Marin:bespoke"]["status"] == (decision_status or "Available")
+    assert (
+        table["Marin:bespoke"]["status"]
+        == compact["Marin:bespoke"]["status"]
+        == ("Excluded" if decision_status == "Excluded" else "Available")
+    )
     assert (
         table["Marin:bespoke"]["consumer_findings"]
         == compact["Marin:bespoke"]["consumer_findings"]
         == [ConsumerReason.TOOL_UNREGISTERED.value]
     )
-    if decision_status is None:
+    if decision_status != "Excluded":
         assert table["Marin:bespoke"]["filtration"] == before["Marin:bespoke"]["filtration"]
     else:
         assert table["Marin:bespoke"]["filtration"]["admitted_count"] == (0 if decision_status == "Excluded" else None)
@@ -475,6 +481,37 @@ def test_status_inventory_matches_source_statuses_without_loading_task_evidence(
     assert compact["sources"] == [{key: source.get(key) for key in fields} for source in complete["sources"]]
     assert compact["snapshot_id"] == complete["snapshot_id"]
     assert compact["synced_at"] == complete["synced_at"]
+
+
+def _served_timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def test_synced_at_reports_the_later_of_created_at_and_loaded_at(catalog_database, catalog_query, tmp_path):
+    """A resumed load refreshes created_at but not loaded_at; the page date must not go backwards."""
+    root = str(tmp_path / "synced-at")
+    publish_sample(root, "synced-at")
+    load_catalog(CurationCatalog(root), catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        live = client.get("/sources", params={"projection": "table"}).json()
+        # Simulate the resumed-load state: the snapshot was re-cut (created_at moved
+        # forward) after the load row was first registered, so loaded_at predates it.
+        catalog_query(
+            "UPDATE atlas_loads SET loaded_at = created_at - interval '1 day'"
+            " WHERE load_id = (SELECT load_id FROM atlas_current WHERE name='latest')",
+            {},
+        )
+        resumed = client.get("/sources", params={"projection": "table"}).json()
+        statuses = client.get("/source-statuses").json()
+    row = catalog_query(
+        "SELECT created_at, loaded_at FROM atlas_loads"
+        " WHERE load_id = (SELECT load_id FROM atlas_current WHERE name='latest')",
+        {},
+    )["rows"][0]
+    assert _served_timestamp(live["synced_at"]) >= _served_timestamp(live["created_at"])
+    assert row["loaded_at"] < row["created_at"]
+    assert _served_timestamp(resumed["synced_at"]) == _served_timestamp(resumed["created_at"])
+    assert statuses["synced_at"] == resumed["synced_at"]
 
 
 @pytest.mark.parametrize("obsolete_summary", [False, True])
@@ -587,6 +624,39 @@ def test_backend_survey_refresh_and_failed_staging_preserve_selected_map(catalog
     assert not load_surveyed_catalog(catalog, catalog_query, second, identities)["changed"]
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         assert client.get("/backends").json()["generated_at"] == second.generated_at
+
+
+def test_load_serves_catalog_grading_evidence_over_a_stale_survey_copy(catalog_database, catalog_query, tmp_path):
+    """A survey row carries the grading evidence measured at survey time; the load serves the catalog's.
+
+    Regression: R40's carried backend survey held pre-re-measure grading evidence for
+    31 sources and the load refused instead of serving the current declaration's.
+    """
+    evidence = GradingEnvironmentEvidence(
+        assessed_tasks=3,
+        required_counts={"shared": 3},
+        declared_counts={"shared": 3},
+        status_counts={"matched": 3},
+        reason_counts={"submitted answer": 3},
+        evidence_url="s3://fixture/grading/current.json",
+    )
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "graded", grading_environment=evidence)
+    catalog = CurationCatalog(root)
+    survey = catalog_backend_map(catalog)
+    stale = evidence.model_copy(update={"evidence_url": "s3://fixture/grading/at-survey.json"})
+    survey = survey.model_copy(
+        update={
+            "sources": [
+                row.model_copy(update={"grading_environment": stale.model_dump(mode="json")}) for row in survey.sources
+            ]
+        }
+    )
+    result = load_surveyed_catalog(catalog, catalog_query, survey, catalog_identity_map(catalog))
+    assert result["grading_evidence_rebound"] == [row.source_id for row in survey.sources]
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        source = client.get("/sources").json()["sources"][0]
+        assert source["backend_capabilities"]["grading_environment"] == evidence.model_dump(mode="json")
 
 
 def test_grading_census_survives_catalog_loader_and_backend_projection(catalog_database, catalog_query, tmp_path):
@@ -2698,7 +2768,7 @@ def test_preview_bundles_current_count_evidence_into_the_served_api(
     assert "build_command" not in staged_manifest
     assert (output / "dist/index.html").exists()
     extras = json.loads((output / "dist/measurements/source-status-extras.json").read_text())
-    assert extras["stages"], "the source build must have generated the status extras"
+    assert extras["pending"], "the source build must have generated the intake inventory"
     provenance = json.loads((output / "dist/bundled-model-provenance.json").read_text())["build_command"]
     assert provenance["prebuilt"] is True and "omits build_command" in provenance["transformation"]
     package = read_applet_package(package_applet(output))
@@ -2745,7 +2815,13 @@ def test_atlas_packages_resolve_aliases_without_repository_imports(tmp_path, mon
             name.startswith(("experiments.", "infra.marina.apps."))
             or (
                 preview
-                and name in {"finestore.rl.curation", "finestore.rl.difficulty", "taskcompendium.source_fingerprints"}
+                # Marina's runtime lags these modules and installs no shellbox (R40 #52:
+                # the v40 publish failed backend validation on shellbox.requirements).
+                and (
+                    name in {"finestore.rl.curation", "finestore.rl.difficulty", "taskcompendium.source_fingerprints"}
+                    or name == "shellbox"
+                    or name.startswith("shellbox.")
+                )
             )
         ):
             raise ModuleNotFoundError(name)
@@ -3840,22 +3916,24 @@ def _source_load_row(catalog_query: AppletQuery, load_id: str, source_id: str) -
     return row[0]
 
 
-def test_new_verify_source_materializes_as_pending_with_marker(catalog_database, catalog_query, tmp_path):
-    """A new admission whose only positive production outcome is VERIFY loads as Pending."""
+def test_new_verify_source_is_available_with_evidence(catalog_database, catalog_query, tmp_path):
+    """A new source with a positive VERIFY outcome is Available and keeps the survey evidence."""
     root = str(tmp_path / "catalog")
     publish_sample(root, "new-verify", source_id="Marin:newverify")
     catalog = CurationCatalog(root)
-    flipped = _verify_pending_survey(catalog_backend_map(catalog), "Marin:newverify")
+    flipped = _verify_pending_survey(catalog_backend_map(catalog), "Marin:newverify").model_copy(
+        update={"snapshot_id": "prior-source-revision", "catalog_root": "prior:catalog"}
+    )
     result = load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
     row = _source_load_row(catalog_query, result["load_id"], "Marin:newverify")
-    assert row["status"] == "Pending"
-    assert "Backend verification pending" in row["notes"]
+    assert row["status"] == "Available"
     assert row["backend_verification_pending"] == ["daytona", "iris", "local"]
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         served = next(
             source for source in client.get("/source-statuses").json()["sources"] if source["id"] == "Marin:newverify"
         )
-        assert served["stage"] == "Backend verification pending"
+        assert served["stage"] is None
+        assert served["status"] == "Available"
 
 
 def test_admitted_source_stays_available_when_every_production_backend_is_verify(
@@ -3950,33 +4028,39 @@ def _unsupported_profile_survey(
     )
 
 
-def test_grader_profile_conflict_ships_as_typed_pending(catalog_database, catalog_query, tmp_path):
-    """A source whose grader needs network under deny defaults loads as Pending with the stage note."""
+def test_declared_grader_network_is_available_with_survey_evidence(catalog_database, catalog_query, tmp_path):
+    """Declared grader network needs do not create a separate profile gate."""
     root = str(tmp_path / "catalog")
     publish_sample(root, "profile-conflict", source_id="Marin:orshape")
     catalog = CurationCatalog(root)
-    flipped = _unsupported_profile_survey(catalog, "Marin:orshape", grader_demands_network=True)
+    flipped = _unsupported_profile_survey(catalog, "Marin:orshape", grader_demands_network=True).model_copy(
+        update={"snapshot_id": "prior-source-revision", "catalog_root": "prior:catalog"}
+    )
     result = load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
     row = _source_load_row(catalog_query, result["load_id"], "Marin:orshape")
-    assert row["status"] == "Pending"
-    assert "Backend profile pending: grader needs network allow." in row["notes"]
-    # no VERIFY cells here: the marker stays unset; the typed stage note is the visibility
+    assert row["status"] == "Available"
+    # The original unsupported survey evidence remains visible.
     assert row["backend_verification_pending"] is None
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         served = next(
             source for source in client.get("/source-statuses").json()["sources"] if source["id"] == "Marin:orshape"
         )
-        assert served["stage"] == "Backend profile pending"
+        assert served["stage"] is None
+        assert served["status"] == "Available"
+        details = next(source for source in client.get("/sources").json()["sources"] if source["id"] == "Marin:orshape")
+        assert details["backend_capabilities"]["demands"] == next(
+            row.demands for row in flipped.sources if row.source_id == "Marin:orshape"
+        )
 
 
-def test_all_unsupported_without_a_profile_conflict_still_blocks(catalog_database, catalog_query, tmp_path):
-    """An all-unsupported Available source with no network demand keeps the hard blocker."""
+def test_backend_runtime_fit_does_not_hold_catalog_admission(catalog_database, catalog_query, tmp_path):
+    """Backend feasibility is enforced when executing the declared TaskSpec."""
     root = str(tmp_path / "catalog")
     publish_sample(root, "plain-unsupported", source_id="Marin:plain")
     catalog = CurationCatalog(root)
     flipped = _unsupported_profile_survey(catalog, "Marin:plain", grader_demands_network=False)
-    with pytest.raises(ValueError, match="Backend admission blocked"):
-        load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
+    result = load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
+    assert _source_load_row(catalog_query, result["load_id"], "Marin:plain")["status"] == "Available"
 
 
 def test_docker_build_preparation_gate_ships_as_typed_pending(catalog_database, catalog_query, tmp_path):
@@ -4017,7 +4101,6 @@ def test_docker_build_preparation_gate_ships_as_typed_pending(catalog_database, 
     result = load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
     served = _source_load_row(catalog_query, result["load_id"], "Marin:buildgate")
     assert served["status"] == "Pending"
-    assert "Backend preparation pending: the grader Docker build context is unresolved" in served["notes"]
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         served_row = next(
             source for source in client.get("/source-statuses").json()["sources"] if source["id"] == "Marin:buildgate"
@@ -4025,9 +4108,8 @@ def test_docker_build_preparation_gate_ships_as_typed_pending(catalog_database, 
         assert served_row["stage"] == "Backend preparation pending"
 
 
-def test_docker_build_gate_with_other_validation_errors_still_blocks(catalog_database, catalog_query, tmp_path):
-    """An all-unsupported source whose grader fails on something besides the build gate
-    keeps the hard blocker: only the source preparation gate downgrades."""
+def test_network_policy_validation_is_runtime_evidence(catalog_database, catalog_query, tmp_path):
+    """Network policy validation does not create a preparation hold."""
     root = str(tmp_path / "catalog")
     publish_sample(root, "other-gate", source_id="Marin:othergate")
     catalog = CurationCatalog(root)
@@ -4056,8 +4138,8 @@ def test_docker_build_gate_with_other_validation_errors_still_blocks(catalog_dat
             ]
         }
     )
-    with pytest.raises(ValueError, match="Backend admission blocked"):
-        load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
+    result = load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
+    assert _source_load_row(catalog_query, result["load_id"], "Marin:othergate")["status"] == "Available"
 
 
 def test_new_train_admission_without_lexical_clearance_is_refused(catalog_database, catalog_query, tmp_path):
@@ -4069,8 +4151,8 @@ def test_new_train_admission_without_lexical_clearance_is_refused(catalog_databa
         load_surveyed_catalog(catalog, catalog_query, catalog_backend_map(catalog), catalog_identity_map(catalog))
 
 
-def test_archived_lineage_panel_grandfathered_with_marker(catalog_database, catalog_query, tmp_path):
-    """The SAMPLE pin gate: new ARCHIVED_LINEAGE admissions refuse; grandfathered rows keep the marker."""
+def test_archived_lineage_panel_admits_with_marker(catalog_database, catalog_query, tmp_path):
+    """SAMPLE history remains visible without holding a prepared source."""
     root = str(tmp_path / "catalog")
     publish_sample(root, "stale-panel", source_id="Marin:stalepanel")
     catalog = CurationCatalog(root)
@@ -4108,10 +4190,6 @@ def test_archived_lineage_panel_grandfathered_with_marker(catalog_database, cata
             )
             tx.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id="stale-panel").model_dump())
     stale_catalog = CurationCatalog(root)
-    with pytest.raises(ValueError, match="older population pin"):
-        load_surveyed_catalog(stale_catalog, catalog_query, survey, catalog_identity_map(stale_catalog))
-    # grandfathering: seed the previous load with the same Available source, then reload
-    seed_previous_available(catalog_database, ["Marin:stalepanel"])
     result = load_surveyed_catalog(stale_catalog, catalog_query, survey, catalog_identity_map(stale_catalog))
     row = _source_load_row(catalog_query, result["load_id"], "Marin:stalepanel")
     assert row["status"] == "Available"
@@ -4165,7 +4243,7 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
     catalog_database, catalog_query, tmp_path, shared_batch
 ):
     root = str(tmp_path / "sample-browse")
-    publish_sample(root, "sample-browse")
+    publish_sample(root, "qc:" + "a" * 64)
     load_catalog(CurationCatalog(root), catalog_query)
     catalog_query(
         "UPDATE atlas_sources SET declaration=jsonb_set(declaration,'{independent_qc}',"
@@ -4179,6 +4257,14 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
     ][0]
     old_key = before["assessment_key"]
     load_id = before["load_id"]
+    catalog_query(
+        "INSERT INTO atlas_review_current VALUES (:load,'Marin:math',:key,CAST(:receipt AS JSONB))",
+        {
+            "load": load_id,
+            "key": old_key,
+            "receipt": json.dumps({"artifact": {"uri": "s3://fixture/old-panel/.artifact.json", "sha256": "a" * 64}}),
+        },
+    )
     catalog_query(
         "INSERT INTO atlas_sources SELECT (jsonb_populate_record(NULL::atlas_sources, "
         "to_jsonb(s)||jsonb_build_object('id','Marin:unreviewed','assessment_key',NULL))).* "
@@ -4200,6 +4286,7 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
         "SELECT * FROM atlas_items WHERE load_id=:load AND pipeline_key=:key ORDER BY task_id",
         {"load": load_id, "key": old_key},
     )["rows"]
+    historical_items = json.loads(json.dumps(items))
     for row in [*populations, *items]:
         row.pop("load_id", None)
         row["pipeline_key"] = key
@@ -4295,6 +4382,21 @@ def test_additive_sample_browse_preserves_catalog_and_exposes_raw_reviews(
         "rows"
     ][0]
     assert after == before
+    assert (
+        catalog_query(
+            "SELECT * FROM atlas_items WHERE load_id=:load AND pipeline_key=:key ORDER BY task_id",
+            {"load": load_id, "key": old_key},
+        )["rows"]
+        == historical_items
+    )
+    unselected = json.loads(json.dumps(staged))
+    unselected["receipt"]["artifact"]["uri"] = "s3://fixture/unselected/.artifact.json"
+    with pytest.raises(ValueError):
+        load_content_reviews(unselected, load_id, "Marin:math", catalog_query)
+    assert catalog_query(
+        "SELECT pipeline_key,receipt FROM atlas_review_current WHERE load_id=:load AND source_id='Marin:math'",
+        {"load": load_id},
+    )["rows"] == [{"pipeline_key": key, "receipt": receipt}]
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         page = client.get("/assessment", params={"source_id": "Marin:math", "defect": "ambiguity"}).json()
         assert page["report"]["evidence"]["total"] == 1
@@ -4536,3 +4638,24 @@ def test_dataset_method_variants_survive_catalog_and_api_projection(tmp_path, ca
         evidence = client.get("/source", params={"source_id": row["id"]}).json()
         assert evidence["method_tags"] == ["RL", "SFT-viable"]
         assert evidence["method_variants"] == variants
+
+
+def _curriculum_reloptions(query: AppletQuery) -> dict[str, list[str] | None]:
+    rows = query(
+        "SELECT relname, reloptions FROM pg_class WHERE relname = ANY(CAST(:names AS TEXT[]))"
+        " AND relnamespace = to_regnamespace(current_schema())",
+        {"names": list(CURRICULUM_ANALYZED_TABLES)},
+    )["rows"]
+    return {row["relname"]: row["reloptions"] for row in rows}
+
+
+def test_curriculum_tables_are_analyzed_after_every_load(catalog_query):
+    """Regression (R40 #58): a load adding a tenth of the rows stayed under the default
+    autoanalyze threshold, so the planner estimated R40's load at a third of its size."""
+    expected = {table: ["autovacuum_analyze_scale_factor=0.01"] for table in CURRICULUM_ANALYZED_TABLES}
+    assert _curriculum_reloptions(catalog_query) == expected
+    for table in CURRICULUM_ANALYZED_TABLES:
+        catalog_query(f"ALTER TABLE {table} RESET (autovacuum_analyze_scale_factor)", {})
+    assert set(_curriculum_reloptions(catalog_query).values()) == {None}
+    ensure_curriculum_analyze_settings(catalog_query)
+    assert _curriculum_reloptions(catalog_query) == expected

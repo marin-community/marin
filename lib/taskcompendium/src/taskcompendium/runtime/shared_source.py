@@ -439,12 +439,19 @@ def grade(contract_path: Path) -> None:
     script.chmod(0o755)
     environment = {**os.environ, "HOME": "/home/taskcompendium-grade"}
     output = reports / "test_output.log"
-    with output.open("wb") as stream:
+    with output.open("ab") as stream:
         # The capture stream is opened by root before the setuid child starts;
         # hand the file to the grader group so a source test script that writes
         # its own command log to the same path (the upstream SWE-rebench
         # rendered test.sh redirects test_cmd there) can reopen and truncate it
         # under the declared trust model (the source scorer owns its verdict).
+        # Append mode: the source's own `cat > test_output.log` still opens and
+        # truncates the path, but this handle's writes (the harness echo and the
+        # standalone grader's stdout) append AFTER the source's content instead
+        # of stomping it at an independent offset — the two writers on one file
+        # were cutting the source's test-name lines mid-stream (observed on the
+        # DELTA5/DELTA6 zero-capture fixtures: the echo glued into `✓ <name> (NN`
+        # and whole test lines lost at the stomp boundaries).
         os.fchown(stream.fileno(), 0, contract["grader_uid"])
         os.fchmod(stream.fileno(), 0o660)
         process = subprocess.Popen(

@@ -154,13 +154,18 @@ def verify_no_prior_drift(
 
 
 def verify_survey_alignment(inputs: SnapshotPublicationInputs, current: dict[str, dict]) -> tuple[dict, dict]:
-    """Identity fingerprints and backend sources must cover exactly the population."""
+    """Both surveys must bind this publication and cover exactly its population."""
     identity = _read_ref(inputs.identity_receipt)
     backend = _read_ref(inputs.backend_receipt)
     if set(identity["fingerprints"]) != set(current):
         raise ValueError("identity fingerprints do not cover exactly the current declarations")
     if {row["source_id"] for row in backend["sources"]} != set(current):
         raise ValueError("backend sources do not cover exactly the current declarations")
+    expected = (inputs.catalog_root, inputs.snapshot_id)
+    for name, document in (("identity", identity), ("backend", backend)):
+        binding = (document.get("catalog_root"), document.get("snapshot_id"))
+        if binding != expected:
+            raise ValueError(f"{name} survey publication binding {binding!r} differs from {expected!r}")
     return identity, backend
 
 
@@ -285,6 +290,7 @@ def main() -> None:
     for field in ("census_receipt", "identity_receipt", "backend_receipt"):
         document[field] = ArtifactRef(**document[field])
     inputs = SnapshotPublicationInputs(**document)
+    configure_coreweave_s3()
     proof = run_snapshot_publication(
         inputs,
         check_only=args.mode == "check-only",

@@ -10,11 +10,13 @@ survey, the identity survey and the deployment manifest — never from counts or
 shapes hard-coded here. All mismatches are collected and reported at once, like the
 admission check.
 
-The served release record (``marina-release.json`` beside the API routes) must bind
-the typed revision and the manifest's app id, and must carry the release's selected
-backend map with a matching SHA-256: the record's map digest must equal the
-canonical digest of the sealed backend survey document, and both must equal the
-digest of the record's own map content.
+The served sources, backend document and duplicate survey are compared with the
+sealed documents through the strict audit's serving projection (the same functions
+``strict_audit`` runs), so the hosted check accepts exactly what the API serves for
+withheld sources, rebound grading evidence and the load's typed backend Pending
+stages, and nothing else. The served applet provenance
+(``bundled-model-provenance.json``) must pin the packaging checkout the deployment
+manifest records, and the typed root must be the manifest's published URL.
 
 The API client is injected; the default binds the maintained ``marina_request`` to
 the typed root (IAP bearer token handled there). The graph supplies a client bound
@@ -35,8 +37,11 @@ from typing import Any, Protocol
 
 from marina.client import marina_request
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.backend_requirements import BackendSurvey
+from taskcompendium.source_fingerprints import SourceIdentitySurvey
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
+from experiments.post_training.task_curation.release_stages import strict_audit
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref
 
 HOSTED_CHECK_SUFFIX = "hosted-check"
@@ -44,7 +49,7 @@ DEPLOYMENT_MANIFEST_SUFFIX = "deployment-manifest"
 SOURCES_PATH = "api/sources"
 BACKENDS_PATH = "api/backends"
 DUPLICATES_PATH = "api/source-duplicates"
-RELEASE_RECORD_PATH = "marina-release.json"
+PROVENANCE_PATH = "bundled-model-provenance.json"
 
 ApiClient = Callable[[str], Any]
 PageFactory = Callable[[], AbstractContextManager["BrowserPage"]]
@@ -69,6 +74,7 @@ class HostedCheckInputs:
     backend: ArtifactRef
     identity: ArtifactRef
     expected_source_count: int
+    retained_tasks: int
     release_manifest: ArtifactRef
     output_root: str
 
@@ -80,8 +86,8 @@ class HostedCheckInputs:
             raise ValueError("output_root is required")
         if self.revision <= 0:
             raise ValueError(f"revision must be positive, got {self.revision}")
-        if self.expected_source_count <= 0:
-            raise ValueError(f"expected_source_count must be positive, got {self.expected_source_count}")
+        if self.expected_source_count <= 0 or self.retained_tasks <= 0:
+            raise ValueError("expected_source_count and retained_tasks must be positive")
 
 
 def seal(path: str, value: dict) -> ArtifactRef:
@@ -103,25 +109,11 @@ def default_api_client(root: str) -> ApiClient:
     return lambda path: marina_request(root, "GET", "/" + path)
 
 
-def canonical_sha256(value: Any) -> str:
-    """The canonical-JSON digest used for served documents and sealed survey content."""
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-
-
 def fetch_document(client: ApiClient, path: str) -> dict:
     served = client(path)
     if not isinstance(served, dict):
         raise ValueError(f"{path}: served document is not an object")
     return served
-
-
-def shared_field_mismatches(expected: dict, served: dict, label: str) -> list[str]:
-    """Fields present in both documents whose values disagree."""
-    return [
-        f"{label}: field {name} is {served[name]!r}, expected {expected[name]!r}"
-        for name in sorted(set(expected) & set(served))
-        if served[name] != expected[name]
-    ]
 
 
 def verify_manifest_binding(inputs: HostedCheckInputs, manifest: dict) -> list[str]:
@@ -143,85 +135,63 @@ def verify_manifest_binding(inputs: HostedCheckInputs, manifest: dict) -> list[s
     return mismatches
 
 
-def check_sources(served: dict, declarations: dict, expected_count: int) -> tuple[list[dict], list[str]]:
-    """The served sources must be exactly the declared population, field by field."""
-    rows = served.get("sources")
-    if not isinstance(rows, list):
-        return [], [f"{SOURCES_PATH}: served document carries no sources list"]
-    mismatches: list[str] = []
-    served_ids = [row["id"] for row in rows if isinstance(row, dict) and isinstance(row.get("id"), str)]
-    if len(served_ids) != len(rows):
-        mismatches.append(f"{SOURCES_PATH}: {len(rows) - len(served_ids)} served rows carry no id")
-    if set(served_ids) != set(declarations):
-        missing = sorted(set(declarations) - set(served_ids))
-        unexpected = sorted(set(served_ids) - set(declarations))
-        mismatches.append(
-            f"{SOURCES_PATH}: served sources differ from the declarations"
-            f" (missing {missing[:5]}, unexpected {unexpected[:5]})"
-        )
-    if len(rows) != expected_count:
-        mismatches.append(f"{SOURCES_PATH}: {len(rows)} served sources, expected {expected_count}")
-    for row in rows:
-        source_id = row.get("id") if isinstance(row, dict) else None
-        if isinstance(source_id, str) and source_id in declarations:
-            mismatches.extend(shared_field_mismatches(declarations[source_id], row, f"{SOURCES_PATH}[{source_id}]"))
-    return [{"check": SOURCES_PATH, "sources": len(rows)}], mismatches
+def _subject_reasons(mismatches: dict[str, list[str]]) -> list[str]:
+    return [f"{subject}: {reason}" for subject, reasons in sorted(mismatches.items()) for reason in reasons]
 
 
-def check_backends(served: dict, survey: dict) -> tuple[list[dict], list[str]]:
-    """The served backend document must agree with the sealed backend survey fields."""
-    shared = set(served) & set(survey)
-    if not shared:
-        return [], [f"{BACKENDS_PATH}: served document shares no fields with the backend survey document"]
-    return (
-        [{"check": BACKENDS_PATH, "shared_fields": sorted(shared)}],
-        shared_field_mismatches(survey, served, BACKENDS_PATH),
-    )
-
-
-def check_duplicates(served: dict, identity: dict) -> tuple[list[dict], list[str]]:
-    """The served duplicate survey must agree with the sealed identity survey fields."""
-    shared = set(served) & set(identity)
-    if not shared:
-        return [], [f"{DUPLICATES_PATH}: served document shares no fields with the identity survey document"]
-    return (
-        [{"check": DUPLICATES_PATH, "shared_fields": sorted(shared)}],
-        shared_field_mismatches(identity, served, DUPLICATES_PATH),
-    )
-
-
-def check_release_record(
-    record: dict, inputs: HostedCheckInputs, manifest: dict, survey: dict
+def check_served_population(
+    inputs: HostedCheckInputs,
+    served: dict,
+    declarations: dict[str, dict],
+    survey: BackendSurvey,
+    identity: SourceIdentitySurvey,
 ) -> tuple[list[dict], list[str]]:
-    """The served release record must bind the revision, app id and selected backend map."""
-    mismatches: list[str] = []
-    if record.get("revision") != inputs.revision:
-        mismatches.append(f"{RELEASE_RECORD_PATH}: revision is {record.get('revision')!r}, expected {inputs.revision}")
-    if record.get("app_id") != manifest.get("app_id"):
-        mismatches.append(
-            f"{RELEASE_RECORD_PATH}: app id is {record.get('app_id')!r}, expected {manifest.get('app_id')!r}"
-        )
-    digest = record.get("selected_backend_map_sha256")
-    backend_map = record.get("selected_backend_map")
-    if not isinstance(backend_map, dict) or not isinstance(digest, str):
-        mismatches.append(f"{RELEASE_RECORD_PATH}: the record carries no selected backend map with its digest")
-    else:
-        if canonical_sha256(backend_map) != digest:
-            mismatches.append(
-                f"{RELEASE_RECORD_PATH}: the recorded backend map digest does not match the record's map content"
-            )
-        if digest != canonical_sha256(survey):
-            mismatches.append(
-                f"{RELEASE_RECORD_PATH}: the record's backend map digest differs from the backend survey document"
-            )
+    """The served sources against the sealed documents, through the serving projection."""
+    mismatches = strict_audit.audit_served_population(
+        served,
+        declarations,
+        survey,
+        identity,
+        expected_source_count=inputs.expected_source_count,
+        retained_tasks=inputs.retained_tasks,
+    )
     checks = [
         {
-            "check": RELEASE_RECORD_PATH,
-            "revision": record.get("revision"),
-            "app_id": record.get("app_id"),
-            "selected_backend_map_sha256": digest,
+            "check": SOURCES_PATH,
+            "sources": len(served["sources"]),
+            "retained_tasks": strict_audit.served_retained_tasks(served),
+            "fields": list(strict_audit.DECLARATION_FIELDS),
         }
     ]
+    return checks, _subject_reasons(mismatches)
+
+
+def check_backends(served: dict, survey: BackendSurvey) -> tuple[list[dict], list[str]]:
+    """The served backend document against the sealed backend survey."""
+    reasons = strict_audit.audit_backends_document(survey, served)
+    return (
+        [{"check": BACKENDS_PATH, "fields": list(strict_audit.BACKEND_DOCUMENT_FIELDS)}],
+        [f"{BACKENDS_PATH}: {reason}" for reason in reasons],
+    )
+
+
+def check_duplicates(served_sources: dict, identity: SourceIdentitySurvey, served: dict) -> tuple[list[dict], list[str]]:
+    """The served duplicate survey against the sealed identity survey."""
+    mismatches = strict_audit.audit_identity_duplicates(served_sources, identity, served)
+    return [{"check": DUPLICATES_PATH, "groups": len(identity.groups)}], _subject_reasons(mismatches)
+
+
+def check_provenance(provenance: dict, inputs: HostedCheckInputs, manifest: dict) -> tuple[list[dict], list[str]]:
+    """The served applet must be the packaged checkout the manifest published at the typed root."""
+    mismatches: list[str] = []
+    if provenance.get("source_revision") != manifest.get("code_revision"):
+        mismatches.append(
+            f"{PROVENANCE_PATH}: served applet pins revision {provenance.get('source_revision')!r},"
+            f" expected the published packaging checkout {manifest.get('code_revision')!r}"
+        )
+    if inputs.root != manifest.get("url"):
+        mismatches.append(f"hosted root {inputs.root!r} is not the published URL {manifest.get('url')!r}")
+    checks = [{"check": PROVENANCE_PATH, "source_revision": provenance.get("source_revision")}]
     return checks, mismatches
 
 
@@ -259,8 +229,8 @@ def run_hosted_check(
     try:
         inputs.validate()
         declarations = read_ref(inputs.declarations)
-        survey = read_ref(inputs.backend)
-        identity = read_ref(inputs.identity)
+        survey = BackendSurvey.model_validate(read_ref(inputs.backend))
+        identity = SourceIdentitySurvey.model_validate(read_ref(inputs.identity))
         manifest = read_ref(inputs.release_manifest)
         if len(declarations) != inputs.expected_source_count:
             raise ValueError(f"{len(declarations)} declarations, expected {inputs.expected_source_count}")
@@ -269,31 +239,22 @@ def run_hosted_check(
         request_count = 0
         if not dry_run:
             client = api_client if api_client is not None else default_api_client(inputs.root)
-            request_count += 1
-            source_checks, source_mismatches = check_sources(
-                fetch_document(client, SOURCES_PATH), declarations, inputs.expected_source_count
-            )
-            request_count += 1
-            backend_checks, backend_mismatches = check_backends(fetch_document(client, BACKENDS_PATH), survey)
-            request_count += 1
-            duplicate_checks, duplicate_mismatches = check_duplicates(fetch_document(client, DUPLICATES_PATH), identity)
-            request_count += 1
-            record_checks, record_mismatches = check_release_record(
-                fetch_document(client, RELEASE_RECORD_PATH), inputs, manifest, survey
-            )
+            served_sources = fetch_document(client, SOURCES_PATH)
+            served_backends = fetch_document(client, BACKENDS_PATH)
+            served_duplicates = fetch_document(client, DUPLICATES_PATH)
+            provenance = fetch_document(client, PROVENANCE_PATH)
+            request_count += 4
+            for document_checks, document_mismatches in (
+                check_served_population(inputs, served_sources, declarations, survey, identity),
+                check_backends(served_backends, survey),
+                check_duplicates(served_sources, identity, served_duplicates),
+                check_provenance(provenance, inputs, manifest),
+            ):
+                checks.extend(document_checks)
+                mismatches.extend(document_mismatches)
             browser_summary, browser_failures = browser_gate(page_factory, inputs.root)
-            checks.extend(
-                [
-                    *source_checks,
-                    *backend_checks,
-                    *duplicate_checks,
-                    *record_checks,
-                    {"check": "browser", **browser_summary},
-                ]
-            )
-            mismatches.extend(
-                [*source_mismatches, *backend_mismatches, *duplicate_mismatches, *record_mismatches, *browser_failures]
-            )
+            checks.append({"check": "browser", **browser_summary})
+            mismatches.extend(browser_failures)
         if mismatches:
             raise ValueError(_report(mismatches))
         proof: dict = {

@@ -328,6 +328,109 @@ def test_grader_scores_empty_ids_with_empty_log_as_unscorable():
     assert report["resolved"] is True
 
 
+def _grade(log_parser: str, log: str, fail_to_pass: list[str], pass_to_pass: list[str]) -> dict:
+    module = types.ModuleType("grade")
+    exec(compile(grader_source(log_parser), "grade.py", "exec"), module.__dict__)
+    return module.grade({"FAIL_TO_PASS": fail_to_pass, "PASS_TO_PASS": pass_to_pass}, log)
+
+
+def test_grader_repairs_the_interleaved_harness_echo():
+    """The sandbox console capture interleaves the harness's own "test_cmd exit code" echo into
+    per-test lines at chunk boundaries (DELTA5 zero-capture fixtures). The repair removes the
+    marker and recovers a cut name only when exactly one configured id is consistent with the
+    surviving prefix; any ambiguity fails closed."""
+
+    # Duration cut mid-stream and the echo glued onto the same line: the real fixture is
+    # swe-rebench-v2-1-repaired-04fbc0a6… ("creates a json file", jest).
+    log = (
+        "PASS src/generateGraphqlCodegen.test.ts\n"
+        "  generateGraphqlCodegen\n"
+        "    ✓ creates a json file (18test_cmd exit code: 0\n"
+        "PASS src/connection.test.ts\n"
+        "  connection\n"
+        "    ✓ should parse single DATABASE_URL (2 ms)\n"
+        "test_cmd exit code: 0\n"
+    )
+    report = _grade(
+        "parse_log_js_4",
+        log,
+        fail_to_pass=[],
+        pass_to_pass=["creates a json file", "should parse single DATABASE_URL"],
+    )
+    assert report["pass_to_pass"] == {"creates a json file": True, "should parse single DATABASE_URL": True}
+    assert report["resolved"] is True
+
+    # The echo glued straight after a complete name: real fixture a28b9b0a… ("is a singleton.").
+    log = "    ✓ is a singleton.test_cmd exit code: 0\n"
+    report = _grade("parse_log_js_4", log, fail_to_pass=[], pass_to_pass=["is a singleton."])
+    assert report["pass_to_pass"] == {"is a singleton.": True}
+
+    # A name cut mid-word by the glue recovers when exactly one configured id extends the
+    # surviving prefix: real fixture 6823445d… (the callbacks.spec.ts suite).
+    callbacks_id = (
+        "src/lib/internal/helpers/tests/callbacks.spec.ts"
+        " > executeCallbacks > groups callbacks and executes them together"
+    )
+    log = " ✓ src/lib/internal/helpers/tests/callbacks.spec.ts > executeCallbatest_cmd exit code: 0\n"
+    report = _grade(
+        "parse_log_js_4",
+        log,
+        fail_to_pass=[],
+        pass_to_pass=[callbacks_id, "src/lib/internal/helpers/tests/other.spec.ts > unrelated test"],
+    )
+    assert report["pass_to_pass"][callbacks_id] is True
+
+    # The same cut with MANY configured ids sharing the prefix stays fail-closed: real
+    # fixture dd598fa4… (20 ids extend "src/rules/no-nth-methods.test.ts > no").
+    log = " ✓ src/rules/no-nth-methods.test.ts > notest_cmd exit code: 0\n"
+    ids = [
+        "src/rules/no-nth-methods.test.ts > no-nth-methods > valid > page",
+        "src/rules/no-nth-methods.test.ts > no-nth-methods > invalid > foo.first()",
+        "src/rules/no-nth-methods.test.ts > no-nth-methods > invalid > foo.last()",
+    ]
+    report = _grade("parse_log_js_4", log, fail_to_pass=[], pass_to_pass=ids)
+    assert all(value is False for value in report["pass_to_pass"].values())
+    assert report["resolved"] is False
+
+    # A shorter parsed name that is a natural prefix of an id never matches without the
+    # truncation mark: real fixture 234f51e… ("should render" vs "should render correct
+    # number of pages" are different tests).
+    log = "    ✓ should render correct number of pages (5 ms)\n"
+    report = _grade(
+        "parse_log_js_4",
+        log,
+        fail_to_pass=[],
+        pass_to_pass=["should render", "should render correct number of pages"],
+    )
+    assert report["pass_to_pass"] == {"should render": False, "should render correct number of pages": True}
+
+    # A marker-only parsed payload (the name was cut entirely) never satisfies an id.
+    log = " ✓ test_cmd exit code: 0\n"
+    report = _grade("parse_log_js_4", log, fail_to_pass=[], pass_to_pass=["anything"])
+    assert report["pass_to_pass"] == {"anything": False}
+
+
+def test_grader_echo_repair_never_breaks_clean_matches():
+    """The repair only removes the harness's own echo marker: clean logs grade exactly as
+    before, and the truncation path never fires without the cut evidence."""
+    log = "PASS src/a.test.ts\n" "  suite\n" "    ✓ handles (special) cases (5 ms)\n" "    ✓ fast test\n"
+    report = _grade(
+        "parse_log_js_4",
+        log,
+        fail_to_pass=["handles (special) cases"],
+        pass_to_pass=["fast test"],
+    )
+    assert report["resolved"] is True
+    assert report["fail_to_pass"] == {"handles (special) cases": True}
+    assert report["pass_to_pass"] == {"fast test": True}
+
+    # A complete duration on a marked line is still stripped, and the name stays recoverable:
+    # the capture can cut the newline after "(5 ms)" and glue the echo to it.
+    log = "    ✓ creates a json file (18 ms)test_cmd exit code: 0\n"
+    report = _grade("parse_log_js_4", log, fail_to_pass=[], pass_to_pass=["creates a json file"])
+    assert report["pass_to_pass"] == {"creates a json file": True}
+
+
 def test_every_task_uses_the_uniform_testbed_workspace():
     """Ruling 2026-11-20 (the 10-snapshot consolidation): every converted task's workdir is the
     uniform /testbed and no spec wiring references the row's per-repo absolute path — the

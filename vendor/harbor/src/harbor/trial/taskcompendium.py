@@ -92,7 +92,7 @@ from harbor.environments.local import local_disk_pool, local_machine_factory
 from harbor.environments.daytona_admission import admit_create
 from harbor.environments.resource_policies import validate_local_resources
 from harbor.host_capabilities import MODEL_CREDENTIALS, MODEL_RELAY_PORT
-from harbor.environments.model_relay import ModelRelay, start_model_relays
+from harbor.environments.model_relay import ModelRelay, start_model_relay, start_model_relays
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.result import TimingInfo
 from harbor.models.verifier.result import VerifierResult
@@ -806,15 +806,6 @@ class TaskSpecTrial(Trial):
             and not any(parent in directories for parent in path.parents)
         )
         image = HostImage(read_only=roots, bin_dirs=(Path(sys.executable).parent,))
-        env = (
-            {}
-            if connection is None
-            else {
-                BASE_URL_ENV: connection.base_url,
-                API_KEY_ENV: connection.api_key,
-                MODEL_ENV: connection.default_model,
-            }
-        )
         spec = MachineSpec(
             image,
             cpus=self.verifier_runtime.cpus,
@@ -822,13 +813,12 @@ class TaskSpecTrial(Trial):
             storage_mb=self.verifier_runtime.storage_mb,
             network=self.verifier_runtime.network,
             startup_timeout=self._environment_build_timeout_sec,
-            env=env,
         )
         async with AsyncExitStack() as stack:
             factory = await stack.enter_async_context(
                 grading_machine_factory(
                     _TrialMachineFactory(
-                        _NetworkFactory(self.factory, self, "verifier_machine"), self, relay, stack, observation_role=None,
+                        _NetworkFactory(self.factory, self, "verifier_machine"), self, None, stack, observation_role=None,
                         usage_path=self.paths.verifier_dir / "resource-usage.json",
                     ),
                     self.verifier_runtime,
@@ -837,6 +827,17 @@ class TaskSpecTrial(Trial):
             )
             machine = await factory.create(spec)
             stack.push_async_callback(machine.close)
+            env = {}
+            if relay is not None:
+                assert connection is not None and self._service_tasks is not None
+                # ALLOW graders share host loopback. Allocate while binding instead
+                # of racing concurrent graders for the fixed actor relay port.
+                endpoint = await start_model_relay(machine, stack, self._service_tasks, relay, port=0)
+                env = {
+                    BASE_URL_ENV: endpoint + "/v1",
+                    API_KEY_ENV: connection.api_key,
+                    MODEL_ENV: connection.default_model,
+                }
             with TemporaryDirectory(prefix="task-spec-grader-") as directory:
                 local = Path(directory)
                 payload = local / "task.json"
@@ -858,7 +859,7 @@ class TaskSpecTrial(Trial):
                 ]
                 if self.attempt.stop_reason is not None:
                     command.extend(("--stop-reason", self.attempt.stop_reason))
-                result = await machine.run(Command(tuple(command), timeout=self.shape.verifier_timeout_sec))
+                result = await machine.run(Command(tuple(command), env=env, timeout=self.shape.verifier_timeout_sec))
                 if result.reason == ExitReason.TIMED_OUT:
                     raise VerifierTimeoutError("Trusted TaskSpec grader deadline expired")
                 if result.exit_code != 0:

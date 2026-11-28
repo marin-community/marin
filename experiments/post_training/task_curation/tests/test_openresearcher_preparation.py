@@ -163,21 +163,37 @@ def test_retained_population_excludes_benchmarks_and_rejects_rewritten_gold(tmp_
     retained = retained_questions(config)
     assert retained.rows == [rows[0]]
     assert [row["id"] for row in retained.heldout_exclusions] == ["benchmark"]
-    bad_licenses = json.loads((tmp_path / "license-receipts.json").read_text())
-    bad_licenses["OpenResearcher:OpenResearcher-Corpus"]["revision"] = "0" * 40
-    bad_stage = tmp_path / "stale-corpus-license"
-    bad_stage.mkdir()
-    _, bad_licenses_sha = seal("stale-corpus-license/license-receipts.json", bad_licenses)
+    stale_licenses = json.loads((tmp_path / "license-receipts.json").read_text())
+    stale_licenses["OpenResearcher:OpenResearcher-Corpus"]["revision"] = "0" * 40
+    stale_stage = tmp_path / "stale-corpus-license"
+    stale_stage.mkdir()
+    _, stale_licenses_sha = seal("stale-corpus-license/license-receipts.json", stale_licenses)
     stage = json.loads((tmp_path / "stage.json").read_text())
-    bad_stage_path, bad_stage_sha = seal(
+    stale_stage_path, stale_stage_sha = seal(
         "stale-corpus-license/stage.json",
-        {**stage, "path": str(bad_stage), "license_receipts_sha256": bad_licenses_sha},
+        {**stage, "path": str(stale_stage), "license_receipts_sha256": stale_licenses_sha},
     )
-    blocked_config = replace(config, stage_receipt=bad_stage_path, stage_receipt_sha256=bad_stage_sha)
-    # A valid dataset license cannot authorize graph creation with a stale corpus grant.
-    with pytest.raises(ValueError, match="another source revision: OpenResearcher:OpenResearcher-Corpus"):
+    stale_config = replace(config, stage_receipt=stale_stage_path, stage_receipt_sha256=stale_stage_sha)
+    # The corpus licence is ingest-time provenance (ruling 2026-11-27): a staged receipt
+    # recorded at an older corpus revision still authorizes the graph — revisions inherit.
+    curate(
+        with_license(source(stale_config)),
+        PipelineOptions(mode=SourceProcessingMode.QUICK, runtime=CampaignRuntime()),
+    )
+    foreign_licenses = json.loads((tmp_path / "license-receipts.json").read_text())
+    foreign_licenses["OpenResearcher:OpenResearcher-Corpus"]["source_id"] = "OpenResearcher:Other-Corpus"
+    foreign_stage = tmp_path / "foreign-corpus-license"
+    foreign_stage.mkdir()
+    _, foreign_licenses_sha = seal("foreign-corpus-license/license-receipts.json", foreign_licenses)
+    foreign_stage_path, foreign_stage_sha = seal(
+        "foreign-corpus-license/stage.json",
+        {**stage, "path": str(foreign_stage), "license_receipts_sha256": foreign_licenses_sha},
+    )
+    foreign_config = replace(config, stage_receipt=foreign_stage_path, stage_receipt_sha256=foreign_stage_sha)
+    # A receipt that belongs to another source never authorizes this graph.
+    with pytest.raises(ValueError, match="belongs to another source: OpenResearcher:OpenResearcher-Corpus"):
         curate(
-            with_license(source(blocked_config)),
+            with_license(source(foreign_config)),
             PipelineOptions(mode=SourceProcessingMode.QUICK, runtime=CampaignRuntime()),
         )
     assert not (tmp_path / "converted").exists()

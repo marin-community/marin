@@ -205,7 +205,7 @@ def test_source_solver_links_reach_attempt_and_rollout(journey: Journey, width: 
     else:
         page.goto(page.url + "source.html#source_id=Marin%3Aclean")
         page.get_by_role("link", name="Browse task attempts and rollouts →").first.click(timeout=5000)
-    expect(page.get_by_role("heading", name="Difficulty attempts · clean")).to_be_visible()
+    expect(page.get_by_role("heading", name="Difficulty attempts · Marin · clean")).to_be_visible()
     page.get_by_role("link", name="0", exact=True).click()
     expect(page.get_by_role("heading", name="Transcript and tool calls")).to_be_visible()
 
@@ -286,15 +286,20 @@ def test_license_withheld_pages_do_not_request_task_content(journey: Journey, wi
             "backends": {
                 "daytona": {
                     "support": "unsupported",
-                    "roles": {"agent": {"unsupported": 1}},
+                    # A complete survey row: both roles measured, the blocker typed.
+                    "roles": {"agent": {"unsupported": 1}, "grader": {"supported": 1}},
                     "task_counts": {"unsupported": 1},
-                    "blockers": {},
+                    "blockers": {"agent:docker_image": 1},
                     "validation_errors": {"private task text": 1},
                 }
             },
         }
     )
-    fits = page.evaluate("source => backendLabels(source)", {"backend_capabilities": capabilities})
+    # Backend labels render from the served taxonomy; this page has no fit table of its own.
+    fits = page.evaluate(
+        "async source => { await loadTaxonomy(); return backendLabels(source); }",
+        {"backend_capabilities": capabilities},
+    )
     assert fits[0]["fit"]["support"] == "unsupported"
     assert fits[0]["fit"]["roles"]["agent"] == {"unsupported": 1}
     assert not any(

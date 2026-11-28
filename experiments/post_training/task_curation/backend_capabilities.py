@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 from finestore.rl.curation import CurationCatalog
+from finestore.rl.status_taxonomy import BackendBlockerReason, backend_blocker_reason_slugs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rolloutengine.machines import _machine_spec
 from rolloutengine.models import MachineRuntimeSpec
@@ -51,11 +52,15 @@ from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.catalog_identity import canonical_backend_survey, canonical_snapshot_source
+from experiments.post_training.task_curation.toolchain_binding import resolved_toolchain_image
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
 
 SUPPORT_ORDER = (Support.SUPPORTED, Support.VERIFY, Support.PARTIAL, Support.UNSUPPORTED)
 APPLICABLE_ORDER = (FitSupport.SUPPORTED, FitSupport.VERIFY, FitSupport.PARTIAL, FitSupport.UNSUPPORTED)
 RESOURCE_FIELDS = ("cpus", "memory_mb", "storage_mb", "gpus")
+ENVIRONMENT_KIND_REQUIREMENTS = frozenset(
+    (Requirement.HOST_IMAGE, Requirement.PACKAGE_SPEC, Requirement.DOCKER_IMAGE, Requirement.DOCKER_BUILD)
+)
 
 
 def environment_kind(source) -> Requirement:
@@ -271,6 +276,7 @@ def source_map(
     task_counts = defaultdict(Counter)
     role_counts = {backend: defaultdict(Counter) for backend in checkers}
     blockers = defaultdict(Counter)
+    blocker_reasons = defaultdict(dict)
     exclusions = defaultdict(Counter)
     errors = defaultdict(Counter)
     assignments = defaultdict(Counter)
@@ -312,6 +318,24 @@ def source_map(
                     if value is not None:
                         low, high = ranges[role].get(name, (value, value))
                         ranges[role][name] = (min(low, value), max(high, value))
+        # A lock-only role binds its composed toolchain image exactly as the serving wave
+        # does (lock_satisfied_by_image, 047bc68189): the stored HostImage source is the
+        # freeze-time fallback, and the binding makes image backends (Daytona) candidates
+        # while the role's disk quota rides the machine spec's own storage sizing. The
+        # task bytes, requirements and grader semantics never change; only the machine
+        # source the role runs from does. The reported demands stay the declaration's.
+        bound_images: dict[str, str] = {}
+        for role in demands:
+            declared = task.get("environment_requirements") if role == "agent" else task["grader"]["environment"]
+            requirements = EnvironmentRequirements.model_validate(declared)
+            if (
+                requirements.packages_lock is not None
+                and requirements.docker_image is None
+                and requirements.docker_build is None
+            ):
+                image = resolved_toolchain_image(requirements.packages_lock)
+                if image is not None:
+                    bound_images[role] = image
         for backend, check in checkers.items():
             outcomes: list[FitSupport] = []
             for role in ("agent", "grader"):
@@ -328,6 +352,9 @@ def source_map(
                     role_counts[backend][role][FitSupport.VERIFY] += 1
                     for capability in error.capabilities:
                         blockers[backend][f"{role}:{capability}"] += 1
+                        blocker_reasons[backend][
+                            f"{role}:{capability}"
+                        ] = BackendBlockerReason.UNCLASSIFIED_CAPABILITY.value
                     errors[backend][str(error)] += 1
                     outcomes.append(FitSupport.VERIFY)
                     continue
@@ -337,6 +364,7 @@ def source_map(
                 if requirements.required_backend is not None and backend != requirements.required_backend.value:
                     role_counts[backend][role][FitSupport.UNSUPPORTED] += 1
                     blockers[backend][f"{role}:required_backend"] += 1
+                    blocker_reasons[backend][f"{role}:required_backend"] = BackendBlockerReason.REQUIRED_BACKEND.value
                     errors[backend][f"{role}: task requires {requirements.required_backend.value}"] += 1
                     outcomes.append(FitSupport.UNSUPPORTED)
                     continue
@@ -357,21 +385,39 @@ def source_map(
                     errors[backend][f"{role}: {error}"] += 1
                     outcomes.append(FitSupport.UNSUPPORTED)
                     continue
+                bound = bound_images.get(role)
+                if bound is not None and isinstance(spec.source, HostImage):
+                    # The binding replaces the freeze-time host fallback with the composed
+                    # digest-pinned toolchain image; the machine-source demands become the
+                    # registry image the role now runs from — the image bakes the lock, so
+                    # both the host-image and packages-lock demands resolve into it.
+                    spec = replace(spec, source=RegistryImage(bound), lock_satisfied_by_image=True)
+                role_needs = demands[role]
+                if bound is not None:
+                    role_needs = {Requirement.DOCKER_IMAGE} | (
+                        set(role_needs) - {Requirement.HOST_IMAGE, Requirement.PACKAGES_LOCK}
+                    )
                 kind = environment_kind(spec.source)
                 if cells[backend, kind].support == Support.UNSUPPORTED:
                     role_counts[backend][role][FitSupport.NOT_APPLICABLE] += 1
                     exclusions[backend][f"{role}:{kind.value}"] += 1
+                    blocker_reasons[backend][
+                        f"{role}:{kind.value}"
+                    ] = BackendBlockerReason.UNSUPPORTED_ENVIRONMENT_KIND.value
                     outcomes.append(FitSupport.NOT_APPLICABLE)
                     continue
                 if backend == "local":
                     spec = replace(spec, memory_mb=None)
-                status = combined_support(cells[backend, need].support for need in demands[role])
-                for need in demands[role]:
+                status = combined_support(cells[backend, need].support for need in role_needs)
+                for need in role_needs:
                     # VERIFY demands are pending live evidence, not failures; the
                     # role's fit carries the VERIFY verdict and admission gates
                     # wait on the live qualification instead of blocking here.
                     if cells[backend, need].support not in {Support.SUPPORTED, Support.VERIFY}:
                         blockers[backend][f"{role}:{need.value}"] += 1
+                        # A typed demand renders as its own value; the served
+                        # backend-reason table carries every requirement value.
+                        blocker_reasons[backend][f"{role}:{need.value}"] = need.value
                 try:
                     check(requirements, spec)
                 except UnsupportedMachineSpec as error:
@@ -382,6 +428,15 @@ def source_map(
             task_counts[backend][combined_fit(outcomes)] += 1
     if not count:
         raise ValueError(f"Converted-spec census is empty: {source_id}")
+    reason_slugs = backend_blocker_reason_slugs([requirement.value for requirement in Requirement])
+    for backend in checkers:
+        stored = set(blockers[backend]) | set(exclusions[backend])
+        unmapped = sorted(key for key in stored if key not in blocker_reasons[backend])
+        if unmapped:
+            raise ValueError(f"Backend blockers with no mapped reason for {source_id}/{backend}: {unmapped}")
+        unknown = sorted(set(blocker_reasons[backend].values()) - reason_slugs)
+        if unknown:
+            raise ValueError(f"Backend blocker reasons outside the served taxonomy for {source_id}/{backend}: {unknown}")
     return BackendSourceMap(
         source_id=source_id,
         basis="converted_spec_census",
@@ -399,11 +454,84 @@ def source_map(
                 roles=dict(role_counts[backend]),
                 blockers=dict(blockers[backend]),
                 not_applicable=dict(exclusions[backend]),
+                blocker_reasons=dict(blocker_reasons[backend]),
                 validation_errors=dict(errors[backend]),
             )
             for backend in checkers
         },
     )
+
+
+def project_backend_blocker_reasons(survey: BackendSurvey) -> BackendSurvey:
+    """Label stored typed blockers while preserving every measured value and verdict."""
+    sources = []
+    for source in survey.sources:
+        if source.basis != "converted_spec_census":
+            sources.append(source)
+            continue
+        backends = {}
+        for backend, fit in source.backends.items():
+            reasons = dict(fit.blocker_reasons)
+            missing = (fit.blockers.keys() | fit.not_applicable.keys()) - reasons.keys()
+            for key in sorted(missing):
+                role, separator, demand = key.partition(":")
+                try:
+                    if not separator or role not in ("agent", "grader"):
+                        raise ValueError("blocker must name an agent or grader demand")
+                    if key in fit.not_applicable:
+                        if Requirement(demand) not in ENVIRONMENT_KIND_REQUIREMENTS:
+                            raise ValueError("not-applicable blocker must name an environment kind")
+                        reason = BackendBlockerReason.UNSUPPORTED_ENVIRONMENT_KIND.value
+                    elif demand == "required_backend":
+                        reason = BackendBlockerReason.REQUIRED_BACKEND.value
+                    else:
+                        reason = Requirement(demand).value
+                except ValueError as error:
+                    raise ValueError(f"Cannot project backend reason for {source.source_id}/{backend}/{key}") from error
+                reasons[key] = reason
+            backends[backend] = fit.model_copy(update={"blocker_reasons": reasons})
+        sources.append(source.model_copy(update={"backends": backends}))
+    projected = survey.model_copy(update={"sources": sources})
+    verify_backend_blocker_reasons(projected)
+    return projected
+
+
+def verify_backend_blocker_reasons(survey: BackendSurvey) -> None:
+    """Fail closed on any backend blocker the served taxonomy cannot label.
+
+    The Backend evidence page derives a blocker for every stored ``blockers`` and
+    ``not_applicable`` key (plus the unmeasured-role and incomplete-support keys it
+    synthesizes) and refuses to render one without a typed reason. The derivation
+    labels every blocker it stores; the catalog load re-checks the sealed survey
+    here, so a release whose survey drifted from the taxonomy refuses to load
+    instead of crashing the page (R40's crash class, found only at the final
+    browser sweep).
+    """
+    reason_slugs = backend_blocker_reason_slugs([requirement.value for requirement in Requirement])
+    for source in survey.sources:
+        if source.basis != "converted_spec_census":
+            continue
+        for backend, fit in source.backends.items():
+            stored = {**fit.blockers, **fit.not_applicable}
+            unmapped = sorted(set(stored) - set(fit.blocker_reasons))
+            if unmapped:
+                raise ValueError(f"Backend blockers with no mapped reason for {source.source_id}/{backend}: {unmapped}")
+            unknown = sorted(set(fit.blocker_reasons.values()) - reason_slugs)
+            if unknown:
+                raise ValueError(
+                    f"Backend blocker reasons outside the served taxonomy for {source.source_id}/{backend}: {unknown}"
+                )
+            for role in ("agent", "grader"):
+                if sum(fit.roles.get(role, {}).values()) != source.task_count:
+                    raise ValueError(
+                        f"Backend fit for {source.source_id}/{backend} leaves {role} outcomes unmeasured;"
+                        " the evidence page would derive an unlabelled not-measured blocker"
+                    )
+            if fit.support == FitSupport.PARTIAL and not stored:
+                raise ValueError(
+                    f"Backend fit for {source.source_id}/{backend} is partial with no stored blocker;"
+                    " the evidence page would derive an unlabelled incomplete-support blocker"
+                )
 
 
 def converted_specs(paths: list[Path], column: str, runtime_column: str | None = None) -> Iterable[dict]:

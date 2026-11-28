@@ -165,13 +165,20 @@ def apply_projection_waivers(
         # independent of declaration drift, so it runs before the selection/drift check.
         # A stale-pin gap is the same sealed-state class for a re-pinned source: the served
         # projection still records the prior pin and catches up at the next refresh, which
-        # the same expiry forces.
+        # the same expiry forces. The curriculum and derived-contract projections of the
+        # same named sources ride the RULING 68 EXTENSION, ratified by the user 2026-11-25
+        # ~20:00 EST: previously admitted sources are re-admitted unless their code is
+        # broken — stale projection states are work to regenerate, not grounds to drop a
+        # previously admitted source. They catch up in the one projection pass the expiry
+        # forces. Recorded in the atlas rulings
+        # (experiments/active/atlas-rulings/ruling68-extension-projection-waiver-20261125.md).
         blocking, waived, notes = [], [], []
+        sealed_pending_projections = {"served-catalog", "curriculum", "derived-contract"}
         if not waivers.source_ids:
             raise ValueError("Ruling 68 waiver must name the exact declared source IDs")
         for gap in gaps:
             if (
-                gap.projection == "served-catalog"
+                gap.projection in sealed_pending_projections
                 and gap.state in {"missing", "stale-pin"}
                 and gap.source_id in waivers.source_ids
             ):
@@ -215,8 +222,7 @@ def atlas_catalog_selection() -> CatalogSelection:
     marina_url, applet_id = target_applet()
     query = atlas_applet_query()
     rows = query(
-        "SELECT load_id, to_regclass(:seal_table) IS NOT NULL AS has_seal_table "
-        "FROM atlas_current WHERE name='latest'",
+        "SELECT load_id, to_regclass(:seal_table) IS NOT NULL AS has_seal_table FROM atlas_current WHERE name='latest'",
         {"seal_table": "atlas_projection_refresh_seals"},
     )["rows"]
     if len(rows) != 1 or not rows[0]["load_id"]:
@@ -313,14 +319,18 @@ def projection_gaps(
     contract_receipts: dict[str, list[DerivedContractReceipt]],
     curriculum_rows: dict[str, dict],
     served_pins: dict[str, DeclarationPin] | None = None,
+    exempt_unmeasured: frozenset[str] | None = None,
 ) -> tuple[list[ProjectionGap], list[str]]:
     """Classify every current pin's projection state; return gaps then informational notes.
 
     With ``served_pins`` the audit also compares the served catalog's declaration against the
     canonical pin: a served row that predates the pin (no census binding, an older revision)
     makes every exact-pin projection pending no matter which receipts are loaded, so it is a
-    gap of its own.
+    gap of its own. An unmeasured source named in ``exempt_unmeasured`` (Excluded with an
+    empty retained population, coordinator ruling 2026-11-26) has no projection to bind, so
+    the audit raises no census demand for it; every other unmeasured source still reports.
     """
+    exempt = exempt_unmeasured or frozenset()
     gaps: list[ProjectionGap] = []
     notes: list[str] = []
     for declaration in declarations:
@@ -353,7 +363,7 @@ def projection_gaps(
                     last_computed_revision=last_computed,
                 )
             )
-        elif state == "unmeasured":
+        elif state == "unmeasured" and declaration.source_id not in exempt:
             notes.append(
                 f"derived-contract: {declaration.source_id} has no actor census binding yet; "
                 "stage its population and census it before the projections can run"
@@ -368,10 +378,9 @@ def projection_gaps(
                     last_computed_revision=last_computed,
                 )
             )
-        elif state == "unmeasured":
+        elif state == "unmeasured" and declaration.source_id not in exempt:
             notes.append(
-                f"curriculum: {declaration.source_id} has no actor census binding yet; "
-                "align it after its intake census"
+                f"curriculum: {declaration.source_id} has no actor census binding yet; align it after its intake census"
             )
     return gaps, notes
 

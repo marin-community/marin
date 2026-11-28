@@ -19,7 +19,7 @@ from finestore.rl.curation import (
     snapshot_declaration_generation,
     source_display_name,
 )
-from finestore.rl.status_taxonomy import ExclusionReason, PendingStage
+from finestore.rl.status_taxonomy import ExclusionReason, PendingStage, SourceStatus
 
 
 def _qualified_document(source_id: str, *, status: str = "Available") -> dict:
@@ -120,6 +120,29 @@ def test_current_form_passes_through_without_a_callback():
     thin = _thin_document("Evalchemy:fixture")
     normalized = normalize_snapshot_declaration(thin)
     assert normalized == thin
+
+
+def test_removed_stage_value_recomputes_from_evidence():
+    """The stage-cleanup era: a served Pending row whose stage the current taxonomy
+    removed recomputes its stage from receipt evidence — the stage is computed,
+    never entered — instead of refusing the whole snapshot read."""
+    document = {**_qualified_document("Marin:fixture", status="Pending"), "stage": "Snapshot repair queued"}
+    assert snapshot_declaration_generation(document) == "qualified-v1"
+    with pytest.raises(ValueError, match="supply pending_stage_of"):
+        normalize_snapshot_declaration(document)
+    normalized = normalize_snapshot_declaration(document, pending_stage_of=_stage_of)
+    assert normalized["stage"] == PendingStage.MEASUREMENTS_PENDING.value
+    assert QualifiedSourceDeclaration.model_validate(normalized).stage is PendingStage.MEASUREMENTS_PENDING
+
+
+def test_removed_stage_value_with_no_evidence_promotes_to_available():
+    """A removed-stage row whose receipt evidence no longer holds any pending work
+    is Available — the same promotion the pre-stage form applies."""
+    document = {**_qualified_document("Marin:fixture", status="Pending"), "stage": "Snapshot repair queued"}
+    normalized = normalize_snapshot_declaration(document, pending_stage_of=lambda source_id: None)
+    assert normalized["stage"] is None
+    assert normalized["status"] == "Available"
+    assert QualifiedSourceDeclaration.model_validate(normalized).status is SourceStatus.AVAILABLE
 
 
 def test_pre_stage_form_converts_only_the_named_fields():

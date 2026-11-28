@@ -22,6 +22,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path, required=True, help="The cohort build plan JSON (source_id, release_repo).")
     parser.add_argument("--artifact-version", required=True, help="The release version the populations stage from.")
+    parser.add_argument(
+        "--converter-revision",
+        required=True,
+        help="The converter revision the census receipts carry; the population records must declare the "
+        "same converter identity for the lexical registration and SAMPLE panel freezing to bind.",
+    )
     parser.add_argument("--workdir", type=Path, required=True, help="Local scratch for the staged populations.")
     parser.add_argument(
         "--text-root", required=True, help="The lexical text root the staged populations copy to (object storage)."
@@ -31,9 +37,16 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
     from huggingface_hub import HfApi, hf_hub_download  # noqa: PLC0415
+    from marin.execution.artifact import (  # noqa: PLC0415
+        ArtifactRecord,
+        result_type_name,
+    )
 
     from experiments.post_training.task_curation.harbor_cohort_release import (  # noqa: PLC0415
         release_repo as release_repo_name,
+    )
+    from experiments.post_training.task_curation.lexical_artifacts import (  # noqa: PLC0415
+        SourceTextPopulation,
     )
     from experiments.post_training.task_curation.release_population import (  # noqa: PLC0415
         stage_release_population,
@@ -59,12 +72,36 @@ def main() -> None:
             stdout=subprocess.DEVNULL,
         )
         record = staged.model_dump(mode="json")
+        # fsutil's recursive copy nests the source directory under the target
+        # (<text_uri>/<slug>/...), so the record's output dirs point at the
+        # nested locations the scan actually reads.
+        nested = f"{text_uri}/{slug}"
         record.update(
             path=f"{text_uri}/",
             dataset_id=repo,
             dataset_revision=head,
-            main_output_dir=f"{text_uri}/outputs/main",
-            specs_output_dir=f"{text_uri}/specs",
+            converter_revision=args.converter_revision,
+            main_output_dir=f"{nested}/outputs/main",
+            specs_output_dir=f"{nested}/specs",
+        )
+        # The scan's raw_load requires the artifact record sidecar at the staged
+        # path; write it through fsutil (the local s3fs has no credentials). The
+        # record carries the payload minus its path, matching what a step runner
+        # persists, so raw_load rebuilds the full model at the staged location.
+        population = SourceTextPopulation(**record)
+        payload_fields = {name for name in SourceTextPopulation.model_fields if name != "path"}
+        sidecar = args.workdir / f"{slug}.artifact.json"
+        sidecar.write_text(
+            ArtifactRecord(
+                output_path=text_uri,
+                result_type=result_type_name(SourceTextPopulation),
+                result=population.model_dump(mode="json", include=payload_fields),
+            ).model_dump_json(indent=2)
+        )
+        subprocess.run(
+            ["uv", "run", "--no-sync", "fsutil", "cp", str(sidecar), text_uri + "/.artifact.json"],
+            check=True,
+            stdout=subprocess.DEVNULL,
         )
         populations.append(record)
     args.output.parent.mkdir(parents=True, exist_ok=True)

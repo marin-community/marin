@@ -162,12 +162,63 @@ def dockerfile_instructions(text: str) -> list[str]:
     return [line.split(maxsplit=1)[0].upper() for line in dockerfile_lines(text)]
 
 
+def _heredoc_delimiter(argument: str) -> str | None:
+    """The heredoc delimiter an unquoted ``<<`` in the command opens, honoring quoting.
+
+    ``cat > f <<'EOF'`` opens a heredoc whose body is shell data; ``echo "a << b"``
+    does not (the operator is inside quotes). Mirrors the OpenSWE profile's
+    scanner; the two must agree on what counts as a heredoc.
+    """
+    quote: str | None = None
+    index = 0
+    while index < len(argument):
+        char = argument[index]
+        if quote:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif argument.startswith("<<", index):
+            index += 2
+            if index < len(argument) and argument[index] == "-":
+                index += 1
+            while index < len(argument) and argument[index].isspace():
+                index += 1
+            if index < len(argument) and argument[index] in "'\"":
+                quote_char = argument[index]
+                index += 1
+                end = argument.find(quote_char, index)
+                if end == -1:
+                    return None
+                return argument[index:end]
+            match = re.match(r"[\w.-]+", argument[index:])
+            if match:
+                return match.group(0)
+            return None
+        index += 1
+    return None
+
+
 def dockerfile_lines(dockerfile: str) -> list[str]:
-    """Recipe lines with backslash continuations joined, comments and blanks dropped."""
+    """Recipe lines with backslash continuations joined, comments and blanks dropped.
+
+    Heredoc bodies are shell data: their bytes never join continuations or
+    surface as instruction lines (machine-authored recipes embed
+    instruction-looking lines — even backslash-continued ones — inside RUN
+    heredocs). A continuation still open at the end of file flushes as the
+    final logical line: the scanner classifies recipe bytes, it does not
+    validate them, and machine-authored recipes carry trailing-continuation
+    lines (an ``ENV`` value ending in a backslash with only comments after).
+    """
     lines: list[str] = []
     buffer: str | None = None
+    heredoc_delimiter: str | None = None
     for raw in dockerfile.splitlines():
         line = raw.strip()
+        if heredoc_delimiter is not None:
+            if line == heredoc_delimiter:
+                heredoc_delimiter = None
+            continue
         if not line or line.startswith("#"):
             continue
         if buffer is None:
@@ -176,10 +227,12 @@ def dockerfile_lines(dockerfile: str) -> list[str]:
             buffer += line[:-1].rstrip() + " "
             continue
         buffer += line
-        lines.append(buffer.strip())
+        joined = buffer.strip()
+        lines.append(joined)
         buffer = None
+        heredoc_delimiter = _heredoc_delimiter(joined)
     if buffer:
-        raise ValueError("unterminated Dockerfile continuation")
+        lines.append(buffer.strip())
     return lines
 
 

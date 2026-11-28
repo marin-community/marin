@@ -29,8 +29,9 @@ from pathlib import Path
 from typing import Any
 
 import requests
+from finestore.rl.status_taxonomy import PendingStage, SourceStatus
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.backend_requirements import BackendSurvey
+from taskcompendium.backend_requirements import BackendSurvey, backend_schema_sha256
 from taskcompendium.source_fingerprints import SourceIdentitySurvey
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
@@ -38,6 +39,7 @@ from experiments.post_training.task_curation.release_stages.manifest import Arti
 from infra.marina.apps.rl_data_catalog.release_browser import evidence_sweep
 from infra.marina.apps.rl_data_catalog.release_check import CatalogReader, browser_checks
 from infra.marina.apps.rl_data_catalog.release_curriculum import curriculum_invariants
+from infra.marina.apps.rl_data_catalog.server.content_access import backend_metadata, content_is_withheld
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 STRICT_AUDIT_SUFFIX = "strict-audit"
@@ -115,7 +117,11 @@ def _merge_mismatches(target: dict[str, list[str]], extra: dict[str, list[str]])
 
 
 def _survey_rows(survey: BackendSurvey) -> dict[str, dict]:
-    return {canonical_source_id(row.source_id): row.model_dump(mode="json") for row in survey.sources}
+    """The sealed survey rows as sealed: a field the model gained after the seal
+    (R40: ``BackendFit.blocker_reasons``) must not appear as its default."""
+    return {
+        canonical_source_id(row.source_id): row.model_dump(mode="json", exclude_unset=True) for row in survey.sources
+    }
 
 
 def _survey_groups(survey: SourceIdentitySurvey) -> dict[str, dict]:
@@ -128,19 +134,51 @@ def _survey_groups(survey: SourceIdentitySurvey) -> dict[str, dict]:
     return groups
 
 
+# The catalog load serves an Available declaration as typed Pending at one of these
+# backend stages (the registry declaration is untouched); see load.py's downgrades.
+LOAD_TIME_PENDING_STAGES = frozenset(stage.value for stage in (PendingStage.BACKEND_PREPARATION_PENDING,))
+
+
+def served_status_matches(row: dict, declaration: dict) -> bool:
+    """The served status is the declared one, or the load's typed backend Pending downgrade."""
+    if row.get("status") == declaration.get("status"):
+        return True
+    return (
+        declaration.get("status") == SourceStatus.AVAILABLE.value
+        and row.get("status") == SourceStatus.PENDING.value
+        and row.get("stage") in LOAD_TIME_PENDING_STAGES
+    )
+
+
+def served_backend_row(survey_row: dict, declaration: dict) -> dict:
+    """The serving projection of one sealed survey row.
+
+    The catalog load serves the declaration's grading evidence in place of the survey's
+    survey-time copy (recorded as ``grading_evidence_rebound``), and the API serves only
+    backend metadata for a source whose content is withheld.
+    """
+    row = {**survey_row, "grading_environment": declaration.get("grading_environment")}
+    return backend_metadata(row) if content_is_withheld(declaration) else row
+
+
 def served_retained_tasks(served: dict) -> int:
     """The served catalog's total retained task count."""
     return sum(int(row["task_count"]) for row in served["sources"])
 
 
 def audit_served_population(
-    inputs: StrictAuditInputs,
     served: dict,
     declarations: dict[str, dict],
     survey: BackendSurvey,
     identity: SourceIdentitySurvey,
+    *,
+    expected_source_count: int,
+    retained_tasks: int,
 ) -> dict[str, list[str]]:
-    """The served sources against the sealed documents, with per-source mismatches."""
+    """The served sources against the sealed documents, with per-source mismatches.
+
+    The hosted check reuses this projection for the published revision.
+    """
     mismatches: dict[str, list[str]] = {}
     served_rows = {row["id"]: row for row in served["sources"]}
     expected_ids = set(declarations)
@@ -150,22 +188,23 @@ def audit_served_population(
             f" (served-only {sorted(set(served_rows) - expected_ids)},"
             f" declared-only {sorted(expected_ids - set(served_rows))})"
         )
-    if len(served_rows) != inputs.expected_source_count:
+    if len(served_rows) != expected_source_count:
         mismatches.setdefault("catalog", []).append(
-            f"{len(served_rows)} served sources, expected {inputs.expected_source_count}"
+            f"{len(served_rows)} served sources, expected {expected_source_count}"
         )
     retained = served_retained_tasks(served)
-    if retained != inputs.retained_tasks:
+    if retained != retained_tasks:
         mismatches.setdefault("catalog", []).append(
-            f"served catalog retains {retained} tasks, expected {inputs.retained_tasks}"
+            f"served catalog retains {retained} tasks, expected {retained_tasks}"
         )
     if served["snapshot_id"] != survey.snapshot_id:
         mismatches.setdefault("catalog", []).append(
             f"served snapshot {served['snapshot_id']!r} differs from the backend survey {survey.snapshot_id!r}"
         )
-    if survey.git_revision != inputs.source_revision:
+    if survey.schema_sha256 != backend_schema_sha256():
         mismatches.setdefault("catalog", []).append(
-            f"backend survey pins revision {survey.git_revision!r}, expected {inputs.source_revision!r}"
+            "backend survey inputs were produced by different survey code:"
+            f" survey schema {survey.schema_sha256!r}, release schema {backend_schema_sha256()!r}"
         )
     if set(identity.fingerprints) != expected_ids:
         mismatches.setdefault("identity-survey", []).append("identity fingerprints do not cover the release population")
@@ -184,12 +223,16 @@ def audit_served_population(
         row = served_rows[source_id]
         declaration = declarations[source_id]
         for field in DECLARATION_FIELDS:
+            if field == "status":
+                if not served_status_matches(row, declaration):
+                    mismatches.setdefault(source_id, []).append("served status differs from the sealed declaration")
+                continue
             if row.get(field) != declaration.get(field):
                 mismatches.setdefault(source_id, []).append(f"served {field} differs from the sealed declaration")
         expected_row = backend_rows.get(source_id)
         if expected_row is None:
             mismatches.setdefault(source_id, []).append("backend survey carries no row for this source")
-        elif row.get("backend_capabilities") != expected_row:
+        elif row.get("backend_capabilities") != served_backend_row(expected_row, declaration):
             mismatches.setdefault(source_id, []).append(
                 "served backend capabilities differ from the sealed backend survey row"
             )
@@ -291,7 +334,17 @@ def run_strict_audit(
         identity = SourceIdentitySurvey.model_validate(read_ref(inputs.identity))
         served = reader.get("api/sources")
         mismatches: dict[str, list[str]] = {}
-        _merge_mismatches(mismatches, audit_served_population(inputs, served, declarations, survey, identity))
+        _merge_mismatches(
+            mismatches,
+            audit_served_population(
+                served,
+                declarations,
+                survey,
+                identity,
+                expected_source_count=inputs.expected_source_count,
+                retained_tasks=inputs.retained_tasks,
+            ),
+        )
         backend_reasons = audit_backends_document(survey, reader.get("api/backends"))
         if backend_reasons:
             mismatches.setdefault("api/backends", []).extend(backend_reasons)

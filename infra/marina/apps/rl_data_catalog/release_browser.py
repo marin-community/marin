@@ -5,6 +5,7 @@
 
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -197,10 +198,17 @@ def check_view(
     return {"total": asdict(total), "shown": asdict(shown), "omitted": omitted, "displayed_ids": displayed_ids}
 
 
-def source_sweep(page: Page, root: str, sources: list[dict[str, Any]], shots: Path) -> list[dict[str, Any]]:
-    """Exercise defaults, filters, Show everything and persistence at all layouts."""
+def source_sweep(
+    page: Page,
+    root: str,
+    sources: list[dict[str, Any]],
+    shots: Path,
+    *,
+    layouts: Sequence[tuple[str, int]] = LAYOUTS,
+) -> list[dict[str, Any]]:
+    """Exercise defaults, filters, Show everything and persistence at the given layouts."""
     results = []
-    for theme, width in LAYOUTS:
+    for theme, width in layouts:
         page.emulate_media(color_scheme=theme)
         page.set_viewport_size({"width": width, "height": 1000})
         page.goto(root)
@@ -321,11 +329,22 @@ def pending_release_ids(page: Page, root: str) -> set[str]:
     return {row["source_id"] for row in manifest["sources"]}
 
 
-def evidence_sweep(page: Page, root: str, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Exercise source/backend evidence for every observed admission/QA/actor state."""
+def evidence_sweep(
+    page: Page,
+    root: str,
+    sources: list[dict[str, Any]],
+    *,
+    layouts: Sequence[tuple[str, int]] = LAYOUTS,
+    cases: Sequence[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Exercise source/backend evidence for every observed admission/QA/actor state.
+
+    ``cases`` restricts the walk to precomputed ``evidence_cases`` rows (a parallel
+    sweep splits them across pages); by default every case is walked.
+    """
     results = []
-    candidates = evidence_cases(sources, pending_release_ids(page, root))
-    for theme, width in LAYOUTS:
+    candidates = list(cases) if cases is not None else evidence_cases(sources, pending_release_ids(page, root))
+    for theme, width in layouts:
         page.emulate_media(color_scheme=theme)
         page.set_viewport_size({"width": width, "height": 1000})
         for row in candidates:
@@ -361,8 +380,10 @@ def evidence_sweep(page: Page, root: str, sources: list[dict[str, Any]]) -> list
 
 
 def check_map(page: Page) -> dict[str, Any]:
-    expect(page.locator("#provenance")).to_contain_text('"release_id"')
-    expect(page.locator("#curriculum-map")).not_to_have_attribute("aria-busy", "true")
+    # The map renders from the release metadata the reader computes on first request; the
+    # parallel pool can hold that past Playwright's 5 s default (R40 #62).
+    expect(page.locator("#provenance")).to_contain_text('"release_id"', timeout=60000)
+    expect(page.locator("#curriculum-map")).not_to_have_attribute("aria-busy", "true", timeout=60000)
     result = page.locator("#curriculum-map").evaluate(MAP_PARTITIONS)
     if result["failures"] or not page.evaluate("document.documentElement.scrollWidth<=innerWidth"):
         raise ValueError(f"Curriculum overlap or parent/child mismatch: {result}")
@@ -371,8 +392,18 @@ def check_map(page: Page) -> dict[str, Any]:
 
 def curriculum_full_sweep(page: Page, root: str, releases: list[dict[str, Any]], shots: Path) -> list[dict[str, Any]]:
     """Check available releases, uses and every live domain without fixed populations."""
+    return [
+        *curriculum_release_sweep(page, root, releases),
+        *curriculum_domain_sweep(page, root, shots),
+    ]
+
+
+def curriculum_release_sweep(
+    page: Page, root: str, releases: list[dict[str, Any]], *, layouts: Sequence[tuple[str, int]] = LAYOUTS
+) -> list[dict[str, Any]]:
+    """Every release, Use and confidence level: counts and map partitions."""
     results = []
-    for theme, width in LAYOUTS:
+    for theme, width in layouts:
         page.emulate_media(color_scheme=theme)
         page.set_viewport_size({"width": width, "height": 1000})
         for release in releases:
@@ -422,6 +453,22 @@ def curriculum_full_sweep(page: Page, root: str, releases: list[dict[str, Any]],
                         }
                     )
                 results.append({"theme": theme, "width": width, "release": release["release_id"], "use": use, **result})
+    return results
+
+
+def curriculum_domain_sweep(
+    page: Page,
+    root: str,
+    shots: Path,
+    *,
+    layouts: Sequence[tuple[str, int]] = LAYOUTS,
+    domains: Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Every live domain (or the given subset) of the selected release: cards, areas and samples."""
+    results = []
+    for theme, width in layouts:
+        page.emulate_media(color_scheme=theme)
+        page.set_viewport_size({"width": width, "height": 1000})
         page.goto("about:blank")
         page.goto(root + "curriculum.html")
         check_map(page)
@@ -435,10 +482,14 @@ def curriculum_full_sweep(page: Page, root: str, releases: list[dict[str, Any]],
             node["kind"] == "subject" or normalize(node["name"]) != normalize(subjects[node["subject_id"]])
             for node in coverage["hierarchy"]
         )
-        domains = page.locator("#domain option").evaluate_all("opts=>opts.map(o=>o.value).filter(Boolean)")
-        for domain in domains:
+        live = page.locator("#domain option").evaluate_all("opts=>opts.map(o=>o.value).filter(Boolean)")
+        if domains is not None and not set(domains) <= set(live):
+            raise ValueError(f"Curriculum domains {sorted(set(domains) - set(live))} are not live on the page")
+        for domain in live if domains is None else [domain for domain in live if domain in domains]:
             page.locator("#domain").select_option(domain)
-            expect(page.locator(".domain-card")).to_have_count(1)
+            # The area response is computed through the reader on first request; the
+            # parallel pool can hold it past Playwright's 5 s default (R40 #62).
+            expect(page.locator(".domain-card")).to_have_count(1, timeout=60000)
             expect(page.locator(".domain-card")).to_have_attribute("data-subject", domain)
             results.append({"theme": theme, "width": width, "domain": domain, **check_map(page)})
             expected_nodes = {
@@ -465,15 +516,24 @@ def curriculum_full_sweep(page: Page, root: str, releases: list[dict[str, Any]],
         page.goto("about:blank")
         page.goto(root + "curriculum.html")
         check_map(page)
-        page.screenshot(path=str(shots / f"curriculum-{theme}-{width}.png"), full_page=True)
+        # One chunk of a split sweep owns the layout's overview screenshot.
+        if domains is None or not live or live[0] in domains:
+            page.screenshot(path=str(shots / f"curriculum-{theme}-{width}.png"), full_page=True)
     return results
 
 
-def curriculum_sweep(page: Page, root: str, releases: list[dict[str, Any]], shots: Path) -> list[dict[str, Any]]:
+def curriculum_sweep(
+    page: Page,
+    root: str,
+    releases: list[dict[str, Any]],
+    shots: Path,
+    *,
+    layouts: Sequence[tuple[str, int]] = LAYOUTS,
+) -> list[dict[str, Any]]:
     """Check one real release, Use, domain, confidence control and sample list per layout."""
     release = next((row for row in releases if row["selected"]), releases[0])
     results = []
-    for theme, width in LAYOUTS:
+    for theme, width in layouts:
         page.emulate_media(color_scheme=theme)
         page.set_viewport_size({"width": width, "height": 1000})
         page.goto(root + "curriculum.html#" + urlencode({"release": release["release_id"], "intended_use": "all"}))
@@ -490,7 +550,9 @@ def curriculum_sweep(page: Page, root: str, releases: list[dict[str, Any]], shot
         domain = representative_domain(data)
         if domain:
             page.locator("#domain").select_option(domain)
-            expect(page.locator(".domain-card")).to_have_count(1)
+            # The area response is computed through the reader on first request; the
+            # parallel pool can hold it past Playwright's 5 s default (R40 #62).
+            expect(page.locator(".domain-card")).to_have_count(1, timeout=60000)
             expect(page.locator("#task-list")).not_to_have_attribute("aria-busy", "true", timeout=60000)
             expect(page.locator("#task-message")).to_contain_text(
                 re.compile("sampled examples|No task examples|No stored sample examples")
@@ -508,7 +570,21 @@ def curriculum_sweep(page: Page, root: str, releases: list[dict[str, Any]], shot
     return results
 
 
-def evidence_smoke(page: Page, root: str, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep one Evidence and Backends presentation in the blocking geometry pass."""
+def evidence_smoke(
+    page: Page,
+    root: str,
+    sources: list[dict[str, Any]],
+    *,
+    layouts: Sequence[tuple[str, int]] = LAYOUTS,
+    cases: Sequence[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Keep one Evidence and Backends presentation in the blocking geometry pass.
+
+    ``cases`` is the parallel sweep's precomputed case list: the unit's page has not
+    navigated yet, so the default path's pending-manifest fetch would be cross-origin
+    (R40 #62). The smoke walk covers one source and needs no manifest.
+    """
     source = next((row for row in sources if (row.get("assessment") or {}).get("pipeline_key")), sources[0])
-    return evidence_sweep(page, root, [source])
+    if cases is not None:
+        return evidence_sweep(page, root, [source], layouts=layouts, cases=[source])
+    return evidence_sweep(page, root, [source], layouts=layouts)

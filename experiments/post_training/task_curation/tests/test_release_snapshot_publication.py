@@ -107,6 +107,34 @@ def test_verify_survey_alignment_refuses_mismatch(tmp_path):
         sp.verify_survey_alignment(inputs, {"Test:One": {}, "Test:Two": {}})
 
 
+@pytest.mark.parametrize(
+    ("survey", "field"),
+    [
+        (None, None),
+        ("identity_receipt", "snapshot_id"),
+        ("backend_receipt", "snapshot_id"),
+        ("identity_receipt", "catalog_root"),
+        ("backend_receipt", "catalog_root"),
+    ],
+)
+def test_survey_publication_binding_matches_the_destination(tmp_path, survey, field):
+    current = {"Test:One": {}, "Test:Two": {}}
+    binding = {"catalog_root": "s3://test/catalog", "snapshot_id": "assembly-test-v1"}
+    documents = {
+        "identity_receipt": {**binding, "fingerprints": current},
+        "backend_receipt": {**binding, "sources": [{"source_id": sid} for sid in current]},
+    }
+    if survey is not None:
+        documents[survey][field] = "another-publication"
+    refs = {name: _write_json(tmp_path, name + ".json", document) for name, document in documents.items()}
+    inputs = _inputs(tmp_path, refs=refs)
+    if survey is not None:
+        with pytest.raises(ValueError, match="publication binding"):
+            sp.verify_survey_alignment(inputs, current)
+        return
+    assert sp.verify_survey_alignment(inputs, current) == (documents["identity_receipt"], documents["backend_receipt"])
+
+
 def test_seal_contracts_refuses_uncensused_or_unregistered_targets(tmp_path, monkeypatch):
     """The census covers the whole population; every target needs a census row and a receipt."""
     one_only = _write_json(tmp_path, "census-one.json", {"results": [{"declaration": {"id": "Test:One"}}]})

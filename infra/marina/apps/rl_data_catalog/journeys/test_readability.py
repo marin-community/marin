@@ -139,3 +139,34 @@ def test_header_sort_and_resize_controls_stay_visible_when_focused(journey: Jour
         assert entered, "the focus walk never reached the header row"
     finally:
         page.close()
+
+
+def test_origin_tabs_stay_visible_when_focused(journey: Journey, readability_catalog: None) -> None:
+    """Regression (R40 #61): with more origins than the strip shows, a focused origin tab
+    past its right edge stayed offscreen (the post-publish sweep's focus-obscured finding)."""
+    page = journey.page.context.new_page()
+    try:
+        page.set_viewport_size({"width": 1440, "height": 1000})
+        page.emulate_media(color_scheme="light")
+        page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+        expect(page.locator("#origin-tabs .tab").first).to_be_visible(timeout=60000)
+        strip = page.locator("#origin-tabs")
+        # The fixture has few origins; narrow the strip so they overflow it like R40's 33 did.
+        strip.evaluate("e => { e.style.maxWidth = '200px'; }")
+        assert strip.evaluate("e => e.scrollWidth > e.clientWidth"), "the origin strip must overflow"
+        page.locator("#origin-tabs .tab").first.focus()
+        for index in range(1, page.locator("#origin-tabs .tab").count()):
+            page.keyboard.press("Tab")
+            state = page.evaluate(
+                """() => {
+                const e = document.activeElement, strip = document.getElementById('origin-tabs');
+                const r = e.getBoundingClientRect(), box = strip.getBoundingClientRect();
+                const hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+                return {tab: e.classList.contains('tab'), inside: r.left >= box.left && r.right <= box.right,
+                        hit: !!hit && (e === hit || e.contains(hit))};
+            }"""
+            )
+            assert state["tab"], f"focus left the origin strip at tab {index}"
+            assert state["inside"] and state["hit"], f"origin tab {index} is clipped or obscured when focused"
+    finally:
+        page.close()

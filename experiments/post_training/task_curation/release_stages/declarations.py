@@ -43,6 +43,7 @@ class DeclarationInputs:
     targets: tuple[str, ...]
     prior_declarations: ArtifactRef
     removed_sources: tuple[str, ...] = ()
+    deliberate_exclusions: tuple[str, ...] = ()
 
     def validate(self) -> None:
         """Refuse malformed inputs before any read runs."""
@@ -134,11 +135,15 @@ def verify_declarations(inputs: DeclarationInputs, current: dict[str, dict], pri
     planned_but_present = sorted(set(inputs.removed_sources) & set(current))
     if planned_but_present:
         raise ValueError(f"the plan removes declarations the current set still carries: {planned_but_present[:5]}")
+    unknown_deliberate = sorted(set(inputs.deliberate_exclusions) - set(prior))
+    if unknown_deliberate:
+        raise ValueError(f"deliberate exclusions the prior release never declared: {unknown_deliberate[:5]}")
     drift = [
         source_id
         for source_id, row in prior.items()
         if source_id in current
         and source_id not in inputs.targets
+        and source_id not in inputs.deliberate_exclusions
         and fingerprint_input(row) != fingerprint_input(current[source_id])
     ]
     if drift:
@@ -166,6 +171,13 @@ def run_declarations(
         unknown_targets = [target for target in inputs.targets if target not in prior and target not in current]
         if unknown_targets:
             raise ValueError(f"targets unknown to the prior and current declaration sets: {sorted(unknown_targets)}")
+        # A deliberate exclusion keeps the served declaration: the release carries the
+        # prior row unchanged and does not adopt the frozen layer's re-pin (the reason
+        # lives in the policy config's DELIBERATE_EXCLUSIONS).
+        current = {
+            **current,
+            **{source_id: prior[source_id] for source_id in inputs.deliberate_exclusions if source_id in prior},
+        }
         source_ids = verify_declarations(inputs, current, prior)
         proof: dict = {
             "kind": f"atlas-{inputs.release_id}-{DECLARATIONS_SUFFIX}",

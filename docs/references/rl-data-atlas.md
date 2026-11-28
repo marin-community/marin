@@ -1169,8 +1169,11 @@ It requires the live source set to equal the archived set minus retired sources.
 Registered converter Use is authoritative; a benchmark marker does not override
 an explicit TRAIN Use. QC metadata updates are recorded separately from
 task-producing inputs. Changed pins require a complete public-input comparison.
-Stable task IDs must match exactly. Changed IDs require a unique bijection of
-the full public inputs, with matching content hashes, source, population and Use.
+Stable task IDs must match exactly. Changed IDs require a unique injective match
+of every current public input, with matching content hashes, source, population
+and Use. A reduced population records the omitted archived task IDs explicitly;
+its entire archived source must have uniform readiness, otherwise fresh alignment is
+required. Equal-size populations still require a complete bijection.
 Repeated public inputs also require unique pinned upstream dataset/revision/row
 identities, verified against both complete frozen TaskSpec streams. Remaining
 ambiguity or changed public inputs cannot reuse scores. The projection records
@@ -1179,7 +1182,8 @@ QA receipts keep their own input bindings.
 
 The CPU pass filters full assignment files, verifies every retained value after
 readback, and rebuilds statistics and deterministic review samples for the selected
-population. Selected-source statistics must equal the archived statistics. This
+population. Statistics for unchanged populations must equal the archived statistics.
+Reduced populations must have their current denominator and componentwise subset bounds. This
 replenishes area samples whose old candidates came from retired sources. It does
 not compute vectors or matching scores and never overwrites archived artifacts.
 Run it in the data's region with a new artifact prefix:

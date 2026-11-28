@@ -34,7 +34,15 @@ from rigging.filesystem.storage_path import StoragePath
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref
-from infra.marina.apps.rl_data_catalog.server.content_access import LICENSE_CONTENT_MARKER
+from infra.marina.apps.rl_data_catalog.server.content_access import (
+    LICENSE_CONTENT_MARKER,
+    content_is_withheld,
+    license_content_excluded,
+)
+from infra.marina.apps.rl_data_catalog.server.publication_scope import (
+    PUBLICATION_DECISIONS,
+    publication_scope_decision,
+)
 
 EXPOSURE_SUFFIX = "anonymous-publication-exposure"
 PROBE_MARKER = "exposure-guard-probe"
@@ -85,6 +93,32 @@ class ExposureProbeInputs:
             missing = [key for key in ("source_id", "upstream_url", "license_id") if not grant.get(key)]
             if missing:
                 raise ValueError(f"publication grant {position} lacks {missing}")
+
+
+def exposure_lists(declarations: dict[str, dict]) -> tuple[tuple[str, ...], tuple[dict, ...]]:
+    """The license-withheld sources and public-display grants of the release's declaration cut.
+
+    The withheld list is every declaration whose content the served app withholds; the
+    grants are the recorded public-display decisions, each bound to its exact declared
+    release. Fails closed on a withheld source the probe cannot verify (one withheld
+    for a reason other than its license carries a different marker) and on a grant
+    whose source is missing from the cut, withheld, or declared at another release.
+    """
+    withheld = tuple(sorted(source_id for source_id, row in declarations.items() if content_is_withheld(row)))
+    unverifiable = [source_id for source_id in withheld if not license_content_excluded(declarations[source_id])]
+    if unverifiable:
+        raise ValueError(f"the probe verifies only license withholding; withheld for another reason: {unverifiable}")
+    grants: list[dict] = []
+    for decision in PUBLICATION_DECISIONS:
+        declaration = declarations.get(decision.source_id)
+        if declaration is None:
+            raise ValueError(f"publication grant {decision.source_id!r} names a source outside the declaration cut")
+        if publication_scope_decision(declaration) != decision:
+            raise ValueError(f"publication grant {decision.source_id!r} does not match its declared release")
+        if content_is_withheld(declaration):
+            raise ValueError(f"publication grant {decision.source_id!r} names a withheld source")
+        grants.append(decision.model_dump(mode="json"))
+    return withheld, tuple(grants)
 
 
 def seal(path: str, value: dict) -> ArtifactRef:

@@ -71,6 +71,7 @@ from experiments.post_training.task_curation.release_stages import (
 )
 from experiments.post_training.task_curation.release_stages.graph import (
     _STAGE_SPECS,
+    PACKAGE_INPUTS_STAGE_DIR,
     REPO_ROOT,
     ReleasePlan,
     _seal_census_inputs,
@@ -295,8 +296,9 @@ def slice_inputs(node: str, plan: ReleasePlan, selection: SliceSelection) -> dic
         inputs["catalog_target_load_id"] = plan.catalog_target_load_id
     if node == "package_preview":
         inputs["package_output_root"] = plan.package_output_root
-        inputs["oracle_inventory"] = _ref_dict(plan.pins.oracle_inventory)
-        inputs["source_counts"] = _ref_dict(plan.pins.source_counts)
+        inputs["census"] = _graph_receipt_receipt(plan, "census")
+        inputs["prior_source_counts"] = _ref_dict(plan.pins.source_counts)
+        inputs["expected_source_count"] = plan.expected_source_count
     return inputs
 
 
@@ -519,6 +521,7 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
             proof = identity_backend_compose_stage.run_identity_backend_compose(
                 identity_backend_compose_stage.IdentityBackendComposeInputs(
                     release_id=plan.release_id,
+                    snapshot_id=plan.snapshot_id,
                     source_revision=plan.source_revision,
                     output_root=f"{root}/identity-backend",
                     targets=plan.targets,
@@ -572,13 +575,20 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
                     release_id=plan.release_id,
                     source_revision=plan.source_revision,
                     output_root=plan.package_output_root,
-                    oracle_inventory=plan.pins.oracle_inventory,
-                    source_counts=plan.pins.source_counts,
+                    census=ArtifactRef(**_graph_receipt_receipt(plan, "census")),
+                    prior_source_counts=plan.pins.source_counts,
+                    expected_source_count=plan.expected_source_count,
+                    derived_root=stage_output_root(plan, PACKAGE_INPUTS_STAGE_DIR),
                 ),
                 dry_run=True,
                 repo_root=REPO_ROOT,
             )
-            return {"packaged": proof["packaged"] is not None, "mode": "dry-run"}
+            return {
+                "packaged": proof["packaged"] is not None,
+                "census_sources": proof["census_sources"],
+                "counted_sources": proof["counted_sources"],
+                "mode": "dry-run",
+            }
 
         return run
 

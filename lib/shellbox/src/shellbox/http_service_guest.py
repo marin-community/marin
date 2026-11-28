@@ -154,7 +154,7 @@ def receive_responses(server):
 
 def serve(port):
     with Server(port) as server:
-        server.emit({"type": "ready"})
+        server.emit({"type": "ready", "port": server.server_port})
         threading.Thread(target=receive_responses, args=(server,), daemon=True).start()
         server.serve_forever(poll_interval=0.05)
 

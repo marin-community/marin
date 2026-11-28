@@ -6,7 +6,9 @@
 import dataclasses
 import hashlib
 import json
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from rigging.filesystem.storage_path import StoragePath
@@ -91,6 +93,22 @@ def test_dry_run_verifies_the_campaign_records_against_the_census_artifact(tmp_p
     assert proof["task_count"] == 10
 
 
+def test_cli_dry_run_reads_the_pinned_census_manifest(tmp_path, monkeypatch, capsys):
+    inputs = _inputs(tmp_path)
+    path = tmp_path / "backend-inputs.json"
+    document = dataclasses.asdict(inputs)
+    document["census_inputs"] = inputs.census_inputs.model_dump(mode="json")
+    path.write_text(json.dumps(document))
+    monkeypatch.setattr(sys, "argv", ["backend_validation", "--inputs", str(path), "--mode", "dry-run"])
+
+    stage.main()
+
+    proof = json.loads(capsys.readouterr().out)
+    assert proof["task_count"] == 10
+    assert proof["sql_writes"] == 0
+    assert not Path(inputs.output_root).exists()
+
+
 def test_dry_run_refuses_a_grading_record_that_disagrees_with_the_census(tmp_path):
     inputs = _inputs(tmp_path, task_count=10)
     broken = dataclasses.replace(inputs, grading_environments={"Marin:fixture": {"assessed_tasks": 9}})
@@ -148,3 +166,18 @@ def test_missing_census_row_refuses(tmp_path):
     broken = dataclasses.replace(inputs, targets=("Marin:other",))
     with pytest.raises(ValueError, match="targets carry no census row"):
         stage.run_backend_validation(broken, dry_run=True, repo_root=tmp_path)
+
+
+def test_verified_disk_pool_reports_its_outcome(monkeypatch):
+    """The survey's pool: configured on a capable worker, reported — not hidden — otherwise."""
+    pool, status = stage._verified_disk_pool()
+    assert pool is None
+    assert status["configured"] is False
+    assert status["root"] == str(stage.LOCAL_DISK_POOL_ROOT)
+    assert status["reason"]
+
+    capable = SimpleNamespace(root=Path("/pool"))
+    monkeypatch.setattr("shellbox.backends.local.disk.LocalDiskPool", lambda root: capable)
+    pool, status = stage._verified_disk_pool()
+    assert pool is capable
+    assert status == {"configured": True, "root": "/pool"}

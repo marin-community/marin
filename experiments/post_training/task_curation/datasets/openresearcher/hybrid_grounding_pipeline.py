@@ -171,43 +171,70 @@ async def hybrid_grounded_rows(
     output: StoragePath,
 ) -> list[dict]:
     work = Path(config.workdir)
-    process = await asyncio.create_subprocess_exec(
-        config.runtime_python,
-        "-m",
-        "experiments.post_training.task_curation.datasets.openresearcher.hybrid_search_server",
-        "--bm25-index",
-        str(work / "bm25"),
-        "--dense-index",
-        str(work / "dense" / "dense.faiss"),
-        "--docids",
-        str(work / "dense" / "dense-docids.parquet"),
-        "--model-dir",
-        str(work / "model"),
-        "--candidates",
-        str(index.fusion.candidate_depth),
-        "--rrf-k",
-        str(index.fusion.rrf_k),
-        "--top-k",
-        "5",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        limit=16 * 1024 * 1024,
-    )
+
+    async def spawn_server() -> asyncio.subprocess.Process:
+        server_log = open(work / "search-server.log", "ab")  # noqa: SIM115 - lives as long as the subprocess
+        process = await asyncio.create_subprocess_exec(
+            config.runtime_python,
+            "-m",
+            "experiments.post_training.task_curation.datasets.openresearcher.hybrid_search_server",
+            "--bm25-index",
+            str(work / "bm25"),
+            "--dense-index",
+            str(work / "dense" / "dense.faiss"),
+            "--docids",
+            str(work / "dense" / "dense-docids.parquet"),
+            "--model-dir",
+            str(work / "model"),
+            "--candidates",
+            str(index.fusion.candidate_depth),
+            "--rrf-k",
+            str(index.fusion.rrf_k),
+            "--top-k",
+            "5",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=server_log,
+            limit=16 * 1024 * 1024,
+        )
+        server_log.close()
+        return process
+
+    process = await spawn_server()
     lock = asyncio.Lock()
     assert process.stdin is not None and process.stdout is not None
+    retrieval_timeout = 900.0
 
     async def retrieve(queries: tuple[str, str]) -> dict[str, str]:
         async with lock:
+            nonlocal process
             assert process.stdin is not None and process.stdout is not None
-            process.stdin.write((json.dumps(queries) + "\n").encode())
-            await process.stdin.drain()
-            result = await retrieval_response(process.stdout)
+            request = (json.dumps(queries) + "\n").encode()
+            try:
+                process.stdin.write(request)
+                await process.stdin.drain()
+                result = await asyncio.wait_for(retrieval_response(process.stdout), timeout=retrieval_timeout)
+            except TimeoutError:
+                # A stalled server blocks every concurrent question; restart once
+                # and replay the request rather than hanging the artifact.
+                logger.warning("Retrieval server stalled on %s; restarting", canonical_sha256(queries))
+                process.kill()
+                await process.wait()
+                (output / "search-server.log").write_text(
+                    (work / "search-server.log").read_text(errors="replace")[-20000:]
+                )
+                process = await spawn_server()
+                assert process.stdin is not None and process.stdout is not None
+                process.stdin.write(request)
+                await process.stdin.drain()
+                result = await asyncio.wait_for(retrieval_response(process.stdout), timeout=retrieval_timeout)
             (output / "retrieval" / (canonical_sha256(queries) + ".json")).write_text(json.dumps(result))
             return result["documents"]
 
     try:
         return await screen_population(rows, connection, tokenizer, retrieve, output, config.concurrency)
     finally:
+        (output / "search-server.log").write_text((work / "search-server.log").read_text(errors="replace")[-20000:])
         process.stdin.close()
         try:
             await asyncio.wait_for(process.wait(), timeout=30)
@@ -215,7 +242,8 @@ async def hybrid_grounded_rows(
             process.kill()
             await process.wait()
         if process.returncode != 0:
-            raise RuntimeError(f"Grounding retrieval process failed: exit={process.returncode}")
+            tail = (work / "search-server.log").read_text(errors="replace")[-2000:]
+            raise RuntimeError(f"Grounding retrieval process failed: exit={process.returncode}; tail: {tail}")
 
 
 def load_questions(config: HybridGroundingConfig, index: HybridIndex) -> list[dict]:

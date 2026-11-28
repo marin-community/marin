@@ -74,14 +74,7 @@ def checked_inputs(config: StageConfig) -> RegionalInputs:
     files, total_bytes = 0, 0
     receipts = json.loads(config.receipts_json)
     for asset in config.assets:
-        require_license(
-            LicenseReceipt.model_validate(receipts[asset.source_id]),
-            asset.source_id,
-            asset.dataset_id,
-            asset.revision,
-            "train",
-            ban=None,
-        )
+        require_license(LicenseReceipt.model_validate(receipts[asset.source_id]), asset.source_id, "train", ban=None)
         for expected in asset.files:
             path = StoragePath(config.source_roots[asset.dataset_id]) / expected.path
             if file_sha256(path) != expected.sha256:
@@ -152,7 +145,7 @@ def main() -> None:
     receipts_json = pinned_document(args.license_receipts, args.license_receipts_sha256).decode()
     receipts = {key: LicenseReceipt.model_validate(value) for key, value in json.loads(receipts_json).items()}
     for asset in assets:
-        require_license(receipts[asset.source_id], asset.source_id, asset.dataset_id, asset.revision, "train", ban=None)
+        require_license(receipts[asset.source_id], asset.source_id, "train", ban=None)
     runtime = CampaignRuntime()
     with artifact_prefix(args.artifact_root):
         downloads = {

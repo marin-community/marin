@@ -25,6 +25,20 @@ def main() -> None:
     parser.add_argument("--census-root", required=True, help="The regional bucket root for the census artifacts.")
     parser.add_argument("--job-name", required=True, help="The Iris job name.")
     parser.add_argument("--cluster", default="cw-us-east-02a", help="The cluster the acceptance jobs ran on.")
+    parser.add_argument(
+        "--population-record",
+        help="Measure the staged lexical population artifact at this path (ruling 2026-11-25 ~21:05 EST, "
+        "option A); empty keeps the release tasks.parquet path.",
+    )
+    parser.add_argument(
+        "--converter-revision",
+        help="The converter revision to bind (the original census receipts' value); empty = this checkout.",
+    )
+    parser.add_argument(
+        "--content-identity-proof",
+        help="The staged per-task sha256 equality proof URI, referenced in the census basis and copied "
+        "beside the receipts.",
+    )
     parser.add_argument("--cpu", default="8")
     parser.add_argument("--memory", default="32GB")
     parser.add_argument("--disk", default="128GB")
@@ -36,7 +50,8 @@ def main() -> None:
     command = (
         f"mkdir -p /workspace && curl -fsSL {script_url} -o /workspace/run_staged_census.sh && "
         f"bash /workspace/run_staged_census.sh {args.revision} {args.source_id} "
-        f"{args.release_repo} {args.acceptance_job} {census_root}"
+        f"{args.release_repo} {args.acceptance_job} {census_root} "
+        f"'{args.population_record or ''}' '{args.converter_revision or ''}' '{args.content_identity_proof or ''}'"
     )
     argv = [
         "uv",

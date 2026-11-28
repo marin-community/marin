@@ -14,8 +14,11 @@ from typing import get_args, get_type_hints
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from finestore.rl.status_taxonomy import taxonomy_tables
 from rolloutengine.models import MachineRuntimeSpec
+from shellbox.backends.daytona.machine import DaytonaMachineFactory
 from shellbox.backends.docker.machine import DockerMachineFactory
+from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.backends.local.machine import check_local_environment
 from shellbox.machine import (
     BACKEND_DEPLOYMENT,
@@ -54,6 +57,7 @@ from experiments.post_training.task_curation.backend_capabilities import (
     production_backends,
     production_matrix,
     source_map,
+    verify_backend_blocker_reasons,
 )
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
@@ -956,3 +960,187 @@ def test_partial_contract_fails_closed():
     )
     docker = mapped.backends["docker"]
     assert docker.roles["grader"] == {FitSupport.UNSUPPORTED: 3}
+
+
+def _production_checkers() -> dict[str, Checker]:
+    """Every surveyed backend with the real production checks; the CI-absent dev-only backends reject."""
+
+    def rejecting(requirements, spec) -> None:
+        raise UnsupportedMachineSpec("The unit lane installs no optional backends")
+
+    return {
+        "docker": DockerMachineFactory().check_environment,
+        "local": check_local_environment,
+        "docker-gvisor": rejecting,
+        "qemu": rejecting,
+        "shellsim": rejecting,
+        "daytona": DaytonaMachineFactory().check_environment,
+        "iris": IrisMachineFactory(controller_url="http://survey.invalid").check_environment,
+    }
+
+
+def _kind_documents() -> dict[str, dict]:
+    """One converted task per environment kind the converted roles resolve to."""
+    dockerfile = inline_resource("Dockerfile", b"FROM busybox:1.36\nCOPY lock .\n")
+    build = {"files": [dockerfile.model_dump(mode="json")]}
+    environments = {
+        "docker_image": {"command_semantics": "linux_process", "docker_image": PDB_SHAPE},
+        "docker_build": {"command_semantics": "linux_process", "docker_build": build},
+        "host_image": {"command_semantics": "linux_process", "packages_lock": "grade.lock"},
+        "package_spec": {"command_semantics": "linux_process", "package_spec": {"pypi_packages": ["numpy==2.3.5"]}},
+    }
+    return {
+        kind: {"environment_requirements": environment, "grader": {"kind": "none"}}
+        for kind, environment in environments.items()
+    }
+
+
+def test_every_environment_kind_on_every_production_backend_labels_every_blocker():
+    """R41 (R40 item 47): the derivation labels every blocker the evidence page renders.
+
+    Derives fit over every environment kind (Docker image, Docker build, host image,
+    package spec) on every production backend and asserts each blocker carries a
+    reason the served taxonomy labels, so the Backend evidence page can never meet
+    an unmapped reason (R40's crash class, found only at the final browser sweep of
+    140 of 321 sources).
+    """
+    served_reasons = set(taxonomy_tables([requirement.value for requirement in Requirement])["backend-reason"])
+    checkers = _production_checkers()
+    matrix = production_matrix(checkers)
+    for kind, document in _kind_documents().items():
+        mapped = source_map(f"kind-{kind}", [document], matrix, checkers, {}, {"agent": RUNTIME, "grader": RUNTIME})
+        for backend, fit in mapped.backends.items():
+            stored = {**fit.blockers, **fit.not_applicable}
+            assert set(fit.blocker_reasons) == set(stored), (kind, backend, fit.blocker_reasons, stored)
+            assert set(fit.blocker_reasons.values()) <= served_reasons, (kind, backend, fit.blocker_reasons)
+            # The page derives the display fit: the stored keys plus the
+            # not_applicable environment kinds, spelled as the R40 crash key.
+            display = {**fit.blockers}
+            for key, count in fit.not_applicable.items():
+                role, _, environment_kind_value = key.partition(":")
+                display[f"{role}:unsupported_environment_kind:{environment_kind_value}"] = count
+            for key in display:
+                emitted = fit.blocker_reasons.get(key)
+                capability = ":".join(key.split(":")[1:])
+                if emitted and emitted in served_reasons:
+                    continue
+                assert (
+                    capability == "required_backend"
+                    or capability.startswith("unsupported_environment_kind:")
+                    or capability in served_reasons
+                ), (kind, backend, key)
+            # The page's not-measured and incomplete-support blockers stay
+            # unreachable: both roles are fully measured and partial support
+            # always carries its refused demand.
+            for role in ("agent", "grader"):
+                assert sum(fit.roles.get(role, {}).values()) == mapped.task_count, (kind, backend, role)
+            if fit.support == FitSupport.PARTIAL:
+                assert stored, (kind, backend)
+        # the derived survey passes the catalog load's fail-closed verification
+        verify_backend_blocker_reasons(_survey_with_source(mapped, checkers))
+
+
+def test_unclassified_capability_blockers_carry_the_canonical_reason():
+    """An unclassified capability renders as the taxonomy's reason, not a crash."""
+    document = {
+        "environment_requirements": {
+            "command_semantics": "linux_process",
+            "capabilities": ["nemotron-agent:ns_tools_simple_agent"],
+        },
+        "grader": {"kind": "none"},
+    }
+    checkers = _unit_checkers()
+    mapped = source_map(
+        "unclassified", [document], production_matrix(checkers), checkers, {}, {"agent": RUNTIME, "grader": RUNTIME}
+    )
+    fit = mapped.backends["docker"]
+    assert fit.blockers == {"agent:nemotron-agent:ns_tools_simple_agent": 1}
+    assert fit.blocker_reasons == {"agent:nemotron-agent:ns_tools_simple_agent": "unclassified-capability"}
+    verify_backend_blocker_reasons(_survey_with_source(mapped, checkers))
+
+
+def _host_image_survey(checkers: dict[str, Checker]) -> tuple[BackendSurvey, object]:
+    """The aime24-shaped grader-only host-image population, derived and sealed."""
+    documents = [
+        {
+            "task": {
+                "grader": {
+                    "environment": {"command_semantics": "linux_process", "packages_lock": "math.lock"},
+                    "timeout": 600,
+                },
+                "resources": {"verifier": [{"path": "grader-files.tar", "bytes": "AAAA"}]},
+            },
+            "runtime": {},
+        }
+        for _ in range(3)
+    ]
+    mapped = source_map(
+        "aime24", documents, production_matrix(checkers), checkers, {}, {"agent": RUNTIME, "grader": RUNTIME}
+    )
+    return _survey_with_source(mapped, checkers), mapped
+
+
+def test_blocker_reason_verification_refuses_an_unlabelled_blocker():
+    checkers = _unit_checkers()
+    survey, mapped = _host_image_survey(checkers)
+    verify_backend_blocker_reasons(survey)
+    docker_fit = mapped.backends["docker"]
+    assert docker_fit.not_applicable == {"grader:host_image": 3}
+    stripped = _survey_with_source(
+        mapped.model_copy(
+            update={"backends": {**mapped.backends, "docker": docker_fit.model_copy(update={"blocker_reasons": {}})}}
+        ),
+        checkers,
+    )
+    with pytest.raises(ValueError, match="no mapped reason"):
+        verify_backend_blocker_reasons(stripped)
+
+
+def test_blocker_reason_verification_refuses_a_reason_outside_the_taxonomy():
+    checkers = _unit_checkers()
+    _survey, mapped = _host_image_survey(checkers)
+    docker_fit = mapped.backends["docker"]
+    relabelled = _survey_with_source(
+        mapped.model_copy(
+            update={
+                "backends": {
+                    **mapped.backends,
+                    "docker": docker_fit.model_copy(update={"blocker_reasons": {"grader:host_image": "mystery-reason"}}),
+                }
+            }
+        ),
+        checkers,
+    )
+    with pytest.raises(ValueError, match="outside the served taxonomy"):
+        verify_backend_blocker_reasons(relabelled)
+
+
+def test_blocker_reason_verification_refuses_an_unmeasured_role():
+    checkers = _unit_checkers()
+    _survey, mapped = _host_image_survey(checkers)
+    docker_fit = mapped.backends["docker"]
+    unmeasured = _survey_with_source(
+        mapped.model_copy(
+            update={"backends": {**mapped.backends, "docker": docker_fit.model_copy(update={"roles": {}})}}
+        ),
+        checkers,
+    )
+    with pytest.raises(ValueError, match="unmeasured"):
+        verify_backend_blocker_reasons(unmeasured)
+
+
+def test_blocker_reason_verification_refuses_partial_support_without_blockers():
+    checkers = _unit_checkers()
+    _survey, mapped = _host_image_survey(checkers)
+    local_fit = mapped.backends["local"]
+    assert local_fit.blockers == {} and local_fit.not_applicable == {}
+    partial = _survey_with_source(
+        mapped.model_copy(
+            update={
+                "backends": {**mapped.backends, "local": local_fit.model_copy(update={"support": FitSupport.PARTIAL})}
+            }
+        ),
+        checkers,
+    )
+    with pytest.raises(ValueError, match="incomplete-support"):
+        verify_backend_blocker_reasons(partial)

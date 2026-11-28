@@ -15,16 +15,22 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.curation import QualifiedSourceDeclaration, SourceOrigin, source_identifier
+from finestore.rl.curation import ActorCensusInput, QualifiedSourceDeclaration, SourceOrigin, source_identifier
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.curriculum.coverage import CONFIDENCE_LEVELS
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, AlignmentSource, CurriculumCoverage
 
+from experiments.post_training.task_curation.derived_contract_census import DerivedContractReceipt
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
+from experiments.post_training.task_curation.license_resolution import license_evidence
 from experiments.post_training.task_curation.release_stages import curriculum_compose as compose
 from experiments.post_training.task_curation.release_stages import embed as embed_stage
-from experiments.post_training.task_curation.release_stages.graph import _fresh_corpus_expectation
+from experiments.post_training.task_curation.release_stages.graph import (
+    _fresh_corpus_expectation,
+    _seal_compose_manifest,
+)
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 from experiments.post_training.task_curation.tests.release_graph_fixtures import fixture_plan
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
@@ -191,7 +197,7 @@ def _seal_json(tmp_path: Path, name: str, document) -> ArtifactRef:
 
 
 def _composition(
-    tmp_path: Path, *, drift=None, overlap=False, param_change=None, expected_tasks=2, removed=False
+    tmp_path: Path, *, drift=None, overlap=False, param_change=None, expected_tasks=2, removed=False, replacement=False
 ) -> tuple[dict, int]:
     """A sealed composition manifest over a one-source retained release plus one fresh.
 
@@ -202,6 +208,10 @@ def _composition(
     """
     old_decl = _declaration("retained")
     fresh_decl = _declaration("admitted")
+    if replacement:
+        fresh_decl = _declaration("retained", "2").model_copy(
+            update={"task_count": 2, "within_source_dedup": deduplication_evidence("fixture", "2", "1", count=2)}
+        )
     removed_decl = _declaration("removed")
     current_decl = fresh_decl
     if drift == "task_count":
@@ -291,6 +301,36 @@ def test_compose_plan_accepts_an_additions_manifest(tmp_path):
     assert len(plan.sources) == 2 and len(plan.inventory) == 2
 
 
+def test_compose_replaces_a_changed_population_without_carrying_its_old_count(tmp_path):
+    document, expected = _composition(tmp_path, replacement=True, removed=True)
+    plan = compose.compose_plan(document, expected, ())
+    release = compose.compose_release(plan, document, {"uri": "/inputs.json", "sha256": "a" * 64})
+    assert {row.source_id: row.task_count for row in release.sources} == {"Marin:retained": 2, "Marin:removed": 1}
+    assert release.task_count == 3
+    inventory = {row.id: row for row in release.inventory}
+    assert inventory["Marin:retained"].dataset_revision == "2"
+    assert plan.retained_task_count == 1
+    assert plan.replaced_sources == {"Marin:retained"}
+
+
+def test_compose_replaces_an_unaligned_inventory_declaration(tmp_path):
+    document, expected = _composition(tmp_path)
+    old = compose.read_reference(document["old_release"])
+    prior_declaration = _declaration("admitted", "0").model_copy(
+        update={"task_count": 0, "within_source_dedup": deduplication_evidence("fixture", "0", "1", count=0)}
+    )
+    old["inventory"].append(prior_declaration.model_dump(mode="json"))
+    document["old_release"] = _seal_json(tmp_path, "old-release.json", old).model_dump(mode="json")
+
+    plan = compose.compose_plan(document, expected, ())
+    release = compose.compose_release(plan, document, {"uri": "/inputs.json", "sha256": "a" * 64})
+
+    assert len(release.inventory) == 2
+    assert {row.id: row.dataset_revision for row in release.inventory} == {"Marin:retained": "1", "Marin:admitted": "1"}
+    assert {row.source_id: row.task_count for row in release.sources} == {"Marin:retained": 3, "Marin:admitted": 2}
+    assert release.task_count == 5
+
+
 def test_compose_plan_drops_planned_removals_from_the_retained_curriculum(tmp_path):
     """A planned removal never survives into the composed release."""
     document, expected = _composition(tmp_path)
@@ -330,12 +370,161 @@ def test_compose_release_carries_lineage_and_totals(tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("change", "refusal"),
+    [
+        ("review", None),
+        ("stale", "belongs to another source revision"),
+        ("missing", "License evidence is missing"),
+        ("restricted", "blocks ingest and admission"),
+        ("task_count", "changed its census binding or task count"),
+        ("actor_binding", "drifted from"),
+    ],
+)
+def test_compose_license_refresh_preserves_alignment_and_permission_checks(tmp_path, change, refusal):
+    document, expected = _composition(tmp_path)
+    fresh = compose.read_reference(document["fresh_release"])
+    declaration = fresh["inventory"][0]
+    receipt = fixture_license(declaration["id"], declaration["dataset_id"], declaration["dataset_revision"])
+    declaration["license_receipt"] = receipt.model_dump(mode="json")
+    document["fresh_release"] = _seal_json(tmp_path, "fresh-release.json", fresh).model_dump(mode="json")
+    current = compose.read_reference(document["current_target_declarations"])
+    target = current[declaration["id"]]
+    reviewed = receipt.model_copy(update={"resolved_at": "2026-11-26T00:00:00Z"})
+    if change == "stale":
+        reviewed = reviewed.model_copy(update={"revision": "2"})
+    if change == "restricted":
+        reviewed = reviewed.model_copy(
+            update={
+                "evidence": [
+                    license_evidence(
+                        "https://example.test/LICENSE", b"SPDX-License-Identifier: CC-BY-NC-4.0\n", "license_file"
+                    )
+                ]
+            }
+        )
+    target["license_receipt"] = None if change == "missing" else reviewed.model_dump(mode="json")
+    if change == "task_count":
+        target.update(
+            task_count=4,
+            within_source_dedup=deduplication_evidence("fixture", "1", "1", count=4).model_dump(mode="json"),
+        )
+    if change == "actor_binding":
+        target["actor_census_input"] = ActorCensusInput(
+            dataset_id="fixture",
+            dataset_revision="1",
+            converter_version="1",
+            converter_revision="1",
+            measured_tasks=3,
+            task_specs_sha256="a" * 64,
+            evidence_url="https://example.test/census",
+        ).model_dump(mode="json")
+    document["current_target_declarations"] = _seal_json(tmp_path, "targets.json", current).model_dump(mode="json")
+    if refusal is not None:
+        with pytest.raises(ValueError, match=refusal):
+            compose.compose_plan(document, expected, ())
+        return
+    plan = compose.compose_plan(document, expected, ())
+    release = compose.compose_release(plan, document, {"uri": "/inputs.json", "sha256": "a" * 64})
+    adopted = next(row for row in release.inventory if row.id == declaration["id"])
+    assert adopted.license_receipt == reviewed
+    assert release.task_count == 5
+    assert release.paths == [*compose.read_reference(document["old_release"])["paths"], *fresh["paths"]]
+
+
+@pytest.mark.parametrize("evidence", ["current", "missing", "stale", "foreign", "wrong_digest", "contradictory"])
+def test_compose_adopts_only_receipt_verified_contract_fields(tmp_path, evidence):
+    document, expected = _composition(tmp_path)
+    fresh = compose.read_reference(document["fresh_release"])
+    measured = fresh["inventory"][0]
+    binding = ActorCensusInput(
+        dataset_id="fixture",
+        dataset_revision="1",
+        converter_version="1",
+        converter_revision="1",
+        measured_tasks=2,
+        task_specs_sha256="a" * 64,
+        evidence_url="https://example.test/actor-census",
+    )
+    measured.update(
+        task_count=2,
+        actor_census_input=binding.model_dump(mode="json"),
+        within_source_dedup=deduplication_evidence("fixture", "1", "1", count=2).model_dump(mode="json"),
+    )
+    document["fresh_release"] = _seal_json(tmp_path, "fresh-release.json", fresh).model_dump(mode="json")
+    target = {
+        **measured,
+        "grader_type": "script",
+        "grader_type_counts": {"script": 2},
+        "derived_agentic": False,
+        "derived_turns": "single-turn",
+        "derived_reply_only": True,
+        "derived_workspace_graded": True,
+    }
+    receipt = DerivedContractReceipt(
+        source_id=measured["id"],
+        input=binding,
+        population_path="s3://fixture/tasks",
+        scanned_task_specs_sha256="a" * 64,
+        summary={
+            "task_count": 2,
+            "grader_type_counts": {"script": 2},
+            "agentic_count": 0,
+            "single_turn_count": 2,
+            "reply_only_count": 2,
+            "workspace_graded_count": 2,
+            "judge_rubric_counts": {},
+            "judge_reference_count": 0,
+            "judge_no_reference_count": 0,
+        },
+        evidence_url="s3://fixture/contract.json",
+    ).model_dump(mode="json")
+    if evidence == "stale":
+        receipt["input"]["dataset_revision"] = "old"
+    if evidence == "foreign":
+        receipt["source_id"] = "Marin:another-source"
+    if evidence == "wrong_digest":
+        receipt["scanned_task_specs_sha256"] = "b" * 64
+    if evidence == "contradictory":
+        target["derived_workspace_graded"] = False
+    document["current_target_declarations"] = _seal_json(tmp_path, "targets.json", {target["id"]: target}).model_dump(
+        mode="json"
+    )
+    if evidence != "missing":
+        document["target_contracts"] = _seal_json(tmp_path, "contracts.json", {target["id"]: receipt}).model_dump(
+            mode="json"
+        )
+    if evidence != "current":
+        with pytest.raises(ValueError, match="contract"):
+            compose.compose_plan(document, expected, ())
+        return
+    sealed = _seal_compose_manifest(
+        declarations={target["id"]: target},
+        contract_receipts={target["id"]: DerivedContractReceipt.model_validate(receipt)},
+        targets=(target["id"],),
+        prior_release=document["old_release"],
+        prior_coverage=document["old_coverage"],
+        fresh_release=document["fresh_release"],
+        fresh_coverage=document["fresh_coverage"],
+        rebound_source="",
+        rebound_tasks=0,
+        release_root=str(tmp_path / "graph"),
+    )
+    document = compose.read_reference(sealed)
+    plan = compose.compose_plan(document, expected, ())
+    release = compose.compose_release(plan, document, {"uri": "/inputs.json", "sha256": "a" * 64})
+    assert release.inventory[-1].model_dump(mode="json") == target
+    assert release.inventory[0] == plan.old_release.inventory[0]
+    assert release.sources[-1] == plan.fresh_release.sources[0]
+    assert release.paths == [*plan.old_release.paths, *plan.fresh_release.paths]
+
+
+@pytest.mark.parametrize(
     ("drift", "overlap", "param_change", "expected_tasks", "message"),
     [
         ("task_count", False, None, 2, "changed its census binding or task count"),
         ("display_name", False, None, 2, "changed non-consumer fields"),
         ("insufficient", False, None, 2, "insufficient-context"),
-        (None, True, None, 2, "overlap the retained curriculum"),
+        (None, True, None, 2, "current target declarations do not cover exactly the fresh and rebound inventory"),
         (None, False, "subject_distance", 2, "disagree on subject_distance"),
         (None, False, None, 3, "expected 3"),
     ],
@@ -476,6 +665,9 @@ def test_fresh_corpus_expectation_counts_the_shipped_targets():
                 "inventory": {"retained_tasks": 0},
             },
             {"source_id": "Marin:not-a-target", "inventory": {"retained_tasks": 99}},
+            # A non-target zero-admission source carries no census inventory at all;
+            # curriculum compose reads the same expectation (R40 refused on this row).
+            {"source_id": "Marin:empty-non-target", "oracle_empty": {"original_count": 3}, "inventory": None},
         ]
     }
     expectation = _fresh_corpus_expectation(plan, census_proof)
@@ -523,3 +715,51 @@ def test_end_to_end_targets_scoped_and_removals_dropped(tmp_path):
     overlap_document, overlap_expected = _composition(tmp_path, overlap=True)
     with pytest.raises(ValueError, match="also a planned removal"):
         compose.compose_plan(overlap_document, overlap_expected, (_declaration("retained").id,))
+
+
+def test_archived_assignment_counts_cover_planned_removals(tmp_path):
+    """The filter counts the archive before projection, so a removed source still counts."""
+    document, _ = _composition(tmp_path, removed=True)
+    archived = compose.read_retained_release(document["old_release"]).sources
+    retained_id, removed_id = _declaration("retained").id, _declaration("removed").id
+    files = [
+        {"counts": [{"source_id": retained_id, "status": "ready", "count": 3}]},
+        {"counts": [{"source_id": removed_id, "status": "ready", "count": 1}]},
+    ]
+    compose.check_archived_assignment_counts(files, archived)
+    with pytest.raises(ValueError, match="retained assignment counts disagree"):
+        compose.check_archived_assignment_counts(files[:1], archived)
+    files[0]["counts"][0]["status"] = "insufficient_context"
+    with pytest.raises(ValueError, match="readiness differs"):
+        compose.check_archived_assignment_counts(files, archived)
+
+
+def test_confidence_export_binds_the_release_and_coverage_ids(tmp_path):
+    """The curriculum load's confidence reader binds the document by release and coverage id."""
+    document, _ = _composition(tmp_path)
+    fresh = compose.AlignmentRelease.model_validate_json(Path(document["fresh_release"]["uri"]).read_text())
+    coverage = compose.CurriculumCoverage.model_validate_json(Path(document["fresh_coverage"]["uri"]).read_text())
+    (source,) = fresh.sources
+    vectors = tmp_path / "confidence.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {"source_id": source.source_id, "metric": metric, "subject_id": "", "node_id": "", "instances": [2] * 5}
+                for metric in ("denominator", "assigned")
+            ]
+        ),
+        vectors,
+    )
+    coverage = coverage.model_copy(update={"confidence_paths": [str(vectors)]})
+    release_reference = {"uri": "memory://compose/release.json", "sha256": "a" * 64, "release_id": fresh.release_id}
+    coverage_reference = {
+        "uri": "memory://compose/coverage.json",
+        "sha256": "b" * 64,
+        "coverage_id": coverage.coverage_id,
+    }
+    ref, validated = compose.confidence_export(
+        str(tmp_path / "composed"), fresh, coverage, release_reference, coverage_reference
+    )
+    exported = json.loads(Path(ref.uri).read_text())
+    assert (exported["release"], exported["coverage"]) == (release_reference, coverage_reference)
+    assert validated > 0

@@ -107,6 +107,11 @@ STAGES: dict[str, StageSpec] = {
             "corpus_assembly.py", "Corpus assembly", "Regional prepare_sources corpus build with inventory verification."
         ),
         StageSpec(
+            "public_input_reuse.py",
+            "Public input reuse",
+            "Verify complete task correspondence and seal curriculum reuse evidence from a fresh census.",
+        ),
+        StageSpec(
             "embed.py", "Embedding", "Curriculum embedding; GPU only with a valid runtime parity receipt, else CPU."
         ),
         StageSpec(

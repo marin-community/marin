@@ -15,6 +15,7 @@ from finestore.rl.curation import ContentEvidenceReference, NoOracleStaticBlocke
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import task_spec_sha256
+from taskcompendium.models import DockerBuildExecution
 from taskcompendium.pipeline.oracle_filter import MechanicalOracleTaskReceipt, OracleExclusionReason, OracleFilterReceipt
 from taskcompendium.pipeline.static_retention import NoOracleSourceContext, StaticRetainedTaskReceipt
 from taskcompendium.runtime.resources import has_oracle_solution
@@ -153,6 +154,7 @@ def collect_static_retention(
     output: Path,
     *,
     recipe_identity: str | None = None,
+    docker_build: DockerBuildExecution = DockerBuildExecution.REJECT,
 ) -> OracleFilterReceipt:
     """Retain original task/runtime rows without calibration, liveness, or model execution."""
     digest = cohort_sha256(cohort)
@@ -174,7 +176,9 @@ def collect_static_retention(
                     raise ValueError("Static retention requires a complete, unique, known no-oracle population")
                 identifiers.add(task.id)
                 tasks.append(task)
-                blockers = task_blockers(task) - {"requires_calibration_solution_and_empty_liveness"}
+                blockers = task_blockers(task, docker_build=docker_build) - {
+                    "requires_calibration_solution_and_empty_liveness"
+                }
                 if blockers - STATIC_REASONS.keys():
                     raise ValueError(f"Unclassified static blockers for {task.id}: {sorted(blockers)}")
                 if blockers:
@@ -241,6 +245,7 @@ def collect_static_retention(
         "unique_static_excluded_count": len(blocked),
         "exclusion_counts": exclusion_counts,
         "executability": "unmeasured",
+        "docker_build_execution": docker_build.value,
         "source_commands": 0,
         "provider_creations": 0,
         "model_requests": 0,
@@ -271,6 +276,12 @@ def main() -> None:
     parser.add_argument("--source-context", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--recipe-identity")
+    parser.add_argument(
+        "--docker-build-execution",
+        type=DockerBuildExecution,
+        choices=list(DockerBuildExecution),
+        default=DockerBuildExecution.REJECT,
+    )
     args = parser.parse_args()
     collect_static_retention(
         args.cohort,
@@ -278,6 +289,7 @@ def main() -> None:
         ContentEvidenceReference.model_validate_json(args.cohort_evidence.read_text()),
         args.output_dir,
         recipe_identity=args.recipe_identity,
+        docker_build=args.docker_build_execution,
     )
 
 

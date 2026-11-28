@@ -217,6 +217,10 @@ def convert_hardmath(row: RawRow, _context: ConversionContext) -> TaskSpec | Imp
 
 
 HARDMATH_RHS_TOKENS = ("\\approx", "\\sim", "\\equiv", "\\propto")
+HARDMATH_SYMBOLIC_SOURCE = "poly1_train"
+HARDMATH_SYMBOLIC_TYPE = "nondimensionalization_symbolic"
+HARDMATH_SYMBOLIC_COEFFICIENTS = ("a_1", "a_2", "a_3")
+HARDMATH_POSITIVE_PREMISE = "Assume $a_1$, $a_2$, and $a_3$ are positive."
 
 
 def hardmath_rhs_reference(reference: str) -> str:
@@ -271,6 +275,18 @@ def convert_hardmath_rhs(row: RawRow, _context: ConversionContext) -> TaskSpec |
         return source_defect("missing_prompt", "A nonempty question is required")
     text = reference if isinstance(reference, str) else str(reference)
     expected = extract_boxed(text) or text
+    if row.data.get("question_type") == HARDMATH_SYMBOLIC_TYPE and row.data.get("source") == HARDMATH_SYMBOLIC_SOURCE:
+        if not all(name in problem for name in ("a_{1}", "a_{2}", "a_{3}")):
+            return source_defect("invalid_question", "Symbolic nondimensionalization requires the three coefficients")
+        if not expected.startswith(r"\epsilon="):
+            return source_defect("invalid_reference", "Symbolic nondimensionalization requires an epsilon equation")
+        return math_answer_task(
+            row,
+            prompt=f"{problem}\n\n{HARDMATH_POSITIVE_PREMISE}",
+            answer=expected.removeprefix(r"\epsilon="),
+            evidence={"ground_truths": reference, "remediation": "rhs_only_positive_symbols"},
+            positive_symbols=HARDMATH_SYMBOLIC_COEFFICIENTS,
+        )
     members = split_top_level_members(expected)
     if len(members) > 1:
         rhs_members = [hardmath_rhs_reference(member) for member in members]
@@ -683,7 +699,10 @@ def math_source(source: MathSource) -> RlDataSource[CurationRecipe]:
             name=source.name,
             source=source.source,
             convert=source.convert,
-            version="1",
+            # Version 2: the symbolic nondimensionalization rows state the positive
+            # domain and bind the coefficients (the regrouped-answer fix, main
+            # #11930); version 1's stored rows predate it.
+            version="2" if source.name == "hardmath_rhs" else "1",
             intended_use=source.intended_use,
             rubric=source.rubric,
             controls=source.controls,

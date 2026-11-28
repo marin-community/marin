@@ -326,8 +326,20 @@ class _FakeCatalog:
     def current(self) -> _FakeSnapshot:
         return self._snapshot
 
-    def sources(self, snapshot_id: str) -> list:
+    def sources(self, snapshot_id: str, *, pending_stage_of=None) -> list:
+        assert pending_stage_of is not None  # pre-stage Pending rows need the evidence-computed stage
         return [SimpleNamespace(id=source_id) for source_id in self._source_ids]
+
+
+def test_catalog_stage_reads_snapshot_ids_canonically(tmp_path, monkeypatch):
+    """The snapshot keeps original source ids; the stage compares canonical ones."""
+    inputs = _sealed_staged_inputs(tmp_path)
+    monkeypatch.setattr(catalog_stage, "canonical_source_id", lambda sid: {"Marin:alias-a": SOURCE_A}.get(sid, sid))
+    monkeypatch.setattr(
+        catalog_stage, "CurationCatalog", lambda root: _FakeCatalog("assembly-test-v1", ["Marin:alias-a", SOURCE_B])
+    )
+    proof = catalog_stage.run_catalog_stage(inputs, dry_run=True, feeds=_feeds(tmp_path))
+    assert proof["source_count"] == 2
 
 
 def test_catalog_stage_dry_run_verifies_and_writes_nothing(tmp_path, monkeypatch):
@@ -388,4 +400,39 @@ def test_catalog_stage_refusals(tmp_path, monkeypatch):
             _sealed_staged_inputs(tmp_path, migrations=("ALTER TABLE atlas_items ADD COLUMN not_in_schema_v40 TEXT",)),
             dry_run=True,
             feeds=_feeds(tmp_path),
+        )
+
+
+def test_deliberate_exclusion_carries_the_served_declaration(tmp_path, monkeypatch):
+    """A deliberate exclusion keeps its served declaration: the release does not adopt
+    the frozen layer's re-pin, and the drift gate tolerates the policy-listed source."""
+    old_a = _declaration("fixture-a")
+    drifted_a = old_a.model_copy(update={"dataset_id": "fixture-drifted"})
+    declarations = {SOURCE_A: drifted_a, SOURCE_B: _declaration("fixture-b")}
+    monkeypatch.setattr(declarations_stage, "require_catalog_declaration", lambda declaration: None)
+    prior = _seal_json(tmp_path, "prior-declarations.json", {SOURCE_A: old_a.model_dump(mode="json")})
+    revision = _init_repo(tmp_path / "repo")
+    inputs = dataclasses.replace(_declaration_inputs(tmp_path, prior, revision), deliberate_exclusions=(SOURCE_A,))
+    proof = declarations_stage.run_declarations(
+        inputs, dry_run=False, repo_root=tmp_path / "repo", sources_fn=_registry(declarations), feeds=_feeds(tmp_path)
+    )
+    document = json.loads((tmp_path / "release" / "declarations" / "declarations.json").read_text())
+    assert set(document) == {SOURCE_A, SOURCE_B}
+    # the release carries the served row: the drifted re-pin is not adopted
+    assert document[SOURCE_A]["dataset_id"] == "fixture"
+    assert document[SOURCE_B]["dataset_id"] == "fixture"
+    assert proof["source_count"] == 2
+
+
+def test_deliberate_exclusion_unknown_to_prior_refuses(tmp_path, monkeypatch):
+    declarations = {SOURCE_A: _declaration("fixture-a"), SOURCE_B: _declaration("fixture-b")}
+    monkeypatch.setattr(declarations_stage, "require_catalog_declaration", lambda declaration: None)
+    prior = _seal_json(tmp_path, "prior-declarations.json", {SOURCE_A: declarations[SOURCE_A].model_dump(mode="json")})
+    revision = _init_repo(tmp_path / "repo")
+    inputs = dataclasses.replace(
+        _declaration_inputs(tmp_path, prior, revision), deliberate_exclusions=("Marin:fixture-unknown",)
+    )
+    with pytest.raises(ValueError, match="deliberate exclusions the prior release never declared"):
+        declarations_stage.run_declarations(
+            inputs, dry_run=True, repo_root=tmp_path / "repo", sources_fn=_registry(declarations), feeds=_feeds(tmp_path)
         )

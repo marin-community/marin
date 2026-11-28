@@ -62,7 +62,7 @@ def preserve_image(config: ImageConfig) -> PreservedImage:
     for folder in EXPECTED_TASKS:
         source_id = DATASET.replace("/", ":", 1) + "/" + folder
         receipt = LicenseReceipt.model_validate(licenses[source_id])
-        require_publication_license(receipt, source_id, DATASET, TASK_REVISION, "train")
+        require_publication_license(receipt, source_id, DATASET, "train")
     item = image_files(pinned_json(config.index_uri, config.index_sha256))[config.bundle_id]
     if (item["path"], item["sha256"], item["bytes"]) != (config.filename, config.sif_sha256, config.sif_bytes):
         raise ValueError("Endless step differs from its frozen bundle binding")

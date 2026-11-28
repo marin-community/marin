@@ -5,9 +5,9 @@
 
 The acceptance runs the recorded negative controls against the converted graders
 on the Daytona RL org (the backend the Harbor trials used). The job environment
-carries the org's API key and the judge key directly: the Daytona SDK and the
+carries the org's API key and the judge keys directly: the Daytona SDK and the
 harnesses read plain environment variables, so the launcher resolves each value
-at submission (the RL key from the operator environment, the judge key through
+at submission (the RL key from the operator environment, the judge keys through
 GSM first) and the CLI redacts secret-shaped values from its submit record.
 """
 
@@ -19,6 +19,7 @@ from rigging.secrets import resolve_secret_spec
 
 RAW_SCRIPT = "https://raw.githubusercontent.com/marin-community/marin/{revision}/experiments/post_training/task_curation/run_acceptance.sh"
 JUDGE_KEY_SPEC = "gcp-secret://projects/hai-gcp-models/secrets/OPENAI_API_KEY/versions/latest"
+TOGETHER_KEY_SPEC = "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest"
 
 
 def _required_env(name: str, what: str) -> str:
@@ -42,8 +43,11 @@ def main() -> None:
     args = parser.parse_args()
 
     daytona_key = _required_env("DAYTONA_RL_API_KEY", "the Daytona RL org key")
-    # The judge key comes from GSM; a missing key is a tooling bug, not a reason to skip.
+    # The judge keys come from GSM; a missing key is a tooling bug, not a reason to skip.
+    # The Together key serves the Together-judged harness families (magicoder, the
+    # nemotron-gym judged cohorts, cfbench); their graders read it from the host env.
     judge_key = resolve_secret_spec(JUDGE_KEY_SPEC).value
+    together_key = resolve_secret_spec(TOGETHER_KEY_SPEC).value
 
     script_url = RAW_SCRIPT.format(revision=args.revision)
     command = (
@@ -73,6 +77,9 @@ def main() -> None:
         "--env-vars",
         "OPENAI_API_KEY",
         judge_key,
+        "--env-vars",
+        "TOGETHER_API_KEY",
+        together_key,
         "--no-wait",
         "--job-name",
         args.job_name,
@@ -90,8 +97,11 @@ def main() -> None:
         "--no-preemptible",
         "--timeout",
         args.timeout,
+        # The Daytona API throttles sandbox creation under fleet-wide churn; a
+        # throttled attempt must retry (the throttle clears in seconds) instead
+        # of failing the whole job on one transient error.
         "--max-retries",
-        "0",
+        "3",
         "--",
         "bash",
         "-c",

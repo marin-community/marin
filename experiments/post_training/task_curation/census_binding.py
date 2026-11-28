@@ -154,6 +154,12 @@ def bind_actor_census(source: RlDataSource, receipt: ActorCensusReceipt | None) 
 
 def receipt_from_census(census: Mapping, summary: IntegrityContractSummary | None) -> ActorCensusReceipt:
     """Bind an actor measurement; contract summaries require their own refreshed evidence."""
+    evidence_url = str(StoragePath(census["path"]) / ".artifact.json")
+    if evidence_url.startswith("/workspace/"):
+        raise ValueError(
+            f"census evidence for {census['source_id']} records an ephemeral in-region workspace path;"
+            " bind the durable actor-artifact path the census stage sealed instead"
+        )
     return ActorCensusReceipt(
         source_id=census["source_id"],
         input=ActorCensusInput(
@@ -163,7 +169,7 @@ def receipt_from_census(census: Mapping, summary: IntegrityContractSummary | Non
             converter_revision=census["converter_revision"],
             measured_tasks=census["task_count"],
             task_specs_sha256=census["task_specs_sha256"],
-            evidence_url=str(StoragePath(census["path"]) / ".artifact.json"),
+            evidence_url=evidence_url,
         ),
         measurement=DaytonaMeasurement.model_validate(
             {name: census[name] for name in DaytonaMeasurement.model_fields if name in census}

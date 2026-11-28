@@ -1,0 +1,6 @@
+{
+  "path": "experiments/post_training/task_curation/datasets/nemotron_ultra_renames_admitted_lean.json",
+  "repo": "open-athena/marin-rl-data-atlas-registry",
+  "revision": "19117ccb27b9146e60dd51313f9fdee4db377265",
+  "sha256": "100d569226dc3ad1472499f33cf8de7bc3deac14d7e9bc272b9b6c75e8cd1802"
+}

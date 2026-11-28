@@ -10,8 +10,10 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
+from typing import Any
 from uuid import uuid4
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
@@ -102,6 +104,8 @@ class TaskRebinding:
     new_task_hashes: tuple[str, ...]
     content_hashes: tuple[str, ...]
     upstream_row_sha256: tuple[str | None, ...]
+    removed_task_ids: tuple[str, ...]
+    removed_task_hashes: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -232,11 +236,12 @@ def public_task_correspondence(
             matches[identifier] = upstream_rows[identifier]
             continue
         candidate = by_content.pop(old[identifier].content_hash, None)
-        if candidate is None:
-            raise ValueError("Changed task IDs lack a unique public-input bijection; existing scores cannot be reused")
-        matches[identifier] = candidate
+        if candidate is not None:
+            matches[identifier] = candidate
     if by_content:
         raise ValueError("Changed task IDs leave unmatched public inputs; existing scores cannot be reused")
+    if len(matches) != len(new) or len(set(matches.values())) != len(new):
+        raise ValueError("Current public inputs lack an injective archived match; existing scores cannot be reused")
     return matches
 
 
@@ -284,11 +289,11 @@ def ambiguous_upstream_correspondence(
         return {}, {}
     before = pinned_upstream_rows(old_manifest, old, {key for key in old_unmatched if old[key].content_hash in repeated})
     after = pinned_upstream_rows(new_manifest, new, {key for key in new_unmatched if new[key].content_hash in repeated})
-    if before.keys() != after.keys():
-        raise ValueError("Repeated public inputs lack a complete pinned upstream-row bijection")
+    if not after.keys() <= before.keys():
+        raise ValueError("Repeated public inputs lack complete pinned upstream-row matches")
     return (
-        {before[key][0]: after[key][0] for key in before},
-        {before[key][0]: before[key][1] for key in before},
+        {before[key][0]: after[key][0] for key in after},
+        {before[key][0]: before[key][1] for key in after},
     )
 
 
@@ -307,24 +312,33 @@ def task_rebinding(archive: AlignmentSource, replacement: SourceReplacement) -> 
         canonical_sha256(old_manifest) != archive.source_key
         or public["source_key"] != source_key
         or public["stored_stream_sha256"] != manifest["input"]["task_spec_scan_sha256"]
-        or len(new) != archive.task_count
+        or not new
+        or len(new) > archive.task_count
         or len(old) != archive.task_count
         or len(new) != manifest["converted_rows"]
     ):
         raise ValueError("Rebound public inputs do not match their frozen populations or scans")
     upstream_rows, upstream_digests = ambiguous_upstream_correspondence(old_manifest, manifest, old, new)
     matches = public_task_correspondence(old, new, upstream_rows)
-    for identifier, before in old.items():
+    for identifier in matches:
+        before = old[identifier]
         after = new[matches[identifier]]
         fields = ("source_id", "content_hash", "intended_use", "population", "public_input")
         if any(getattr(before, key) != getattr(after, key) for key in fields):
             raise ValueError(f"Public task content changed; existing scores cannot be reused: {identifier}")
         if before.source_key != archive.source_key or after.source_key != source_key:
             raise ValueError(f"Public task source key differs from its manifest: {identifier}")
-    identifiers = tuple(sorted(old))
+    identifiers = tuple(sorted(matches))
+    removed = tuple(sorted(old.keys() - matches.keys()))
+    if removed and archive.ready_count not in (0, archive.task_count):
+        raise ValueError("A retained subset with mixed readiness requires fresh alignment")
     declaration = canonical_declaration(QualifiedSourceDeclaration.model_validate(manifest["input"]["declaration"]))
-    if declaration.id != archive.source_id or manifest["intended_use"] != archive.intended_use:
-        raise ValueError("Replacement manifest identifies a different source or intended use")
+    if (
+        declaration.id != archive.source_id
+        or declaration.task_count != len(new)
+        or manifest["intended_use"] != archive.intended_use
+    ):
+        raise ValueError("Replacement manifest identifies a different source, population count or intended use")
     source = archive.model_copy(
         update={
             "source_key": source_key,
@@ -332,6 +346,11 @@ def task_rebinding(archive: AlignmentSource, replacement: SourceReplacement) -> 
             "input_rows": manifest["input_rows"],
             "converted_rows": manifest["converted_rows"],
             "rejections": manifest["rejections"],
+            "task_count": len(new),
+            "ready_count": (len(new) if archive.ready_count else 0) if removed else archive.ready_count,
+            "insufficient_context_count": (
+                (0 if archive.ready_count else len(new)) if removed else archive.insufficient_context_count
+            ),
         }
     )
     return TaskRebinding(
@@ -343,6 +362,8 @@ def task_rebinding(archive: AlignmentSource, replacement: SourceReplacement) -> 
         tuple(new[matches[key]].task_hash for key in identifiers),
         tuple(new[matches[key]].content_hash for key in identifiers),
         tuple(upstream_digests.get(key) for key in identifiers),
+        removed,
+        tuple(old[key].task_hash for key in removed),
     )
 
 
@@ -352,6 +373,13 @@ def project_assignment_table(
     """Retain selected rows and change only independently verified TaskSpec provenance."""
     table = table.filter(pc.is_in(table["source_id"], value_set=pa.array(sorted(selected_ids))))
     for replacement in rebindings:
+        if replacement.removed_task_ids:
+            removed_indices = pc.index_in(table["task_id"], value_set=pa.array(replacement.removed_task_ids))
+            removed = pc.and_(pc.equal(table["source_id"], replacement.source.source_id), pc.is_valid(removed_indices))
+            expected = pc.filter(pc.take(pa.array(replacement.removed_task_hashes), removed_indices), removed)
+            if not pc.filter(table["task_hash"], removed).equals(expected):
+                raise ValueError("Removed assignment differs from its archived public input")
+            table = table.filter(pc.invert(removed))
         mask = pc.equal(table["source_id"], replacement.source.source_id)
         indices = pc.index_in(table["task_id"], value_set=pa.array(replacement.task_ids))
         if pc.any(pc.is_null(pc.filter(indices, mask))).as_py():
@@ -434,7 +462,7 @@ def filter_assignment_file(
     }
 
 
-def statistics_by_key(paths: list[str]) -> dict[tuple, int]:
+def statistics_by_key(paths: list[str]) -> dict[tuple, Any]:
     values = {}
     for path in paths:
         with StoragePath(path).open("rb") as stream:
@@ -446,23 +474,43 @@ def statistics_by_key(paths: list[str]) -> dict[tuple, int]:
     return values
 
 
+def verify_retained_statistics(archived: dict, projected: dict, reduced_counts: dict[str, int]) -> None:
+    """Check exact unaffected values and subset bounds for reduced populations."""
+    if {key: value for key, value in archived.items() if key[0] not in reduced_counts} != {
+        key: value for key, value in projected.items() if key[0] not in reduced_counts
+    }:
+        raise ValueError("Unaffected curriculum statistics changed during projection")
+    for source_id, count in reduced_counts.items():
+        denominator = np.asarray(projected.get((source_id, "denominator", "", ""), []))
+        if not denominator.size or np.any(denominator != count):
+            raise ValueError(f"Reduced population denominator differs from its retained tasks: {source_id}")
+    for key, value in projected.items():
+        if key[0] not in reduced_counts:
+            continue
+        current = np.asarray(value)
+        before = np.asarray(archived.get(key, np.zeros_like(current)))
+        if current.shape != before.shape or np.any(current < 0) or np.any(current > before):
+            raise ValueError(f"Reduced population statistic exceeds its archived value: {key}")
+
+
 def write_task_identity_mappings(
     root: StoragePath, rebindings: tuple[TaskRebinding, ...]
 ) -> dict[str, ManifestReference]:
     """Publish immutable old/new task identities with the shared public-content digest."""
     task_mappings = {}
     for row in rebindings:
+        removed = (None,) * len(row.removed_task_ids)
         path = root / "task-identity-mappings" / f"{canonical_sha256(row.source.source_id)}.parquet"
         with path.open("wb", auto_mkdir=True) as stream:
             pq.write_table(
                 pa.table(
                     {
-                        "old_task_id": row.task_ids,
-                        "new_task_id": row.new_task_ids,
-                        "old_task_sha256": row.old_task_hashes,
-                        "new_task_sha256": row.new_task_hashes,
-                        "public_content_sha256": row.content_hashes,
-                        "upstream_row_sha256": pa.array(row.upstream_row_sha256, type=pa.string()),
+                        "old_task_id": row.task_ids + row.removed_task_ids,
+                        "new_task_id": row.new_task_ids + removed,
+                        "old_task_sha256": row.old_task_hashes + row.removed_task_hashes,
+                        "new_task_sha256": row.new_task_hashes + removed,
+                        "public_content_sha256": row.content_hashes + removed,
+                        "upstream_row_sha256": pa.array(row.upstream_row_sha256 + removed, type=pa.string()),
                     }
                 ),
                 stream,
@@ -590,8 +638,8 @@ def project_curriculum(
     expected_statistics = {
         key: value for key, value in statistics_by_key(old_coverage.paths).items() if key[0] in selected_ids
     }
-    if statistics_by_key(data.paths) != expected_statistics:
-        raise ValueError("Selected-source curriculum statistics changed during projection")
+    reduced_counts = {row.source.source_id: len(row.task_ids) for row in rebindings if row.removed_task_ids}
+    verify_retained_statistics(expected_statistics, statistics_by_key(data.paths), reduced_counts)
     coverage_identity = {
         "alignment_release_id": release.release_id,
         **{
@@ -646,6 +694,7 @@ def project_curriculum(
                 "source_id": row.source.source_id,
                 "source_key": row.source.source_key,
                 "task_count": len(row.task_ids),
+                "removed_task_count": len(row.removed_task_ids),
                 "all_public_inputs_unchanged": True,
                 "changed_task_id_count": sum(
                     old != new for old, new in zip(row.task_ids, row.new_task_ids, strict=True)
@@ -660,7 +709,8 @@ def project_curriculum(
         "embedding_cache_reads": 0,
         "embedding_cache_misses": 0,
         "samples_rebuilt_from_selected_population": True,
-        "all_selected_statistics_unchanged": True,
+        "all_selected_statistics_unchanged": not reduced_counts,
+        "retained_subset_statistics_verified": True,
     }
     (root / "projection-receipt.json").write_text(json.dumps(receipt, indent=2))
     return SemanticArtifact(path=output_root, paths=data.paths)

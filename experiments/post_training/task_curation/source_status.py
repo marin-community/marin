@@ -13,12 +13,13 @@ population, conversion pipeline or schema change.
 import argparse
 import json
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass, field
+from functools import cache
 from pathlib import Path
 from typing import Any
 
-from finestore.rl.curation import SourceUse, source_display_name
+from finestore.rl.curation import CurationCatalog, SnapshotSource, SourceUse, source_display_name
 from finestore.rl.status_taxonomy import (
     REASON_EXPLANATIONS,
     ExclusionReason,
@@ -30,17 +31,13 @@ from finestore.rl.status_taxonomy import (
 from experiments.post_training.task_curation.consumer_scope import CONSUMER_RUNTIME_COMMIT
 from experiments.post_training.task_curation.datasets.daytona_measurements import actor_census_receipts
 from experiments.post_training.task_curation.datasets.grading_measurements import grading_census_receipts
-from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
-from experiments.post_training.task_curation.datasets.oracle_admitted_releases import oracle_admitted_release_receipts
-from experiments.post_training.task_curation.datasets.oracle_releases import oracle_release_receipts
-from experiments.post_training.task_curation.datasets.retained_releases import retained_release_receipts
-from experiments.post_training.task_curation.datasets.sample_qc_results import sample_qc_receipts
 from experiments.post_training.task_curation.environment_artifacts import verify_declared_environment_artifacts
+from experiments.post_training.task_curation.exclusion_registry import manual_exclusion_claims
 from experiments.post_training.task_curation.metadata_exclusions import metadata_exclusions
-from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source import RlDataSource
+from experiments.post_training.task_curation.source_owners import source_owner
 from experiments.post_training.task_curation.sources import PENDING_MEASUREMENT_SOURCES, all_sources
-from experiments.post_training.task_curation.within_source_binding import read_dedup_receipts
+from infra.marina.apps.rl_data_catalog.server.admission import population_admission_blocker
 from infra.marina.apps.rl_data_catalog.server.methods import variant_projection
 
 
@@ -58,6 +55,8 @@ class StatusRow:
     stage: str | None = None
     dataset_id: str | None = None
     dataset_revision: str | None = None
+    owner: str | None = None
+    """The owning lane rendered beside the unresolved reasons; None only off the registry."""
     use: SourceUse | None = None
     """The declared intended use; metadata-only rows carry none."""
     method_tags: tuple[SourceMethod, ...] = ()
@@ -82,72 +81,82 @@ def intake_columns(source: RlDataSource) -> dict[str, Any]:
 
 
 def receipt_registry_keys() -> dict[str, set[str]]:
-    """Return each standard measurement registry's covered source IDs."""
-    keys: dict[str, set[str]] = {
-        "actor census": set(actor_census_receipts()),
-        "lexical": set(lexical_measurements()),
-        "grading": set(grading_census_receipts()),
-        "sample": set(sample_qc_receipts()),
-        "oracle": set(oracle_release_receipts()),
-        "oracle admitted": set(oracle_admitted_release_receipts()),
-        "retained": set(retained_release_receipts()),
+    """Source IDs with nonempty task data and complete executable-grader evidence."""
+    actors = actor_census_receipts()
+    graders = grading_census_receipts()
+    return {
+        "actor census": {source_id for source_id, receipt in actors.items() if receipt.input.measured_tasks > 0},
+        "grading": {
+            source_id
+            for source_id, receipt in graders.items()
+            if population_admission_blocker(receipt.input, receipt.input.measured_tasks, receipt.evidence) is None
+        },
     }
-    dedup = read_dedup_receipts(
-        Path(__file__).with_name("datasets") / "within_source_dedup.json", load_json=read_registry_json
-    )
-    keys["dedup"] = set(dedup)
-    return keys
 
 
-def pending_stage(source_id: str, receipts: dict[str, set[str]]) -> PendingStage:
-    """Derive a pending source's stage from the measurement receipts it lacks.
-
-    The stage describes catalog-evidence state: a queued source has no
-    measurement receipts at all, a measured source has some, and an
-    admission-pending source has every receipt the standard admission path
-    produces.
-    """
+def pending_stage(source_id: str, receipts: dict[str, set[str]]) -> PendingStage | None:
+    """Describe missing task data or graders; complete preparation has no hold stage."""
     covered = [source_id in keys for keys in receipts.values()]
-    if all(covered):
-        return PendingStage.ADMISSION_PENDING
+    if covered and all(covered):
+        return None
     if any(covered):
         return PendingStage.MEASUREMENTS_PENDING
     return PendingStage.INTAKE_QUEUED
 
 
+def served_snapshot_sources(catalog: CurationCatalog, snapshot_id: str) -> Iterator[SnapshotSource]:
+    """A served snapshot's sources; a pre-stage Pending row takes its stage from receipt evidence.
+
+    Served snapshots store a Pending row without a stage (the stage is computed, never
+    entered), so every reader binds the same evidence: the measurement registries.
+    """
+    receipts = cache(receipt_registry_keys)
+    return catalog.sources(snapshot_id, pending_stage_of=lambda source_id: pending_stage(source_id, receipts()))
+
+
 def pending_rows() -> list[dict[str, Any]]:
-    """Rows for every queued source that is not configured for the catalog yet."""
+    """Rows for every queued source that is not configured for the catalog yet.
+
+    A queued row whose manual exclusion claims are already recorded renders
+    **Excluded** with those claims and its owner (the 2026-11-26 15:20 EST user
+    rule: nothing stays Pending indefinitely — a row with no live driver to
+    admission leaves Pending, keeps its typed reason and its clearing path, and
+    returns to intake only when the claims clear). The rest queue Pending with
+    their computed stage.
+    """
     receipts = receipt_registry_keys()
-    return [
-        StatusRow(
+    rows = []
+    for source in PENDING_MEASUREMENT_SOURCES:
+        decided = manual_exclusion_claims(source.info.id)
+        owner = source_owner(source.info.id)
+        common = dict(
             id=source.info.id,
             display_name=source_display_name(source.info.id),
-            status=SourceStatus.PENDING.value,
             origin=source.info.origin.value,
             upstream_dataset=source.info.upstream_dataset,
             upstream_url=source.info.upstream_url,
             notes=source.info.notes,
-            stage=pending_stage(source.info.id, receipts).value,
+            owner=owner.owner if owner else None,
             **intake_columns(source),
-        ).payload()
-        for source in PENDING_MEASUREMENT_SOURCES
-    ]
-
-
-CONSUMER_PENDING_CORE_RECEIPTS = ("actor census", "lexical", "grading", "sample", "dedup")
-
-
-def consumer_pending_stage(source_id: str, receipts: dict[str, set[str]]) -> PendingStage:
-    """The stage a consumer-decision-Pending source queues under.
-
-    Every core admission-measurement receipt present means the source awaits
-    configuration and admission only (``ADMISSION_PENDING``); a missing core
-    receipt keeps the source at its consumer check. The oracle and retained
-    registries hold release evidence rather than admission gates: no-oracle
-    sources never register there, admitted or not.
-    """
-    covered = all(source_id in receipts[name] for name in CONSUMER_PENDING_CORE_RECEIPTS)
-    return PendingStage.ADMISSION_PENDING if covered else PendingStage.CONSUMER_CHECK_PENDING
+        )
+        if decided:
+            rows.append(
+                StatusRow(
+                    status=SourceStatus.EXCLUDED.value,
+                    reasons=[claim.model_dump(mode="json") for claim in decided],
+                    **common,
+                ).payload()
+            )
+        else:
+            stage = pending_stage(source.info.id, receipts)
+            rows.append(
+                StatusRow(
+                    status=SourceStatus.PENDING.value if stage else SourceStatus.AVAILABLE.value,
+                    stage=stage.value if stage else None,
+                    **common,
+                ).payload()
+            )
+    return rows
 
 
 def remediation_rows() -> list[dict[str, Any]]:
@@ -156,8 +165,7 @@ def remediation_rows() -> list[dict[str, Any]]:
     These rows keep every claim visible on the status page while their status
     is Pending: the remediation agent produces the clean or remediated
     private-release receipt, and the source returns to Available. Each row
-    carries the source's computed stage, so a source whose binding constraint
-    is the snapshot budget shows its repair stage here too.
+    carries the source's computed lexical-remediation stage.
     """
     return [
         StatusRow(
@@ -169,6 +177,7 @@ def remediation_rows() -> list[dict[str, Any]]:
             upstream_url=source.info.upstream_url,
             notes=source.info.notes,
             stage=source.stage.value if source.stage else None,
+            owner=(source_owner(source.info.id).owner if source_owner(source.info.id) else None),
             **intake_columns(source),
             reasons=[claim.model_dump(mode="json") for claim in source.declaration.exclusion_claims],
         ).payload()
@@ -189,6 +198,7 @@ def metadata_rows() -> list[dict[str, Any]]:
             upstream_url=row.upstream_url,
             dataset_id=row.dataset_id,
             dataset_revision=row.dataset_revision,
+            owner=(source_owner(row.id).owner if source_owner(row.id) else None),
             notes=row.notes,
             reasons=[claim.model_dump(mode="json") for claim in row.claims],
         ).payload()
@@ -224,6 +234,15 @@ def require_typed_rows(rows: list[dict[str, Any]]) -> None:
             raise ValueError(f"Pending source carries no PendingStage: {source_id}")
         if row["display_name"] != source_display_name(source_id):
             raise ValueError(f"Row display name differs from the identity-derived display name: {source_id}")
+        if row["status"] in (SourceStatus.PENDING.value, SourceStatus.EXCLUDED.value) and not row.get("owner"):
+            raise ValueError(f"Unresolved {row['status']} source carries no owner: {source_id}")
+        if row["status"] == SourceStatus.PENDING.value:
+            entry = source_owner(source_id)
+            if entry is not None and not entry.active:
+                raise ValueError(
+                    f"Pending source's owner shows no activity since the previous release "
+                    f"(user rule 2026-11-26 15:20 EST): {source_id} ({entry.owner})"
+                )
         if row["stage"]:
             member(PendingStage, row["stage"], source_id, "stage")
         for claim in row["reasons"]:
@@ -272,21 +291,91 @@ def status_extras() -> dict[str, Any]:
     pending = pending_rows()
     metadata = metadata_rows()
     require_typed_rows([*pending, *remediation, *metadata])
+    served_unresolved = {
+        source.info.id: source_owner(source.info.id).owner if source_owner(source.info.id) else None
+        for source in all_sources().values()
+        if source.status in (SourceStatus.PENDING, SourceStatus.EXCLUDED)
+    }
+    owners = {
+        **{row["id"]: row["owner"] for row in [*pending, *remediation, *metadata]},
+        **served_unresolved,
+    }
+    missing = sorted(source_id for source_id, owner in owners.items() if not owner)
+    if missing:
+        raise ValueError(f"Unresolved sources carry no owner in the registry: {missing[:8]}")
+    # The release-time driver check (user rule 2026-11-26 15:20 EST): a Pending row
+    # whose owner shows no activity since the previous release fails the build.
+    # require_typed_rows covers the built rows; this covers the served catalog's
+    # Pending rows, which arrive through the owners overlay alone.
+    inactive = sorted(
+        source.info.id
+        for source in all_sources().values()
+        if source.status is SourceStatus.PENDING
+        and (entry := source_owner(source.info.id)) is not None
+        and not entry.active
+    )
+    if inactive:
+        raise ValueError(
+            f"Pending sources' owners show no activity since the previous release "
+            f"(user rule 2026-11-26 15:20 EST): {inactive[:8]}"
+        )
     return {
+        "owners": owners,
         "consumer_inputs": consumer_inputs(all_sources().values()),
         "pending": pending,
         "stages": {
             **{row["id"]: row["stage"] for row in remediation if row["stage"]},
-            **{
-                source.info.id: consumer_pending_stage(source.info.id, receipt_registry_keys()).value
-                for source in all_sources().values()
-                if source.approved_consumer_status is SourceStatus.PENDING and not source.exclusion_claims
-            },
         },
         "remediation_queue": remediation,
         "metadata_exclusions": metadata,
+        "grader_drift": grader_drift_rows(),
         "reason_explanations": reason_explanations(),
     }
+
+
+def grader_drift_rows(reference=None, *, repo_root=None) -> list[dict[str, Any]]:
+    """The advisory re-seal queue: train publications whose stored graders predate main's fixes.
+
+    Measured live against origin/main (ruling 2026-11-26 6:45 AM EST): the
+    publication's sealed recipe files at their converter revision against main's
+    current blobs, with the main fix commits and PRs that touch the changed
+    files. ``reference`` overrides the measured main side and ``repo_root`` the
+    checkout for tests. A source with no sealed census binding has no stored
+    grader to compare and never queues.
+    """
+    from experiments.post_training.task_curation import grader_drift  # noqa: PLC0415 — beside its only use
+
+    sources = all_sources()
+    if not sources:
+        return []
+    repo_root = repo_root or Path(__file__).resolve().parents[3]
+    paths = sorted({recipe_file for source in sources.values() for recipe_file in source.files})
+    if reference is None:
+        reference = grader_drift.measure_main_recipe_reference(
+            repo_root, source_revision=grader_drift.head_revision(repo_root), paths=paths
+        )
+    rows = []
+    for source_id, source in sorted(sources.items()):
+        declaration = source.declaration.model_dump(mode="json")
+        if not grader_drift.is_drift_population(declaration):
+            continue
+        sealed = grader_drift.measure_sealed_recipe(source_id, declaration, repo_root)
+        finding = grader_drift.compare_recipe(source_id, sealed, reference)
+        if finding is None:
+            continue
+        rows.append(
+            {
+                "id": source_id,
+                "display_name": source_display_name(source_id),
+                "finding": finding.finding,
+                "converter_revision": finding.converter_revision,
+                "converter_version": finding.converter_version,
+                "changed_files": [file.model_dump(mode="json") for file in finding.changed_files],
+                "fix_commits": [commit.model_dump(mode="json") for commit in finding.fix_commits],
+                "main_revision": reference.revision,
+            }
+        )
+    return rows
 
 
 def main() -> None:

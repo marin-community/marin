@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any
 
 from marin.execution.artifact import read_record, result_type_name
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.atlas_deployment import (
@@ -64,12 +64,16 @@ from experiments.post_training.task_curation.release_stages.admission_check impo
 from experiments.post_training.task_curation.release_stages.graph import PLAN_KIND, ReleasePlan, write_plan
 from experiments.post_training.task_curation.release_stages.history_staging import Query
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+from experiments.post_training.task_curation.release_stages.qc_browse import changed_review_sources
 from experiments.post_training.task_curation.release_stages.release_config import (
     ReleaseConfig,
     config_fingerprint,
 )
 from experiments.post_training.task_curation.source_duplicate_ci import fingerprint_input
+from experiments.post_training.task_curation.source_policy import DELIBERATE_EXCLUSIONS
 from experiments.post_training.task_curation.sources import all_sources
+from infra.marina.apps.rl_data_catalog.server.content_access import content_is_withheld
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 DERIVATION_RECEIPT_KIND = "atlas-release-derivation"
 DERIVATION_RECEIPT_NAME = "derivation-receipt.json"
@@ -120,6 +124,128 @@ class PriorCatalogState(BaseModel):
     available_source_ids: tuple[str, ...]
     snapshot_uri: str
     snapshot_sha256: str
+    declarations: dict[str, dict] = Field(default_factory=dict)
+
+
+def seal_prior_state(declarations: dict[str, dict], query: Query, load_id: str, *, release_root: str) -> dict[str, dict]:
+    """Seal the served declarations and surveys as the re-cut's retained prior state."""
+    backend, identity = reconstruct_prior_surveys(query, load_id)
+    refs = {}
+    for name, document in (
+        ("declarations", {"kind": "atlas-prior-state-declarations", "declarations": declarations}),
+        ("backend", backend),
+        ("identity", identity),
+    ):
+        raw = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
+        path = StoragePath(f"{release_root}/prior-state/{name}.json")
+        if path.exists():
+            if path.read_bytes() != raw:
+                raise ValueError(f"sealed prior-state artifact {path} exists with different content")
+        else:
+            path.write_bytes(raw, auto_mkdir=True)
+        if path.read_bytes() != raw:
+            raise ValueError(f"sealed prior-state artifact readback mismatch at {path}")
+        refs[name] = {"uri": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
+    return refs
+
+
+def reconstruct_prior_surveys(query: Query, load_id: str) -> tuple[dict, dict]:
+    """Reconstruct the served load's backend and identity survey documents from SQL.
+
+    The load stages its surveys split across tables: the survey metadata rows, the
+    per-source backend capabilities, the capability matrix cells, the per-source
+    fingerprints and duplicate groups, and the pair reviews. This reassembles the
+    two documents the identity-backend compose consumes as its retained prior, in
+    the exact shapes :class:`BackendSurvey` and :class:`SourceIdentitySurvey`
+    validate.
+    """
+    from taskcompendium.backend_requirements import BackendSurvey  # noqa: PLC0415 — beside its only use
+    from taskcompendium.source_fingerprints import (  # noqa: PLC0415 — beside its only use
+        DuplicateGroup,
+        SourceIdentitySurvey,
+    )
+
+    def one(sql: str, parameters: dict) -> dict:
+        rows = query(sql, parameters)["rows"]
+        if len(rows) != 1:
+            raise ValueError(f"the prior load {load_id} carries {len(rows)} survey rows, expected exactly 1")
+        return rows[0]
+
+    def paged(sql_template: str, order_column: str, page_size: int) -> list[dict]:
+        """Keyset-paged reads: the applet query caps each response at 5 MB, and the
+        fingerprint rows carry the bounded review sample (~60 KB each). Every bound
+        parameter must appear in the SQL, so the first page omits :after."""
+        rows: list[dict] = []
+        after: str | None = None
+        while True:
+            parameters: dict = {"load": load_id, "limit": page_size}
+            predicate = "TRUE" if after is None else order_column + " > :after"
+            sql = sql_template.format(predicate=predicate) + " ORDER BY " + order_column + " LIMIT :limit"
+            if after is not None:
+                parameters["after"] = after
+            page = query(sql, parameters)["rows"]
+            if not page:
+                return rows
+            rows.extend(page)
+            if len(page) < page_size:
+                return rows
+            after = page[-1][order_column]
+
+    backend = dict(
+        one("SELECT survey, survey_id FROM atlas_backend_surveys WHERE load_id=:load", {"load": load_id})["survey"]
+    )
+    backend["sources"] = [
+        row["capabilities"]
+        for row in paged(
+            "SELECT capabilities, source_id FROM atlas_backend_sources WHERE load_id=:load AND ({predicate})",
+            "source_id",
+            500,
+        )
+    ]
+    backend["matrix"] = [
+        row["cell"]
+        for row in query(
+            "SELECT cell FROM atlas_backend_cells WHERE load_id=:load ORDER BY backend, requirement", {"load": load_id}
+        )["rows"]
+    ]
+    BackendSurvey.model_validate(backend)
+
+    identity = dict(
+        one("SELECT metadata, survey_id FROM atlas_identity_surveys WHERE load_id=:load", {"load": load_id})["metadata"]
+    )
+    fingerprints = {
+        row["id"]: row["source_fingerprint"]
+        for row in paged(
+            "SELECT id, source_fingerprint FROM atlas_sources"
+            " WHERE load_id=:load AND source_fingerprint IS NOT NULL AND ({predicate})",
+            "id",
+            64,
+        )
+    }
+    reviews = [
+        row["review"]
+        for row in paged(
+            "SELECT review, left_source FROM atlas_duplicate_reviews WHERE load_id=:load AND ({predicate})",
+            "left_source",
+            500,
+        )
+    ]
+    groups_by_id: dict[str, dict] = {}
+    for row in paged(
+        "SELECT id, duplicate_group FROM atlas_sources"
+        " WHERE load_id=:load AND duplicate_group IS NOT NULL AND ({predicate})",
+        "id",
+        500,
+    ):
+        group = row["duplicate_group"]
+        groups_by_id.setdefault(group["group_id"], group)
+    identity["fingerprints"] = fingerprints
+    identity["reviews"] = reviews
+    identity["groups"] = [
+        DuplicateGroup.model_validate(group).model_dump(mode="json") for group in groups_by_id.values()
+    ]
+    SourceIdentitySurvey.model_validate(identity)
+    return backend, identity
 
 
 def _verify_freeze(repo_root: Path, revision: str) -> str:
@@ -185,7 +311,6 @@ def _verify_prior_pins(config: ReleaseConfig) -> dict[str, ArtifactRef]:
         "backend",
         "composed_release",
         "composed_coverage",
-        "oracle_inventory",
         "source_counts",
     ):
         ref = getattr(prior, name)
@@ -256,7 +381,7 @@ def _resolve_population(source_id: str, source: Any, region_prefix: str) -> tupl
         pinned = getattr(population, name)
         if not str(pinned).startswith(region_prefix):
             raise ValueError(
-                f"population {name} for {source_id} is outside the release region prefix" f" {region_prefix}: {pinned}"
+                f"population {name} for {source_id} is outside the release region prefix {region_prefix}: {pinned}"
             )
     if population.task_count != binding.measured_tasks:
         raise ValueError(
@@ -285,6 +410,17 @@ def _target_integrity_contract(source_id: str, source: Any) -> dict | None:
     summary = actor.integrity_contracts
     if not isinstance(summary, dict) or not summary.get("groups"):
         return None
+    if summary["distinct_groups"] > len(summary["groups"]):
+        complete = json.loads(StoragePath(summary["evidence_url"]).read_bytes())
+        groups = complete["groups"]
+        if (
+            complete["input_artifact"] != actor.input_artifact
+            or len(groups) != summary["distinct_groups"]
+            or groups[: len(summary["groups"])] != summary["groups"]
+            or sum(group["count"] for group in groups) != actor.task_count
+        ):
+            raise ValueError(f"complete integrity artifact differs from the actor census: {source_id}")
+        return {**summary, "groups": groups}
     return summary
 
 
@@ -326,6 +462,14 @@ def read_prior_catalog_state(
         source.id
         for source in catalog.sources(snapshot.snapshot_id, pending_stage_of=lambda sid: pending_stage(sid, receipts))
     )
+    declarations = {
+        canonical_source_id(source.id): (
+            source.declaration.model_dump(mode="json")
+            if hasattr(source.declaration, "model_dump")
+            else source.declaration
+        )
+        for source in catalog.sources(snapshot.snapshot_id, pending_stage_of=lambda sid: pending_stage(sid, receipts))
+    }
     load_row = query("SELECT load_id FROM atlas_current WHERE name='latest'", {})["rows"]
     if len(load_row) != 1 or not load_row[0].get("load_id"):
         raise ValueError(f"the catalog pointer carries no selected load: {load_row!r}")
@@ -366,6 +510,7 @@ def read_prior_catalog_state(
         available_source_ids=canonical_ids(available),
         snapshot_uri=snapshot_uri,
         snapshot_sha256=snapshot_sha256,
+        declarations=declarations,
     )
 
 
@@ -397,6 +542,19 @@ class DerivedRelease:
         return self.plan_document["release_id"]
 
 
+def _measure_grader_drift_reference(repo_root: Path, source_revision: str, declared: dict[str, dict]) -> Any:
+    """Measure main's recipe side and every declared source's sealed recipe side.
+
+    The drift stage is advisory (grader fixes must not block training), but its
+    measurement is not optional: the derivation fetches origin/main fail-fast, so
+    deriving a release whose checkout cannot see main refuses instead of sealing
+    a drift reference against a stale main.
+    """
+    from experiments.post_training.task_curation import grader_drift  # noqa: PLC0415 — beside its only use
+
+    return grader_drift.measure_grader_drift_reference(repo_root, source_revision=source_revision, declared=declared)
+
+
 def derive_release_plan(
     config: ReleaseConfig,
     *,
@@ -404,6 +562,7 @@ def derive_release_plan(
     query: Query,
     sources_fn: Any = all_sources,
     prior_catalog_reader: Any = read_prior_catalog_state,
+    drift_reference_fn: Any | None = None,
     service: AtlasService | None = None,
 ) -> DerivedRelease:
     """Derive the release plan from the config and authoritative state.
@@ -411,7 +570,9 @@ def derive_release_plan(
     All measurements happen at the freeze revision's declarations layer; the
     caller supplies the applet query client (read-only SQL). The returned plan
     document validates as :class:`ReleasePlan` and the receipt records every
-    measured input.
+    measured input. ``drift_reference_fn`` overrides the main-recipe drift
+    measurement (tests inject a fixture reference; the real derivation measures
+    origin/main fail-fast).
     """
     config.validate_shape()
     deployment = region_deployment(config.cluster)
@@ -443,7 +604,39 @@ def derive_release_plan(
             " staging first: " + str(present_removals[:5])
         )
 
-    targets = tuple(sorted(set(declared_ids) - prior_ids - removed_ids))
+    prior_pins = _verify_prior_pins(config)
+    prior_declarations = _verify_prior_pin(prior_pins["declarations"], "prior_release.declarations")
+
+    # The authoritative prior is the served catalog state. A fresh cut finds the
+    # catalog still serving the config's pinned prior snapshot; a re-cut of this
+    # release finds it serving a snapshot this release published, and retains
+    # against what is SERVED: the compose and the declaration drift gate read the
+    # served declarations and surveys, not the older prior-release pin.
+    recut = prior.snapshot_id != config.prior_snapshot_id
+    if recut:
+        state_refs = seal_prior_state(
+            prior.declarations,
+            lambda sql, parameters: query(sql, parameters),
+            prior.load_id,
+            release_root=f"{deployment.region_prefix}preview-release/{config.release_id}-{artifact_version}",
+        )
+        prior_pins["declarations"] = ArtifactRef(**state_refs["declarations"])
+        prior_pins["identity"] = ArtifactRef(**state_refs["identity"])
+        prior_pins["backend"] = ArtifactRef(**state_refs["backend"])
+
+    prior_curriculum = _verify_prior_pin(prior_pins["composed_release"], "prior_release.composed_release")
+    prior_inventory = {canonical_source_id(row["id"]): row for row in prior_curriculum["inventory"]}
+    replacements = {
+        source_id
+        for previous in (prior_declarations, prior_inventory)
+        for source_id, row in previous.items()
+        if source_id in declared and fingerprint_input(row) != fingerprint_input(declared[source_id])
+    }
+    deliberate_ids = set(DELIBERATE_EXCLUSIONS)
+    unknown_deliberate = sorted(deliberate_ids - prior_ids)
+    if unknown_deliberate:
+        raise ValueError(f"deliberate exclusions the prior release never declared: {unknown_deliberate[:5]}")
+    targets = tuple(sorted(((set(declared_ids) - prior_ids | replacements) - removed_ids) - deliberate_ids))
 
     populations: dict[str, str] = {}
     task_counts: dict[str, int] = {}
@@ -470,23 +663,25 @@ def derive_release_plan(
     unknown_exclusions = sorted(exclusion_ids - set(prior.review_panel_source_ids))
     if unknown_exclusions:
         raise ValueError(f"QC exclusions the prior load holds no panel for: {unknown_exclusions[:5]}")
-    expected_panels = len([sid for sid in prior.review_panel_source_ids if sid not in exclusion_ids])
-
-    prior_pins = _verify_prior_pins(config)
-    prior_declarations = _verify_prior_pin(prior_pins["declarations"], "prior_release.declarations")
-    drifted = sorted(
-        source_id
-        for source_id, row in prior_declarations.items()
-        if source_id in declared
-        and source_id not in targets
-        and fingerprint_input(row) != fingerprint_input(declared[source_id])
+    copy_exclusions = exclusion_ids | (
+        changed_review_sources(prior_declarations, declared) & set(prior.review_panel_source_ids)
     )
-    if drifted:
-        raise ValueError(f"non-target declarations drifted from the prior release: {drifted[:5]}")
+    expected_panels = len(set(prior.review_panel_source_ids) - copy_exclusions)
+    selected_qc_sources = {
+        sid
+        for sid, row in declared.items()
+        if sid not in exclusion_ids
+        and (row.get("independent_qc") or {}).get("evidence_url")
+        and not content_is_withheld(row)
+    }
+    expected_selected_panels = len((set(prior.review_panel_source_ids) - copy_exclusions) | selected_qc_sources)
 
     registry_index = _read_registry_index(targets)
     measured = _measured_dependency(repo_root, config.freeze_source_revision)
     expected_contract_count, expected_contract_tasks = _measure_contract_counts(targets)
+    grader_drift_reference = (drift_reference_fn or _measure_grader_drift_reference)(
+        repo_root, config.freeze_source_revision, declared
+    )
 
     plan_identity = {
         "release_id": config.release_id,
@@ -519,9 +714,7 @@ def derive_release_plan(
         expected_browse_source_count=expected_panels,
         expected_contract_count=expected_contract_count,
         expected_contract_tasks=expected_contract_tasks,
-        # The loads re-select the prior load's current-pin review panels; the QC
-        # exclusions gate the browse copy, not the index replay.
-        expected_selected_panels=len(prior.review_panel_source_ids),
+        expected_selected_panels=expected_selected_panels,
         expected_prior_sources=len(prior.source_ids),
         expected_panels=expected_panels,
         expected_population_tasks=expected_population_tasks,
@@ -535,7 +728,6 @@ def derive_release_plan(
             "prior_release": prior_pins["composed_release"].model_dump(mode="json"),
             "prior_coverage": prior_pins["composed_coverage"].model_dump(mode="json"),
             "registry_index": registry_index.model_dump(mode="json"),
-            "oracle_inventory": prior_pins["oracle_inventory"].model_dump(mode="json"),
             "source_counts": prior_pins["source_counts"].model_dump(mode="json"),
             "parity_receipt": config.parity_receipt.model_dump(mode="json") if config.parity_receipt else None,
             "exposure_input_check": (
@@ -562,9 +754,12 @@ def derive_release_plan(
         migrations=tuple(config.migrations),
         rebound_source=config.rebound_source,
         rebound_tasks=config.rebound_tasks,
+        recut=recut,
         removed_sources=tuple(sorted(removed_ids)),
+        deliberate_exclusions=tuple(sorted(deliberate_ids)),
         main_source_sync=config.main_source_sync,
         strict_audit_local=config.strict_audit_local,
+        grader_drift_reference=grader_drift_reference,
         validation_grading_environments={},
         validation_integrity_contracts={
             source_id: record
@@ -590,13 +785,15 @@ def derive_release_plan(
             "prior_snapshot_id": prior.snapshot_id,
             "prior_review_panel_source_count": len(prior.review_panel_source_ids),
             "expected_panels": expected_panels,
-            "expected_selected_panels": len(prior.review_panel_source_ids),
+            "expected_selected_panels": expected_selected_panels,
+            "qc_copy_exclusions": sorted(copy_exclusions),
             "expected_population_tasks": expected_population_tasks,
             "expected_contract_count": expected_contract_count,
             "expected_contract_tasks": expected_contract_tasks,
             "population_task_counts": dict(sorted(task_counts.items())),
             "population_evidence_kinds": dict(sorted(evidence_kinds.items())),
             "targets": list(targets),
+            "replacement_sources": sorted(replacements),
             "oracle_empty_sources": sorted(k for k, v in evidence_kinds.items() if v == "oracle-empty"),
             "integrity_contract_targets": sorted(plan.validation_integrity_contracts),
         },
@@ -612,9 +809,9 @@ def derive_release_plan(
 def seal_derivation(release_root: str, derived: DerivedRelease) -> dict:
     """Seal the derived plan and its receipt write-once under the release prefix.
 
-    Re-deriving at the same freeze must produce byte-identical documents: a
-    content mismatch refuses (a moved prior state or a changed registry is a
-    decision, not a resume). Returns the sealed plan reference.
+    Resuming compares every receipt field except the generation timestamp and
+    preserves the original receipt unchanged. The complete plan must also match.
+    Returns the sealed plan reference.
     """
     plan = ReleasePlan.model_validate(derived.plan_document)
     plan.validate_shape()
@@ -622,7 +819,10 @@ def seal_derivation(release_root: str, derived: DerivedRelease) -> dict:
     receipt_path = StoragePath(f"{release_root}/{DERIVATION_RECEIPT_NAME}")
     raw = (json.dumps(derived.receipt, indent=2, sort_keys=True) + "\n").encode()
     if receipt_path.exists():
-        if receipt_path.read_bytes() != raw:
+        raw = receipt_path.read_bytes()
+        sealed = json.loads(raw)
+        resumed = {**derived.receipt, "generated_at": sealed["generated_at"]}
+        if sealed != resumed:
             raise ValueError(
                 f"the derivation receipt already exists with different content at {receipt_path};"
                 " the release inputs moved after the freeze — re-derive deliberately"

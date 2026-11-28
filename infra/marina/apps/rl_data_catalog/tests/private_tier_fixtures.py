@@ -16,6 +16,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.curation import QualifiedSourceDeclaration as SourceDeclaration
+from finestore.rl.curation import source_display_name
 from finestore.rl.status_taxonomy import DataRestriction
 from sqlalchemy import text
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
@@ -60,8 +61,7 @@ def restricted_declaration(
     return {
         "license_receipt": fixture_license(source_id, FIXTURE_DATASET, FIXTURE_REVISION).model_dump(mode="json"),
         "id": source_id,
-        "name": source_id,
-        "display_name": source_id.upper(),
+        "display_name": source_display_name(source_id),
         "data_restriction": restriction.value,
         "origin": "Marin",
         "build_path": "test",

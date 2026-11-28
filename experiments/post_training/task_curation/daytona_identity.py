@@ -218,6 +218,13 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
                 continue
             shape = execution_resource_shape(task, shape, role)
             requirements = EnvironmentRequirements.model_validate(declared)
+            if requirements.required_backend is not None and requirements.required_backend.value != "daytona":
+                # The slot routes to another backend (the per-task required_backend
+                # mechanism, 0f612f8c81): it provisions no Daytona snapshot and its
+                # Daytona compatibility is not census evidence. The census validates
+                # LOCAL-routed slots through check_local_environment instead.
+                continue
+            backend = shape.get("backend")
             with tempfile.TemporaryDirectory() as tmp:
                 context = Path(tmp)
                 if requirements.docker_build is not None:
@@ -249,11 +256,15 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
                     gpus=shape.get("gpus", 0),
                 )
                 try:
-                    factory.check_environment(requirements, machine)
+                    # A slot routed to LOCAL (the per-task required_backend mechanism,
+                    # 0f612f8c81) never borrows a Daytona snapshot identity: the census
+                    # validates its LOCAL fit through check_local_environment instead.
+                    if backend != "local":
+                        factory.check_environment(requirements, machine)
                     require_resolved_environment(requirements)
                 except UnsupportedMachineSpec as error:
                     execution_errors.append(f"{role}: {error}")
-                if not isinstance(source, RegistryImage | DockerfileSource):
+                if backend == "local" or not isinstance(source, RegistryImage | DockerfileSource):
                     continue
                 try:
                     name = snapshot_request_for_spec(machine).name

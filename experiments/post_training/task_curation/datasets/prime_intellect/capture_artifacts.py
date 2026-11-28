@@ -180,9 +180,7 @@ async def capture_all(inputs: CaptureInput, config: CaptureConfig) -> list[dict]
 
 
 def capture_artifacts(config: CaptureConfig) -> CapturedArtifacts:
-    require_license(
-        LicenseReceipt.model_validate_json(config.license_receipt_json), SOURCE_ID, DATASET, REVISION, "train", ban=None
-    )
+    require_license(LicenseReceipt.model_validate_json(config.license_receipt_json), SOURCE_ID, "train", ban=None)
     job = get_job_info()
     output = StoragePath(config.output_path)
     bucket = data_buckets().get(output.bucket)
@@ -287,7 +285,7 @@ def main() -> None:
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     receipt = read_license_receipts(args.license_receipts).get(SOURCE_ID)
-    require_license(receipt, SOURCE_ID, DATASET, REVISION, "train", ban=None)
+    require_license(receipt, SOURCE_ID, "train", ban=None)
     assert receipt is not None
     if args.concurrency <= 0:
         raise ValueError("Capture concurrency must be positive")

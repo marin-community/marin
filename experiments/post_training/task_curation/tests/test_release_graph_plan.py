@@ -103,15 +103,17 @@ def test_plan_document_bytes_are_stable_across_new_optins():
 def test_registered_difficulty_seal_binds_only_the_named_release(tmp_path, monkeypatch):
     reference = {"uri": "s3://bucket/sealed/manifest.json", "sha256": "a" * 64}
     registry = tmp_path / "difficulty_snapshots.json"
-    registry.write_text(json.dumps({"r41": reference}))
+    registry.write_text(json.dumps({"atlas-2026.11.27": reference}))
     monkeypatch.setattr(graph, "DIFFICULTY_SNAPSHOTS", registry)
     plan_file = tmp_path / "plan.json"
-    plan_file.write_text(fixture_plan(release_id="r41").model_dump_json())
+    plan_file.write_text(fixture_plan(release_id="atlas-2026.11.27").model_dump_json())
     assert graph.load_plan(plan_file).difficulty_snapshot.model_dump() == reference
     plan_file.write_text(fixture_plan(release_id="r40").model_dump_json())
     assert graph.load_plan(plan_file).difficulty_snapshot is None
     plan_file.write_text(
-        fixture_plan(release_id="r41", difficulty_snapshot={"uri": "other", "sha256": "b" * 64}).model_dump_json()
+        fixture_plan(
+            release_id="atlas-2026.11.27", difficulty_snapshot={"uri": "other", "sha256": "b" * 64}
+        ).model_dump_json()
     )
     with pytest.raises(ValueError, match="registered difficulty seal"):
         graph.load_plan(plan_file)

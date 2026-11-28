@@ -245,7 +245,14 @@ function blockerReasons(fit) {
   const reasons = new Set();
   for (const key of Object.keys(fit.blockers || {})) {
     const capability = key.split(':').slice(1).join(':');
-    if (capability === 'required_backend') reasons.add('required-backend');
+    // The derivation emits a canonical reason for every stored blocker and the
+    // catalog load refuses a survey with an unmapped one; surveys sealed before
+    // that guarantee keep the key-derived mapping below.
+    const emitted = (fit.blocker_reasons || {})[key];
+    if (emitted && AtlasTaxonomy.backendReason[emitted]) reasons.add(emitted);
+    else if (capability === 'required_backend') reasons.add('required-backend');
+    // displayBackendFit derives these from the survey's not_applicable environment kinds.
+    else if (capability.startsWith('unsupported_environment_kind:')) reasons.add('unsupported-environment-kind');
     else if (AtlasTaxonomy.backendReason[capability]) reasons.add(capability);
     else throw new Error(`Backend blocker "${key}" maps to no typed reason; the survey drifted from the taxonomy.`);
   }
@@ -323,7 +330,8 @@ function gradingChips(source) {
 function backendDetails(source) {
   const wrap = node('div', undefined, 'table-wrap'); wrap.tabIndex = 0; wrap.setAttribute('aria-label', 'Backend fit by execution role');
   const table = node('table', undefined, 'backend-table'), head = node('thead'), headings = node('tr');
-  for (const title of ['Backend', 'Overall', 'Agent', 'Grader', 'Reasons', 'Affected tasks by role', 'Blockers', 'Validation errors']) headings.append(node('th', title));
+  // Header order matches the cells: the reason chips sit beside the overall verdict.
+  for (const title of ['Backend', 'Overall', 'Reasons', 'Agent', 'Grader', 'Affected tasks by role', 'Blockers', 'Validation errors']) headings.append(node('th', title));
   head.append(headings); table.append(head); const body = node('tbody');
   for (const {key, fit, reasons} of backendLabels(source)) {
     const row = node('tr'); row.append(node('td', AtlasTaxonomy.backend[key].label));

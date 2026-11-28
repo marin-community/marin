@@ -31,11 +31,7 @@ logger = logging.getLogger(__name__)
 
 REGIONAL_PREFIX = "s3://marin-us-east-02a/marin"
 DEFAULT_REPO = "open-athena/fweindel-validated-tasks-mimo-v1-pinned-images-20261124-a-v1"
-LICENSE_SOURCE = {
-    "dataset_id": "XiaomiMiMo/MiMo-V2.6-RL-oss",
-    "revision": "639865fd3374018d6cb29b9fb82dd531406fcf5f",
-    "url": "https://huggingface.co/datasets/XiaomiMiMo/MiMo-V2.6-RL-oss/tree/639865fd3374018d6cb29b9fb82dd531406fcf5f",
-}
+SOURCE_ID = "FWeindel:validated-tasks/mimo_v1"
 INPUT_REPO = "open-athena/fweindel-validated-tasks-mimo-v1-local-images-20261122-b-v1"
 INPUT_REVISION = "9efbd74114d232e5d3607af847c75418a1a798d8"
 CONVERTER_VERSION = "2026.11.23.pinned-images.1"
@@ -48,23 +44,12 @@ class PublicationInputs:
 
 
 def card_text(summary: dict, package: str) -> str:
-    """The publication card: the original license front matter plus the repair provenance."""
+    """The publication card body; the chokepoint writes the licensed front matter."""
     return "\n".join(
         (
-            "---",
-            "pretty_name: MiMo code v1 backend-repair candidate",
-            "license: apache-2.0",
-            "license_source:",
-            f"  dataset_id: {LICENSE_SOURCE['dataset_id']}",
-            f"  revision: {LICENSE_SOURCE['revision']}",
-            f"  url: {LICENSE_SOURCE['url']}",
-            "license_evidence_urls:",
-            f"- {LICENSE_SOURCE['url']}/resolve/{LICENSE_SOURCE['revision']}/README.md",
-            "---",
-            "",
             "Source pin: "
-            + f"{INPUT_REPO}@{INPUT_REVISION} repaired {CONVERTER_VERSION}"
-            + " (converter landing in atlas-env-audit)",
+            f"{INPUT_REPO}@{INPUT_REVISION} repaired {CONVERTER_VERSION}"
+            " (converter landing in atlas-env-audit)",
             "",
             "Private TRAIN candidate, not admitted. The backend repair of the pinned MiMo population:",
             f"every task's agent environment is its digest-pinned prepared image ({package},",
@@ -76,9 +61,6 @@ def card_text(summary: dict, package: str) -> str:
             "native files and role budgets are unchanged. No original oracle exists; executability",
             "is unmeasured under the approved no-oracle policy. The conversion receipt",
             "(conversion-receipt.json) binds the admitted revision to its per-task conversions.",
-            "",
-            f"License source: [XiaomiMiMo/MiMo-V2.6-RL-oss@{LICENSE_SOURCE['revision']}]({LICENSE_SOURCE['url']}).",
-            "Original notices and attribution are preserved in the accompanying upstream files.",
             "",
         )
     )
@@ -112,13 +94,17 @@ def publish_release(inputs: PublicationInputs, revision: str) -> dict:
         )
         card = staging / "README.md"
         card.write_text(card_text(summary, "ghcr.io/marin-community/rl-data-mimo-prepared"))
-        commit = publish(
+        publication = publish(
             tasks,
             card,
             inputs.repo,
             data_restriction=DataRestriction.OPEN,
             evidence_files=(receipt,),
+            source_id=SOURCE_ID,
+            use="train",
+            pretty_name="MiMo code v1 backend-repair candidate",
         )
+        commit = publication.revision
         published = Path(hf_hub_download(inputs.repo, "tasks.parquet", repo_type="dataset", revision=commit))
         published_sha = file_sha256(StoragePath(str(published)))
         if published_sha != summary["output_sha256"]:

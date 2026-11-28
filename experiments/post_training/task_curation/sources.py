@@ -10,16 +10,35 @@ from finestore.rl.curation import OversightLevel
 
 from experiments.post_training.task_curation.census_binding import bind_actor_census
 from experiments.post_training.task_curation.content_identity import read_content_identity_receipts
+from experiments.post_training.task_curation.conversion_admission import (
+    bind_conversion_admission,
+    conversion_admission_receipts,
+)
 from experiments.post_training.task_curation.datasets import (
+    acecode_89k_admitted,
     backfill_releases,
+    big_math_admitted,
     campaign_releases,
+    citation_formatting_admitted,
     crosscode_python_repair,
+    dolci_precise_if_admitted,
+    edge_websearch_admitted,
     facet_terminal,
+    freeform_formatting_admitted,
+    hardmath_rhs_admitted,
     hierarchy_intake,
+    inverse_ifeval_admitted,
+    leetcode_dataset_admitted,
     native_releases,
+    nemo_mcqa,
     nemo_structured,
+    nemotron_ultra_renames_admitted,
+    qa_abstention_admitted,
     repair_releases,
+    s1_deepresearch_admitted,
+    structeval_admitted,
     structure_closure,
+    tasktrove_structured_native,
     terminus_pivot,
     thoughtcrime,
     workplace,
@@ -47,6 +66,7 @@ from experiments.post_training.task_curation.datasets.fineenvs import tasks as f
 from experiments.post_training.task_curation.datasets.full_content_results import full_content_result_bindings
 from experiments.post_training.task_curation.datasets.grading_measurements import grading_census_receipts
 from experiments.post_training.task_curation.datasets.ifbench import tasks as ifbench
+from experiments.post_training.task_curation.datasets.lean import goedel as goedel_lean
 from experiments.post_training.task_curation.datasets.lean import numina as lean_numina
 from experiments.post_training.task_curation.datasets.lean import proofs as lean_proofs
 from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
@@ -144,7 +164,6 @@ MAIN_SYNC_STAGED_IDS = frozenset(
         "Anthropic:hh_rlhf/helpful-online",
         "Anthropic:hh_rlhf/helpful-rejection-sampled",
         "TaskTrove:laion__glaive-code-assistant-sandboxes-verified-v2",
-        "TaskTrove:laion__nemotron-gym-structured-outputs-v4",
         "TaskTrove:laion__stackexchange-tezos-sandboxes-verified-v2",
         "Nemotron:nemotron_ultra_mopd/hs3_en",
         "Nemotron:nemotron_ultra_mopd/hs3_multi",
@@ -208,11 +227,28 @@ R41_PENDING_SOURCE_IDS = (
         "Nvidia:Nemotron-RL-agent-workplace_assistant",
         # The instruction-hierarchy admission (c42f355d09) also landed after the freeze.
         "Nvidia:Nemotron-System-User-Instruction-Hierarchy-v1",
+        "AllenAI:Dolci-Think-SFT-Clean-v2/precise-if",
+        "Nvidia:Nemotron-RL-InverseIFEval-v1",
+        "Nvidia:Nemotron-RL-Instruction-Following-Citation-Formatting-v1",
+        "Nvidia:Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1",
+        "Nvidia:Nemotron-RL-QA-Abstention-v1",
+        "ScienceOne:S1-DeepResearch-15k",
+        "Yatin:Edge-Agent-Reasoning-WebSearch-260K",
+        "Nemotron:Nemotron-RL-knowledge-mcqa",
+        # Preserve deferred cohort provenance and receipts in pending intake.
+        "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@sealed-20261124",
+        # The native TaskTrove structured-output cohort qualified after the R40 freeze.
+        "TaskTrove:laion__nemotron-gym-structured-outputs-v4",
     }
 )
 
 PENDING_MEASUREMENT_SOURCES = (
     *(source for source in litmus.sources() if source.info.subset == "validation"),
+    *(
+        source
+        for source in repair_releases.sources()
+        if source.info.id == "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@sealed-20261124"
+    ),
     *(source for source in cascade.sources() if source.info.subset not in CASCADE_RETAINED_SUBSETS),
     *lean_proofs.sources(),
     *lean_numina.sources(),
@@ -226,7 +262,19 @@ PENDING_MEASUREMENT_SOURCES = (
     *endless.cohort_source(),
     *pymethods2test.sources(),
     *workplace.sources(),
+    *nemo_mcqa.sources(),
     *hierarchy_intake.sources(),
+    *dolci_precise_if_admitted.sources(),
+    *inverse_ifeval_admitted.sources(),
+    *qa_abstention_admitted.sources(),
+    *edge_websearch_admitted.sources(),
+    *s1_deepresearch_admitted.sources(),
+    *freeform_formatting_admitted.sources(),
+    *citation_formatting_admitted.sources(),
+    *big_math_admitted.sources(),
+    *acecode_89k_admitted.sources(),
+    *leetcode_dataset_admitted.sources(),
+    *structeval_admitted.sources(),
     *(
         source
         for source in campaign_releases.sources()
@@ -251,19 +299,21 @@ PENDING_MEASUREMENT_SOURCES = (
         for source in nemotron_ultra.sources()
         if source.info.id
         in {
-            "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
-            "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
             "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
             "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
             "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
         }
     ),
+    # The two admitted wave-1 renames bind their qualification records; their retained
+    # releases surface at the R41 load.
+    *nemotron_ultra_renames_admitted.sources(),
     # The main-sync staged sources (2026-11-25): declared on origin/main, absent
     # from the Atlas r39 cut, staged for R41 intake at their main pins. The
     # license-banned KTO components never enter this listing.
     *(source for source in skyrl_preference.sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
     *(source for source in nemotron_ultra.sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
-    *(source for source in tasktrove_structured_outputs.candidate_sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
+    *goedel_lean.sources(),
+    *tasktrove_structured_native.sources(),
     *(source for source in tasktrove_judged.candidate_sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
 )
 
@@ -286,7 +336,8 @@ def configured_sources() -> list[RlDataSource]:
         *eval_simpleqa.sources(),
         *eval_long_context.sources(),
         *eval_nupa.sources(),
-        *skyrl_math.sources(),
+        *(source for source in skyrl_math.sources() if source.info.id != "pafitis:hardmath@rhs"),
+        *hardmath_rhs_admitted.sources(),
         *skyrl_code.sources(),
         *skyrl_ifeval.sources(),
         *skyrl_mcq.sources(),
@@ -295,6 +346,7 @@ def configured_sources() -> list[RlDataSource]:
         *tasktrove_python_tests.sources(),
         *tasktrove_nl2bash.sources(),
         *tasktrove_structured_outputs.sources(),
+        *tasktrove_structured_native.sources(),
         *tasktrove_repositories.sources(),
         *swe_rebench_v2.admitted_sources(),
         *tasktrove_math.sources(),
@@ -309,7 +361,20 @@ def configured_sources() -> list[RlDataSource]:
         *nemotron_ultra.sources(),
         *nemo_structured.sources(),
         *hierarchy_intake.sources(),
+        *dolci_precise_if_admitted.sources(),
+        *inverse_ifeval_admitted.sources(),
+        *qa_abstention_admitted.sources(),
+        *edge_websearch_admitted.sources(),
+        *s1_deepresearch_admitted.sources(),
+        *freeform_formatting_admitted.sources(),
+        *citation_formatting_admitted.sources(),
+        *big_math_admitted.sources(),
+        *acecode_89k_admitted.sources(),
+        *leetcode_dataset_admitted.sources(),
+        *structeval_admitted.sources(),
+        *nemotron_ultra_renames_admitted.sources(),
         *workplace.sources(),
+        *nemo_mcqa.sources(),
         *(source for source in cascade.sources() if source.info.subset in CASCADE_RETAINED_SUBSETS),
         *ifbench.sources(),
         *openresearcher.sources(),
@@ -418,6 +483,12 @@ def all_sources() -> dict[str, RlDataSource]:
             continue  # the R40 freeze routes sources admitted after the cut to R41
         sources[source_id] = bind_oracle_admitted_release(sources[source_id], receipt)
     sources = {source_id: crosscode_python_repair.bind_source(source) for source_id, source in sources.items()}
+    # The oracle-flow conversion admissions (the 2026-11-26 base-pinned conversions):
+    # a registered receipt re-binds its configured original declaration to the
+    # conversion release as an executable TaskSpec population.
+    for source_id, admission in conversion_admission_receipts().items():
+        if source_id in sources:
+            sources[source_id] = bind_conversion_admission(sources[source_id], admission)
     samples, full_content = sample_qc_receipts(), full_content_result_bindings()
     content_identities = read_content_identity_receipts()
     retained_records = dict(retained_release_receipts())

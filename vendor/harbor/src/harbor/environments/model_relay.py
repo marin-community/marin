@@ -60,14 +60,24 @@ async def start_model_relays(
         (candidate, CANDIDATE_MODEL_RELAY_PORT),
     ):
         if relay is not None:
-            try:
-                await stack.enter_async_context(
-                    serve_http(
-                        machine, relay.handle, port=port, task_group=service_tasks
-                    )
-                )
-            except Exception as exc:
-                raise RuntimeServiceError("Model relay failed to start") from exc
+            await start_model_relay(machine, stack, service_tasks, relay, port=port)
+
+
+async def start_model_relay(
+    machine: Machine,
+    stack: AsyncExitStack,
+    service_tasks: asyncio.TaskGroup,
+    relay: "ModelRelay",
+    *,
+    port: int,
+) -> str:
+    """Start one role relay and return its guest-local endpoint."""
+    try:
+        return await stack.enter_async_context(
+            serve_http(machine, relay.handle, port=port, task_group=service_tasks)
+        )
+    except Exception as exc:
+        raise RuntimeServiceError("Model relay failed to start") from exc
 
 
 class ModelRelay:

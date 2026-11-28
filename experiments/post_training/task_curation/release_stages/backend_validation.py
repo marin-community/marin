@@ -147,6 +147,34 @@ def build_census_manifest(
     }
 
 
+LOCAL_DISK_POOL_ROOT = Path("/var/lib/shellbox-disk-pool")
+"""The survey worker's verified disk pool root.
+
+The release worker runs privileged (driver.py's WORKER_CONTAINER_PROFILE), its
+container filesystem is root-owned and private, and the pool provisions its
+fixed-size ext4 files there — 72f807c8ff's LOCAL disk enforcement, configured
+for the survey so the local storage cells measure the pool's verified evidence
+instead of waiting forever on a qualification no stage scheduled.
+"""
+
+
+def _verified_disk_pool() -> tuple[object | None, dict]:
+    """Construct the survey's disk pool, reporting the outcome instead of hiding it.
+
+    On a worker that cannot enforce (not privileged, no loop control, no
+    mkfs.ext4) the pool stays None and the survey's local storage cells keep
+    their VERIFY semantics — pending evidence, recorded in the receipt.
+    """
+    from shellbox.backends.local.disk import LocalDiskPool  # noqa: PLC0415 — beside its only stage use
+    from shellbox.machine import UnsupportedMachineSpec  # noqa: PLC0415
+
+    try:
+        pool = LocalDiskPool(LOCAL_DISK_POOL_ROOT)
+    except UnsupportedMachineSpec as error:
+        return None, {"configured": False, "root": str(LOCAL_DISK_POOL_ROOT), "reason": str(error)[:300]}
+    return pool, {"configured": True, "root": str(pool.root)}
+
+
 def run_backend_validation(
     inputs: BackendValidationInputs,
     *,
@@ -239,6 +267,7 @@ def run_backend_validation(
             )
             if pinned.returncode != 0:
                 raise ValueError(f"checkout HEAD does not contain the plan's pinned revision {inputs.source_revision}")
+        disk_pool, disk_pool_status = _verified_disk_pool()
         receipt = run_validation(
             ValidationInputs(
                 release_id=inputs.release_id,
@@ -253,9 +282,11 @@ def run_backend_validation(
             dry_run=False,
             repo_root=repo_root,
             revision=inputs.source_revision,
+            disk_pool_root=disk_pool.root if disk_pool is not None else None,
         )
         receipt["manifest"] = {"uri": manifest_ref.uri, "sha256": manifest_ref.sha256}
         receipt["populations"] = {row["source_id"]: {"census_artifact": row["population_path"]} for row in rows}
+        receipt["disk_pool"] = disk_pool_status
         alerts.stage_finished(
             inputs.release_id,
             "backend_validation",
@@ -290,7 +321,9 @@ def main() -> None:
     parser.add_argument("--repo-root", type=Path, default=Path.cwd(), help="Checkout the validation runs from")
     parser.add_argument("--mode", choices=("dry-run", "write"), default="dry-run")
     args = parser.parse_args()
-    inputs = BackendValidationInputs(**json.loads(args.inputs.read_text()))
+    document = json.loads(args.inputs.read_text())
+    document["census_inputs"] = ArtifactRef(**document["census_inputs"])
+    inputs = BackendValidationInputs(**document)
     proof = run_backend_validation(inputs, dry_run=args.mode == "dry-run", repo_root=args.repo_root)
     print(json.dumps(proof), flush=True)
 

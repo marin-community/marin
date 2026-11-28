@@ -9,8 +9,8 @@ landed checkout, publishes the packaged preview through Marina's applet API, and
 seals two write-once documents under the release prefix: the publish record and the
 deployment manifest that the hosted stages verify against.
 
-Receipt contracts (decided here): the preflight and hosted receipts are the
-maintained release-check receipts (``ReleaseReceipt`` in
+Receipt contracts (decided here): the preflight receipt is the
+maintained release-check receipt (``ReleaseReceipt`` in
 ``infra.marina.apps.rl_data_catalog.release_receipts``) and must record ``passed``
 true (the receipt's boolean outcome field), the matching ``phase``, the typed
 ``source_revision``, and the typed applet id in ``target.id``. The package receipt
@@ -39,9 +39,10 @@ from marina.client import bearer_token, marina_token_provider, publish_applet
 from rigging.filesystem.storage_path import StoragePath
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
+from experiments.post_training.task_curation.release_stages import live_applet as live_applet_module
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref
 
-PUBLISH_MODE = "private"
+ACCESS_MODES = ("private", "public")
 PACKAGE_RECEIPT_KIND_SUFFIX = "preview-package"
 RELEASE_RECORD_SUFFIX = "marina-release"
 DEPLOYMENT_MANIFEST_SUFFIX = "deployment-manifest"
@@ -61,9 +62,9 @@ class MarinaReleaseInputs:
     service_url: str
     package: ArtifactRef
     preflight_receipt: ArtifactRef
-    hosted_receipt: ArtifactRef
     prior_manifest: ArtifactRef | None
     base_version: int
+    access_mode: str
     output_root: str
 
     def validate(self) -> None:
@@ -76,6 +77,8 @@ class MarinaReleaseInputs:
             raise ValueError(
                 f"base_version must be the positive live revision this release updates, got {self.base_version}"
             )
+        if self.access_mode not in ACCESS_MODES:
+            raise ValueError(f"access_mode must be one of {ACCESS_MODES}, got {self.access_mode!r}")
 
 
 def verify_checkout(repo_root: Path, source_revision: str) -> str:
@@ -141,9 +144,10 @@ def verify_package_receipt(package: ArtifactRef, inputs: MarinaReleaseInputs) ->
     if document.get("release_id") != inputs.release_id or document.get("source_revision") != inputs.source_revision:
         raise ValueError("the package receipt binds a different release or revision")
     packaged = document.get("packaged") or {}
-    if packaged.get("source_revision") != inputs.source_revision:
+    if packaged.get("source_revision") != document.get("code_revision"):
         raise ValueError(
-            f"packaged provenance pins revision {packaged.get('source_revision')!r}, expected {inputs.source_revision!r}"
+            f"packaged provenance pins revision {packaged.get('source_revision')!r},"
+            f" expected the packaging checkout {document.get('code_revision')!r}"
         )
     root = (document.get("package") or {}).get("uri")
     if not isinstance(root, str) or not root:
@@ -162,8 +166,8 @@ def verify_prior_manifest(prior: ArtifactRef, inputs: MarinaReleaseInputs) -> di
         )
     if document.get("app_id") != inputs.applet_id:
         raise ValueError("the prior manifest names a different applet than this release")
-    if document.get("mode") != PUBLISH_MODE:
-        raise ValueError(f"prior manifest mode is {document.get('mode')!r}, expected {PUBLISH_MODE!r}")
+    if document.get("mode") != inputs.access_mode:
+        raise ValueError(f"prior manifest mode is {document.get('mode')!r}, expected {inputs.access_mode!r}")
     return document
 
 
@@ -185,16 +189,16 @@ def publish_with_iap_token(inputs: MarinaReleaseInputs, payload: bytes) -> dict:
         payload,
         applet_id=inputs.applet_id,
         base_version=inputs.base_version,
-        mode=PUBLISH_MODE,
+        mode=inputs.access_mode,
     )
 
 
 def verify_publish_result(result: dict, inputs: MarinaReleaseInputs) -> int:
-    """Marina must have released this applet, private, at exactly the next revision."""
+    """Marina must have released this applet, in the live access mode, at exactly the next revision."""
     if result.get("id") != inputs.applet_id:
         raise ValueError(f"Marina released applet {result.get('id')!r}, expected {inputs.applet_id!r}")
-    if result.get("mode") != PUBLISH_MODE:
-        raise ValueError(f"Marina released in mode {result.get('mode')!r}, expected {PUBLISH_MODE!r}")
+    if result.get("mode") != inputs.access_mode:
+        raise ValueError(f"Marina released in mode {result.get('mode')!r}, expected {inputs.access_mode!r}")
     version = result.get("version")
     if not isinstance(version, int) or version != inputs.base_version + 1:
         raise ValueError(f"Marina released version {version!r}, expected {inputs.base_version + 1}")
@@ -233,13 +237,11 @@ def run_marina_release(
     try:
         inputs.validate()
         verify_release_check_receipt(inputs.preflight_receipt, "preflight", inputs)
-        verify_release_check_receipt(inputs.hosted_receipt, "hosted", inputs)
         package = verify_package_receipt(inputs.package, inputs)
         prior = verify_prior_manifest(inputs.prior_manifest, inputs) if inputs.prior_manifest is not None else None
         verify_checkout(repo_root, inputs.source_revision)
         receipts = {
             "preflight": ref_fields(inputs.preflight_receipt),
-            "hosted": ref_fields(inputs.hosted_receipt),
             "package": ref_fields(inputs.package),
         }
         proof: dict = {
@@ -249,6 +251,7 @@ def run_marina_release(
             "applet_id": inputs.applet_id,
             "service_url": inputs.service_url,
             "base_version": inputs.base_version,
+            "access_mode": inputs.access_mode,
             "receipts": receipts,
             "prior_manifest": ref_fields(inputs.prior_manifest) if prior is not None else None,
             "dry_run": dry_run,
@@ -263,6 +266,14 @@ def run_marina_release(
         for path, label in ((release_path, "release document"), (manifest_path, "deployment manifest")):
             if path.exists():
                 raise ValueError(f"{label} already exists at {path}; bump the release prefix instead of republishing")
+        # The preflight check recorded the live revision and mode; the publish continues
+        # exactly that state (the compare-and-set also refuses a moved base).
+        live = live_applet_module.live_applet(inputs.service_url, inputs.applet_id)
+        if (live.version, live.mode) != (inputs.base_version, inputs.access_mode):
+            raise ValueError(
+                f"the preview moved to v{live.version} ({live.mode}) since the preflight check recorded"
+                f" v{inputs.base_version} ({inputs.access_mode})"
+            )
         payload = package_applet(Path(package["package"]["uri"]))
         verify_packaged_modules(payload, package["packaged"])
         publish_fn = (
@@ -289,6 +300,7 @@ def run_marina_release(
             "app_id": result["id"],
             "mode": result["mode"],
             "source_sha": inputs.source_revision,
+            "code_revision": package["code_revision"],
             "service_url": inputs.service_url,
             "package": {"root": package["package"]["uri"]},
             "receipts": receipts,
@@ -319,7 +331,7 @@ def main() -> None:
     parser.add_argument("--mode", choices=("dry-run", "write"), default="dry-run")
     args = parser.parse_args()
     document = json.loads(args.inputs.read_text(encoding="utf-8"))
-    for name in ("package", "preflight_receipt", "hosted_receipt"):
+    for name in ("package", "preflight_receipt"):
         document[name] = ArtifactRef(**document[name])
     if document.get("prior_manifest") is not None:
         document["prior_manifest"] = ArtifactRef(**document["prior_manifest"])

@@ -145,6 +145,7 @@ class MathSpec:
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
     profile: MathProfile = MathProfile.ANCHORED
     allow_additive_constant: bool = False
+    positive_symbols: tuple[str, ...] = field(default=(), kw_only=True)
 
 
 @dataclass(frozen=True)

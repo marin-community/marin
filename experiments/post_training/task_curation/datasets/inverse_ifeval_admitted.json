@@ -1,0 +1,6 @@
+{
+  "repo": "open-athena/marin-rl-data-atlas-registry",
+  "revision": "7f5e4afc68d8e6cb793437bfc922748e9eb8db0d",
+  "path": "experiments/post_training/task_curation/datasets/inverse_ifeval_admitted.json",
+  "sha256": "bff977db8e1692318c07a86ac8834a398ecab14c4b0f6b56876966089ac2537f"
+}

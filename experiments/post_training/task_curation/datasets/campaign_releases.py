@@ -6,9 +6,9 @@
 Each entry pins an immutable Hugging Face revision in the RL Data Atlas.
 Rebuilt TaskCompendium cohorts use ``prebuilt.import_prebuilt`` to validate and
 admit their published tasks without repeating conversion. Their qualification
-evidence and oversight levels describe the checks behind admission.
-Native Harbor cohorts use ``prebuilt.import_harbor_prebuilt`` and require
-exact-package control receipts for admission.
+evidence and oversight levels describe the checks behind admission. The
+swesmith repair campaign's taskspec re-pin admits its canonical conversion
+release through ``import_taskcompendium_prebuilt``.
 
 Retired legacy pointers are tracked in retired-inventory-only.json. Their
 underlying artifacts and prior evidence remain archived.
@@ -25,9 +25,10 @@ from finestore.rl.curation import (
 from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.pipeline.models import IntendedUse
 
+from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
+from experiments.post_training.task_curation.datasets.native_releases import taskspec_lexical_evidence
 from experiments.post_training.task_curation.prebuilt import (
     PrebuiltCohort,
-    import_harbor_prebuilt,
     import_prebuilt,
     import_taskcompendium_prebuilt,
 )
@@ -184,16 +185,20 @@ def _puzzles_qa_release() -> RlDataSource[PrebuiltCohort]:
 
 
 def sources() -> list[RlDataSource]:
+    # The taskspec re-pin (declared-pin ruling 2026-11-25 ~23:35 EST): the cohort's
+    # conversion release moves to the taskspec conversion of the same upstream content
+    # (per-task byte and grader identity verified against the prior pin's conversion
+    # output; the conversion identity harbor-cohort-taskspec-v1). The prior release's
+    # qualification evidence stays at its revisions and in this file's history.
     swesmith_repaired = PrebuiltCohort(
         intended_use=IntendedUse.TRAIN,
         name="swesmith-verifier-repaired-v5",
-        version="2026.11.12.2",
-        repo="open-athena/swesmith-verifier-repaired-v5-20261112",
-        revision="26bb8c8ffba53adecd1c2a5e9d64b47b9f7e52fd",
+        version="harbor-cohort-taskspec-v1",
+        repo="open-athena/swesmith-verifier-repaired-v5-0bfcd894-taskspec-20261124g",
+        revision="aab66e36193afed777ceea90bf04e2001f2cf11e",
         expected_rows=7016,
         repo_type="dataset",
     )
-    swesmith_evidence = f"https://huggingface.co/datasets/{swesmith_repaired.repo}/blob/{swesmith_repaired.revision}/"
     return [
         _rebuilt_cohort(
             config=PrebuiltCohort(
@@ -1089,7 +1094,7 @@ def sources() -> list[RlDataSource]:
             ),
         ),
         RlDataSource(
-            pipeline=import_harbor_prebuilt,
+            pipeline=import_taskcompendium_prebuilt,
             config=swesmith_repaired,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
@@ -1102,49 +1107,60 @@ def sources() -> list[RlDataSource]:
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="swe-repo",
                 tags=("agentic", "language:python", "campaign-release", "verified"),
-                task_format=TaskFormat.HARBOR,
+                task_format=TaskFormat.TASKSPEC,
+                lexical_contamination=taskspec_lexical_evidence(
+                    {"repo": swesmith_repaired.repo, "revision": swesmith_repaired.revision},
+                    lexical_measurements()["TaskTrove:swesmith-verifier-repaired-v5"],
+                ),
                 count=swesmith_repaired.expected_rows,
                 dataset=swesmith_repaired.dataset,
-                daytona_snapshot_count=5,
+                daytona_snapshot_count=0,
                 daytona_execution_failures=0,
                 daytona_count_basis=(
-                    "production Harbor machine_spec and Shellbox snapshot_identity over every native "
-                    "Harbor package at the pinned revision, retaining each task.toml environment shape; "
-                    "zero mapping failures. Evidence: " + swesmith_evidence + "daytona-identity.json"
+                    "Coordinator ruling 2026-11-25 13:00 EST: declarative build contexts are acceptable "
+                    "for admission with execution evidence. The cohort's passing acceptance run "
+                    "(acceptance-swesmith-verifier-repaired-v5) built and executed its contexts through "
+                    "Daytona's declarative path without named snapshots; declared demands measured from "
+                    "the staged population artifact without provider calls: 7016 machine slots, zero "
+                    "execution failures. Conversion identity harbor-cohort-taskspec-v1 @ "
+                    "a94870c78d23d1c569987f4146d379fad9e4b2ec. Evidence: "
+                    "s3://marin-us-east-02a/marin/rl-data/staged-census-20261126/"
+                    "swesmith-verifier-repaired-v5/"
                 ),
                 oracle_validation=OracleValidation.EXECUTED,
                 recipe_qa_history=RecipeQAHistoricalNotes(
-                    campaign="SWE-smith verifier repair v5",
-                    recipe_revision="43a40938875b4fbc4286a0784f6a7454110a0453",
+                    campaign="SWE-smith verifier repair v5; taskspec conversion",
+                    recipe_revision="a94870c78d23d1c569987f4146d379fad9e4b2ec",
                     verification=(
-                        "Every admitted task has scored bug=0 and pinned-reference=1 controls, matched "
-                        "to its exact TaskSpec SHA256; infrastructure errors cannot admit a task. "
-                        "All 5,628 admitted v4 package strings remain byte-identical. Evidence: "
-                        + swesmith_evidence
-                        + "controls.jsonl"
+                        "The taskspec conversion converted every input row with zero rejections "
+                        "(converted_rows 7016 == input_rows 7016); the cohort's passing acceptance run "
+                        "(acceptance-swesmith-verifier-repaired-v5) replayed the recorded bug controls "
+                        "through Daytona against the converted graders per the 2026-11-24 ruling, and "
+                        "that passing run is the declarative execution evidence. The per-task grading "
+                        "boundary census assessed all 7016 tasks (required separate: 7016; status "
+                        "matched: 7016). The prior release's control evidence stays at its revisions."
                     ),
-                    reviewed=swesmith_repaired.expected_rows,
-                    admitted=swesmith_repaired.expected_rows,
+                    reviewed=7016,
+                    admitted=7016,
                 ),
                 independent_qc=IndependentQC(
                     verdict=Verdict.GOOD,
                     method=(
-                        "admission requires exact-package bug-zero/reference-one controls; "
-                        "residual exclusions retained"
+                        "per-task grading-boundary census over the complete staged population plus the "
+                        "passing acceptance replay; the conversion receipts account for every row"
                     ),
-                    reviewed=8045,
-                    admitted=swesmith_repaired.expected_rows,
-                    evidence_url=swesmith_evidence + "manifest.json",
+                    reviewed=7016,
+                    admitted=7016,
+                    evidence_url="s3://marin-us-east-02a/marin/rl-data/grading-census-taskspec-20261126/",
                 ),
                 notes=(
-                    "7,016 controlled SWE-smith tasks: 5,628 admitted v4 packages preserved byte-for-byte "
-                    "and 1,388 newly admitted repairs. 1,029 of 8,045 candidates remain excluded with "
-                    "per-task reasons and receipts. Native Harbor packages retain their declared "
-                    "environment, bootstrap and hidden verifier; import validates the complete cohort "
-                    "without rewriting packages or rerunning controls. Oversight is full and oracle "
-                    "validation is executed. Preserved upstream recipes include floating image tags "
-                    "and dependency resolution; control receipts identify the tested builds. "
-                    "The repair-campaign repository is private. Controls do not measure model-solving accuracy."
+                    "7,016 SWE-smith tasks re-pinned to the taskspec conversion release "
+                    "(declared-pin ruling 2026-11-25 ~23:35 EST): the same upstream content converted "
+                    "by harbor-cohort-taskspec-v1 with built executable graders; per-task byte and "
+                    "grader identity verified against the prior conversion output. The prior release's "
+                    "qualification evidence (5,628 admitted v4 packages, the control receipts, the "
+                    "independent review) stays at its revisions and in this file's history. The "
+                    "repair-campaign repositories are private."
                 ),
             ),
         ),

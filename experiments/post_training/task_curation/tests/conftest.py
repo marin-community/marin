@@ -17,15 +17,17 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.reviewer_spec import JudgeTier
 from taskcompendium.runtime.resources import inline_resource
 
-from experiments.post_training.task_curation import driver, inventory, publication_gate
+from experiments.post_training.task_curation import driver, inventory, publication_gate, sources
+from experiments.post_training.task_curation.admission_inventory import PANEL_SCHEMA
 from experiments.post_training.task_curation.difficulty_samples import DifficultySource
 from experiments.post_training.task_curation.full_qc_inputs import InputConfig
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, HostedJudgeEndpoint
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
+from experiments.post_training.task_curation.published_census import population_documents
 from experiments.post_training.task_curation.release_stages import alerts as release_stage_alerts
 from experiments.post_training.task_curation.retention_plan import RetentionPlan
-from experiments.post_training.task_curation.sample_qc_artifacts import SamplePanel
+from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory, SamplePanel
 from experiments.post_training.task_curation.tests.admission_fixtures import (
     isolated_admission_census as isolated_admission_census,
 )
@@ -50,6 +52,11 @@ def offline_registry(request, monkeypatch):
 
     request.getfixturevalue("isolated_admission_census")
     monkeypatch.setattr(driver, "all_sources", lambda: {})
+    # The defining module's binding is what a local import reads at call time:
+    # the declaration audit's replacement-link check imports all_sources inside
+    # the function, so patching only the driver's import-time binding left the
+    # real registry read live under the download-boundary guard.
+    monkeypatch.setattr(sources, "all_sources", lambda: {})
     # Selection restriction tiers come from the configured estate, which offline
     # unit tests cannot assemble; synthetic selections declare no private source.
     # Patch every importing module's binding, not only the defining one.
@@ -151,6 +158,49 @@ def fixture_qc_inputs(tmp_path, extra_documents=()):
 @pytest.fixture
 def qc_inputs(tmp_path):
     return fixture_qc_inputs(tmp_path)
+
+
+@pytest.fixture
+def sample_panel(qc_inputs, tmp_path):
+    config, _ = qc_inputs
+    population = SourceTextPopulation.raw_load(config.population_path)
+    path = tmp_path / "panel.parquet"
+    rows = [
+        {
+            "task_id": task["id"],
+            "task_spec": TaskSpec.model_validate(task).model_dump_json(),
+            "runtime": json.dumps(runtime),
+        }
+        for task, runtime in population_documents(population)
+    ]
+    pq.write_table(pa.Table.from_pylist(rows, schema=PANEL_SCHEMA), path)
+    summary = tmp_path / "summary.json"
+    panel = SamplePanel(
+        source_id=population.source_id,
+        dataset_id=population.dataset_id,
+        dataset_revision=population.dataset_revision,
+        converter_version=population.source_version,
+        input_artifact=population.path,
+        task_specs_sha256=population.task_specs_sha256,
+        scanned_task_specs_sha256=population.task_specs_sha256,
+        retained_tasks=len(rows),
+        sample_seed=0,
+        sample_size=len(rows),
+        panel_path=str(path),
+        panel_sha256=file_sha256(StoragePath(str(path))),
+        evidence_url=str(summary),
+    )
+    inventory = SampleInventory(
+        **panel.model_dump(),
+        oracle_tasks=1,
+        execution_qualification="not_assessed",
+        runnable_grader_tasks=3,
+        no_grader_tasks=0,
+        grader_kinds={"script": 3},
+        missing_grader_reasons={},
+    )
+    summary.write_text(inventory.model_dump_json(exclude_none=True))
+    return panel
 
 
 @pytest.fixture

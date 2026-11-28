@@ -56,6 +56,7 @@ Sequencing decisions wired here (flagged for the r39 builder's quirk review):
 
 import dataclasses
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -71,6 +72,9 @@ from marin.execution.remote import remote
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.task_curation.datasets.derived_contract_measurements import derived_contract_receipts
+from experiments.post_training.task_curation.derived_contract_census import DerivedContractReceipt
+from experiments.post_training.task_curation.grader_drift import GraderDriftReference
 from experiments.post_training.task_curation.release_stages import (
     admission_check as admission_check_stage,
 )
@@ -117,6 +121,9 @@ from experiments.post_training.task_curation.release_stages import (
     identity_backend_compose as identity_backend_compose_stage,
 )
 from experiments.post_training.task_curation.release_stages import (
+    main_grader_drift as main_grader_drift_stage,
+)
+from experiments.post_training.task_curation.release_stages import (
     main_sources as main_source_sync_stage,
 )
 from experiments.post_training.task_curation.release_stages import (
@@ -156,6 +163,7 @@ from experiments.post_training.task_curation.release_stages.sizing import (
     embedding_sizing,
     qc_browse_sizing,
 )
+from infra.marina.apps.rl_data_catalog.server.content_access import content_is_withheld
 
 PLAN_KIND = "atlas-release-plan"
 GRAPH_RECEIPT_KIND = "atlas-release-graph-receipt"
@@ -177,7 +185,9 @@ class ReleasePins(BaseModel):
     prior_coverage: ArtifactRef
     prior_manifest: ArtifactRef | None = None
     registry_index: ArtifactRef
-    oracle_inventory: ArtifactRef
+    # Plans cut before the package derived its inputs (R40) carry the prior oracle
+    # inventory. No stage reads it; it stays so their sealed plan documents reseal.
+    oracle_inventory: ArtifactRef | None = None
     source_counts: ArtifactRef
     exposure_input_check: ArtifactRef | None = None
     parity_receipt: ArtifactRef | None = None
@@ -260,10 +270,16 @@ class ReleasePlan(BaseModel):
     migrations: tuple[str, ...] = ()
     rebound_source: str = ""
     rebound_tasks: int = 0
+    recut: bool = False
+    deliberate_exclusions: tuple[str, ...] = ()
     removed_sources: tuple[str, ...] = ()
     main_source_sync: main_source_sync_stage.MainSourceSyncPlan | None = None
     strict_audit_local: bool = False
     slice_output_root: str = ""
+    grader_drift_reference: GraderDriftReference | None = None
+    """The derivation-measured main-recipe comparison basis; a plan predating it
+    reseals byte-identically (the field is absent from the document when unset).
+    The drift stage it feeds is advisory and runs only when the reference exists."""
     validation_grading_environments: dict[str, dict]
     validation_integrity_contracts: dict[str, dict]
     validation_runtime_defaults: dict[str, dict]
@@ -288,16 +304,16 @@ class ReleasePlan(BaseModel):
         if not self.targets or self.expected_source_count <= 0:
             raise ValueError("targets and a positive expected_source_count are required")
         for name in (
-            "expected_browse_source_count",
             "expected_contract_count",
             "expected_contract_tasks",
-            "expected_selected_panels",
             "expected_prior_sources",
-            "expected_panels",
             "expected_population_tasks",
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
+        for name in ("expected_browse_source_count", "expected_selected_panels", "expected_panels"):
+            if getattr(self, name) < 0:
+                raise ValueError(f"{name} must be nonnegative")
         if not self.region_prefix.endswith("/"):
             raise ValueError("region_prefix must end with '/' so region pins are unambiguous")
         if not self.populations:
@@ -329,6 +345,10 @@ def _plan_document_data(plan: ReleasePlan) -> dict:
     data = plan.model_dump(mode="json")
     if plan.main_source_sync is None:
         data.pop("main_source_sync", None)
+    if plan.grader_drift_reference is None:
+        data.pop("grader_drift_reference", None)
+    if plan.pins.oracle_inventory is None:
+        data["pins"].pop("oracle_inventory", None)
     return data
 
 
@@ -367,6 +387,10 @@ def plan_ref(release_root: str, relative: str, sha256: str | None = None) -> dic
     """A {uri, sha256} reference into the release prefix (sha filled by the stage)."""
     uri = str(StoragePath(f"{release_root}/{relative}"))
     return {"uri": uri, "sha256": sha256} if sha256 else {"uri": uri, "sha256": ""}
+
+
+# The derived package inputs (oracle inventory, source counts) seal under this stage dir.
+PACKAGE_INPUTS_STAGE_DIR = "package-inputs"
 
 
 def stage_output_root(plan: ReleasePlan, stage: str) -> str:
@@ -463,6 +487,9 @@ def typed_inputs(inputs_type: type, config: dict) -> Any:
     hints = typing.get_type_hints(inputs_type)
     kwargs = {}
     for field in dataclasses.fields(inputs_type):
+        if field.name not in config and field.default is not dataclasses.MISSING:
+            # A phase-specific optional input the stage's config omits keeps its default.
+            continue
         kwargs[field.name] = _coerce_ref(config[field.name], hints[field.name])
     return inputs_type(**kwargs)
 
@@ -494,9 +521,18 @@ def _stage_receipt(stage: str, proof: dict, receipt_key: str) -> StageReceipt:
 
 
 def _execute_census_inputs(config: dict) -> dict:
+    declarations = read_ref(ArtifactRef(**config["declarations"]))
+    populations = config["populations"]
+    if config.get("recut"):
+        # A status-only re-cut's census is incremental: the new admissions' rows
+        # only. The retained population's census receipt is the prior
+        # publication's own, so the retained populations are never re-read.
+        targets = set(config["targets"])
+        declarations = {source_id: row for source_id, row in declarations.items() if source_id in targets}
+        populations = {source_id: path for source_id, path in populations.items() if source_id in targets}
     return _seal_census_inputs(
-        declarations=read_ref(ArtifactRef(**config["declarations"])),
-        populations=config["populations"],
+        declarations=declarations,
+        populations=populations,
         release_root=config["release_root"],
         source_revision=config["source_revision"],
     )
@@ -505,6 +541,7 @@ def _execute_census_inputs(config: dict) -> dict:
 def _execute_compose_manifest(config: dict) -> dict:
     return _seal_compose_manifest(
         declarations=read_ref(ArtifactRef(**config["declarations"])),
+        contract_receipts=derived_contract_receipts(),
         targets=tuple(config["targets"]),
         prior_release=config["prior_release"],
         prior_coverage=config["prior_coverage"],
@@ -652,6 +689,11 @@ def _execute_main_source_sync(config: dict) -> dict:
     return main_source_sync_stage.run_main_source_sync(inputs, dry_run=False)
 
 
+def _execute_main_grader_drift(config: dict) -> dict:
+    inputs = typed_inputs(main_grader_drift_stage.GraderDriftInputs, config)
+    return main_grader_drift_stage.run_main_grader_drift(inputs, dry_run=False)
+
+
 _STAGE_EXECUTORS: dict[str, Callable[[dict], dict]] = {
     "census_inputs": _execute_census_inputs,
     "compose_manifest": _execute_compose_manifest,
@@ -680,6 +722,7 @@ _STAGE_EXECUTORS: dict[str, Callable[[dict], dict]] = {
     "hosted_check": _execute_hosted_check,
     "exposure_probe": _execute_exposure_probe,
     "main_source_sync": _execute_main_source_sync,
+    "main_grader_drift": _execute_main_grader_drift,
 }
 
 
@@ -789,6 +832,7 @@ def _seal_census_inputs(
 
 def _seal_compose_manifest(
     declarations: dict,
+    contract_receipts: dict[str, DerivedContractReceipt],
     targets: tuple[str, ...],
     prior_release: dict,
     prior_coverage: dict,
@@ -806,6 +850,14 @@ def _seal_compose_manifest(
         f"{release_root}/compose/target-declarations.json",
         {source_id: declarations[source_id] for source_id in sorted(targets)},
     )
+    target_contracts_ref = _seal_document(
+        f"{release_root}/compose/target-contracts.json",
+        {
+            source_id: contract_receipts[source_id].model_dump(mode="json")
+            for source_id in sorted(targets)
+            if source_id in contract_receipts
+        },
+    )
     rebound = None if not rebound_source else {"source_id": rebound_source, "tasks": rebound_tasks}
     document = {
         "kind": "atlas-curriculum-composition-manifest",
@@ -814,6 +866,7 @@ def _seal_compose_manifest(
         "fresh_release": dict(fresh_release),
         "fresh_coverage": dict(fresh_coverage),
         "current_target_declarations": target_declarations_ref,
+        "target_contracts": target_contracts_ref,
         "rebound": rebound,
     }
     ref = _seal_document(f"{release_root}/compose/composition-manifest.json", document)
@@ -846,6 +899,8 @@ def _census_inputs_step(plan: ReleasePlan, declarations: ArtifactStep) -> Artifa
         "populations": plan.populations,
         "release_root": plan.release_root,
         "source_revision": plan.source_revision,
+        "recut": plan.recut,
+        "targets": list(plan.targets),
     }
 
     def build_config(ctx: StepContext) -> dict:
@@ -941,8 +996,14 @@ _STAGE_SPECS: dict[str, StageSpec] = {
         "corpus_assembly", "corpus_assembly", corpus_assembly_stage.__name__, ("census",), True
     ),
     "embed": StageSpec("embed", "embed", embed_stage.__name__, ("corpus_assembly",), True),
+    # The compose stage seals its handoff document; there is no separate receipt.
     "curriculum_compose": StageSpec(
-        "curriculum_compose", "curriculum_compose", curriculum_compose_stage.__name__, ("compose_manifest",), True
+        "curriculum_compose",
+        "curriculum_compose",
+        curriculum_compose_stage.__name__,
+        ("compose_manifest",),
+        True,
+        receipt_key="handoff",
     ),
     "identity_backend_compose": StageSpec(
         "identity_backend_compose",
@@ -1013,30 +1074,40 @@ _STAGE_SPECS: dict[str, StageSpec] = {
         "strict_audit_before",
         "strict_audit",
         strict_audit_stage.__name__,
-        ("catalog_load", "curriculum_load"),
+        ("census", "catalog_load", "curriculum_load"),
         False,
     ),
     "strict_audit_after": StageSpec(
-        "strict_audit_after", "strict_audit", strict_audit_stage.__name__, ("marina_release",), False
+        "strict_audit_after", "strict_audit", strict_audit_stage.__name__, ("census", "marina_release"), False
     ),
     "package_preview": StageSpec(
-        "package_preview", "package_preview", package_preview_stage.__name__, ("strict_audit_before",), False
+        "package_preview", "package_preview", package_preview_stage.__name__, ("strict_audit_before", "census"), False
     ),
     "release_check_preflight": StageSpec(
         "release_check_preflight", "release_check", release_check_stage.__name__, ("package_preview",), False
     ),
     "release_check_hosted": StageSpec(
-        "release_check_hosted", "release_check", release_check_stage.__name__, ("release_check_preflight",), False
+        "release_check_hosted",
+        "release_check",
+        release_check_stage.__name__,
+        ("release_check_preflight", "marina_release"),
+        False,
     ),
     "marina_release": StageSpec(
         "marina_release",
         "marina_release",
         marina_release_stage.__name__,
-        ("package_preview", "release_check_preflight", "release_check_hosted"),
+        ("package_preview", "release_check_preflight"),
         False,
         receipt_key="manifest",
     ),
-    "hosted_check": StageSpec("hosted_check", "hosted_check", hosted_check_stage.__name__, ("marina_release",), False),
+    "hosted_check": StageSpec(
+        "hosted_check",
+        "hosted_check",
+        hosted_check_stage.__name__,
+        ("declarations", "identity_backend_compose", "census", "marina_release"),
+        False,
+    ),
     "release_check_postpublish": StageSpec(
         "release_check_postpublish",
         "release_check",
@@ -1048,7 +1119,7 @@ _STAGE_SPECS: dict[str, StageSpec] = {
         "exposure_probe",
         "exposure_probe",
         exposure_probe_stage.__name__,
-        ("marina_release", "hosted_check", "release_check_postpublish", "strict_audit_after"),
+        ("declarations", "marina_release", "hosted_check", "release_check_postpublish", "strict_audit_after"),
         False,
     ),
     # The main-source sync is a plan-gated leaf: it never joins another stage's
@@ -1061,6 +1132,16 @@ _STAGE_SPECS: dict[str, StageSpec] = {
         ("declarations",),
         False,
         receipt_key="report",
+    ),
+    # The grader-drift leaf shares the main-source-sync shape: every plan carries
+    # the node, only a plan whose derivation pinned a grader_drift_reference can
+    # run it, nothing depends on it, and it is advisory — its findings never gate.
+    "main_grader_drift": StageSpec(
+        "main_grader_drift",
+        "main_grader_drift",
+        main_grader_drift_stage.__name__,
+        ("declarations",),
+        False,
     ),
 }
 
@@ -1216,6 +1297,43 @@ def _main_source_sync_step(plan: ReleasePlan, declarations: ArtifactStep) -> Art
     )
 
 
+def _main_grader_drift_step(plan: ReleasePlan, declarations: ArtifactStep) -> ArtifactStep[StageReceipt]:
+    """The plan-gated grader-drift leaf: the advisory stale-grader queue.
+
+    Every plan carries the node so the graph shape is stable, but only a plan
+    whose derivation pinned a ``grader_drift_reference`` can execute it. It
+    depends on nothing but the sealed declarations and nothing depends on it, so
+    opting in or out never moves another stage's fingerprint, and the release
+    tail never waits on an advisory instrument.
+    """
+    spec = _STAGE_SPECS["main_grader_drift"]
+    identity = _identity_fields(plan, "release_id", "source_revision", "grader_drift_reference")
+
+    def build_inputs(ctx: StepContext) -> dict:
+        if plan.grader_drift_reference is None:
+            raise ValueError(
+                "plan pins no grader_drift_reference; the main-grader-drift stage cannot run"
+                " (re-derive the plan at a freeze whose checkout reaches origin/main)"
+            )
+        return {
+            "release_id": plan.release_id,
+            "source_revision": plan.source_revision,
+            "declarations": _resolved_receipt(ctx, declarations),
+            "reference": plan.grader_drift_reference,
+            "output_root": stage_output_root(plan, "grader-drift"),
+        }
+
+    return _stage_step(
+        plan,
+        "main_grader_drift",
+        spec,
+        (declarations,),
+        build_inputs=build_inputs,
+        identity=identity,
+        inputs_type=main_grader_drift_stage.GraderDriftInputs,
+    )
+
+
 def _declarations_step(plan: ReleasePlan, plan_handle: ArtifactStep) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["declarations"]
     identity = _identity_fields(plan, "release_id", "source_revision", "expected_source_count", "targets", "pins")
@@ -1229,6 +1347,7 @@ def _declarations_step(plan: ReleasePlan, plan_handle: ArtifactStep) -> Artifact
             "targets": plan.targets,
             "prior_declarations": _ref_dict(plan.pins.prior_declarations),
             "removed_sources": plan.removed_sources,
+            "deliberate_exclusions": plan.deliberate_exclusions,
         }
 
     return _stage_step(
@@ -1291,7 +1410,9 @@ def _census_step(plan: ReleasePlan, census_inputs: ArtifactStep) -> ArtifactStep
             "inputs": {"uri": inputs_doc.uri, "sha256": inputs_doc.sha256},
             "output_root": stage_output_root(plan, "census"),
             "region_prefix": plan.region_prefix,
-            "expected_sources": plan.expected_source_count,
+            # A re-cut's census is incremental (the new admissions only); the
+            # census-inputs document's own row count is the expected source count.
+            "expected_sources": inputs_doc.source_count,
             # The per-source fan-out rides the job's measured core count.
             "workers": census_sizing(plan.expected_population_tasks).cpu,
             "slice_output_root": plan.slice_output_root or None,
@@ -1405,18 +1526,16 @@ def _curriculum_compose_step(
     )
 
     def build_inputs(ctx: StepContext) -> dict:
-        census_proof = _resolved_proof(ctx, census)
-        per_source = {row["source_id"]: row["inventory"]["retained_tasks"] for row in census_proof["results"]}
-        missing = sorted(set(plan.targets) - set(per_source))
-        if missing:
-            raise ValueError(f"census results carry no tasks for targets: {missing[:5]}")
+        # The same shipped fresh set the embed stage expects (an oracle-empty source
+        # carries no census inventory).
+        fresh = _fresh_corpus_expectation(plan, _resolved_proof(ctx, census))
         inputs_doc = ctx.resolved(compose_manifest)
         return {
             "release_id": plan.release_id,
             "source_revision": plan.source_revision,
             "inputs": {"uri": inputs_doc.uri, "sha256": inputs_doc.sha256},
             "output_root": stage_output_root(plan, "compose"),
-            "expected_fresh_task_count": sum(per_source[source_id] for source_id in plan.targets),
+            "expected_fresh_task_count": fresh["expected_task_count"],
             "removed_sources": plan.removed_sources,
         }
 
@@ -1483,11 +1602,12 @@ def _backend_validation_step(plan: ReleasePlan, census_inputs: ArtifactStep) -> 
 
 def _identity_backend_compose_step(plan: ReleasePlan, backend_validation: ArtifactStep) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["identity_backend_compose"]
-    identity = _identity_fields(plan, "release_id", "source_revision", "targets", "expected_source_count")
+    identity = _identity_fields(plan, "release_id", "snapshot_id", "source_revision", "targets", "expected_source_count")
 
     def build_inputs(ctx: StepContext) -> dict:
         return {
             "release_id": plan.release_id,
+            "snapshot_id": plan.snapshot_id,
             "source_revision": plan.source_revision,
             "output_root": stage_output_root(plan, "identity-backend"),
             "targets": plan.targets,
@@ -1610,6 +1730,9 @@ def _text_scan_merge_step(
 
 
 def _qc_browse_inputs(plan: ReleasePlan, declarations_ref: dict) -> dict:
+    current = read_ref(ArtifactRef(**declarations_ref))
+    prior = read_ref(plan.pins.prior_declarations)
+    copy_exclusions = set(plan.qc_exclusions) | qc_browse_stage.changed_review_sources(prior, current)
     return {
         "release_id": plan.release_id,
         "prior_load_id": plan.prior.load_id,
@@ -1620,7 +1743,7 @@ def _qc_browse_inputs(plan: ReleasePlan, declarations_ref: dict) -> dict:
         "expected_panels": plan.expected_panels,
         # The copy fans panels out across paced SQL clients; the plan step stays serial.
         "workers": qc_browse_sizing(plan.expected_browse_source_count).workers,
-        "exclusions": plan.qc_exclusions,
+        "exclusions": tuple(sorted(copy_exclusions)),
         "service_url": plan.service.service_url,
         "applet_id": plan.service.applet_id,
     }
@@ -1798,9 +1921,23 @@ def _fresh_qc_index_step(
         "catalog_target_load_id",
         "snapshot_id",
         "source_revision",
+        "removed_sources",
     )
 
     def build_inputs(ctx: StepContext) -> dict:
+        declarations_ref = _resolved_receipt(ctx, declarations)
+        frozen = read_ref(ArtifactRef(**declarations_ref))
+        carried = {row["source_id"] for row in _resolved_proof(ctx, qc_browse)["results"]}
+        fresh_panels = {}
+        for source_id, declaration in sorted(frozen.items()):
+            if source_id in carried or source_id in plan.qc_exclusions:
+                continue
+            if not (declaration.get("independent_qc") or {}).get("evidence_url"):
+                continue
+            if content_is_withheld(declaration):
+                continue
+            uri = qc_browse_stage.selected_uri(declaration)
+            fresh_panels[source_id] = {"uri": uri, "sha256": hashlib.sha256(StoragePath(uri).read_bytes()).hexdigest()}
         return {
             "release_id": plan.release_id,
             "prior_load_id": plan.prior.load_id,
@@ -1810,8 +1947,10 @@ def _fresh_qc_index_step(
             "output_root": stage_output_root(plan, "qc-index"),
             "service_url": plan.service.service_url,
             "applet_id": plan.service.applet_id,
-            "declarations": _resolved_receipt(ctx, declarations),
+            "declarations": declarations_ref,
             "qc_completion": _resolved_receipt(ctx, qc_browse),
+            "fresh_panels": fresh_panels,
+            "removed_sources": plan.removed_sources,
         }
 
     return _stage_step(
@@ -1823,6 +1962,20 @@ def _fresh_qc_index_step(
         identity=identity,
         inputs_type=fresh_qc_index_stage.FreshQcIndexInputs,
     )
+
+
+def measured_module_path(module: str) -> str:
+    """The measured module as a file path catalog_load can digest.
+
+    A derived plan records the repo-relative path; the hand-written R40 plan names the
+    dotted module. Normalized here, once, at the load's input boundary.
+    """
+    if "/" in module:
+        return str(REPO_ROOT / module)
+    spec = importlib.util.find_spec(module)
+    if spec is None or spec.origin is None:
+        raise ValueError(f"measured module {module!r} is neither a repo path nor an importable module")
+    return spec.origin
 
 
 def _catalog_load_step(plan: ReleasePlan, catalog_stage: ArtifactStep) -> ArtifactStep[StageReceipt]:
@@ -1865,7 +2018,7 @@ def _catalog_load_step(plan: ReleasePlan, catalog_stage: ArtifactStep) -> Artifa
             "expected_contract_tasks": plan.expected_contract_tasks,
             "expected_selected_panels": plan.expected_selected_panels,
             "expected_browse_source_count": plan.expected_browse_source_count,
-            "measured_module": plan.measured.module,
+            "measured_module": measured_module_path(plan.measured.module),
             "measured_revision": plan.measured.revision,
             "measured_sha256": plan.measured.sha256,
             "measured_schema_sha256": plan.measured.schema_sha256,
@@ -1919,7 +2072,7 @@ def _curriculum_load_step(
             "text_scan": scan_proof["receipt"],
             "expected_source_count": plan.expected_source_count,
             "expected_inventory_count": compose_proof["inventory_count"],
-            "expected_aligned_sources": plan.expected_source_count,
+            "expected_aligned_sources": compose_proof["source_count"],
             "expected_task_count": compose_proof["task_count"],
             "expected_rebound_source": plan.rebound_source,
             "expected_rebound_tasks": plan.rebound_tasks,
@@ -1948,6 +2101,7 @@ def _strict_audit_step(
     declarations: ArtifactStep,
     identity_backend: ArtifactStep,
     phase: str,
+    census: ArtifactStep,
     catalog_load: ArtifactStep | None = None,
     curriculum_load: ArtifactStep | None = None,
     origin_handle: ArtifactStep | None = None,
@@ -1957,15 +2111,13 @@ def _strict_audit_step(
             raise ValueError("the before-phase audit reads the live applet origin, not a published revision")
         if catalog_load is None or curriculum_load is None:
             raise ValueError("the before-phase audit runs after both loads and needs their handles")
-        deps = (declarations, identity_backend, catalog_load, curriculum_load)
+        deps = (declarations, identity_backend, census, catalog_load, curriculum_load)
     else:
         if origin_handle is None:
             raise ValueError("the after-phase audit needs the marina release for its published origin")
-        deps = (declarations, identity_backend, origin_handle)
+        deps = (declarations, identity_backend, census, origin_handle)
     spec = _STAGE_SPECS[f"strict_audit_{phase}"]
-    identity = _identity_fields(
-        plan, "release_id", "source_revision", "expected_source_count", "expected_population_tasks"
-    )
+    identity = _identity_fields(plan, "release_id", "source_revision", "expected_source_count")
 
     def build_inputs(ctx: StepContext) -> dict:
         if phase == "before":
@@ -1983,7 +2135,8 @@ def _strict_audit_step(
             "backend": _resolved_proof(ctx, identity_backend)["documents"]["backend_map"],
             "identity": _resolved_proof(ctx, identity_backend)["documents"]["identity_survey"],
             "expected_source_count": plan.expected_source_count,
-            "retained_tasks": plan.expected_population_tasks,
+            # The measured census total, not the plan's hand count (R40: 4,272,894 vs 4,363,214).
+            "retained_tasks": _resolved_proof(ctx, census)["tasks"],
             "phase": phase,
         }
 
@@ -1998,24 +2151,29 @@ def _strict_audit_step(
     )
 
 
-def _package_preview_step(plan: ReleasePlan, audit: ArtifactStep) -> ArtifactStep[StageReceipt]:
+def _package_preview_step(plan: ReleasePlan, audit: ArtifactStep, census: ArtifactStep) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["package_preview"]
-    identity = _identity_fields(plan, "release_id", "source_revision", "pins", "package_output_root")
+    identity = _identity_fields(
+        plan, "release_id", "source_revision", "pins", "package_output_root", "expected_source_count"
+    )
 
-    def build_inputs(_ctx: StepContext) -> dict:
+    def build_inputs(ctx: StepContext) -> dict:
         return {
             "release_id": plan.release_id,
             "source_revision": plan.source_revision,
             "output_root": plan.package_output_root,
-            "oracle_inventory": _ref_dict(plan.pins.oracle_inventory),
-            "source_counts": _ref_dict(plan.pins.source_counts),
+            "census": _resolved_receipt(ctx, census),
+            # Only the ruling citations carry forward from the prior counts.
+            "prior_source_counts": _ref_dict(plan.pins.source_counts),
+            "expected_source_count": plan.expected_source_count,
+            "derived_root": stage_output_root(plan, PACKAGE_INPUTS_STAGE_DIR),
         }
 
     return _stage_step(
         plan,
         "package_preview",
         spec,
-        (audit,),
+        (audit, census),
         build_inputs=build_inputs,
         identity=identity,
         inputs_type=package_preview_stage.PackagePreviewInputs,
@@ -2032,7 +2190,9 @@ def _release_check_step(
 ) -> ArtifactStep[StageReceipt]:
     deps = tuple(handle for handle in (package, preflight, hosted, marina) if handle is not None)
     spec = _STAGE_SPECS[f"release_check_{phase}"]
-    identity = _identity_fields(plan, "release_id", "source_revision", "expected_source_count", "service")
+    identity = _identity_fields(
+        plan, "release_id", "source_revision", "expected_source_count", "service", "package_output_root"
+    )
 
     def build_inputs(ctx: StepContext) -> dict:
         inputs: dict[str, Any] = {
@@ -2040,21 +2200,22 @@ def _release_check_step(
             "source_revision": plan.source_revision,
             "phase": phase,
             "output_root": stage_output_root(plan, f"release-check-{phase}"),
+            # The checker runs on the workstation that holds the package.
+            "work_root": plan.package_output_root,
             "service_url": plan.service.service_url,
             "applet_id": plan.service.applet_id,
             "expected_source_count": plan.expected_source_count,
             "production_version": plan.service.production_version,
         }
         if phase == "preflight":
+            package_proof = _resolved_proof(ctx, package)
             inputs["package"] = _resolved_receipt(ctx, package)
-            inputs["oracle_inventory"] = _ref_dict(plan.pins.oracle_inventory)
-            inputs["source_counts"] = _ref_dict(plan.pins.source_counts)
+            inputs["oracle_inventory"] = package_proof["oracle_inventory"]
+            inputs["source_counts"] = package_proof["source_counts"]
         else:
             inputs["preflight_receipt"] = _resolved_receipt(ctx, preflight)
-            if phase == "hosted":
-                inputs["published_revision"] = plan.service.preview_base_version
-            else:
-                inputs["published_revision"] = _resolved_proof(ctx, marina)["publish"]["version"]
+            inputs["published_revision"] = _resolved_proof(ctx, marina)["publish"]["version"]
+            if phase == "postpublish":
                 inputs["hosted_receipt"] = _resolved_receipt(ctx, hosted)
         return inputs
 
@@ -2074,7 +2235,7 @@ def _node_of(handle: ArtifactStep) -> str:
 
 
 def _marina_release_step(
-    plan: ReleasePlan, package: ArtifactStep, preflight: ArtifactStep, hosted: ArtifactStep
+    plan: ReleasePlan, package: ArtifactStep, preflight: ArtifactStep
 ) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["marina_release"]
     identity = _identity_fields(plan, "release_id", "source_revision", "service", "pins")
@@ -2087,9 +2248,12 @@ def _marina_release_step(
             "service_url": plan.service.service_url,
             "package": _resolved_receipt(ctx, package),
             "preflight_receipt": _resolved_receipt(ctx, preflight),
-            "hosted_receipt": _resolved_receipt(ctx, hosted),
             "prior_manifest": _ref_dict(plan.pins.prior_manifest),
-            "base_version": plan.service.preview_base_version,
+            # The live revision and mode the preflight check observed, not the plan's
+            # cut-time preview_base_version (R40: planned 32, live 39). The hosted
+            # check then verifies the published revision (RELEASE.md).
+            "base_version": _resolved_proof(ctx, preflight)["live"]["version"],
+            "access_mode": _resolved_proof(ctx, preflight)["live"]["mode"],
             "output_root": stage_output_root(plan, "marina-release"),
         }
 
@@ -2097,7 +2261,7 @@ def _marina_release_step(
         plan,
         "marina_release",
         spec,
-        (package, preflight, hosted),
+        (package, preflight),
         build_inputs=build_inputs,
         identity=identity,
         inputs_type=marina_release_stage.MarinaReleaseInputs,
@@ -2105,7 +2269,11 @@ def _marina_release_step(
 
 
 def _hosted_check_step(
-    plan: ReleasePlan, declarations: ArtifactStep, identity_backend: ArtifactStep, marina: ArtifactStep
+    plan: ReleasePlan,
+    declarations: ArtifactStep,
+    identity_backend: ArtifactStep,
+    census: ArtifactStep,
+    marina: ArtifactStep,
 ) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["hosted_check"]
     identity = _identity_fields(plan, "release_id", "source_revision", "expected_source_count", "service")
@@ -2121,6 +2289,8 @@ def _hosted_check_step(
             "backend": _resolved_proof(ctx, identity_backend)["documents"]["backend_map"],
             "identity": _resolved_proof(ctx, identity_backend)["documents"]["identity_survey"],
             "expected_source_count": plan.expected_source_count,
+            # The measured census total, as the strict audit reads it.
+            "retained_tasks": _resolved_proof(ctx, census)["tasks"],
             "release_manifest": _resolved_receipt(ctx, marina),
             "output_root": stage_output_root(plan, "hosted-check"),
         }
@@ -2129,7 +2299,7 @@ def _hosted_check_step(
         plan,
         "hosted_check",
         spec,
-        (declarations, identity_backend, marina),
+        (declarations, identity_backend, census, marina),
         build_inputs=build_inputs,
         identity=identity,
         inputs_type=hosted_check_stage.HostedCheckInputs,
@@ -2137,22 +2307,29 @@ def _hosted_check_step(
 
 
 def _exposure_probe_step(
-    plan: ReleasePlan, marina: ArtifactStep, hosted: ArtifactStep, postpublish: ArtifactStep, audit_after: ArtifactStep
+    plan: ReleasePlan,
+    declarations: ArtifactStep,
+    marina: ArtifactStep,
+    hosted: ArtifactStep,
+    postpublish: ArtifactStep,
+    audit_after: ArtifactStep,
 ) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["exposure_probe"]
     identity = _identity_fields(plan, "release_id", "service", "pins")
 
     def build_inputs(ctx: StepContext) -> dict:
+        # The withheld sources and grants come from the release's sealed declaration
+        # cut; an exposure_input_check pin, when a plan carries one, is a cross-check.
         publish = _resolved_proof(ctx, marina)["publish"]
-        if not plan.pins.exposure_input_check:
-            raise ValueError("the exposure probe requires the exposure_input_check pin")
-        input_check = read_ref(plan.pins.exposure_input_check)
+        withheld, grants = exposure_probe_stage.exposure_lists(
+            read_ref(ArtifactRef(**_resolved_receipt(ctx, declarations)))
+        )
         return {
             "release_id": plan.release_id,
             "revision": publish["version"],
             "root": plan.service.public_root,
-            "withheld_sources": tuple(sorted(input_check["withheld_sources"])),
-            "publication_grants": tuple(input_check["publication_grants"]),
+            "withheld_sources": withheld,
+            "publication_grants": grants,
             "input_check_receipt": _ref_dict(plan.pins.exposure_input_check),
             "output_root": stage_output_root(plan, "exposure-probe"),
         }
@@ -2161,7 +2338,7 @@ def _exposure_probe_step(
         plan,
         "exposure_probe",
         spec,
-        (marina, hosted, postpublish, audit_after),
+        (declarations, marina, hosted, postpublish, audit_after),
         build_inputs=build_inputs,
         identity=identity,
         inputs_type=exposure_probe_stage.ExposureProbeInputs,
@@ -2221,6 +2398,7 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
 
     declarations = _declarations_step(plan, plan_handle)
     main_sync = _main_source_sync_step(plan, declarations)
+    drift = _main_grader_drift_step(plan, declarations)
     census_inputs = _census_inputs_step(plan, declarations)
     backend_validation = _backend_validation_step(plan, census_inputs)
     identity_backend = _identity_backend_compose_step(plan, backend_validation)
@@ -2241,19 +2419,22 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
     catalog_load = _catalog_load_step(plan, catalog_stage)
     curriculum_load = _curriculum_load_step(plan, compose, text_scans)
 
-    audit_before = _strict_audit_step(plan, declarations, identity_backend, "before", catalog_load, curriculum_load)
-    package = _package_preview_step(plan, audit_before)
+    audit_before = _strict_audit_step(
+        plan, declarations, identity_backend, "before", census, catalog_load, curriculum_load
+    )
+    package = _package_preview_step(plan, audit_before, census)
     check_preflight = _release_check_step(plan, "preflight", package, None, None, None)
-    check_hosted = _release_check_step(plan, "hosted", None, check_preflight, None, None)
-    marina = _marina_release_step(plan, package, check_preflight, check_hosted)
-    audit_after = _strict_audit_step(plan, declarations, identity_backend, "after", origin_handle=marina)
-    hosted = _hosted_check_step(plan, declarations, identity_backend, marina)
+    marina = _marina_release_step(plan, package, check_preflight)
+    check_hosted = _release_check_step(plan, "hosted", None, check_preflight, None, marina)
+    audit_after = _strict_audit_step(plan, declarations, identity_backend, "after", census, origin_handle=marina)
+    hosted = _hosted_check_step(plan, declarations, identity_backend, census, marina)
     check_postpublish = _release_check_step(plan, "postpublish", None, check_preflight, check_hosted, marina)
-    exposure = _exposure_probe_step(plan, marina, hosted, check_postpublish, audit_after)
+    exposure = _exposure_probe_step(plan, declarations, marina, hosted, check_postpublish, audit_after)
 
     stages: dict[str, ArtifactStep] = {
         "declarations": declarations,
         "main_source_sync": main_sync,
+        "main_grader_drift": drift,
         "admission_check": admission_check,
         "census_inputs": census_inputs,
         "census": census,
@@ -2328,4 +2509,7 @@ def graph_nodes(graph: ReleaseGraph) -> list[dict]:
     sync = graph.stages.get("main_source_sync")
     if sync is not None:
         visit(sync)
+    drift = graph.stages.get("main_grader_drift")
+    if drift is not None:
+        visit(drift)
     return nodes

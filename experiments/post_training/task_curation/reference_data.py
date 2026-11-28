@@ -105,7 +105,12 @@ def _verify_write_base(api: HfApi, index: DataReferenceIndex, head: str, documen
 
 
 def commit_reference_documents(
-    index_path: Path, documents: Mapping[str, bytes], *, message: str, max_attempts: int = 5
+    index_path: Path,
+    documents: Mapping[str, bytes],
+    *,
+    message: str,
+    max_attempts: int = 5,
+    retain_references: bool = True,
 ) -> str:
     """Upload new or updated documents to the referenced private dataset and rewrite the index.
 
@@ -146,7 +151,9 @@ def commit_reference_documents(
             downloaded = hf_hub_download(repo_id=index.repo, repo_type="dataset", revision=commit.oid, filename=path)
             if hashlib.sha256(Path(downloaded).read_bytes()).hexdigest() != sha:
                 raise ValueError(f"Referenced dataset bytes changed: {index.repo}@{commit.oid}:{path}")
-        retained = [reference for reference in index.references if reference.path not in documents]
+        retained = (
+            [reference for reference in index.references if reference.path not in documents] if retain_references else []
+        )
         updated_references = [
             DataReference(repo=index.repo, revision=commit.oid, path=path, sha256=hashlib.sha256(data).hexdigest())
             for path, data in sorted(documents.items())

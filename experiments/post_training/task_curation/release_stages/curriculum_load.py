@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
@@ -79,15 +81,18 @@ def read_ref(ref: ArtifactRef) -> dict:
 
 
 def verify_handoff(inputs: CurriculumLoadInputs, handoff: dict) -> None:
-    """The composition handoff must describe a complete, unchanged composition."""
-    if handoff["source_count"] != inputs.expected_source_count:
-        raise ValueError(f"handoff has {handoff['source_count']} sources, expected {inputs.expected_source_count}")
-    if handoff["inventory_count"] != inputs.expected_inventory_count:
+    """Verify composition counts, unchanged scopes and pinned identity rewrites."""
+    # The compose handoff's vocabulary: ``source_count`` counts the aligned (matched)
+    # sources, ``inventory_count`` the catalog sources the plan declares.
+    if handoff["source_count"] != inputs.expected_aligned_sources:
+        raise ValueError(f"handoff aligns {handoff['source_count']} sources, expected {inputs.expected_aligned_sources}")
+    if handoff["inventory_count"] not in {inputs.expected_inventory_count} & {inputs.expected_source_count}:
         raise ValueError(
             f"handoff inventories {handoff['inventory_count']} sources, expected {inputs.expected_inventory_count}"
+            f" (plan: {inputs.expected_source_count})"
         )
-    if handoff["tasks"] != inputs.expected_task_count:
-        raise ValueError(f"handoff carries {handoff['tasks']} tasks, expected {inputs.expected_task_count}")
+    if handoff["task_count"] != inputs.expected_task_count:
+        raise ValueError(f"handoff carries {handoff['task_count']} tasks, expected {inputs.expected_task_count}")
     unchanged = (
         handoff["all_retained_assignment_values_verified"],
         handoff["all_statistics_and_confidence_values_unchanged"],
@@ -96,6 +101,7 @@ def verify_handoff(inputs: CurriculumLoadInputs, handoff: dict) -> None:
     )
     if not all(unchanged):
         raise ValueError(f"handoff reports changed composition values: {unchanged}")
+    verify_public_input_rebindings(handoff)
     rebound_matches = handoff["rebound_source"] == inputs.expected_rebound_source and (
         handoff["rebound_tasks"] == inputs.expected_rebound_tasks
     )
@@ -104,16 +110,48 @@ def verify_handoff(inputs: CurriculumLoadInputs, handoff: dict) -> None:
             f"handoff rebound {handoff['rebound_source']!r} ({handoff['rebound_tasks']} tasks);"
             f" expected {inputs.expected_rebound_source!r} ({inputs.expected_rebound_tasks})"
         )
-    if handoff["confidence_rows_validated"] != inputs.expected_confidence_rows:
+    if handoff["confidence_validated_rows"] != inputs.expected_confidence_rows:
         raise ValueError(
-            f"handoff validated {handoff['confidence_rows_validated']} confidence rows,"
+            f"handoff validated {handoff['confidence_validated_rows']} confidence rows,"
             f" expected {inputs.expected_confidence_rows}"
         )
 
 
-def verify_text_scan(
-    inputs: CurriculumLoadInputs, handoff: dict, handoff_ref: ArtifactRef, scan: dict, coverage: dict
-) -> None:
+def verify_public_input_rebindings(handoff: dict) -> None:
+    """Require complete, digest-bound task identity mappings for scoped rewrites."""
+    rebindings = handoff.get("public_input_rebindings", [])
+    if not rebindings:
+        return
+    if handoff["unchanged_scope"] != "unrebound_retained_sources" or not handoff["retained_subset_statistics_verified"]:
+        raise ValueError("Rebound handoff lacks scoped retention verification")
+    reference = handoff["release"]
+    release = read_ref(ArtifactRef(uri=reference["uri"], sha256=reference["sha256"]))
+    sources = {row["source_id"]: row for row in release["sources"]}
+    seen = set()
+    for binding in rebindings:
+        source_id = binding["source_id"]
+        if source_id in seen or source_id not in sources or not binding["all_public_inputs_unchanged"]:
+            raise ValueError("Rebound handoff repeats, omits or changes a source's public inputs")
+        seen.add(source_id)
+        encoded = manifest_bytes(ManifestReference.model_validate(binding["task_identity_mapping"]))
+        rows = pq.read_table(pa.BufferReader(encoded)).to_pylist()
+        retained = [row for row in rows if row["new_task_id"] is not None]
+        removed = [row for row in rows if row["new_task_id"] is None]
+        if (
+            len(retained) != binding["task_count"]
+            or len(retained) != sources[source_id]["task_count"]
+            or len(removed) != binding["removed_task_count"]
+            or len({row["old_task_id"] for row in rows}) != len(rows)
+            or len({row["new_task_id"] for row in retained}) != len(retained)
+            or any(not row["old_task_sha256"] for row in rows)
+            or any(not row["new_task_sha256"] or not row["public_content_sha256"] for row in retained)
+            or any(row["new_task_sha256"] is not None for row in removed)
+            or sum(row["old_task_id"] != row["new_task_id"] for row in retained) != binding["changed_task_id_count"]
+        ):
+            raise ValueError(f"Rebound task mapping does not cover the selected population: {source_id}")
+
+
+def verify_text_scan(handoff: dict, handoff_ref: ArtifactRef, scan: dict, coverage: dict) -> None:
     """The text scan must be a passing scan of exactly this handoff and coverage."""
     if scan["status"] != "PASS":
         raise ValueError(f"text scan status is {scan['status']!r}, expected PASS")
@@ -127,7 +165,7 @@ def verify_text_scan(
         raise ValueError("text scan coverage artifact disagrees with the handoff")
     if scan["artifacts"]["confidence"] != ArtifactRef(**handoff["confidence"]).model_dump(mode="json"):
         raise ValueError("text scan confidence artifact disagrees with the handoff")
-    if scan["task_count"] != handoff["tasks"] or scan["source_count"] != handoff["source_count"]:
+    if scan["task_count"] != handoff["task_count"] or scan["source_count"] != handoff["source_count"]:
         raise ValueError("text scan counts disagree with the handoff")
     if scan["sample_task_count"] != coverage["sample_task_count"]:
         raise ValueError("text scan sample task count disagrees with the coverage")
@@ -153,7 +191,7 @@ def run_curriculum_load(
         coverage = read_ref(ArtifactRef(**handoff["coverage"]))
         scan_ref = ManifestReference(uri=inputs.text_scan.uri, sha256=inputs.text_scan.sha256)
         scan = json.loads(manifest_bytes(scan_ref))
-        verify_text_scan(inputs, handoff, handoff_ref, scan, coverage)
+        verify_text_scan(handoff, handoff_ref, scan, coverage)
 
         if dry_run:
             proof = {
@@ -162,7 +200,7 @@ def run_curriculum_load(
                 "prior_curriculum_load_id": inputs.prior_curriculum_load_id,
                 "handoff": {"uri": inputs.handoff.uri, "sha256": inputs.handoff.sha256},
                 "source_count": handoff["source_count"],
-                "tasks": handoff["tasks"],
+                "tasks": handoff["task_count"],
                 "sql_writes": 0,
             }
             alerts.stage_finished(
@@ -176,6 +214,19 @@ def run_curriculum_load(
     except Exception as error:
         alerts.stage_failed(inputs.release_id, "curriculum_load", {"error": str(error)[:500]}, alert_feeds)
         raise
+
+
+def resume_cursor(curriculum_current: list[dict], prior_load_id: str) -> str | None:
+    """The load to resume: none while the prior curriculum is still selected.
+
+    A selected load chained from the prior one is this release's earlier attempt and
+    resumes; any other selection is a foreign load and refuses.
+    """
+    if not curriculum_current or curriculum_current[0]["load_id"] == prior_load_id:
+        return None
+    if curriculum_current[0]["previous_load_id"] != prior_load_id:
+        raise ValueError(f"curriculum selection moved to an unrelated load: {curriculum_current[0]!r}")
+    return curriculum_current[0]["load_id"]
 
 
 def _run_write(inputs, handoff, coverage, scan_ref, query, query_factory, loader, alert_feeds):
@@ -192,8 +243,8 @@ def _run_write(inputs, handoff, coverage, scan_ref, query, query_factory, loader
     if catalog_selection not in allowed:
         raise ValueError(f"another catalog load was selected: {catalog_selection!r}")
     curriculum_current = query("SELECT load_id,previous_load_id FROM curriculum_current WHERE name='latest'", {})["rows"]
-    resume = curriculum_current[0]["load_id"] if curriculum_current else None
-    if resume is not None and resume != inputs.prior_curriculum_load_id:
+    resume = resume_cursor(curriculum_current, inputs.prior_curriculum_load_id)
+    if resume is not None:
         cursor = query("SELECT load_id FROM curriculum_loads WHERE load_id=:load", {"load": resume})["rows"]
         if len(cursor) > 1:
             raise ValueError("ambiguous curriculum resume cursor")
@@ -224,7 +275,7 @@ def _run_write(inputs, handoff, coverage, scan_ref, query, query_factory, loader
         "SELECT COUNT(*) AS n FROM curriculum_sources WHERE load_id=:load AND alignment->>'basis'='matched'",
         {"load": selected[0]["load_id"]},
     )["rows"][0]["n"]
-    if readback["sources"] != inputs.expected_inventory_count or aligned != inputs.expected_source_count:
+    if readback["sources"] != inputs.expected_inventory_count or aligned != inputs.expected_aligned_sources:
         raise ValueError(f"curriculum readback {readback} with {aligned} matched sources disagrees with the handoff")
     if readback["tasks"] != coverage["sample_task_count"]:
         raise ValueError("curriculum readback task count disagrees with the coverage")

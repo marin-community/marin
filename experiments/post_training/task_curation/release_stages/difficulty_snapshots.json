@@ -1,6 +1,6 @@
 {
-  "r41": {
-    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/difficulty-ledger/v1/sealed-snapshots/5c6a25cecc5172d33db614d24640b8d00cdac77ee3bae610adff3bf250bfbb56/manifest.json",
-    "sha256": "c09b275b5c7eb1de09cda63b5cb1084854d1a957ff58e62a188e273c72bbf0db"
+  "atlas-2026.11.27": {
+    "uri": "gs://marin-us-central2/rl-data/atlas/difficulty-tpu-v4/d7cb5dc7f21b1584dfc849aa646aaac7bb1b37ba8d9dbd6aa45f530e974fb579/release-seals/atlas-2026.11.27/20261127T120000Z/snapshots/bc2d919533c7a1dce4922156886a5558b16e4cf97b9c1d8c9f2bed9ac0db5bf1/manifest.json",
+    "sha256": "5927056f047676cde5c9b2d46bf5a5a1ca34314217079427f5d316db4c291fcc"
   }
 }

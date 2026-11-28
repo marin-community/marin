@@ -26,6 +26,7 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets.native_harbor import native_task, unpack_native
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
+from experiments.post_training.task_curation.shell_heredoc_repair import repair_task
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 DATASET = "laion/rts-1k-rootless-apptainer"
@@ -47,6 +48,7 @@ def convert_rst(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRej
     task = native_task(row, context)
     if isinstance(task, ImportRejection):
         return task
+    task = repair_task(task)
     resources = {resource.path: resource for resource in task.resources.verifier}
     configuration = tomllib.loads(resource_bytes(resources["task.toml"]).decode())
     private = {

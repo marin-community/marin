@@ -337,6 +337,36 @@ def _additive_constant_match(expected: list, candidate: list) -> bool:
     return False
 
 
+def _positive_symbol_match(expected: list, candidate: list, positive_symbols: tuple[str, ...]) -> bool:
+    """Prove scalar equality after applying only the contract's positive assumptions."""
+    from math_verify.utils import timeout  # noqa: PLC0415
+    from sympy import Expr, Symbol, simplify  # noqa: PLC0415
+    from sympy.matrices.expressions import MatrixExpr  # noqa: PLC0415
+
+    @timeout(_timeout())
+    def equal_under_assumptions(gold, target) -> bool:
+        replacements = {
+            symbol: Symbol(symbol.name, positive=True)
+            for symbol in gold.free_symbols | target.free_symbols
+            if symbol.name in positive_symbols
+        }
+        return simplify(gold.xreplace(replacements) - target.xreplace(replacements)) == 0
+
+    return any(
+        equal_under_assumptions(gold, target)
+        for gold in expected
+        for target in candidate
+        if isinstance(gold, Expr)
+        and isinstance(target, Expr)
+        and not isinstance(gold, MatrixExpr)
+        and not isinstance(target, MatrixExpr)
+        and gold.is_commutative
+        and target.is_commutative
+        and not _is_undefined(gold)
+        and not _is_undefined(target)
+    )
+
+
 def validate_math(spec: MathSpec) -> None:
     """Check the parsing policy; the reference itself is parsed only when grading."""
     empty_output_policy(spec)
@@ -344,6 +374,17 @@ def validate_math(spec: MathSpec) -> None:
         raise InvalidTask("allow_additive_constant must be boolean")
     if not isinstance(spec.profile, MathProfile) or not isinstance(spec.math_type, MathType):
         raise InvalidTask("unknown math parsing profile or math_type")
+    if (
+        not isinstance(spec.positive_symbols, tuple)
+        or any(
+            not isinstance(name, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name)
+            for name in spec.positive_symbols
+        )
+        or len(set(spec.positive_symbols)) != len(spec.positive_symbols)
+    ):
+        raise InvalidTask("positive_symbols must contain unique symbol names")
+    if spec.positive_symbols and spec.math_type is not MathType.SCALAR:
+        raise InvalidTask("positive_symbols requires scalar math_type")
 
 
 def grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
@@ -405,6 +446,8 @@ def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
         )
     with _deadline_phase(MATH_DEADLINE_COMPARISON):
         match = bool(parsed) and _verify(expected, parsed)
+        if not match and spec.positive_symbols:
+            match = _positive_symbol_match(expected, parsed, spec.positive_symbols)
         chosen = None
         if parsed:
             gold_strings = strings_of(expected)
@@ -444,6 +487,8 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
             return scored(0.0, reason="missing_parse", expected_parsed=bool(expected), candidate_parsed=bool(parsed))
         with _deadline_phase(MATH_DEADLINE_COMPARISON):
             match = bool(_verify(expected, parsed))
+            if not match and spec.positive_symbols:
+                match = _positive_symbol_match(expected, parsed, spec.positive_symbols)
             if not match and spec.allow_additive_constant:
                 match = _additive_constant_match(expected, parsed)
         return scored(float(match), extracted=candidate, expected=spec.expected)
@@ -463,6 +508,8 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
             match = _members_match(expected, parsed)
         else:
             match = _verify(expected[0], parsed[0], allow_set_relation_comp=spec.math_type in SET_TYPES)
+            if not match and spec.positive_symbols:
+                match = _positive_symbol_match(expected[0], parsed[0], spec.positive_symbols)
         if not match and spec.allow_additive_constant and not is_list:
             match = _additive_constant_match(expected[0], parsed[0])
     return scored(float(bool(match)), extracted=candidate, expected=spec.expected)

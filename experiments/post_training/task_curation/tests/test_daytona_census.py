@@ -75,6 +75,45 @@ def test_execution_cost_census_keeps_task_specs_rejected_by_the_grading_boundary
     assert not rejected
 
 
+def test_required_backend_routes_actor_slots_off_daytona_and_off_the_snapshot_budget():
+    """The per-task required_backend mechanism (0f612f8c81) routes census slots too.
+
+    An actor that declares required_backend=local counts under the LOCAL role, its
+    env is validated through check_local_environment, and it provisions no Daytona
+    snapshot identity — so a cohort of distinct pinned images consumes no snapshot
+    budget (the FACET/mimo LOCAL-routed repair shape).
+    """
+    task = {
+        "id": "local-routed-actor",
+        "environment_requirements": {
+            "docker_image": "actor@sha256:" + "a" * 64,
+            "command_semantics": "linux_process",
+            "required_backend": "local",
+        },
+        "grader": {"environment": {"docker_image": "actor@sha256:" + "a" * 64, "command_semantics": "linux_process"}},
+    }
+    measured = measure_envelopes([(task, {})])
+    assert measured.machine_slots == 0
+    assert measured.roles["agent"]["local"]["machine_slots"] == 1
+    assert "daytona" not in measured.roles["agent"]
+    assert not measured.snapshot_sizes
+    assert measured.execution_failure_tasks == 0
+    daytona_task = {
+        "id": "daytona-actor",
+        "environment_requirements": {
+            "docker_image": "actor@sha256:" + "a" * 64,
+            "command_semantics": "linux_process",
+        },
+        "grader": {"environment": None},
+    }
+    daytona_fit = measure_envelopes([(daytona_task, {})])
+    assert daytona_fit.machine_slots == 1
+    routed = [{"id": f"routed-{index}", **task} for index in range(11)]
+    off_budget = measure_envelopes((row, {}) for row in routed)
+    assert set(daytona_unsafe_reasons(off_budget)) == set()
+    assert daytona_unsafe_counts(off_budget) == {}
+
+
 def test_actor_unsafe_reasons_distinguish_snapshot_budget_build_and_host_image():
 
     def actor(requirements):

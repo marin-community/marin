@@ -254,7 +254,7 @@ def test_require_license_applies_a_registry_ban():
         issue_url=ISSUE_URL,
     )
     with pytest.raises(ValueError, match="blocks ingest and admission"):
-        require_license(receipt([evidence(("mit",))]), source_id, "math", "rev-1", "ingest", ban=ban)
+        require_license(receipt([evidence(("mit",))]), source_id, "ingest", ban=ban)
 
 
 def test_policy_reward_measurement_binds_and_validates():
@@ -348,21 +348,26 @@ def test_source_declaration_carries_policy_reward_measurements():
 def test_require_license_fails_closed_on_each_missing_prerequisite():
     source_id = "nemotron_sft_v3/math_v2/medium"
     with pytest.raises(ValueError):
-        require_license(None, source_id, "math", "rev-1", "ingest", ban=None)
+        require_license(None, source_id, "ingest", ban=None)
     stale = receipt([evidence(("mit",))])
     stale = stale.model_copy(update={"resolver_version": "atlas-license-v1"})
     with pytest.raises(ValueError):
-        require_license(stale, source_id, "math", "rev-1", "ingest", ban=None)
-    with pytest.raises(ValueError):
-        require_license(receipt([evidence(("mit",))]), source_id, "math", "rev-2", "ingest", ban=None)
+        require_license(stale, source_id, "ingest", ban=None)
+    foreign = receipt([evidence(("mit",))]).model_copy(update={"source_id": "other/source"})
+    with pytest.raises(ValueError, match="belongs to another source"):
+        require_license(foreign, source_id, "ingest", ban=None)
+    # A revision at another pin inherits the source's record (ruling 2026-11-27): the
+    # check evaluates the record's own pin and never compares the published revision.
+    revision = receipt([evidence(("mit",))]).model_copy(update={"revision": "rev-2"})
+    require_license(revision, source_id, "ingest", ban=None)
     banned = receipt([evidence(("mit",))], [decision(LicenseDecisionKind.BAN, True)])
     with pytest.raises(ValueError):
-        require_license(banned, source_id, "math", "rev-1", "ingest", ban=None)
+        require_license(banned, source_id, "ingest", ban=None)
     failing = receipt([evidence(("mit",), restrictive_terms=True)])
     with pytest.raises(ValueError):
-        require_license(failing, source_id, "math", "rev-1", "ingest", ban=None)
+        require_license(failing, source_id, "ingest", ban=None)
     excepted = receipt(
         [evidence(("mit",), restrictive_terms=True)],
         [decision(LicenseDecisionKind.EXCEPTION, True)],
     )
-    require_license(excepted, source_id, "math", "rev-1", "ingest", ban=None)
+    require_license(excepted, source_id, "ingest", ban=None)

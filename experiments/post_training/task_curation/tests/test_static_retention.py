@@ -18,7 +18,16 @@ from finestore.rl.curation import (
 )
 from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements, NoGrader, ResourceGroups, Source, TaskSpec
+from taskcompendium.models import (
+    CommandSemantics,
+    DockerBuildContext,
+    DockerBuildExecution,
+    EnvironmentRequirements,
+    NoGrader,
+    ResourceGroups,
+    Source,
+    TaskSpec,
+)
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.pipeline.oracle_filter import (
     MechanicalOracleTaskReceipt,
@@ -33,6 +42,7 @@ from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.harbor_inspection import native_task_checksums
 from experiments.post_training.task_curation.static_retention import collect_mixed_retention, collect_static_retention
+from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_task
 from lib.taskcompendium.tests.oracle_filter_fixtures import oracle_receipt
 
 
@@ -329,3 +339,32 @@ def test_static_collection_rejects_duplicate_ids_across_batches_before_writing(t
     with pytest.raises(ValueError, match="complete, unique, known no-oracle population"):
         collect_static_retention(cohort, context, evidence, output)
     assert not output.exists()
+
+
+def test_declarative_static_route_preserves_builds_without_clearing_other_blockers(tmp_path):
+    task = TaskSpec.model_validate(json.loads(prebuilt_task("build")["lowered_task_spec"])["task"])
+    context = DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM python@sha256:" + b"d" * 64 + b"\n"),))
+    environment = task.environment_requirements.model_copy(update={"docker_image": None, "docker_build": context})
+    task = task.model_copy(update={"environment_requirements": environment})
+    unsupported = no_oracle_answer("unsupported").model_copy(
+        update={
+            "tags": ("harbor",),
+            "grader": NoGrader(reason="Original native verifier"),
+            "resources": ResourceGroups(
+                verifier=(inline_resource("task.toml", b'[environment]\ndocker_image="python:latest"\n'),)
+            ),
+        }
+    )
+    cohort, original, source_context, evidence = frozen_cohort(tmp_path, [task, unsupported])
+    rejected = collect_static_retention(cohort, source_context, evidence, tmp_path / "generic")
+    assert not rejected.tasks[task.id].passed
+    output = tmp_path / "declarative"
+    retained = collect_static_retention(
+        cohort, source_context, evidence, output, docker_build=DockerBuildExecution.DECLARATIVE
+    )
+    assert retained.tasks[task.id].passed and not retained.tasks[unsupported.id].passed
+    assert pq.read_table(output / "tasks.parquet").to_pylist() == [original[0]]
+    assert require_oracle_filter(task, retained, {"source": task.id}, source_context=source_context)
+    assert pq.read_table(cohort).to_pylist() == original
+    summary = json.loads((output / "static-retention.json").read_text())
+    assert summary["docker_build_execution"] == "declarative" and summary["executability"] == "unmeasured"

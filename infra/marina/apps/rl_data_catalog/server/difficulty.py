@@ -11,6 +11,7 @@ from finestore.rl.difficulty import PROTOCOL_ID, DifficultyObservation, Measurem
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .audit import wilson_interval
 from .content_access import content_is_withheld, content_marker
 from .source_identity import canonical_source_id, original_source_id
 
@@ -122,8 +123,16 @@ def model_summaries(current: dict[Solver, DifficultyObservation]) -> list[dict[s
         record = current[solver]
         payload = record.model_dump(mode="json", exclude={"sample": {"tasks"}})
         payload["solve_rate"] = record.solved / record.n if record.status == MeasurementStatus.MEASURED else None
+        if record.status == MeasurementStatus.MEASURED and record.n > 0 and record.wilson_95 is None:
+            payload["wilson_95"] = difficulty_interval(record.solved, record.n)
         models.append(payload)
     return models
+
+
+def difficulty_interval(solved: int, n: int) -> dict[str, float]:
+    """The Wilson 95% interval for a measured difficulty cell."""
+    low, high = wilson_interval(solved, n)
+    return {"low": low, "high": high}
 
 
 def difficulty_table_summary(declaration: dict[str, Any], records: Iterable[DifficultyObservation]) -> dict[str, Any]:

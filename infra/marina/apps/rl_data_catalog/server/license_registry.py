@@ -4,7 +4,7 @@
 """Versioned user decisions; Python packaging preserves this registry in hosted backends."""
 
 LICENSE_BANS = r"""{
-  "version": "2026.11.25.a-main-sync.1",
+  "version": "2026.11.26.b-license-exceptions.2",
   "bans": [
     {
       "source_id": "FWeindel:validated-tasks/tmax11-v1.1",
@@ -498,7 +498,56 @@ LICENSE_BANS = r"""{
       ],
       "decided_at": "2026-11-15T17:27:51.574601+00:00",
       "decision_by": "user via coordinator",
-      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+      "issue_url": "https://github.com/marin-community/marin/issues/11497",
+      "exception": {
+        "upstream_revision": "937e9f10356e31e854f6efb9a2507f1e200c8b25",
+        "use": "train",
+        "receipt_sha256": "fe67508421dd34ee42d5dbb92926320697d211a173981fa98c331c043565b2ef",
+        "rationale": "Reversing user ruling: repackager ruling plus verified MIT lineage clear train use at this pin.",
+        "evidence_urls": [
+          "https://github.com/sarahmart/HARDMath/blob/9ade062a80b7d475666b11ae13a2fb0d7b7f0341/LICENSE",
+          "https://huggingface.co/datasets/open-athena/atlas-source-pins/blob/eec74e0a1f6e7a8c81f382d193a82ae00ced069e/hardmath_lineage.json",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.25.1/inputs/hardmath-license-receipt-v1.json",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.25.1/inputs/hardmath-folder-lineage-receipt-v1.json",
+          "file:///Users/benfeuer/Documents/experiments/active/atlas-rulings/repackager-license-follows-upstream-20261116.md"
+        ],
+        "decided_at": "2026-11-26T07:45:00-05:00",
+        "decision_by": "user via coordinator (Claude session b610073d)"
+      }
+    },
+    {
+      "source_id": "pafitis:hardmath@rhs",
+      "upstream_id": "pafitis/HARDMath_processed_training",
+      "upstream_revision": "937e9f10356e31e854f6efb9a2507f1e200c8b25",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "No license declaration in pinned upstream primary evidence.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/pafitis/HARDMath_processed_training/resolve/937e9f10356e31e854f6efb9a2507f1e200c8b25/README.md"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574601+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497",
+      "exception": {
+        "upstream_revision": "937e9f10356e31e854f6efb9a2507f1e200c8b25",
+        "use": "train",
+        "receipt_sha256": "eb4f7527271cd23953b93e0b3c8466e91ebf4f1853f098135e1849e6e0942800",
+        "rationale": "Variant exception per option a (2026-11-26): base lineage, train scope, release pin b87667c4.",
+        "evidence_urls": [
+          "https://github.com/sarahmart/HARDMath/blob/9ade062a80b7d475666b11ae13a2fb0d7b7f0341/LICENSE",
+          "https://huggingface.co/datasets/open-athena/atlas-source-pins/blob/eec74e0a1f6e7a8c81f382d193a82ae00ced069e/hardmath_lineage.json",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.25.1/inputs/hardmath-license-receipt-v1.json",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.25.1/inputs/hardmath-folder-lineage-receipt-v1.json",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.25.1/inputs/hardmath-rhs-variant-receipt-v1.json",
+          "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.25.1/hardmath-repair-republish-v2/result.json",
+          "https://huggingface.co/datasets/open-athena/pafitis-hardmath-processed-training-repaired-20261126-v1/tree/b87667c4bf6ac31027e439e46dde77399af15f26",
+          "file:///Users/benfeuer/Documents/experiments/active/atlas-rulings/repackager-license-follows-upstream-20261116.md"
+        ],
+        "decided_at": "2026-11-26T12:45:00-05:00",
+        "decision_by": "user via coordinator (Claude session b610073d)"
+      }
     },
     {
       "classification": "missing",

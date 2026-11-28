@@ -19,7 +19,6 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from huggingface_hub import HfApi
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.pipeline.conversion import convert_raw_row, row_source, row_task_id
@@ -41,6 +40,7 @@ from experiments.post_training.task_curation.identity_following_repair import (
     REPAIR_RULE,
     SOURCE_ID,
 )
+from experiments.post_training.task_curation.license_publication import publish_licensed_population
 from experiments.post_training.task_curation.remediation_publish import TASK_SCHEMA
 
 logger = logging.getLogger(__name__)
@@ -182,17 +182,36 @@ def _row_identity(recipe: SourceRecipe, archive_path: str) -> tuple[str, str]:
     return row_task_id(recipe, source), locator
 
 
-def publish_population(output: Path, repo: str, *, private: bool = True) -> str:
-    """Upload the built population to one private Hugging Face repository revision."""
-    api = HfApi()
-    api.create_repo(repo, repo_type="dataset", private=private, exist_ok=True)
-    for name in (TASKS_FILE, LEDGER_FILE, MANIFEST_FILE):
-        api.upload_file(path_or_fileobj=output / name, path_in_repo=name, repo_id=repo, repo_type="dataset")
-    revision = api.repo_info(repo, repo_type="dataset").sha
-    if revision is None:
-        raise ValueError(f"Published repository {repo} reports no revision")
-    logger.info("Published %s at revision %s", repo, revision)
-    return revision
+def publish_population(output: Path, repo: str) -> str:
+    """Publish the built population through the licensed publication chokepoint.
+
+    The repaired population derives from the pinned TaskTrove archive's receipt: the
+    card declares that receipt's resolved upstream, the upload is read back, and the
+    new pin's receipt registers before the revision is returned.
+    """
+    manifest = json.loads((output / MANIFEST_FILE).read_text())
+    body = (
+        f"# {SOURCE_ID} {REPAIR_LABEL}\n\n"
+        "Private repaired identity-following population (ruling 2026-11-23). Every task carries the\n"
+        "versioned identity repair applied to the pinned TaskTrove archive; the per-task before/after\n"
+        f"ledger rides beside the tasks. Repair rule: {REPAIR_RULE}\n\n"
+        f"Input archive: {TASKTROVE_REPO}@{TASKTROVE_REVISION}, config {CONFIG}\n"
+        f"({manifest['input']['file_sha256']}); importer {RECIPE_NAME} at {IMPORTER_REVISION}.\n"
+        f"Exclusion ruling on record: {EXCLUSION_RULING}\n"
+        "Conversion is mechanical: no review, deduplication or admission runs here — the repaired\n"
+        "revision re-enters the normal gates afterward.\n"
+    )
+    publication = publish_licensed_population(
+        SOURCE_ID,
+        repo,
+        output,
+        (TASKS_FILE, LEDGER_FILE, MANIFEST_FILE),
+        body=body,
+        pretty_name=f"{CONFIG} repaired identity-following tasks",
+        use=IntendedUse.TRAIN.value,
+    )
+    logger.info("Published %s at revision %s", publication.repo, publication.revision)
+    return publication.revision
 
 
 def main() -> None:
@@ -201,12 +220,11 @@ def main() -> None:
     parser.add_argument("--parquet", required=True, help="Local path of the pinned config's tasks.parquet")
     parser.add_argument("--output", required=True, help="Build output directory")
     parser.add_argument("--publish-repo", default=None, help="Publish the build to this HF dataset repo")
-    parser.add_argument("--public", action="store_true", help="Publish as public instead of private")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     counts = build_population(args.parquet, Path(args.output))
     if args.publish_repo:
-        revision = publish_population(Path(args.output), args.publish_repo, private=not args.public)
+        revision = publish_population(Path(args.output), args.publish_repo)
         print(json.dumps({"converted": counts.converted, "repo": args.publish_repo, "revision": revision}))
 
 

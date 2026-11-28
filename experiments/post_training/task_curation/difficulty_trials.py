@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Any
 
 from finestore.rl.curation import ContentEvidenceReference
@@ -54,7 +53,6 @@ from taskcompendium.grading_result import GradingFailure
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_policy_qualified, read_source_runtime
 from verifyit.modes.grade_math import MATH_DEADLINE_REFERENCE_PARSE, MATH_VERIFIER_DEADLINE
 
-from experiments.post_training.task_curation.datasets.environments import BUILDABLE_ENVIRONMENTS
 from experiments.post_training.task_curation.difficulty.launch import DATA_ADMISSION_COMMAND
 from experiments.post_training.task_curation.difficulty_config import (
     DECLARED_JUDGE_PROVIDER_PREFIX,
@@ -252,29 +250,18 @@ _LOCK_TEMPDIR_COMMENT = re.compile(r"^\s*#.*requirements\.in")
 
 def _normalized_lock(lock: str) -> str:
     """The lock's pinned content, without the compile comment lines that name the staging directory."""
-    return "".join(line for line in lock.splitlines(keepends=True) if not _LOCK_TEMPDIR_COMMENT.match(line))
+    # Harbor's unit suite imports this module without the marin graph; the
+    # binding module pulls marin in, so keep the import inside the wrappers.
+    from experiments.post_training.task_curation import toolchain_binding  # noqa: PLC0415
+
+    return toolchain_binding.normalized_lock(lock)
 
 
 def _declared_lock(environment: Environment) -> str | None:
     """The declared environment's compiled lock content, or None when its lock cannot compile."""
-    # The image-build module pulls in the Marin execution graph, which the Harbor runtime
-    # environment does not carry; resolve it only when a grader lock actually needs matching.
-    from experiments.post_training.task_curation.images.build import (  # noqa: PLC0415
-        LOCK_FILE,
-        compile_lock,
-    )
+    from experiments.post_training.task_curation import toolchain_binding  # noqa: PLC0415
 
-    try:
-        with TemporaryDirectory() as directory:
-            compile_lock(environment.requirements, Path(directory) / LOCK_FILE)
-            return _normalized_lock((Path(directory) / LOCK_FILE).read_text())
-    except Exception as error:
-        LOGGER.warning(
-            "Declared environment lock compile failed; its grader env cannot be matched: %s: %s",
-            type(error).__name__,
-            error,
-        )
-        return None
+    return toolchain_binding.declared_lock(environment)
 
 
 @cache
@@ -287,38 +274,9 @@ def declared_grader_machine_image(lock_url: str) -> str | None:
     it instead of the host. Returns None when no declaration matches, keeping the existing
     lock-built machine; callers that need the toolchain fail closed at the toolchain probe.
     """
+    from experiments.post_training.task_curation import toolchain_binding  # noqa: PLC0415
 
-    from experiments.post_training.task_curation.difficulty_artifacts import (  # noqa: PLC0415
-        REGIONAL_ENVIRONMENT_ROOT,
-    )
-    from experiments.post_training.task_curation.images.build import (  # noqa: PLC0415  # noqa: PLC0415
-        DEFAULT_REPOSITORY,
-        ENVIRONMENT_ARTIFACT_VERSION,
-        IDENTITY_CHARS,
-        identity_digest,
-        image_tag,
-    )
-
-    lock = _normalized_lock(StoragePath(lock_url).read_text())
-    for environment in BUILDABLE_ENVIRONMENTS:
-        if environment.dockerfile is None:
-            continue
-        declared = _declared_lock(environment)
-        if declared is not None and declared == lock:
-            identity = identity_digest(environment)
-            # The LOCAL backend refuses tag references: deliver the digest-pinned image the
-            # in-region build recorded, falling back to the identity tag when no record exists.
-            try:
-                from marin.execution.artifact import read_record  # noqa: PLC0415
-
-                record = read_record(
-                    f"{REGIONAL_ENVIRONMENT_ROOT}/env-{identity[:IDENTITY_CHARS]}/{ENVIRONMENT_ARTIFACT_VERSION}"
-                )
-                image = (record.result or {}).get("image") if record is not None else None
-            except Exception:
-                image = None
-            return image or image_tag(DEFAULT_REPOSITORY, identity)
-    return None
+    return toolchain_binding.resolved_toolchain_reference(lock_url)
 
 
 DEFECTIVE_ACTOR_IMAGES: frozenset[str] = frozenset(

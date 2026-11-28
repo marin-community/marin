@@ -67,7 +67,6 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.submission import conversation_messages
-from verifyit.modes.grade_judge import BASE_URL_ENV
 from verifyit.spec import JudgeSpec
 
 from harbor.agents import taskcompendium as agents
@@ -384,10 +383,6 @@ async def test_physical_nop_writer_records_original_preparation_without_shell_ex
     with running_review_server() as server:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1"
 
-        async def relay_boundary(machine, stack, service_tasks, *, judge, candidate):
-            machines.machines[-1].env[BASE_URL_ENV] = endpoint
-
-        monkeypatch.setattr(adapter, "start_model_relays", relay_boundary)
         record = await run_negative_control(
             TrialConfig(
                 task=TaskConfig(
@@ -964,13 +959,6 @@ async def test_converted_judge_task_preserves_contract_through_production_trial(
         label = next(label for label, score in judge.label_scores.items() if score == reward)
         server.judge_replies.append(JudgeReply(label))
 
-        async def relay_boundary(machine, stack, service_tasks, *, judge, candidate):
-            assert judge.model == verifyit_spec(task.grader).model
-            assert candidate is None
-            # The fake guest's loopback port maps to the real HTTP judge fixture.
-            machines.machines[-1].env[BASE_URL_ENV] = endpoint
-
-        monkeypatch.setattr(adapter, "start_model_relays", relay_boundary)
         trial = await Trial.create(
             TrialConfig(
                 task=TaskConfig(path=directory),
@@ -1170,11 +1158,6 @@ async def test_judge_model_selection_respects_source_delegation(tmp_path, monkey
         endpoint = f"http://127.0.0.1:{server.server_port}/v1"
         server.judge_replies.append(JudgeReply("correct"))
 
-        async def relay_boundary(machine, stack, service_tasks, *, judge, candidate):
-            assert judge.model == model
-            machines.machines[-1].env[BASE_URL_ENV] = endpoint
-
-        monkeypatch.setattr(adapter, "start_model_relays", relay_boundary)
         kwargs = {"model_endpoint": endpoint, "disk_root": str(tmp_path / "disks")}
         if model is not None:
             kwargs["model_name"] = model
@@ -1514,4 +1497,66 @@ async def test_native_script_judge_uses_the_trial_guest_relay(tmp_path, monkeypa
         }]
     assert [spec.network for spec in machines.specifications] == [NetworkPolicy.ALLOW]
     assert all(machine.closed and "host-only-key" not in machine.env.values() for machine in machines.machines)
+    assert (directory / "task-spec.json").read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_overlapping_trusted_graders_keep_their_judge_endpoints_separate(tmp_path, monkeypatch):
+    task = convert_finance(
+        RawRow(
+            "finance", Source(dataset="PatronusAI/financebench", revision="fixture-pin", row="0", importer_revision="1"),
+            {"evidence_text": "Revenue was 42 dollars.", "question": "What was revenue?", "answer": "42 dollars"},
+        ),
+        ConversionContext(inputs={}, grader_environment=None),
+    )
+    directory = tmp_path / "task"
+    write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
+    write_source_runtime(task, {"verifier_machine": {"network": "allow"}}, directory)
+    original = (directory / "task-spec.json").read_bytes()
+    response = tmp_path / "response.json"
+    response.write_text(json.dumps([{"role": "assistant", "content": "42 dollars"}]))
+    machines = Machines(tmp_path / "sandboxes", disk_pool=object())
+    both_grading = asyncio.Barrier(2)
+    create = machines.create
+
+    async def create_overlapping(spec):
+        machine = await create(spec)
+        run = machine.run
+
+        async def run_together(command):
+            if command.argv[1:3] == ("-m", "taskcompendium.harbor.in_process"):
+                await asyncio.wait_for(both_grading.wait(), 5)
+            return await run(command)
+
+        machine.run = run_together
+        return machine
+
+    async def qualify(root):
+        return machines.disk_pool
+
+    monkeypatch.setattr(machines, "create", create_overlapping)
+    monkeypatch.setattr(local_environments, "verified_local_disk_pool", qualify)
+    monkeypatch.setattr(local_environments, "LocalMachineFactory", lambda **kwargs: machines)
+    with running_review_server() as first, running_review_server() as second:
+        trials = []
+        for index, server in enumerate((first, second)):
+            endpoint = f"http://127.0.0.1:{server.server_port}/v1"
+            server.judge_replies.append(JudgeReply("correct"))
+            trials.append(await Trial.create(TrialConfig(
+                task=TaskConfig(path=directory), trial_name=f"judge-{index}", trials_dir=tmp_path / "trials",
+                agent=AgentConfig(name="task-spec-response", kwargs={"response_path": str(response)}),
+                environment=EnvironmentConfig(kwargs={
+                    "model_endpoint": endpoint, "model_name": f"pinned-judge-{index}",
+                    "disk_root": str(tmp_path / "disks"),
+                }),
+            ), host_capabilities=HostCapabilities(model_authentication={endpoint: f"host-only-key-{index}"})))
+        results = await asyncio.gather(*(trial.run() for trial in trials))
+        assert all(result.exception_info is None for result in results), [result.exception_info for result in results]
+        assert [result.verifier_result.rewards for result in results] == [{"reward": 1.0}, {"reward": 1.0}]
+        assert [[request["model"] for request in server.requests] for server in (first, second)] == [
+            ["pinned-judge-0"], ["pinned-judge-1"],
+        ]
+    assert all(spec.network == NetworkPolicy.ALLOW for spec in machines.specifications)
+    assert len(machines.machines) == 2 and all(machine.closed for machine in machines.machines)
+    assert all(not value.startswith("host-only-key-") for machine in machines.machines for value in machine.env.values())
     assert (directory / "task-spec.json").read_bytes() == original

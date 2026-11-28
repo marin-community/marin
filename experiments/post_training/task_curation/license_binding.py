@@ -16,7 +16,10 @@ from pathlib import Path
 from finestore.rl.licenses import LICENSE_REGISTRY_ISSUE, LicenseReceipt
 from pydantic import ValidationError
 
-from experiments.post_training.task_curation.receipt_shards import read_receipt_shards, receipts_from_documents
+from experiments.post_training.task_curation.receipt_shards import (
+    read_receipt_shards,
+    receipts_from_documents,
+)
 from experiments.post_training.task_curation.reference_data import (
     DataReferenceIndex,
     commit_reference_documents,
@@ -58,12 +61,19 @@ def read_license_receipts(path: Path) -> dict[str, LicenseReceipt]:
     return receipts
 
 
+class AppendWouldRewriteSharedShard(ValueError):
+    """An append that would rewrite a shared shard; the receipts owners own re-pinning."""
+
+
 def append_license_receipt(index_path: Path, receipt: LicenseReceipt, *, message: str) -> str:
     """Register one reviewed receipt in the referenced registry and bump the committed index.
 
-    The receipt is an upsert: a source's row is rewritten in the shard that holds it,
-    or a first receipt lands in the next part file. Either way the write creates a new
-    immutable dataset revision and the index pins that revision.
+    The write is append-only: the receipt lands in a NEW part file and every existing
+    shard keeps its exact bytes. Rewriting a shared shard invalidates every concurrent
+    writer's verify-current-head gate (the 2026-11-26 InverseIFEval break); a source
+    whose receipt already exists in an older shard is refused with a typed error —
+    re-pinning it needs a variant shard family and a reader that resolves the newest
+    reference, which the receipts owners own.
     """
     key = canonical_source_id(receipt.source_id)
     if key != receipt.source_id:
@@ -71,11 +81,13 @@ def append_license_receipt(index_path: Path, receipt: LicenseReceipt, *, message
     documents = load_referenced_json(index_path)
     existing = receipts_from_documents(documents, LicenseReceipt, "license receipt")
     row = json.dumps({key: receipt.model_dump(mode="json")}, indent=2, sort_keys=True) + "\n"
-    if existing and key in existing:
-        shard = next(name for name, document in documents.items() if key in document)
-        rewritten = {**documents[shard], key: receipt.model_dump(mode="json")}
-        payload = json.dumps(rewritten, indent=2, sort_keys=True) + "\n"
-        return commit_reference_documents(index_path, {shard: payload.encode()}, message=message)
+    if key in existing:
+        held = next(name for name, document in documents.items() if key in document)
+        raise AppendWouldRewriteSharedShard(
+            f"{key} already holds a receipt in {held}; appending its new pin would rewrite that shared "
+            "shard. Land the bind in a variant shard family with the receipts owners' newest-reference "
+            "reader instead."
+        )
     directories = {Path(name).parent for name in documents}
     if len(directories) > 1:
         raise ValueError("License receipt shards span multiple directories; select one complete shard family")
@@ -92,12 +104,14 @@ def append_license_receipt(index_path: Path, receipt: LicenseReceipt, *, message
 def bind_license_receipt[ConfigT: CatalogConfig](
     source: RlDataSource[ConfigT], receipt: LicenseReceipt | None
 ) -> RlDataSource[ConfigT]:
-    """Keep stale receipts out of a new pin; the gate reports missing evidence."""
-    dataset = source.dataset
-    if receipt is not None and (
-        dataset is None
-        or (receipt.source_id, receipt.dataset_id, receipt.revision) != (source.info.id, dataset.name, dataset.revision)
-    ):
+    """Bind the source's ingest licence record; every revision of the source inherits it.
+
+    The lookup is by source_id (ruling 2026-11-27): the record's own pin is the ingest
+    pin, and a declaration at any later revision binds the same record without a pin
+    match — a licence never changes after ingest. A record that belongs to another
+    source never binds, and the gate fails closed on the missing evidence.
+    """
+    if receipt is not None and receipt.source_id != source.info.id:
         return replace(source, info=replace(source.info, license_receipt=None))
     return replace(source, info=replace(source.info, license_receipt=receipt))
 

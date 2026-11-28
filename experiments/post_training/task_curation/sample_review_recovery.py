@@ -19,6 +19,11 @@ SAMPLE panels, then recovers each source in one in-region job:
 
 Prior FULL-run reviews ride the FULL campaign's own grandfathered receipts and
 are not re-derived here.
+
+The ``completion`` subcommand builds the fresh-review completion queue the
+``sample_review_completion`` runner consumes: sources whose current panel's
+conclusive coverage is incomplete get the exact top-up task IDs their receipt's
+missing observations enumerate, beside the derivation record.
 """
 
 import argparse
@@ -55,6 +60,7 @@ from experiments.post_training.task_curation.review_carry_forward import (
     sample_topup_ids,
 )
 from experiments.post_training.task_curation.sample_qc_binding import SampleQCReceipt
+from experiments.post_training.task_curation.sample_review_completion import CompletionQueue, CompletionTarget
 from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId
 
 logger = logging.getLogger(__name__)
@@ -108,7 +114,6 @@ def collect_receipt_history(
     documents_by_revision: dict[str, dict[str, tuple[ReceiptReference, dict]]],
 ) -> dict[str, list[ReceiptReference]]:
     """Group a registry's receipt documents per source, newest first.
-
     ``documents_by_revision`` maps revision → source ID → (part reference,
     parsed receipt document), newest revision first, where each part reference
     pins the part file's exact bytes. Blank shard placeholders carry nothing.
@@ -176,6 +181,96 @@ def survey_queue() -> RecoveryQueue:
         if source_id in current
     ]
     return RecoveryQueue(targets=targets)
+
+
+def _newest_sample_receipts() -> dict[str, tuple[ReceiptReference, SampleQCReceipt]]:
+    """Verify and return the newest revision's sample receipts, keyed by source.
+
+    The newest revision holding sample receipt parts is the current selection:
+    the family appends only, so its parts carry every source's current receipt.
+    """
+    api = HfApi()
+    for commit in api.list_repo_commits(REGISTRY_REPO, repo_type="dataset"):
+        parts = [
+            name
+            for name in api.list_repo_files(REGISTRY_REPO, repo_type="dataset", revision=commit.commit_id)
+            if name.startswith(f"{RECEIPT_PARTS_DIRECTORY}/") and name.endswith(".json")
+        ]
+        if not parts:
+            continue
+        receipts: dict[str, tuple[ReceiptReference, SampleQCReceipt]] = {}
+        for name in parts:
+            downloaded = hf_hub_download(REGISTRY_REPO, repo_type="dataset", revision=commit.commit_id, filename=name)
+            part_bytes = Path(downloaded).read_bytes()
+            reference = ReceiptReference(
+                repo=REGISTRY_REPO,
+                revision=commit.commit_id,
+                path=name,
+                sha256=hashlib.sha256(part_bytes).hexdigest(),
+            )
+            document = json.loads(part_bytes)
+            for source_id, row in document.items():
+                if not isinstance(row, dict) or not row.get("review"):
+                    continue
+                receipts[source_id] = (reference, read_receipt_reference(reference, source_id))
+        return receipts
+    raise ValueError(f"The registry holds no sample receipt parts: {REGISTRY_REPO}")
+
+
+def completion_queue(output_root: str, source_ids: tuple[str, ...]) -> CompletionQueue:
+    """Build the fresh-review completion queue the sample completion runner consumes.
+
+    A source's own receipt enumerates its missing observations — the fail-closed
+    qualification refuses anything else — and each missing task's fresh review
+    completes the panel's conclusive coverage. The derivation record written
+    beside the queue carries the verified receipt reference and the count math,
+    so every target's evidence URL resolves to how its tasks were derived.
+    """
+    configure_coreweave_s3()
+    receipts = _newest_sample_receipts()
+    unknown = sorted(set(source_ids) - set(receipts))
+    if unknown:
+        raise ValueError(f"No current sample receipt for: {', '.join(unknown)}")
+    targets = []
+    for source_id in source_ids:
+        reference, receipt = receipts[source_id]
+        missing = receipt.missing_observations
+        if not missing:
+            continue
+        review = receipt.review
+        task_ids = tuple(row.review.task_id for row in missing)
+        derivation = {
+            "kind": "sample-completion-derivation",
+            "source_id": source_id,
+            "receipt": {
+                "repo": reference.repo,
+                "revision": reference.revision,
+                "path": reference.path,
+                "sha256": reference.sha256,
+            },
+            "panel": {
+                "dataset_id": review.panel.dataset_id,
+                "dataset_revision": review.panel.dataset_revision,
+                "sample_size": review.panel.sample_size,
+                "input_artifact": review.panel.input_artifact,
+            },
+            "reviewed": review.result.reviewed,
+            "attempted": review.attempted_count,
+            "missing_task_ids": list(task_ids),
+        }
+        key = canonical_sha256({"kind": "completion-derivation", "source": source_id})[:20]
+        record_path = prefix_join(output_root, f"completion-derivation/{key}.json")
+        StoragePath(record_path).parent.mkdirs(exist_ok=True)
+        StoragePath(record_path).write_text(json.dumps(derivation, indent=2, sort_keys=True) + "\n")
+        targets.append(
+            CompletionTarget(
+                source_id=source_id,
+                population=review.panel.input_artifact,
+                task_ids=task_ids,
+                topup_evidence=record_path,
+            )
+        )
+    return CompletionQueue(targets=tuple(targets))
 
 
 @dataclass(frozen=True)
@@ -411,6 +506,12 @@ def main() -> None:
         help="Typed equivalence allowance to attempt (calibration_completion, actor_setup_pinning, lock_resources)",
     )
     recover.add_argument("--run", action="store_true")
+    completion = subparsers.add_parser(
+        "completion", help="Write the fresh-review completion queue for sources with incomplete panel coverage"
+    )
+    completion.add_argument("--source-id", action="append", required=True, help="The source to complete; repeatable.")
+    completion.add_argument("--output", required=True, help="Where the queue document is written.")
+    completion.add_argument("--output-root", required=True, help="Where the derivation records are written.")
     args = parser.parse_args()
     configure_coreweave_s3()
     if args.command == "survey":
@@ -418,6 +519,22 @@ def main() -> None:
         StoragePath(args.output).parent.mkdirs(exist_ok=True)
         StoragePath(args.output).write_text(json.dumps(queue.model_dump(mode="json"), indent=2) + "\n")
         print(json.dumps({"targets": len(queue.targets), "output": args.output}))
+        return
+    if args.command == "completion":
+        queue = completion_queue(args.output_root, tuple(args.source_id))
+        output = StoragePath(args.output)
+        output.parent.mkdirs(exist_ok=True)
+        output.write_text(json.dumps(queue.model_dump(mode="json"), indent=2) + "\n")
+        print(
+            json.dumps(
+                {
+                    "targets": len(queue.targets),
+                    "tasks": sum(len(target.task_ids) for target in queue.targets),
+                    "queue_sha256": file_sha256(output),
+                    "output": args.output,
+                }
+            )
+        )
         return
     queue_path = StoragePath(args.queue)
     if file_sha256(queue_path) != args.queue_sha256:

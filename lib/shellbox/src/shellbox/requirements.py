@@ -80,6 +80,9 @@ MACHINE_FIELDS = {
     "storage_mb": (Requirement.STORAGE,),
     "gpus": (Requirement.GPUS,),
     "startup_timeout": (Requirement.STARTUP_TIMEOUT,),
+    # The machine runs the environment's own composed toolchain image instead of
+    # mounting the lock runtime (taskcompendium.runtime.environment's lock guard).
+    "lock_satisfied_by_image": (Requirement.PACKAGES_LOCK,),
 }
 
 COMMAND_FIELDS = {

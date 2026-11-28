@@ -4,16 +4,14 @@
 """Admission counts production backends only; dev-only verdicts never satisfy it."""
 
 import pytest
-from finestore.rl.curation import IndependentQC
 
 from experiments.post_training.task_curation.tests.admission_fixtures import (
     with_declaration_admission_census,
 )
 from infra.marina.apps.rl_data_catalog.server.admission import (
-    backend_admission_review,
+    backend_verification_evidence,
     has_runnable_production_support,
     require_available_lexical_clearance,
-    require_sample_pin_currency,
 )
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import (
     contamination_declarations,
@@ -23,102 +21,11 @@ from lib.taskcompendium.tests.decontamination_fixtures import (
 )
 
 
-def test_dev_only_supported_cell_never_satisfies_admission():
-    """A DEV_ONLY SUPPORTED verdict is dropped before the runnable check."""
-    verdicts = {
-        "docker": "supported",
-        "docker-gvisor": "supported",
-        "iris": "unsupported",
-        "daytona": "unsupported",
-        "local": "partial",
-    }
-    # local is production and partial: RUNNABLE_FIT includes partial, so this passes
-    assert backend_admission_review(verdicts, "Available") == (None, [])
-
-
-def test_only_dev_support_still_blocks():
-    verdicts = {
-        "docker": "supported",
-        "docker-gvisor": "supported",
-        "iris": "unsupported",
-        "daytona": "unsupported",
-        "local": "unsupported",
-    }
-    blocker, _ = backend_admission_review(verdicts, "Available")
-    assert blocker is not None and "no surveyed production backend" in blocker
-    # the blocked message still names every surveyed backend, dev-only included
-    assert "docker=supported" in blocker and "docker-gvisor=supported" in blocker
-
-
-def test_survey_deployment_classes_override_the_defaults():
-    """A survey's own deployment_classes map wins over the mirrored defaults."""
-    verdicts = {"custom-prod-backend": "supported"}
-    # unknown backends default to dev_only: blocked without a survey map
-    assert backend_admission_review(verdicts, "Available")[0] is not None
-    # the survey declares it production: admitted
-    assert backend_admission_review(
-        verdicts,
-        "Available",
-        deployment_classes={"custom-prod-backend": "production"},
-    ) == (None, [])
-
-
-def test_all_production_role_absent_needs_no_backend():
-    verdicts = {"iris": "role_absent", "daytona": "role_absent", "local": "role_absent", "docker": "supported"}
-    # the dev-only cell cannot rescue the role_absent production set
-    assert backend_admission_review(verdicts, "Available") == (None, [])
-
-
-def test_non_available_status_needs_no_backend():
-    assert backend_admission_review({"docker": "supported", "iris": "unsupported"}, "Excluded") == (None, [])
-
-
-def test_verify_pending_never_blocks_and_reports_the_backends():
-    """VERIFY on production backends is pending evidence, never a fit failure.
-
-    The status decision is the loader's: an already-admitted source keeps its
-    status with the marker, a new admission materializes as Pending.
-    """
-    verdicts = {"daytona": "verify", "iris": "verify", "local": "verify"}
-    blocker, pending = backend_admission_review(verdicts, "Available")
-    assert blocker is None
-    assert pending == ["daytona", "iris", "local"]
-
-
-def test_verify_with_a_runnable_production_backend_passes_with_a_marker():
-    verdicts = {"daytona": "verify", "local": "supported"}
-    blocker, pending = backend_admission_review(verdicts, "Available")
-    assert blocker is None and pending == ["daytona"]
-
-
-def test_all_production_unsupported_still_blocks_with_exact_verdicts():
-    verdicts = {"daytona": "unsupported", "iris": "unsupported", "local": "unsupported"}
-    blocker, pending = backend_admission_review(verdicts, "Available")
-    assert blocker == (
-        "no surveyed production backend can run the source: " "daytona=unsupported, iris=unsupported, local=unsupported"
-    )
-    assert pending == []
-
-
-def test_not_applicable_does_not_negate_a_production_verify():
-    """N/A on other production backends cannot negate one pending VERIFY cell."""
-    verdicts = {"daytona": "not_applicable", "iris": "not_applicable", "local": "verify"}
-    blocker, pending = backend_admission_review(verdicts, "Available")
-    assert blocker is None and pending == ["local"]
-
-
-def test_runnable_production_support_ignores_dev_only_cells():
-    """The runnable check filters to production backends before scanning verdicts."""
-    assert has_runnable_production_support({"docker": "supported", "iris": "unsupported"}) is False
-    assert has_runnable_production_support({"docker": "supported", "iris": "supported"}) is True
-    assert has_runnable_production_support({"iris": "verify", "local": "verify"}) is False
-    assert (
-        has_runnable_production_support(
-            {"custom": "supported"},
-            deployment_classes={"custom": "production"},
-        )
-        is True
-    )
+def test_verify_evidence_survives_without_becoming_an_admission_gate():
+    verdicts = {"iris": "verify", "local": "verify", "docker": "verify"}
+    assert has_runnable_production_support(verdicts)
+    assert backend_verification_evidence(verdicts) == ["iris", "local"]
+    assert backend_verification_evidence({"custom": "verify"}, {"custom": "production"}) == ["custom"]
 
 
 REV = "b" * 40
@@ -175,33 +82,3 @@ def test_new_evaluation_admission_passes_with_a_benchmark_measured_receipt():
 def test_null_intended_use_is_refused_before_any_lexical_check():
     with pytest.raises(ValueError, match="explicit intended_use"):
         require_available_lexical_clearance(_lexical_declaration(None))
-
-
-def _declaration_with_panel(use, panel_currency):
-    qc = (
-        IndependentQC(
-            verdict="good",
-            method="SAMPLE content panel: seed 0, 100 selected / 918 current tasks",
-            reviewed=100,
-            evidence_url="s3://test/panel",
-            panel_currency=panel_currency,
-        )
-        if panel_currency is not None
-        else None
-    )
-    source = with_declaration_admission_census(contamination_declarations()[0][1])
-    return source.model_copy(update={"intended_use": use, "independent_qc": qc})
-
-
-def test_archived_lineage_panel_refuses_a_new_available_admission():
-
-    with pytest.raises(ValueError, match="belongs to an older population pin"):
-        require_sample_pin_currency(_declaration_with_panel("eval", "archived-lineage"))
-
-
-def test_current_pin_panel_passes_the_gate():
-    require_sample_pin_currency(_declaration_with_panel("eval", "current-pin"))
-
-
-def test_missing_or_untyped_panel_is_not_the_sample_gate_to_refuse():
-    require_sample_pin_currency(_declaration_with_panel("train", None))

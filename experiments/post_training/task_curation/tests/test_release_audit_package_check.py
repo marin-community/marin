@@ -19,149 +19,38 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from finestore.rl.curation import QualifiedSourceDeclaration, SourceOrigin, source_display_name, source_identifier
-from shellbox.backends.docker.machine import DockerMachineFactory
-from shellbox.backends.local.machine import check_local_environment
-from shellbox.machine import Backend, NetworkPolicy, UnsupportedMachineSpec
-from taskcompendium.backend_requirements import BackendFit, BackendSourceMap, BackendSurvey, FitSupport, RuntimeProfile
-from taskcompendium.source_fingerprints import DuplicateGroup, DuplicateGroupMember, SourceIdentitySurvey
+from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.task_curation.backend_capabilities import production_matrix
-from experiments.post_training.task_curation.release_stages import package_preview, release_check, strict_audit
-from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
-from infra.marina.apps.rl_data_catalog.server.curriculum import TOTAL_METRICS
-from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
-
-SOURCE_A = "Marin:fixture-a"
-SOURCE_B = "Marin:fixture-b"
-SOURCE_IDS = (SOURCE_A, SOURCE_B)
-REVISION = "c" * 40
-SNAPSHOT_ID = "assembly-test-v1"
-RELEASE_ID = "testrelease"
-RUNTIME = RuntimeProfile(
-    network=NetworkPolicy.DENY,
-    cpus=1,
-    memory_mb=512,
-    storage_mb=1024,
-    gpus=0,
-    user=None,
-    startup_timeout=60.0,
-    cleanup_timeout=30.0,
+from experiments.post_training.task_curation.release_stages import (
+    guard,
+    live_applet,
+    package_inputs,
+    package_preview,
+    release_check,
+    strict_audit,
 )
-BACKEND_VALUES = frozenset(backend.value for backend in Backend) | {"iris"}
+from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory
+from experiments.post_training.task_curation.tests.admission_fixtures import actor_census_input
+from experiments.post_training.task_curation.tests.release_audit_fixtures import (
+    REVISION,
+    SNAPSHOT_ID,
+    SOURCE_A,
+    SOURCE_B,
+    SOURCE_IDS,
+    backend_survey,
+    declarations_document,
+    identity_survey,
+)
+from infra.marina.apps.rl_data_catalog.prepare_preview import oracle_inventory_payload
+from infra.marina.apps.rl_data_catalog.server.curriculum import TOTAL_METRICS
+from infra.marina.apps.rl_data_catalog.server.source_counts import (
+    ACTORLESS_POLICY_SHA256,
+    NO_ORACLE_POLICY_SHA256,
+    SourceCounts,
+)
 
-
-def _declaration(identifier: str) -> QualifiedSourceDeclaration:
-    return QualifiedSourceDeclaration(
-        id=(source_id := source_identifier(SourceOrigin.MARIN, identifier, None, None)),
-        display_name=source_display_name(source_id),
-        origin="Marin",
-        build_path="fixture",
-        upstream_dataset=identifier,
-        upstream_name=identifier,
-        current_release={"repo": "fixture", "revision": "1", "url": "https://example.org/pin"},
-        family="fixture",
-        tags=[],
-        task_count=2,
-        within_source_dedup=deduplication_evidence("fixture", "1", "1", count=2),
-        notes="",
-        dataset_id="fixture",
-        dataset_revision="1",
-        url=None,
-        type="RLVR",
-        turns="Single-turn",
-        is_benchmark=False,
-        kind="Dataset",
-        status="Available",
-        pipeline={"name": "fixture", "version": "1", "source": "fixture", "revision": "1", "files": []},
-        daytona_safety="not_applicable",
-        daytona_snapshot_count=0,
-        daytona_machine_slots=0,
-        daytona_execution_failures=0,
-        daytona_count_basis="Fixture contains no actor environment.",
-        intended_use="train",
-    )
-
-
-def _declarations_document() -> dict[str, dict]:
-    return {source_id: _declaration(source_id.split(":")[1]).model_dump(mode="json") for source_id in SOURCE_IDS}
-
-
-def _rejecting(requirements, spec) -> None:
-    raise UnsupportedMachineSpec("The unit lane installs no optional backends")
-
-
-def _checkers() -> dict:
-    return {
-        "docker": DockerMachineFactory().check_environment,
-        "local": check_local_environment,
-        "docker-gvisor": _rejecting,
-        "qemu": _rejecting,
-        "shellsim": _rejecting,
-        "daytona": _rejecting,
-        "iris": _rejecting,
-    }
-
-
-def _fit(support: FitSupport) -> BackendFit:
-    counts = {support: 2}
-    return BackendFit(
-        support=support,
-        task_counts=counts,
-        roles={"agent": dict(counts), "grader": dict(counts)},
-        blockers={},
-        validation_errors={},
-    )
-
-
-def _backend_row(source_id: str) -> BackendSourceMap:
-    fits = {backend: _fit(FitSupport.SUPPORTED) for backend in BACKEND_VALUES}
-    return BackendSourceMap(
-        source_id=source_id,
-        basis="converted_spec_census",
-        task_count=2,
-        inputs={},
-        demands={"agent": {}, "grader": {}},
-        resource_ranges={"agent": {}, "grader": {}},
-        backends=fits,
-        role_backend_assignments={"agent": {}, "grader": {}},
-        grading_environment=None,
-    )
-
-
-def _survey(git_revision: str = REVISION) -> BackendSurvey:
-    return BackendSurvey(
-        catalog_root="test:catalog",
-        snapshot_id=SNAPSHOT_ID,
-        generated_at="2026-11-23T00:00:00Z",
-        git_revision=git_revision,
-        schema_sha256="0" * 64,
-        runtime_defaults={"agent": RUNTIME, "grader": RUNTIME},
-        matrix=production_matrix(_checkers()),
-        deployment_limits={},
-        deployment_classes={},
-        sources=[_backend_row(source_id) for source_id in SOURCE_IDS],
-    )
-
-
-def _identity_survey() -> SourceIdentitySurvey:
-    group = DuplicateGroup(
-        group_id="fixture-duplicate-group",
-        canonical_source_id=SOURCE_A,
-        members=[
-            DuplicateGroupMember(source_id=SOURCE_A, overlap_with_canonical=1.0),
-            DuplicateGroupMember(source_id=SOURCE_B, overlap_with_canonical=None),
-        ],
-    )
-    return SourceIdentitySurvey(
-        catalog_root="test:catalog",
-        snapshot_id=SNAPSHOT_ID,
-        generated_at="2026-11-23T00:00:00Z",
-        fingerprints={source_id: None for source_id in SOURCE_IDS},
-        reviews=[],
-        groups=[group],
-        judge=None,
-    )
+RELEASE_ID = "testrelease"
 
 
 def _curriculum_document(release_id: str, source_id: str) -> dict:
@@ -220,9 +109,9 @@ class _FakeReader:
 
 def _audit_fixture(tmp_path: Path, *, local: bool = True, **overrides) -> SimpleNamespace:
     """Sealed fixture documents plus a fake reader serving a consistent catalog."""
-    survey = _survey()
-    identity = _identity_survey()
-    declarations = _declarations_document()
+    survey = backend_survey()
+    identity = identity_survey()
+    declarations = declarations_document()
     group_document = identity.groups[0].model_dump(mode="json")
     backend_rows = {row.source_id: row.model_dump(mode="json") for row in survey.sources}
     served_rows = [
@@ -299,6 +188,22 @@ def test_strict_audit_pass_seals_receipt(tmp_path):
     assert by_name["browser-evidence"]["browser_checks"] == strict_audit.SKIPPED_BROWSER
     assert proof["receipt"]["sha256"] == hashlib.sha256(Path(proof["receipt"]["uri"]).read_bytes()).hexdigest()
     assert _last_alert_kind(tmp_path) == strict_audit.alerts.KIND_FINISH
+
+
+def test_strict_audit_compares_survey_rows_as_sealed(tmp_path):
+    """Regression (R40 #53): a survey sealed before ``BackendFit.blocker_reasons`` existed
+    is served without it; the audit must not compare the model's default against it."""
+    survey = backend_survey().model_dump(mode="json")
+    for row in survey["sources"]:
+        for fit in row["backends"].values():
+            del fit["blocker_reasons"]
+    fixture = _audit_fixture(tmp_path)
+    rows = {row["source_id"]: row for row in survey["sources"]}
+    for served in fixture.served["sources"]:
+        served["backend_capabilities"] = rows[served["id"]]
+    inputs = dataclasses.replace(fixture.inputs, backend=_seal_json(tmp_path, "backend-presealed.json", survey))
+    proof = strict_audit.run_strict_audit(inputs, dry_run=True, feeds=_feeds(tmp_path), reader_factory=fixture.factory)
+    assert proof["mismatches"] == {}
 
 
 def test_strict_audit_reports_all_mismatches_at_once(tmp_path):
@@ -400,26 +305,115 @@ def test_strict_audit_input_validation(tmp_path):
         )
 
 
+def _census_row(source_id: str, *, measured: bool = True, status: str = "Available") -> dict:
+    if not measured:
+        return {
+            "source_id": source_id,
+            "declaration": {"status": status, "intended_use": "train", "actor_census_input": None},
+            "inventory": None,
+            "inventory_reference": None,
+            "oracle_tasks": 0,
+            "static_blocked_tasks": None,
+            "static_reason_counts": {},
+            "static_audit": None,
+        }
+    binding = actor_census_input(f"fixture/{source_id}", "a" * 40, "1", 3)
+    inventory = SampleInventory(
+        source_id=source_id,
+        dataset_id=binding.dataset_id,
+        dataset_revision=binding.dataset_revision,
+        converter_version=binding.converter_version,
+        input_artifact="s3://fixture/population",
+        task_specs_sha256=binding.task_specs_sha256,
+        scanned_task_specs_sha256=binding.task_specs_sha256,
+        retained_tasks=3,
+        sample_seed=0,
+        sample_size=3,
+        panel_path="s3://fixture/panel.parquet",
+        panel_sha256="b" * 64,
+        evidence_url="s3://fixture/inventory.json",
+        oracle_tasks=0,
+        execution_qualification="not_assessed",
+    )
+    return {
+        "source_id": source_id,
+        "declaration": {
+            "status": status,
+            "intended_use": "train",
+            "actor_census_input": binding.model_dump(mode="json"),
+        },
+        "inventory": inventory.model_dump(mode="json"),
+        "inventory_reference": {"uri": f"s3://fixture/{source_id}/summary.json", "sha256": "c" * 64},
+        "oracle_tasks": 0,
+        "static_blocked_tasks": 1,
+        "static_reason_counts": {"fixture": 1},
+        "static_audit": {"uri": f"s3://fixture/{source_id}/static.json", "sha256": "d" * 64},
+    }
+
+
+def _census_proof(rows: list[dict]) -> dict:
+    return {"sources": len(rows), "results": rows}
+
+
+CITATIONS = (
+    {"uri": "memory://rulings/no-oracle.md", "sha256": NO_ORACLE_POLICY_SHA256},
+    {"uri": "memory://rulings/actorless.md", "sha256": ACTORLESS_POLICY_SHA256},
+)
+PRIOR_COUNTS = {"sources": [{"policy": CITATIONS[0], "actorless_policy": CITATIONS[1]}]}
+
+FIXTURE_CENSUS = [
+    _census_row("Marin:first"),
+    _census_row("Marin:second"),
+    _census_row("Marin:dropped", measured=False, status="Excluded"),
+]
+
+
 def _package_inputs(tmp_path: Path, revision: str, **overrides) -> package_preview.PackagePreviewInputs:
     defaults: dict[str, Any] = {
         "release_id": RELEASE_ID,
         "source_revision": revision,
         "output_root": str(tmp_path / "release" / "package"),
-        "oracle_inventory": _seal_json(tmp_path, "oracle-inventory.json", {"schema_version": 2, "rows": []}),
-        "source_counts": _seal_json(tmp_path, "source-counts.json", {"sources": []}),
+        "census": _seal_json(tmp_path, "census-receipt.json", _census_proof(FIXTURE_CENSUS)),
+        "prior_source_counts": _seal_json(tmp_path, "prior-source-counts.json", PRIOR_COUNTS),
+        "expected_source_count": len(FIXTURE_CENSUS),
+        "derived_root": "memory://release/package-inputs",
     }
     defaults.update(overrides)
     return package_preview.PackagePreviewInputs(**defaults)
 
 
-def test_package_preview_write_stages_package_and_seals_receipt(tmp_path, monkeypatch):
+def test_package_inputs_derive_from_the_census_and_fail_closed():
+    derived = package_inputs.derive_package_inputs(_census_proof(FIXTURE_CENSUS), len(FIXTURE_CENSUS), CITATIONS)
+    assert (derived.census_sources, derived.counted_sources) == (3, 2)
+    assert derived.unmeasured_sources == ("Marin:dropped",)
+    observations = oracle_inventory_payload(derived.oracle_inventory)
+    counts = SourceCounts.model_validate_json(derived.source_counts)
+    assert [row["source_id"] for row in observations["sources"]] == ["Marin:first", "Marin:second"]
+    assert [row.source_id for row in counts.sources] == ["Marin:first", "Marin:second"]
+    assert all(row.static_blocked_tasks == 1 for row in counts.sources)
+    assert {(row.policy.uri, row.actorless_policy.uri) for row in counts.sources} == {
+        (CITATIONS[0]["uri"], CITATIONS[1]["uri"])
+    }
+    # A plan source missing from the census fails closed.
+    with pytest.raises(ValueError, match="the census covers 3 sources"):
+        package_inputs.derive_package_inputs(_census_proof(FIXTURE_CENSUS), len(FIXTURE_CENSUS) + 1, CITATIONS)
+    # An Available source must have a measured population.
+    unmeasured_available = [*FIXTURE_CENSUS[:2], _census_row("Marin:dropped", measured=False)]
+    with pytest.raises(ValueError, match="Available source Marin:dropped has no measured census population"):
+        package_inputs.derive_package_inputs(_census_proof(unmeasured_available), 3, CITATIONS)
+
+
+def test_package_preview_write_derives_seals_and_stages_its_inputs(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     revision = _init_repo(repo)
     inputs = _package_inputs(tmp_path, revision)
+    derived = package_inputs.derive_package_inputs(_census_proof(FIXTURE_CENSUS), len(FIXTURE_CENSUS), CITATIONS)
     staged: list[tuple[Path, Path, Path | None, Path | None]] = []
 
     def fake_prepare(checkout, output, oracle_inventory=None, source_counts=None):
         staged.append((checkout, Path(output), oracle_inventory, source_counts))
+        assert oracle_inventory.read_bytes() == derived.oracle_inventory
+        assert source_counts.read_bytes() == derived.source_counts
         dist = Path(output) / "dist"
         dist.mkdir(parents=True)
         (dist / "bundled-model-provenance.json").write_text(
@@ -429,13 +423,16 @@ def test_package_preview_write_stages_package_and_seals_receipt(tmp_path, monkey
     monkeypatch.setattr(package_preview, "prepare_preview", fake_prepare)
     proof = package_preview.run_package_preview(inputs, dry_run=False, repo_root=repo, feeds=_feeds(tmp_path))
     planned = tmp_path / "release" / "package" / "preview-package"
-    assert staged == [(repo, planned, Path(inputs.oracle_inventory.uri), Path(inputs.source_counts.uri))]
+    staged_inputs = tmp_path / "release" / "package" / package_preview.STAGED_INPUTS_DIR_NAME
+    assert staged == [(repo, planned, staged_inputs / "oracle-inventory.json", staged_inputs / "source-counts.json")]
     receipt = json.loads((tmp_path / "release" / "package" / "preview-package-receipt.json").read_text())
     assert receipt["kind"] == package_preview.receipt_kind(RELEASE_ID)
     assert receipt["package"]["uri"] == str(planned)
     assert receipt["packaged"]["source_revision"] == revision
-    assert receipt["oracle_inventory"]["uri"] == inputs.oracle_inventory.uri
-    assert receipt["source_counts"]["uri"] == inputs.source_counts.uri
+    assert (receipt["census_sources"], receipt["counted_sources"]) == (3, 2)
+    for name, raw in (("oracle_inventory", derived.oracle_inventory), ("source_counts", derived.source_counts)):
+        sealed = StoragePath(receipt[name]["uri"]).read_bytes()
+        assert sealed == raw and receipt[name]["sha256"] == hashlib.sha256(raw).hexdigest()
     assert proof["receipt"]["sha256"] == hashlib.sha256(Path(proof["receipt"]["uri"]).read_bytes()).hexdigest()
     assert _last_alert_kind(tmp_path) == package_preview.alerts.KIND_FINISH
 
@@ -485,8 +482,8 @@ def test_package_preview_refusals(tmp_path, monkeypatch):
             feeds=_feeds(tmp_path),
         )
 
-    # The refs bind the originally sealed bytes; rewriting the document breaks the digest.
-    (tmp_path / "oracle-inventory.json").write_text(json.dumps({"schema_version": 3, "rows": []}))
+    # The census ref binds the originally sealed bytes; rewriting the document breaks the digest.
+    (tmp_path / "census-receipt.json").write_text(json.dumps(_census_proof(FIXTURE_CENSUS[:1])))
     with pytest.raises(ValueError, match="sealed reference digest mismatch"):
         package_preview.run_package_preview(
             dataclasses.replace(inputs, source_revision=repo2_revision),
@@ -514,7 +511,7 @@ def _preflight_receipt_document(revision: str, production_version: int = 41) -> 
 
 
 def _package_receipt(
-    tmp_path: Path, revision: str = REVISION, count: int = 2
+    tmp_path: Path, revision: str = REVISION, count: int = 2, census_sources: int = 2
 ) -> tuple[ArtifactRef, ArtifactRef, ArtifactRef, Path]:
     oracle_ref = _seal_json(tmp_path, "oracle-inventory.json", {"schema_version": 2, "rows": []})
     counts_ref = _seal_json(tmp_path, "source-counts.json", {"sources": []})
@@ -524,7 +521,10 @@ def _package_receipt(
         "kind": package_preview.receipt_kind(RELEASE_ID),
         "release_id": RELEASE_ID,
         "source_revision": revision,
+        "code_revision": revision,
         "package": {"uri": str(package_dir)},
+        "census_sources": census_sources,
+        "counted_sources": 2,
         "packaged": {
             "source_revision": revision,
             "source_counts": {"sources": count},
@@ -552,6 +552,17 @@ class _FakeChecker:
             )
 
 
+LIVE_VERSION = 39
+PUBLISHED_VERSION = LIVE_VERSION + 1
+
+
+@pytest.fixture(autouse=True)
+def _live_preview(monkeypatch):
+    monkeypatch.setattr(live_applet, "live_applet", lambda _url, _app: live_applet.LiveApplet(LIVE_VERSION, "public"))
+    # The release-check fixtures run the checker from a checkout at REVISION.
+    monkeypatch.setattr(release_check, "repo_head", lambda _root: REVISION)
+
+
 def _release_check_inputs(
     tmp_path: Path, phase: str, name: str = "release-check", **overrides
 ) -> release_check.ReleaseCheckInputs:
@@ -564,9 +575,25 @@ def _release_check_inputs(
         "applet_id": "12345678-1234-5678-1234-567812345678",
         "expected_source_count": 2,
         "production_version": 41,
+        "work_root": str(tmp_path / "work" / name),
     }
     defaults.update(overrides)
     return release_check.ReleaseCheckInputs(**defaults)
+
+
+def _preflight_stage_receipt(
+    tmp_path: Path, name: str = "preflight", production_version: int = 41, **overrides
+) -> ArtifactRef:
+    """A sealed preflight stage receipt binding its sealed maintained checker receipt."""
+    checker = _seal_json(tmp_path, f"{name}-checker.json", _preflight_receipt_document(REVISION, production_version))
+    document = {
+        "phase": "preflight",
+        "passed": True,
+        "source_revision": REVISION,
+        "checker_receipt": {"uri": checker.uri, "sha256": checker.sha256},
+        **overrides,
+    }
+    return _seal_json(tmp_path, f"{name}-stage.json", document)
 
 
 def test_release_check_preflight_dry_run_plans_without_execution(tmp_path):
@@ -583,11 +610,13 @@ def test_release_check_preflight_dry_run_plans_without_execution(tmp_path):
     assert planned["module"] == release_check.CHECKER_MODULE
     argv = planned["arguments"]
     assert argv[argv.index("--dist") + 1] == str(package_dir)
-    assert argv[argv.index("--source-counts") + 1] == counts_ref.uri
-    assert argv[argv.index("--oracle-inventory") + 1] == oracle_ref.uri
+    staged = tmp_path / "work" / "release-check" / "release-check-preflight" / "inputs"
+    assert argv[argv.index("--source-counts") + 1] == str(staged / "source-counts.json")
+    assert argv[argv.index("--oracle-inventory") + 1] == str(staged / "oracle-inventory.json")
     assert argv[argv.index("--production-version") + 1] == "41"
     assert not (tmp_path / "release" / "release-check" / "checker").exists()
     assert not (tmp_path / "release" / "release-check" / "release-check-preflight.json").exists()
+    assert not (tmp_path / "work").exists()
 
 
 def test_release_check_passes_the_bundle_attestation_to_the_checker(tmp_path, monkeypatch):
@@ -617,10 +646,20 @@ def test_release_check_preflight_write_delegates_and_seals(tmp_path):
     proof = release_check.run_release_check(
         inputs, dry_run=False, repo_root=repo, feeds=_feeds(tmp_path), checker=checker
     )
-    repo_arg, _argv, receipt_path = checker.calls[0]
+    repo_arg, argv, receipt_path = checker.calls[0]
     assert repo_arg == repo
-    assert receipt_path == str(tmp_path / "release" / "release-check" / "checker" / "preflight.json")
+    # The checker reads and writes local files: digest-verified inputs staged beside its receipt.
+    work = tmp_path / "work" / "release-check" / "release-check-preflight"
+    assert receipt_path == str(work / "checker" / "preflight.json")
+    for flag, ref in (("--source-counts", counts_ref), ("--oracle-inventory", oracle_ref)):
+        assert Path(argv[argv.index(flag) + 1]).read_bytes() == Path(ref.uri).read_bytes()
     stage_receipt = json.loads((tmp_path / "release" / "release-check" / "release-check-preflight.json").read_text())
+    sealed_checker = tmp_path / "release" / "release-check" / "checker" / "preflight.json"
+    assert sealed_checker.read_bytes() == Path(receipt_path).read_bytes()
+    assert stage_receipt["checker_receipt"] == {
+        "uri": str(sealed_checker),
+        "sha256": hashlib.sha256(sealed_checker.read_bytes()).hexdigest(),
+    }
     assert stage_receipt["kind"] == f"atlas-{RELEASE_ID}-release-check"
     assert stage_receipt["phase"] == "preflight" and stage_receipt["passed"] is True
     assert stage_receipt["target"] == {
@@ -633,7 +672,7 @@ def test_release_check_preflight_write_delegates_and_seals(tmp_path):
 
 def test_release_check_phase_gating_refusals(tmp_path):
     package_ref, oracle_ref, counts_ref, _ = _package_receipt(tmp_path)
-    preflight_ref = _seal_json(tmp_path, "preflight-receipt.json", _preflight_receipt_document(REVISION))
+    preflight_ref = _preflight_stage_receipt(tmp_path)
     with pytest.raises(ValueError, match="requires the package, oracle-inventory and source-counts"):
         release_check.run_release_check(
             _release_check_inputs(tmp_path, "preflight", package=package_ref),
@@ -657,14 +696,21 @@ def test_release_check_phase_gating_refusals(tmp_path):
         )
     with pytest.raises(ValueError, match="requires the sealed preflight receipt"):
         release_check.run_release_check(
-            _release_check_inputs(tmp_path, "hosted", published_revision=7),
+            _release_check_inputs(tmp_path, "hosted"),
+            dry_run=True,
+            repo_root=tmp_path,
+            feeds=_feeds(tmp_path),
+        )
+    with pytest.raises(ValueError, match="requires the published revision"):
+        release_check.run_release_check(
+            _release_check_inputs(tmp_path, "hosted", preflight_receipt=preflight_ref),
             dry_run=True,
             repo_root=tmp_path,
             feeds=_feeds(tmp_path),
         )
     with pytest.raises(ValueError, match="runs the published revision"):
         release_check.run_release_check(
-            _release_check_inputs(tmp_path, "hosted", package=package_ref, published_revision=7),
+            _release_check_inputs(tmp_path, "hosted", package=package_ref),
             dry_run=True,
             repo_root=tmp_path,
             feeds=_feeds(tmp_path),
@@ -679,15 +725,24 @@ def test_release_check_phase_gating_refusals(tmp_path):
 
 
 def test_release_check_hosted_delegates_with_baseline_and_seals(tmp_path):
-    preflight_ref = _seal_json(tmp_path, "preflight-receipt.json", _preflight_receipt_document(REVISION))
+    preflight_ref = _preflight_stage_receipt(tmp_path)
     checker = _FakeChecker("hosted", REVISION)
-    inputs = _release_check_inputs(tmp_path, "hosted", preflight_receipt=preflight_ref, published_revision=7)
+    inputs = _release_check_inputs(
+        tmp_path, "hosted", preflight_receipt=preflight_ref, published_revision=PUBLISHED_VERSION
+    )
     release_check.run_release_check(
         inputs, dry_run=False, repo_root=tmp_path / "repo", feeds=_feeds(tmp_path), checker=checker
     )
     _, argv, receipt_path = checker.calls[0]
-    assert argv[argv.index("--revision") + 1] == "7"
-    assert argv[argv.index("--baseline") + 1] == preflight_ref.uri
+    # RELEASE.md: the hosted check verifies the newly published revision, never the
+    # preceding live one (R40 #51), and keeps the live mode.
+    assert argv[argv.index("--revision") + 1] == str(PUBLISHED_VERSION)
+    assert argv[argv.index("--expected-mode") + 1] == "public"
+    baseline = Path(argv[argv.index("--baseline") + 1])
+    assert (
+        baseline == tmp_path / "work" / "release-check" / "release-check-hosted" / "inputs" / "preflight-baseline.json"
+    )
+    assert json.loads(baseline.read_text()) == _preflight_receipt_document(REVISION)
     assert "--dist" not in argv
     assert receipt_path.endswith("checker/hosted.json")
     stage_receipt = json.loads((tmp_path / "release" / "release-check" / "release-check-hosted.json").read_text())
@@ -695,10 +750,18 @@ def test_release_check_hosted_delegates_with_baseline_and_seals(tmp_path):
     assert stage_receipt["target"]["id"] == "12345678-1234-5678-1234-567812345678"
 
 
-def test_release_check_postpublish_plans_full_sweep(tmp_path):
-    preflight_ref = _seal_json(tmp_path, "preflight-receipt.json", _preflight_receipt_document(REVISION))
+def test_release_check_postpublish_diffs_against_the_staged_hosted_receipt(tmp_path):
+    preflight_ref = _preflight_stage_receipt(tmp_path)
+    hosted_checker = _seal_json(tmp_path, "hosted-checker.json", {"phase": "hosted", "passed": True, "revision": 7})
     hosted_ref = _seal_json(
-        tmp_path, "hosted-receipt.json", {"phase": "hosted", "passed": True, "source_revision": REVISION}
+        tmp_path,
+        "hosted-receipt.json",
+        {
+            "phase": "hosted",
+            "passed": True,
+            "source_revision": REVISION,
+            "checker_receipt": {"uri": hosted_checker.uri, "sha256": hosted_checker.sha256},
+        },
     )
     checker = _FakeChecker("postpublish", REVISION)
     inputs = _release_check_inputs(
@@ -708,45 +771,47 @@ def test_release_check_postpublish_plans_full_sweep(tmp_path):
         inputs, dry_run=True, repo_root=tmp_path, feeds=_feeds(tmp_path), checker=checker
     )
     assert checker.calls == []
-    assert "--full-browser-sweep" in proof["planned_checker"]["arguments"]
+    arguments = proof["planned_checker"]["arguments"]
+    assert "--postpublish" in arguments
     release_check.run_release_check(
         inputs, dry_run=False, repo_root=tmp_path / "repo", feeds=_feeds(tmp_path), checker=checker
     )
-    assert "--full-browser-sweep" in checker.calls[0][1]
+    argv = checker.calls[0][1]
+    staged = Path(argv[argv.index("--hosted-receipt") + 1])
+    assert staged.read_bytes() == Path(hosted_checker.uri).read_bytes()
 
 
 def test_release_check_refuses_failed_or_stale_prior_receipts(tmp_path):
-    preflight_document = _preflight_receipt_document(REVISION)
-    failed = _seal_json(tmp_path, "failed-preflight.json", {**preflight_document, "passed": False})
+    failed = _preflight_stage_receipt(tmp_path, "failed", passed=False)
     with pytest.raises(ValueError, match="did not pass"):
         release_check.run_release_check(
-            _release_check_inputs(tmp_path, "hosted", preflight_receipt=failed, published_revision=7),
+            _release_check_inputs(tmp_path, "hosted", preflight_receipt=failed, published_revision=PUBLISHED_VERSION),
             dry_run=True,
             repo_root=tmp_path,
             feeds=_feeds(tmp_path),
         )
-    stale = _seal_json(tmp_path, "stale-preflight.json", {**preflight_document, "source_revision": "d" * 40})
+    stale = _preflight_stage_receipt(tmp_path, "stale", source_revision="d" * 40)
     with pytest.raises(ValueError, match="pins revision"):
         release_check.run_release_check(
-            _release_check_inputs(tmp_path, "hosted", preflight_receipt=stale, published_revision=7),
+            _release_check_inputs(tmp_path, "hosted", preflight_receipt=stale, published_revision=PUBLISHED_VERSION),
             dry_run=True,
             repo_root=tmp_path,
             feeds=_feeds(tmp_path),
         )
-    wrong_phase = _seal_json(tmp_path, "wrong-phase.json", {**preflight_document, "phase": "hosted"})
+    wrong_phase = _preflight_stage_receipt(tmp_path, "wrong-phase", phase="hosted")
     with pytest.raises(ValueError, match="prior receipt phase is"):
         release_check.run_release_check(
-            _release_check_inputs(tmp_path, "hosted", preflight_receipt=wrong_phase, published_revision=7),
+            _release_check_inputs(
+                tmp_path, "hosted", preflight_receipt=wrong_phase, published_revision=PUBLISHED_VERSION
+            ),
             dry_run=True,
             repo_root=tmp_path,
             feeds=_feeds(tmp_path),
         )
-    drifted = _seal_json(
-        tmp_path, "drifted-preflight.json", _preflight_receipt_document(REVISION, production_version=42)
-    )
+    drifted = _preflight_stage_receipt(tmp_path, "drifted", production_version=42)
     with pytest.raises(ValueError, match="different production version"):
         release_check.run_release_check(
-            _release_check_inputs(tmp_path, "hosted", preflight_receipt=drifted, published_revision=7),
+            _release_check_inputs(tmp_path, "hosted", preflight_receipt=drifted, published_revision=PUBLISHED_VERSION),
             dry_run=True,
             repo_root=tmp_path,
             feeds=_feeds(tmp_path),
@@ -804,3 +869,70 @@ def test_release_check_refuses_mismatched_produced_receipts(tmp_path):
             checker=silent,
         )
     assert _last_alert_kind(tmp_path) == release_check.alerts.KIND_FAIL
+
+
+def test_package_preview_refuses_the_in_region_bundle(tmp_path, monkeypatch):
+    """The package and the release checks share a workstation disk; the bundle has neither."""
+    repo = tmp_path / "repo"
+    revision = _init_repo(repo)
+    monkeypatch.setenv(guard.ATTESTED_REVISION_ENV, revision)
+    with pytest.raises(ValueError, match="workstation worktree"):
+        package_preview.run_package_preview(
+            _package_inputs(tmp_path, revision), dry_run=True, repo_root=repo, feeds=_feeds(tmp_path)
+        )
+
+
+def test_release_check_binds_the_package_to_the_census_and_its_counted_sources(tmp_path):
+    for name, overrides, message in (
+        ("census", {"census_sources": 3}, "derives from a census of 3 sources, expected 2"),
+        ("counted", {"count": 1}, "carries 1 count rows, the census measured 2"),
+    ):
+        root = tmp_path / name
+        root.mkdir()
+        package_ref, oracle_ref, counts_ref, _ = _package_receipt(root, **overrides)
+        inputs = _release_check_inputs(
+            root, "preflight", package=package_ref, oracle_inventory=oracle_ref, source_counts=counts_ref
+        )
+        with pytest.raises(ValueError, match=message):
+            release_check.run_release_check(inputs, dry_run=True, repo_root=root, feeds=_feeds(root))
+
+
+def test_strict_audit_reads_the_serving_projection_of_sealed_rows():
+    """The load serves typed backend Pending, rebinds grading evidence and withholds content."""
+    available = {
+        "id": "Marin:fixture",
+        "status": "Available",
+        "grading_environment": {"evidence_url": "s3://fixture/current.json"},
+    }
+    pending = {"status": "Pending", "stage": strict_audit.PendingStage.BACKEND_PREPARATION_PENDING.value}
+    assert strict_audit.served_status_matches(pending, available)
+    assert not strict_audit.served_status_matches({"status": "Pending", "stage": "Snapshot repair queued"}, available)
+    assert not strict_audit.served_status_matches({"status": "Excluded"}, available)
+
+    survey_row = {"source_id": "Marin:fixture", "basis": "matched", "task_count": 3, "backends": {}}
+    survey_row["grading_environment"] = {"evidence_url": "s3://fixture/survey-time.json"}
+    served = strict_audit.served_backend_row(survey_row, available)
+    assert served["grading_environment"] == available["grading_environment"]
+    withheld = {**available, "data_restriction": "private_always"}
+    assert strict_audit.served_backend_row(survey_row, withheld) == strict_audit.backend_metadata(served)
+
+
+def test_package_preview_records_the_fix_forward_checkout_beside_the_cut(tmp_path, monkeypatch):
+    """R40: the package builds from a checkout past the plan's cut; provenance pins that checkout."""
+    repo = tmp_path / "repo"
+    cut = _init_repo(repo)
+    (repo / "x").write_text("fix forward\n")
+    subprocess.run(["git", "commit", "--quiet", "-am", "fix"], cwd=repo, check=True, capture_output=True)
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True)
+    head = head.stdout.strip()
+
+    def fake_prepare(checkout, output, oracle_inventory=None, source_counts=None):
+        dist = Path(output) / "dist"
+        dist.mkdir(parents=True)
+        (dist / "bundled-model-provenance.json").write_text(json.dumps({"source_revision": head}))
+
+    monkeypatch.setattr(package_preview, "prepare_preview", fake_prepare)
+    proof = package_preview.run_package_preview(
+        _package_inputs(tmp_path, cut), dry_run=False, repo_root=repo, feeds=_feeds(tmp_path)
+    )
+    assert (proof["source_revision"], proof["code_revision"]) == (cut, head)

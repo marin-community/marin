@@ -24,6 +24,7 @@ from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.harbor_cohort_conversion import (
     CONVERSION_PROTOCOL,
+    COPIED_EVAL_OUTPUT,
     COPIED_TEST_STDOUT,
     COPIED_VERDICT,
     CohortConversionRejected,
@@ -160,14 +161,23 @@ def test_verifier_config_absent_falls_back_to_the_reward_files():
     out = _convert(_package(with_verifier_config=False))
     grader = out.task.grader
     targets = [artifact.target for artifact in grader.artifacts]
-    assert targets == [COPIED_TEST_STDOUT, "/source-reward.json", "/source-reward.txt", "/source-exit-code.txt"]
+    assert targets == [
+        COPIED_TEST_STDOUT,
+        "/source-reward.json",
+        "/source-reward.txt",
+        COPIED_EVAL_OUTPUT,
+        "/source-exit-code.txt",
+    ]
     assert [file.format.value for file in grader.reward.files] == ["json", "number"]
     assert grader.reward.files[0].path == "/converted-reward.json"
     assert grader.reward.files[1].path == "/converted-reward.txt"
     assert grader.argv == (
         "bash",
         "-c",
-        "cp /source-reward.json /converted-reward.json 2>/dev/null || cp /source-reward.txt /converted-reward.txt",
+        "if cp /source-reward.json /converted-reward.json 2>/dev/null; then :; else\n"
+        "cp /source-reward.txt /converted-reward.txt\n"
+        ":\n"
+        "fi",
     )
 
 

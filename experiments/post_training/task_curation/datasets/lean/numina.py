@@ -31,6 +31,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+from finestore.rl.curation import TaskFormat
 from finestore.rl.status_taxonomy import DataRestriction
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import EVIDENCE_PATH, source_defect, unsupported
@@ -238,6 +239,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 upstream_dataset="NuminaMath-LEAN",
                 upstream_name="NuminaMath-LEAN",
                 build_path="Lean kernel replay",
+                task_format=TaskFormat.TASKSPEC,
                 family="math-proof",
                 tags=("lean", "theorem-proving", "single-turn", "license:apache-2.0"),
                 count=9475,

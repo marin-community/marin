@@ -362,31 +362,40 @@ def test_eurus2_code_selects_code_rows_and_keeps_every_prompt_message():
     assert grader_config(task)["test_cases"] == [{"input": "1 2\n", "output": "3\n", "testtype": "stdin"}]
 
 
-@pytest.mark.parametrize(
-    ("name", "constraints"),
-    [
-        ("nemotron_if", [{"func_name": "validate_lowercase"}]),
-        ("rlvr_ifeval", [{"func_name": "validate_no_commas"}]),
-    ],
-)
-def test_ifeval_task_gives_the_scorer_skyrl_constraints(name, constraints):
-    task = converted_task(RECIPES[name], ROWS[name])
+def test_rlvr_ifeval_task_gives_verifyit_normalized_constraints():
+    task = converted_task(RECIPES["rlvr_ifeval"], ROWS["rlvr_ifeval"])
     assert isinstance(task.grader, ScriptGrader)
-    assert task.grader.environment == fixture_context(RECIPES[name]).grader_environment
-    assert grader_config(task)["constraints"] == constraints
+    assert task.grader.environment == fixture_context(RECIPES["rlvr_ifeval"]).grader_environment
+    assert grader_config(task)["constraints"] == [{"name": "punctuation:no_comma", "params": {}}]
 
 
-def test_nemotron_repeat_prompt_constraint_receives_the_instruction():
+@pytest.mark.parametrize("as_list", [False, True])
+def test_rlvr_ifeval_converter_rejects_response_language(as_list):
+    descriptor = {"func_name": "validate_response_language", "language": "de"}
+    ground_truth = [descriptor, {"func_name": "validate_no_commas"}] if as_list else descriptor
+    row = {**ROWS["rlvr_ifeval"], "ground_truth": json.dumps(ground_truth)}
+    result = convert_row(RECIPES["rlvr_ifeval"], row)
+    assert isinstance(result, ImportRejection)
+    assert (result.kind, result.reason) == (ImportFailureKind.UNSUPPORTED, "unsupported_ifeval_constraint")
+
+
+def test_nemotron_task_gives_verifyit_the_ifeval_instructions_without_null_arguments():
     row = {
         **ROWS["nemotron_if"],
         "args": {
-            "instruction_id_list": ["combination:repeat_prompt"],
-            "instruction_kwargs": [{"prompt_to_repeat": "Write a haiku about rain."}],
+            "instruction_id_list": ["length_constraints:number_paragraphs", "keywords:letter_frequency"],
+            "instruction_kwargs": [
+                {"num_paragraphs": 2, "keywords": None},
+                {"letter": "q", "let_frequency": 3, "let_relation": "at least"},
+            ],
         },
     }
     task = converted_task(RECIPES["nemotron_if"], row)
-    (constraint,) = grader_config(task)["constraints"]
-    assert constraint == {"func_name": "validate_repeat_prompt", "original_prompt": row["input"][0]["content"]}
+    assert isinstance(task.grader, ScriptGrader)
+    assert grader_config(task)["constraints"] == [
+        {"name": "length_constraints:number_paragraphs", "params": {"num_paragraphs": 2}},
+        {"name": "keywords:letter_frequency", "params": {"letter": "q", "let_frequency": 3, "let_relation": "at least"}},
+    ]
 
 
 @pytest.mark.parametrize("name", sorted(PREFERENCE_SOURCES))
@@ -484,11 +493,18 @@ REJECTIONS = [
     ),
     ("hendrycks_math", {"solution": "The answer is 5."}, ImportFailureKind.UNSUPPORTED, "missing_final_answer"),
     ("gpqa", {"Incorrect Answer 3": " Neutron "}, ImportFailureKind.SOURCE_DEFECT, "duplicate_options"),
-    (
-        "nemotron_if",
-        {"args": {"instruction_id_list": ["unknown:instruction"], "instruction_kwargs": [{}]}},
-        ImportFailureKind.UNSUPPORTED,
-        "unsupported_ifeval_constraint",
+    *(
+        (
+            "nemotron_if",
+            {"args": {"instruction_id_list": [name], "instruction_kwargs": [arguments]}},
+            ImportFailureKind.UNSUPPORTED,
+            "unsupported_ifeval_constraint",
+        )
+        for name, arguments in (
+            ("unknown:instruction", {}),
+            ("length_constraints:number_words", {"num_words": None, "relation": "at least"}),
+            ("keywords:forbidden_words", {"forbidden_words": []}),
+        )
     ),
     (
         "hh_helpful_base",
@@ -693,3 +709,38 @@ def test_convert_hardmath_rhs_excludes_unparseable_members():
     assert rejection.kind is ImportFailureKind.SOURCE_DEFECT
     assert rejection.reason == "invalid_reference"
     assert "parseable math target" in rejection.detail
+
+
+def test_hardmath_rhs_symbolic_nondimensionalization_states_domain_and_grades_regrouping():
+    row = {
+        **HARDMATH_NONDIM_ROW,
+        "question_type": "nondimensionalization_symbolic",
+        "source": "poly1_train",
+    }
+    task = converted_task(RECIPES["hardmath_rhs"], row)
+    regrouped = r"\frac{a_{1}a_{3}^{3}}{a_{2}^{3}a_{3}}"
+    wrong = r"\frac{a_{1}a_{3}^{4}}{a_{2}^{3}a_{3}}"
+
+    assert "Assume $a_1$, $a_2$, and $a_3$ are positive." in task.context.events[-1].content
+    assert grade_reply(task, regrouped).reward == 1.0
+    assert grade_reply(task, wrong).reward == 0.0
+
+
+def test_hardmath_rhs_poly1_train_row_binds_positive_symbols_and_grades_the_briefs_regrouping():
+    # The 89-row defect from the stale-grader brief: the regrouped equivalent of the
+    # 19/9 exponent pair scored 0 before the positive-symbol contract (#11930).
+    row = {
+        "question": (
+            r"Nondimensionalize $a_{1}x^{19}+a_{2}x^{9}+a_{3}$ into "
+            r"$\epsilon y^{19}+y^{9}+1$; express $\epsilon$ in terms of the coefficients."
+        ),
+        "ground_truths": r"$\boxed{\epsilon=\frac{a_{1}\left(\frac{a_{3}}{a_{2}}\right)^{\frac{19}{9}}}{a_{3}}}$",
+        "question_type": "nondimensionalization_symbolic",
+        "source": "poly1_train",
+    }
+    task = converted_task(RECIPES["hardmath_rhs"], row)
+    regrouped = r"\frac{a_{1}a_{3}^{\frac{19}{9}}}{a_{2}^{\frac{19}{9}}a_{3}}"
+
+    assert "Assume $a_1$, $a_2$, and $a_3$ are positive." in task.context.events[-1].content
+    assert task.grader.parameters["positive_symbols"] == ["a_1", "a_2", "a_3"]
+    assert grade_reply(task, regrouped).reward == 1.0

@@ -3,14 +3,18 @@
 
 # Log parsers and test-name matching shared by the standalone Harbor graders.
 # task_files.grader_source() copies the definitions that a parser needs into tests/grade.py.
+# Keep typing aliases compatible with the generated grader's Python 3.8 minimum.
+# ruff: noqa: UP006, UP035
 from __future__ import annotations
 
 import contextlib
 import fnmatch
+import json
 import re
 import xml.etree.ElementTree as ET
 from bisect import bisect_left
 from enum import Enum
+from typing import Any, Callable, Dict, Iterator, Set
 
 
 class TestStatus(str, Enum):
@@ -21,6 +25,12 @@ class TestStatus(str, Enum):
 
     def __str__(self):
         return self.value
+
+
+# One parsed log: test name -> final status. The parser functions annotate with this alias.
+ParsedTestLog = Dict[str, TestStatus]
+TestParser = Callable[[str], ParsedTestLog]
+TestResults = Dict[str, Set[str]]
 
 
 def ansi_escape(text: str) -> str:
@@ -1942,6 +1952,59 @@ def parse_lue_nvim(log: str) -> ParsedTestLog:
     return results
 
 
+# The trial harness (templates/test.sh) echoes "test_cmd exit code: <n>" to the verifier
+# console after the test command. The sandbox console capture interleaves that echo into
+# the captured test output at chunk boundaries — observed glued mid-line into per-test
+# status lines (the DELTA5 zero-capture fixtures). The marker is the harness's own output
+# and never part of a real test name, so removing it is a faithful de-corruption. Where
+# the marker was glued onto a line with surviving content, the capture cut that line at
+# the glue point: the surviving payload may be a truncated test name or a duration the
+# cut interrupted, so the line's name is flagged with TRUNCATED_TEST_NAME_MARK and the
+# grader resolves such a name against the configured ids only when exactly one configured
+# id is consistent with the surviving prefix (fail-closed: any ambiguity stays unsatisfied).
+HARNESS_TEST_CMD_ECHO_RE = re.compile(r"test_cmd exit code: \d+")
+TRUNCATED_TEST_NAME_MARK = "\x00"
+_TRUNCATED_DURATION_TAIL_RE = re.compile(r"\(\s*\d+(?:\.\d+)?\s*(?:ms|s)?\)?\s*$", re.IGNORECASE)
+
+
+def _split_line_ending(line: str) -> tuple[str, str]:
+    for separator in ("\r\n", "\n", "\r"):
+        if line.endswith(separator):
+            return line[: -len(separator)], separator
+    return line, ""
+
+
+def repair_interleaved_harness_echo(test_log: str) -> str:
+    """Remove the harness's interleaved ``test_cmd exit code`` echo from a captured test log.
+
+    The capture cuts a line at the glue point, so a line that carried the marker after
+    surviving content is flagged as truncated: a trailing (possibly unterminated) duration
+    fragment the cut interrupted is dropped and TRUNCATED_TEST_NAME_MARK marks the name.
+    """
+    repaired: list[str] = []
+    for line in test_log.splitlines(keepends=True):
+        body, separator = _split_line_ending(line)
+        match = HARNESS_TEST_CMD_ECHO_RE.search(body)
+        if match is None:
+            repaired.append(line)
+            continue
+        glued = body[: match.start()].strip()
+        body = HARNESS_TEST_CMD_ECHO_RE.sub("", body)
+        if glued:
+            body = _TRUNCATED_DURATION_TAIL_RE.sub("", body) + TRUNCATED_TEST_NAME_MARK
+        repaired.append(body + separator)
+    return "".join(repaired)
+
+
+def _truncated_actual_prefixes(parsed_passed: set[str]) -> set[str]:
+    """The surviving name prefixes of parsed passes whose capture line was cut."""
+    return {
+        name[: -len(TRUNCATED_TEST_NAME_MARK)].strip()
+        for name in parsed_passed
+        if name.endswith(TRUNCATED_TEST_NAME_MARK)
+    }
+
+
 def _names_failed_on_any_line(test_log: str, parse_fn: TestParser) -> set[str]:
     failed: set[str] = set()
     for line in test_log.splitlines():
@@ -2123,11 +2186,3 @@ def _expected_selector_satisfied(actual_passed: set[str], expected_name: str) ->
 def _expected_name_satisfied(actual_passed: set[str], expected_name: str) -> bool:
     selector_parts = _split_java_class_selectors(expected_name) or [expected_name]
     return all(_expected_selector_satisfied(actual_passed, selector) for selector in selector_parts)
-
-
-def normalized_passed_subset(actual: TestResults, expected: TestResults) -> bool:
-    actual_passed = _actual_passed_aliases(_normalized_passed_names(actual["PASSED"]))
-    expected_passed = _normalized_passed_names(expected["PASSED"])
-    return bool(expected_passed) and all(
-        _expected_name_satisfied(actual_passed, expected_name) for expected_name in expected_passed
-    )

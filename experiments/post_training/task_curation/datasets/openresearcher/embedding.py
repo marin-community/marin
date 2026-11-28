@@ -82,7 +82,7 @@ class EmbeddingConfig:
 def validate_model_license() -> LicenseReceipt:
     """Fail closed unless the pinned encoder's recorded license is permissive."""
     receipt = LicenseReceipt.model_validate_json(EMBEDDING_MODEL_LICENSE.read_bytes())
-    require_license(receipt, EMBEDDING_MODEL, EMBEDDING_MODEL, EMBEDDING_MODEL_REVISION, "train", ban=None)
+    require_license(receipt, EMBEDDING_MODEL, "train", ban=None)
     return receipt
 
 

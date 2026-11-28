@@ -131,12 +131,29 @@ TERMINUS_GRADER_PACKAGES = Environment(requirements=("openapi-schema-validator==
 
 POLARIS_GRADER_PACKAGES = Environment(requirements=("sympy==1.13.3", "pylatexenc==2.10"))
 
+TOOLCHAIN_GRADER_PACKAGES = replace(GRADER_PACKAGES, dockerfile=HERE / "toolchain_host.Dockerfile")
+"""The grader packages composed as a toolchain image: the same compiled lock as GRADER_PACKAGES,
+with the worker's host programs baked in, so a frozen lock-only grader environment binds through
+lock_satisfied_by_image and image backends (Daytona) can host it."""
+
+LEETCODE_GRADER_PACKAGES = Environment(
+    # LeetCodeDataset's own eval environment imports sortedcontainers (the v2 chain).
+    requirements=("sortedcontainers==2.4.0",),
+)
+STRUCTEVAL_GRADER_PACKAGES = Environment(
+    # The official StructEval non-renderable evaluator parses YAML, XML and TOML.
+    requirements=("pyyaml==6.0.2", "xmltodict==0.14.2", "toml==0.10.2"),
+)
+
 BUILDABLE_ENVIRONMENTS = (
     GRADER_PACKAGES,
+    TOOLCHAIN_GRADER_PACKAGES,
     COMPILER_GRADER_PACKAGES,
     LEAN_GRADER_PACKAGES,
     LEAN_KERNEL_GRADER_PACKAGES,
     TERMINUS_GRADER_PACKAGES,
     POLARIS_GRADER_PACKAGES,
+    LEETCODE_GRADER_PACKAGES,
+    STRUCTEVAL_GRADER_PACKAGES,
 )
 """Explicit environment registrations for the images build CLI."""

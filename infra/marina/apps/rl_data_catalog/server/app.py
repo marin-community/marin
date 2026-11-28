@@ -223,6 +223,23 @@ def loaded_catalog(connection: Connection) -> dict[str, Any]:
     return dict(row)
 
 
+def effective_synced_at(load: dict[str, Any]) -> Any:
+    """The load's honest last-update time for the served page.
+
+    A resumed load re-cuts its snapshot and the upsert refreshes created_at, but
+    loaded_at keeps the INSERT-time default from the first registration (the resume
+    upsert never touches it), so loaded_at alone can predate created_at and render a
+    stale page DATE. The served synced_at is therefore the later of the two.
+    """
+    created_at = load.get("created_at")
+    loaded_at = load.get("loaded_at")
+    if created_at is None:
+        return loaded_at
+    if loaded_at is None:
+        return created_at
+    return max(created_at, loaded_at)
+
+
 def duplicate_projection(
     connection: Connection, load_id: str, sources: list[dict[str, Any]]
 ) -> tuple[dict[str, dict[str, Any]], dict[str, list[dict[str, str | float]]]]:
@@ -528,11 +545,11 @@ def create_api(services: AppletServices) -> FastAPI:
                         | {
                             "data_restriction": declaration.get("data_restriction"),
                             "method_tags": method_tags,
-                            "updated_at": metadata["loaded_at"],
+                            "updated_at": effective_synced_at(metadata),
                         }
                     )
                 )
-        return {"sources": sources, "snapshot_id": metadata["snapshot_id"], "synced_at": metadata["loaded_at"]}
+        return {"sources": sources, "snapshot_id": metadata["snapshot_id"], "synced_at": effective_synced_at(metadata)}
 
     @api.get("/sources")
     def sources(projection: SourceProjection = SourceProjection.COMPLETE) -> dict[str, Any]:
@@ -622,7 +639,7 @@ def create_api(services: AppletServices) -> FastAPI:
                         "contamination_status": contamination(row["declaration"]),
                         "result": result(row["declaration"], (row["cohorts"] or {}).get("admitted")),
                         "issue_rate": issue_rate(row["declaration"], (row["cohorts"] or {}).get("admitted")),
-                        "updated_at": metadata["loaded_at"],
+                        "updated_at": effective_synced_at(metadata),
                         "daytona": daytona(row["declaration"], DAYTONA_SAFE_SNAPSHOT_LIMIT),
                         "coverage": coverage.get(row["id"]),
                         "difficulty": (
@@ -668,7 +685,7 @@ def create_api(services: AppletServices) -> FastAPI:
             ),
             "snapshot_id": metadata["snapshot_id"],
             "created_at": metadata["created_at"],
-            "synced_at": metadata["loaded_at"],
+            "synced_at": effective_synced_at(metadata),
             "daytona_snapshot_limit": DAYTONA_SAFE_SNAPSHOT_LIMIT,
         }
         # A concurrent input change must not leave a cached mixture of versions.
@@ -1117,7 +1134,7 @@ def create_api(services: AppletServices) -> FastAPI:
             "issue_rate": issue_rate(declaration, review),
             "daytona": daytona(declaration, DAYTONA_SAFE_SNAPSHOT_LIMIT),
             "daytona_snapshot_limit": DAYTONA_SAFE_SNAPSHOT_LIMIT,
-            "updated_at": load["loaded_at"],
+            "updated_at": effective_synced_at(load),
             "catalog": {"root": load["catalog_root"], "snapshot_id": load["snapshot_id"]},
         }
 

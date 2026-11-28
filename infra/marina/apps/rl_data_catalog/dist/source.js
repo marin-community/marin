@@ -365,8 +365,9 @@ if (!window.AtlasSourceBootstrap) {
   else {
     $('title').textContent = 'Loading source…';
     $('sections').setAttribute('aria-busy', 'true');
-    sourceJson(`api/source?${new URLSearchParams({source_id: sourceId})}`, SOURCE_DEADLINE_MS)
-      .then(data => {
+    // Backend fit rows render from the served taxonomy, so it loads with the source.
+    Promise.all([loadTaxonomy(), sourceJson(`api/source?${new URLSearchParams({source_id: sourceId})}`, SOURCE_DEADLINE_MS)])
+      .then(([, data]) => {
         // Restricted sources never request supplementary content or task reviews.
         const auxiliary = contentWithheld(data) ? {} : {
           progress: sourceJson('measurements/content-progress.json'),

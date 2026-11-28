@@ -28,7 +28,7 @@ def test_table_source_evidence_finishes_when_auxiliary_never_settles(journey: Jo
     page.locator("#show-everything").click()
     page.route("**/" + auxiliary, lambda route: held.append(route))
     page.locator('tr[data-source-id="Marin:clean"] a[href^="source.html"]').click()
-    expect(page.locator("#title")).to_have_text("clean", timeout=5000)
+    expect(page.locator("#title")).to_have_text("Marin · clean", timeout=5000)
     expect(page.locator("#sections")).to_have_attribute("aria-busy", "false", timeout=5000)
     expect(page.get_by_role("heading", name="Oversight evidence", exact=True)).to_be_visible()
     expect(page.get_by_text("Loading supplementary evidence…", exact=True)).to_have_count(
@@ -154,7 +154,7 @@ def test_failed_source_asset_shows_error_and_reload_recovers_same_source(
         page.unroute("**/" + asset)
         with page.expect_navigation(wait_until="domcontentloaded"):
             reload.click()
-        expect(page.locator("#title")).to_have_text("clean", timeout=5000)
+        expect(page.locator("#title")).to_have_text("Marin · clean", timeout=5000)
         expect(page.locator("#sections")).to_have_attribute("aria-busy", "false", timeout=5000)
         expect(page.get_by_role("link", name="Reload page", exact=True)).to_be_hidden()
         assert page.url.endswith("#source_id=Marin%3Aclean")

@@ -5,10 +5,13 @@
 
 One maintained module replaces the per-release compose scripts (see INVENTORY.md);
 every release-identifying value arrives as typed :class:`IdentityBackendComposeInputs`
-and the stage source carries none of them. Additions mode: the retained identity survey
-and backend map are carried verbatim, minus the plan's removed sources (their
+and the stage source carries none of them. The retained identity survey
+and backend measurements are preserved, minus the plan's removed or replaced sources (their
 fingerprints, backend rows and the pair reviews that touch them), and the fresh targets'
-registry fingerprints and backend survey rows are appended. Nothing is re-pinned.
+registry fingerprints, current-input pair reviews and backend survey rows are appended.
+Both output surveys bind the planned publication snapshot; their input references
+and measurement revisions remain intact.
+Missing reason labels are projected from stored typed blockers without changing their measurements.
 
 The stage verifies before it composes: the fresh backend survey must cover exactly the
 targets under the current requirement schema, prior and fresh runtime settings must
@@ -36,9 +39,10 @@ from taskcompendium.backend_requirements import (
     backend_schema_sha256,
 )
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
+from taskcompendium.source_fingerprints import DuplicateReview, SourceFingerprint, SourceIdentitySurvey
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
+from experiments.post_training.task_curation.backend_capabilities import project_backend_blocker_reasons
 from experiments.post_training.task_curation.catalog_identity import (
     canonical_backend_survey,
     canonical_identity_survey,
@@ -46,7 +50,7 @@ from experiments.post_training.task_curation.catalog_identity import (
 from experiments.post_training.task_curation.registry import RegistryReference, read_registry_document
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 from infra.marina.apps.rl_data_catalog.server.duplicate_folding import SourceStanding, fold_groups
-from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
 
 STAGE = "identity_backend_compose"
 RegistryReader = Callable[[RegistryReference], dict[str, Any]]
@@ -57,6 +61,7 @@ class IdentityBackendComposeInputs:
     """Typed inputs for one compose run; every value is a graph output."""
 
     release_id: str
+    snapshot_id: str
     source_revision: str
     output_root: str
     targets: tuple[str, ...]
@@ -69,8 +74,8 @@ class IdentityBackendComposeInputs:
 
     def validate(self) -> None:
         """Refuse malformed inputs before any read runs."""
-        if not self.release_id or not self.source_revision or not self.output_root:
-            raise ValueError("release_id, source_revision and output_root are required")
+        if not self.release_id or not self.snapshot_id or not self.source_revision or not self.output_root:
+            raise ValueError("release_id, snapshot_id, source_revision and output_root are required")
         if not self.targets:
             raise ValueError("targets must name the fresh admissions")
         if self.expected_target_count <= 0:
@@ -120,11 +125,7 @@ def verify_backend_alignment(
     ):
         if retained != fresh_value:
             raise ValueError(f"prior and fresh {name} disagree; the retained settings must be carried unchanged")
-    prior_ids = {row.source_id for row in prior.sources}
-    overlap = sorted(prior_ids & set(targets))
-    if overlap:
-        raise ValueError(f"prior map already holds {overlap[:4]}; additions mode never re-pins")
-    retained = [row for row in prior.sources if row.source_id not in removed]
+    retained = [row for row in prior.sources if row.source_id not in set(removed) | set(targets)]
     composed = sorted([*retained, *fresh.sources], key=lambda row: row.source_id)
     if len(composed) != len(retained) + len(targets):
         raise ValueError("composed backend rows do not equal the retained rows plus the targets")
@@ -132,24 +133,28 @@ def verify_backend_alignment(
 
 
 def compose_backend_survey(
-    prior: BackendSurvey, fresh: BackendSurvey, composed_sources: list[BackendSourceMap]
+    prior: BackendSurvey, fresh: BackendSurvey, composed_sources: list[BackendSourceMap], *, snapshot_id: str
 ) -> BackendSurvey:
-    """Retain the prior map and rebind the composed rows to the fresh schema and snapshot."""
+    """Bind verified rows to the publication snapshot, retaining measurement provenance."""
     composed = prior.model_dump(mode="json")
     composed.update(
-        snapshot_id=fresh.snapshot_id,
+        snapshot_id=snapshot_id,
         generated_at=datetime.now(tz=UTC).isoformat(timespec="seconds"),
         git_revision=fresh.git_revision,
         schema_sha256=fresh.schema_sha256,
         sources=[row.model_dump(mode="json") for row in composed_sources],
     )
-    return BackendSurvey.model_validate(composed)
+    return project_backend_blocker_reasons(BackendSurvey.model_validate(composed))
 
 
-def fetch_target_fingerprints(
-    index: dict[str, Any], targets: tuple[str, ...], reader: RegistryReader
-) -> dict[str, SourceFingerprint]:
-    """Fetch each target's registry identity document and validate its fingerprint.
+@dataclass(frozen=True)
+class TargetIdentities:
+    fingerprints: dict[str, SourceFingerprint]
+    reviews: tuple[DuplicateReview, ...]
+
+
+def fetch_target_identities(index: dict[str, Any], targets: tuple[str, ...], reader: RegistryReader) -> TargetIdentities:
+    """Fetch targets' fingerprints and pair reviews from their pinned registry documents.
 
     Two registry-entry generations exist: the pinned Hugging Face reference
     (``{repo, revision, path, sha256}``) and the digest-bound storage reference
@@ -160,6 +165,7 @@ def fetch_target_fingerprints(
     if not isinstance(sources, dict):
         raise ValueError("registry index carries no sources mapping")
     fingerprints: dict[str, SourceFingerprint] = {}
+    reviews: dict[tuple[str, ...], DuplicateReview] = {}
     for target in targets:
         entry = sources.get(target)
         if not isinstance(entry, dict):
@@ -167,7 +173,10 @@ def fetch_target_fingerprints(
         document = _registry_document(entry, reader)
         # Registry entries point at full identity surveys; a bare fingerprint map is also accepted.
         rows = document["fingerprints"] if "fingerprints" in document else document
-        if not isinstance(rows, dict) or rows.get(target) is None:
+        if not isinstance(rows, dict):
+            raise ValueError(f"registry identity document for {target!r} carries no fingerprint mapping")
+        rows = canonical_source_map(rows)
+        if rows.get(target) is None:
             raise ValueError(f"registry identity document for {target!r} carries no fingerprint for it")
         fingerprint = SourceFingerprint.model_validate(rows[target])
         if fingerprint.task_count <= 0:
@@ -176,7 +185,22 @@ def fetch_target_fingerprints(
                 " targets must carry measured populations"
             )
         fingerprints[target] = fingerprint
-    return fingerprints
+        for payload in document.get("reviews", []):
+            review = DuplicateReview.model_validate(payload)
+            pair = review.similarity.model_copy(
+                update={
+                    "left": canonical_source_id(review.similarity.left),
+                    "right": canonical_source_id(review.similarity.right),
+                }
+            )
+            if target not in {pair.left, pair.right}:
+                continue
+            review = review.model_copy(update={"similarity": pair})
+            key = tuple(sorted((pair.left, pair.right)))
+            if key in reviews and reviews[key] != review:
+                raise ValueError(f"conflicting fresh pair reviews for {pair.left}/{pair.right}")
+            reviews[key] = review
+    return TargetIdentities(fingerprints, tuple(reviews.values()))
 
 
 def _registry_document(entry: dict[str, Any], reader: RegistryReader) -> dict[str, Any]:
@@ -201,17 +225,19 @@ def compose_identity_survey(
     prior: SourceIdentitySurvey,
     targets: tuple[str, ...],
     removed: tuple[str, ...],
-    fresh_fingerprints: dict[str, SourceFingerprint],
+    fresh: TargetIdentities,
     snapshot_id: str,
 ) -> SourceIdentitySurvey:
     """Drop the planned removals, extend with the targets' fingerprints, recheck reviews and groups."""
     unknown = sorted(set(removed) - set(prior.fingerprints))
     if unknown:
         raise ValueError(f"planned removals are absent from the retained identity: {unknown[:4]}")
-    retained = {source_id: fp for source_id, fp in prior.fingerprints.items() if source_id not in removed}
-    fingerprints: dict[str, SourceFingerprint | None] = {**retained, **fresh_fingerprints}
+    replaced = set(prior.fingerprints) & set(targets)
+    omitted = set(removed) | replaced
+    retained = {source_id: fp for source_id, fp in prior.fingerprints.items() if source_id not in omitted}
+    fingerprints: dict[str, SourceFingerprint | None] = {**retained, **fresh.fingerprints}
     retained_reviews = [
-        review for review in prior.reviews if not {review.similarity.left, review.similarity.right} & set(removed)
+        review for review in prior.reviews if not {review.similarity.left, review.similarity.right} & omitted
     ]
     for review in retained_reviews:
         pair = review.similarity
@@ -232,12 +258,21 @@ def compose_identity_survey(
                 continue
             if recorded != canonical_sha256(fingerprint.inputs):
                 raise ValueError(f"retained review measurement inputs disagree with the fingerprint for {side}")
-    overlap = sorted(set(prior.fingerprints) & set(targets))
-    if overlap:
-        raise ValueError(f"retained identity already holds {overlap[:4]}; additions mode never re-pins")
     if len(fingerprints) != len(retained) + len(targets):
         raise ValueError("composed fingerprints do not equal the retained fingerprints plus the targets")
-    served_reviews = retained_reviews
+    for review in fresh.reviews:
+        pair = review.similarity
+        measurement = review.measurement
+        if measurement is None:
+            raise ValueError(f"fresh review requires measured inputs: {pair.left}/{pair.right}")
+        for side, recorded in (
+            (pair.left, measurement.left_inputs_sha256),
+            (pair.right, measurement.right_inputs_sha256),
+        ):
+            fingerprint = fingerprints.get(side)
+            if fingerprint is None or recorded != canonical_sha256(fingerprint.inputs):
+                raise ValueError(f"fresh review measurement inputs disagree with the fingerprint for {side}")
+    served_reviews = [*retained_reviews, *fresh.reviews]
     standings = {
         source_id: SourceStanding(fingerprint.task_count)
         for source_id, fingerprint in fingerprints.items()
@@ -273,21 +308,28 @@ def _compose(
     fresh = canonical_backend_survey(read_ref(ArtifactRef(**survey_ref)))
     prior_backend = canonical_backend_survey(read_ref(inputs.prior_backend))
     composed_sources = verify_backend_alignment(prior_backend, fresh, targets, inputs.removed_sources)
-    backend_survey = compose_backend_survey(prior_backend, fresh, composed_sources)
+    backend_survey = compose_backend_survey(prior_backend, fresh, composed_sources, snapshot_id=inputs.snapshot_id)
 
     index = read_ref(inputs.registry_index)
     registry_revision = index.get("revision")
     if not isinstance(registry_revision, str) or not registry_revision:
         raise ValueError("registry index carries no revision")
-    fresh_fingerprints = fetch_target_fingerprints(index, targets, registry_reader)
+    fresh_identities = fetch_target_identities(index, targets, registry_reader)
     prior_identity = canonical_identity_survey(read_ref(inputs.prior_identity))
     identity_survey = compose_identity_survey(
-        prior_identity, targets, inputs.removed_sources, fresh_fingerprints, fresh.snapshot_id
+        prior_identity, targets, inputs.removed_sources, fresh_identities, inputs.snapshot_id
     )
 
     # Composed counts shared by the dry-run proof and the sealed receipts.
+    prior_rows = {row.source_id: row for row in prior_backend.sources}
+    retained_rows = [row for row in backend_survey.sources if row.source_id not in targets]
     backend_counts = {
-        "retained_rows_unchanged": len(backend_survey.sources) - len(targets),
+        "retained_rows_unchanged": sum(row == prior_rows[row.source_id] for row in retained_rows),
+        "retained_measurements_unchanged": len(retained_rows),
+        "blocker_reason_labels_added": (
+            sum(len(fit.blocker_reasons) for row in backend_survey.sources for fit in row.backends.values())
+            - sum(len(fit.blocker_reasons) for row in composed_sources for fit in row.backends.values())
+        ),
         "added_rows": sorted(targets),
         "source_count": len(backend_survey.sources),
         "prior_schema_sha256": prior_backend.schema_sha256,
@@ -298,21 +340,27 @@ def _compose(
         "removed_fingerprints": sorted(inputs.removed_sources),
         "added_fingerprints": sorted(targets),
         "fingerprint_count": len(identity_survey.fingerprints),
-        "retained_review_count": len(identity_survey.reviews),
-        "pair_reviews_touching_targets": 0,
+        "retained_review_count": len(identity_survey.reviews) - len(fresh_identities.reviews),
+        "pair_reviews_touching_targets": len(fresh_identities.reviews),
     }
+    replaced = set(targets) & set(prior_identity.fingerprints)
+    if replaced:
+        identity_counts["replaced_fingerprints"] = sorted(replaced)
+        identity_counts["superseded_review_count"] = sum(
+            bool({row.similarity.left, row.similarity.right} & replaced) for row in prior_identity.reviews
+        )
     completed_at = datetime.now(tz=UTC).isoformat(timespec="seconds")
     receipt_base = {
         "release_id": inputs.release_id,
         "source_revision": inputs.source_revision,
-        "snapshot_id": fresh.snapshot_id,
+        "snapshot_id": inputs.snapshot_id,
         "registry_revision": registry_revision,
     }
     proof: dict[str, Any] = {
         "kind": f"atlas-{inputs.release_id}-identity-backend-compose",
         "release_id": inputs.release_id,
         "source_revision": inputs.source_revision,
-        "snapshot_id": fresh.snapshot_id,
+        "snapshot_id": inputs.snapshot_id,
         "registry_revision": registry_revision,
         "backend": {"kind": f"atlas-{inputs.release_id}-backend-composition", **backend_counts},
         "identity": {"kind": f"atlas-{inputs.release_id}-identity-composition", **identity_counts},
@@ -323,7 +371,6 @@ def _compose(
     }
     if dry_run:
         return proof
-    configure_coreweave_s3()
     backend_ref = seal(f"{inputs.output_root}/backend-map.json", backend_survey.model_dump(mode="json"))
     backend_receipt = seal(
         f"{inputs.output_root}/backend-composition-receipt.json",
@@ -375,6 +422,7 @@ def run_identity_backend_compose(
     alerts.stage_started(inputs.release_id, STAGE, {"mode": mode}, alert_feeds)
     try:
         inputs.validate()
+        configure_coreweave_s3()
         targets = tuple(sorted({canonical_source_id(target) for target in inputs.targets}))
         if len(targets) != len(inputs.targets):
             raise ValueError("targets repeat or alias one canonical source id")

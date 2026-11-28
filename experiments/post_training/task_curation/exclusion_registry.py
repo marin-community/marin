@@ -21,55 +21,208 @@ def _note(message: str) -> ExclusionEvidence:
 
 
 MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
-    "TaskTrove:swesmith-verifier-repaired-v5": (
+    # The 2026-11-26 15:20 EST user rule (nothing stays Pending indefinitely): intake
+    # rows whose owner shows no live work driving them to admission by the atlas-
+    # 2026.11.27 release are Excluded with their typed reason, the clearing path and
+    # their owner. They keep their measured receipts and return to intake when the
+    # path clears.
+    "TaskTrove:laion__glaive-code-assistant-sandboxes-verified-v2": (
         ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
+            reason=ExclusionReason.GRADER_JUDGE_UNAVAILABLE,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
-                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
-                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Machine execution requires "
-                "explicit semantics and native dependencies. The dev-only backends (docker, docker-gvisor) never "
-                "count for admission, and the declared TaskSpec population (7016 tasks) stays intact pending a "
-                "pinned rebuild. Surfaced by the 908 grading-metadata adoption (grading-metadata-proof-v5)."
+                "Staged intake with no live driver (the 2026-11-26 15:20 EST user rule): the declared "
+                "judge grader (MEDIUM MiniMax-M3, binary full-rubric, no reference) has no runtime "
+                "qualification — CANDIDATES parks it for the coordinator-directed fresh three-source "
+                "rotation and ingest B's live groups (QA-Abstention, Formatting, Edge) do not include "
+                "it. Judge-only over code that is never run; graders fail closed. Clears when the "
+                "rotation claims it and the native-judge runtime qualification (oracle/no-op controls "
+                "through the declared judge) seals."
             ),
         ),
     ),
-    "TaskTrove:DCAgent__exp_rle_adversarial-v6": (
+    "TaskTrove:laion__stackexchange-tezos-sandboxes-verified-v2": (
         ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
+            reason=ExclusionReason.GRADER_JUDGE_UNAVAILABLE,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
-                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
-                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
-                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
-                "never count for admission, and the declared TaskSpec population (2726 tasks) stays intact "
-                "pending a pinned rebuild."
+                "Staged intake with no live driver (the 2026-11-26 15:20 EST user rule): the declared "
+                "judge grader (MEDIUM MiniMax-M3, binary full-rubric, no reference) has no runtime "
+                "qualification — CANDIDATES parks it for the coordinator-directed fresh three-source "
+                "rotation and ingest B's live groups (QA-Abstention, Formatting, Edge) do not include "
+                "it. Judge-only Tezos answers; the _copyN duplicates fall to dedup. Clears when the "
+                "rotation claims it and the native-judge runtime qualification seals."
             ),
         ),
     ),
-    "TaskTrove:DCAgent__exp_rpt_nemotron-cpp": (
+    "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1": (
         ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
+            reason=ExclusionReason.RETAINED_POPULATION_EMPTY,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
-                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
-                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
-                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
-                "never count for admission, and the declared TaskSpec population (4196 tasks) stays intact "
-                "pending a pinned rebuild."
+                "The declared 491-row small cohort was never published (the 2026-11-26 15:20 EST user "
+                "rule): the pinned release carries the LARGE Unitsyn population (4,991 rows) instead of "
+                "the 491-row small cohort the declaration names, so the declared retained population is "
+                "empty at this pin. Ingest A owns the republish; no republish job is live. Clears when "
+                "the small cohort is republished at its declared pin and the chain re-measures."
             ),
         ),
     ),
-    "TaskTrove:DCAgent__inferredbugs-sandboxes-verifier": (
+    "Anthropic:hh_rlhf/harmless-base": (
         ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
+            reason=ExclusionReason.GRADER_MISSING,
             evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
-                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
-                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
-                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
-                "never count for admission, and the declared TaskSpec population (9659 tasks) stays intact "
-                "pending a pinned rebuild."
+                "Not a valid RL source as declared (ingest C decision, brief-delegated 2026-11-26): every "
+                "converted task carries NoGrader — the preference converter's typed reason is 'Preference "
+                "labels rank source candidates; scoring a new reply needs a reward model' and the Atlas has "
+                "no reward-model grader, so no task can produce a reward; main declares the preference "
+                "sources 'kept for review only'. Sealed evidence at the pin: the sibling subsets' grading "
+                "censuses (converter 1509fc8638f6) report 100% 'No executable grader is declared' "
+                "(helpful-base 43,699/43,699, helpful-online 21,989, helpful-rejection-sampled 52,382) and "
+                "this subset's 42,378-task census shares that converter and declaration. MIT license gate "
+                "PASSES (registry ingest_c_intake_20261126_a_v1) — the rows are untrainable as RL, not "
+                "banned. Clears only with an executable or judge grader and a zero-missing grading census."
+            ),
+        ),
+    ),
+    "Anthropic:hh_rlhf/helpful-base": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Not a valid RL source as declared (ingest C decision, brief-delegated 2026-11-26): the "
+                "sealed grading census at this pin reports 43,699/43,699 tasks 'No executable grader is "
+                "declared' (s3://marin-us-east-02a/marin/rl-data/atlas/grading-census/2026.11.13.1/results/"
+                "d587beb02be5706914cc/receipt.json) — the preference converter emits NoGrader ('Preference "
+                "labels rank source candidates; scoring a new reply needs a reward model'). MIT license gate "
+                "PASSES (registry ingest_c_intake_20261126_a_v1) — untrainable as RL, not banned. Clears "
+                "only with an executable or judge grader and a zero-missing grading census."
+            ),
+        ),
+    ),
+    "Anthropic:hh_rlhf/helpful-online": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Not a valid RL source as declared (ingest C decision, brief-delegated 2026-11-26): the "
+                "sealed grading census at this pin reports 21,989/21,989 tasks 'No executable grader is "
+                "declared' — the preference converter emits NoGrader ('Preference labels rank source "
+                "candidates; scoring a new reply needs a reward model'). MIT license gate PASSES (registry "
+                "ingest_c_intake_20261126_a_v1) — untrainable as RL, not banned. Clears only with an "
+                "executable or judge grader and a zero-missing grading census."
+            ),
+        ),
+    ),
+    "Anthropic:hh_rlhf/helpful-rejection-sampled": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Not a valid RL source as declared (ingest C decision, brief-delegated 2026-11-26): the "
+                "sealed grading census at this pin reports 52,382/52,382 tasks 'No executable grader is "
+                "declared' — the preference converter emits NoGrader ('Preference labels rank source "
+                "candidates; scoring a new reply needs a reward model'). MIT license gate PASSES (registry "
+                "ingest_c_intake_20261126_a_v1) — untrainable as RL, not banned. Clears only with an "
+                "executable or judge grader and a zero-missing grading census."
+            ),
+        ),
+    ),
+    "Nemotron:nemotron_ultra_mopd/hs3_en": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): no executable grader is"
+                " declared on any task — the blend converter emits NoGrader text tasks, and the sibling hs3"
+                " grading censuses at this pin report 100% 'No executable grader is declared' (hs3_multi 962,"
+                " hs3_multiturn 1,243). cc-by-4.0 license gate PASSES (registry ingest_c_intake_20261126_a_v1)"
+                " — re-admissible with an executable or reward-model grader plus a zero-missing grading"
+                " census; not banned."
+            ),
+        ),
+    ),
+    "Nemotron:nemotron_ultra_mopd/hs3_multi": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading"
+                " census at this pin reports 962/962 tasks 'No executable grader is declared' (converter"
+                " 1509fc8638f6, s3://marin-us-east-02a/marin/rl-data/atlas/grading-census/2026.11.13.1/)."
+                " cc-by-4.0 license gate PASSES — re-admissible with an executable or reward-model grader"
+                " plus a zero-missing grading census; not banned."
+            ),
+        ),
+    ),
+    "Nemotron:nemotron_ultra_mopd/hs3_multiturn": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading"
+                " census at this pin reports 1,243/1,243 tasks 'No executable grader is declared' (converter"
+                " 1509fc8638f6). cc-by-4.0 license gate PASSES — re-admissible with an executable or"
+                " reward-model grader plus a zero-missing grading census; not banned."
+            ),
+        ),
+    ),
+    "Nemotron:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading"
+                " census at this pin reports 2,000/2,000 tasks 'No executable grader is declared', and the"
+                " actor census reports every task blocked on 'agent: no declared environment' (execution"
+                " requirement). cc-by-4.0 license gate PASSES — re-admissible with an executable or"
+                " reward-model grader plus a zero-missing grading census; not banned."
+            ),
+        ),
+    ),
+    "Nemotron:nemotron_ultra_mopd/safety_en": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading"
+                " census at this pin reports 629/629 tasks 'No executable grader is declared' (converter"
+                " 1509fc8638f6). cc-by-4.0 license gate PASSES — re-admissible with an executable or"
+                " reward-model grader plus a zero-missing grading census; not banned."
+            ),
+        ),
+    ),
+    "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading"
+                " census at this pin reports 860/860 tasks 'No executable grader is declared' (converter"
+                " 1509fc8638f6, s3://marin-us-east-02a/marin/rl-data/atlas/grading-census/2026.11.13.1/"
+                "results/449f65753d610f85f4c8/receipt.json). cc-by-4.0 license gate PASSES — re-admissible"
+                " with an executable or reward-model grader plus a zero-missing grading census; not banned."
+            ),
+        ),
+    ),
+    "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading"
+                " census at this pin reports 3,903/3,903 tasks 'No executable grader is declared' (converter"
+                " 1509fc8638f6). cc-by-4.0 license gate PASSES — re-admissible with an executable or"
+                " reward-model grader plus a zero-missing grading census; not banned."
+            ),
+        ),
+    ),
+    "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading"
+                " census at this pin reports 246/246 tasks 'No executable grader is declared' (converter"
+                " 1509fc8638f6). cc-by-4.0 license gate PASSES — re-admissible with an executable or"
+                " reward-model grader plus a zero-missing grading census; not banned."
+            ),
+        ),
+    ),
+    "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading"
+                " census at this pin reports 932/932 tasks 'No executable grader is declared' (converter"
+                " 1509fc8638f6). cc-by-4.0 license gate PASSES — re-admissible with an executable or"
+                " reward-model grader plus a zero-missing grading census; not banned."
             ),
         ),
     ),
@@ -125,19 +278,6 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
             ),
         ),
     ),
-    "TaskTrove:laion__exp_rpt_ghactions-v3": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
-                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
-                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
-                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
-                "never count for admission, and the declared TaskSpec population (9930 tasks) stays intact "
-                "pending a pinned rebuild."
-            ),
-        ),
-    ),
     "TaskTrove:laion__exp_rpt_nemotron-junit-v6": (
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
@@ -147,84 +287,6 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
                 "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
                 "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
                 "never count for admission, and the declared TaskSpec population (447 tasks) stays intact pending "
-                "a pinned rebuild."
-            ),
-        ),
-    ),
-    "TaskTrove:laion__exp_rpt_scaffold-v3": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
-                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
-                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
-                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
-                "never count for admission, and the declared TaskSpec population (3121 tasks) stays intact "
-                "pending a pinned rebuild."
-            ),
-        ),
-    ),
-    "TaskTrove:laion__exp_rpt_stack-cpp-v4": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
-                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
-                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
-                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
-                "never count for admission, and the declared TaskSpec population (7878 tasks) stays intact "
-                "pending a pinned rebuild."
-            ),
-        ),
-    ),
-    "TaskTrove:laion__exp_rpt_stack-dockerfile-gpt5mini-v7": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
-                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
-                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
-                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
-                "never count for admission, and the declared TaskSpec population (587 tasks) stays intact pending "
-                "a pinned rebuild."
-            ),
-        ),
-    ),
-    "TaskTrove:laion__exp_rpt_stack-go-v5": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
-                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
-                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
-                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
-                "never count for admission, and the declared TaskSpec population (2275 tasks) stays intact "
-                "pending a pinned rebuild."
-            ),
-        ),
-    ),
-    "TaskTrove:laion__exp_rpt_stack-jest-v5": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
-                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
-                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
-                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
-                "never count for admission, and the declared TaskSpec population (424 tasks) stays intact pending "
-                "a pinned rebuild."
-            ),
-        ),
-    ),
-    "TaskTrove:laion__exp_rpt_stack-junit-v6": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
-                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
-                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
-                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
-                "never count for admission, and the declared TaskSpec population (843 tasks) stays intact pending "
                 "a pinned rebuild."
             ),
         ),
@@ -239,45 +301,6 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
                 "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
                 "never count for admission, and the declared TaskSpec population (462 tasks) stays intact pending "
                 "a pinned rebuild."
-            ),
-        ),
-    ),
-    "TaskTrove:laion__exp_rpt_stack-pytest-large-v3": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
-                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
-                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
-                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
-                "never count for admission, and the declared TaskSpec population (1782 tasks) stays intact "
-                "pending a pinned rebuild."
-            ),
-        ),
-    ),
-    "TaskTrove:laion__exp_rpt_stack-rspec-v4": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
-                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
-                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
-                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
-                "never count for admission, and the declared TaskSpec population (8860 tasks) stays intact "
-                "pending a pinned rebuild."
-            ),
-        ),
-    ),
-    "TaskTrove:laion__mix_h10_reward_proportional-v2": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
-                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
-                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
-                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
-                "never count for admission, and the declared TaskSpec population (2858 tasks) stays intact "
-                "pending a pinned rebuild."
             ),
         ),
     ),
@@ -303,19 +326,6 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
                 "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
                 "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
                 "never count for admission, and the declared TaskSpec population (2848 tasks) stays intact "
-                "pending a pinned rebuild."
-            ),
-        ),
-    ),
-    "TaskTrove:laion__nemotron-gym-agentic-function-calling-pivot-v3": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
-                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
-                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
-                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
-                "never count for admission, and the declared TaskSpec population (9579 tasks) stays intact "
                 "pending a pinned rebuild."
             ),
         ),
@@ -385,19 +395,6 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
             ),
         ),
     ),
-    "TaskTrove:laion__nemotron-gym-instruction-following-citation-v2": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
-                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
-                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
-                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
-                "never count for admission, and the declared TaskSpec population (9033 tasks) stays intact "
-                "pending a pinned rebuild."
-            ),
-        ),
-    ),
     "TaskTrove:laion__nemotron-gym-instruction-following-multiturnchat-v4": (
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
@@ -433,45 +430,6 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
                 "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
                 "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
                 "never count for admission, and the declared TaskSpec population (2915 tasks) stays intact "
-                "pending a pinned rebuild."
-            ),
-        ),
-    ),
-    "TaskTrove:laion__nemotron-gym-litmus-bench-v2": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
-                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
-                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
-                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
-                "never count for admission, and the declared TaskSpec population (5232 tasks) stays intact "
-                "pending a pinned rebuild."
-            ),
-        ),
-    ),
-    "TaskTrove:laion__nemotron-gym-math-advanced-calculations-v4": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
-                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
-                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
-                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
-                "never count for admission, and the declared TaskSpec population (5291 tasks) stays intact "
-                "pending a pinned rebuild."
-            ),
-        ),
-    ),
-    "TaskTrove:laion__nemotron-gym-multichallenge-vanilla-v3": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
-                "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
-                "(daytona/iris/local) UNSUPPORTED with measured per-role cause: agent: Unresolved Docker build "
-                "context must be built and pinned before execution. The dev-only backends (docker, docker-gvisor) "
-                "never count for admission, and the declared TaskSpec population (1050 tasks) stays intact "
                 "pending a pinned rebuild."
             ),
         ),
@@ -529,24 +487,6 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
             ),
         ),
     ),
-    "TaskTrove:laion__exp_rpt_crosscodeeval-csharp-v4": (
-        ExclusionClaim(
-            reason=ExclusionReason.GRADER_DEFECT,
-            evidence=_note("0.25 reward for any identifier-shaped output; instruction coaches the hack."),
-        ),
-    ),
-    "TaskTrove:laion__exp_rpt_crosscodeeval-java-v3": (
-        ExclusionClaim(
-            reason=ExclusionReason.GRADER_DEFECT,
-            evidence=_note("Exact string match on a single line completion. Not agentic, no execution."),
-        ),
-    ),
-    "TaskTrove:laion__exp_rpt_crosscodeeval-typescript-v2": (
-        ExclusionClaim(
-            reason=ExclusionReason.GRADER_DEFECT,
-            evidence=_note("Re-skin of the Python variant with the same free 0.25 tier; metadata still says python."),
-        ),
-    ),
     "TaskTrove:laion__exp_rpt_methods2test-large-v4": (
         ExclusionClaim(
             reason=ExclusionReason.GRADER_DEFECT,
@@ -564,26 +504,6 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
                 "No FAIL_TO_PASS ids: the v7 verifier scores whichever tests its custom pytest "
                 "guard plugin saw execute, and the repository is cloned by a root-level setup "
                 "script at agent time. Needs its own converter."
-            ),
-        ),
-    ),
-    "TaskTrove:laion__r2egym-patched-full-oracle-v3": (
-        ExclusionClaim(
-            reason=ExclusionReason.GRADER_DEFECT,
-            evidence=_note(
-                "Grades by overlap between test_info.json and expected_output_json rather than "
-                "by pytest node id; not the trusted-paths shape the swe converters handle."
-            ),
-        ),
-    ),
-    "TaskTrove:laion__swegym-tasks-patched-validated-v5": (
-        ExclusionClaim(
-            reason=ExclusionReason.GRADER_DEFECT,
-            evidence=_note(
-                "Image ships no repository: the instruction clones it and runs make init at "
-                "agent time, and the old grader pip-installed requirements again at grading "
-                "time. Sampled oracles fail on missing dependencies and the empty check cannot "
-                "start."
             ),
         ),
     ),
@@ -627,29 +547,7 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
             ),
         ),
     ),
-    "TaskTrove:laion__codeelo-v2": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "BackendSurvey (v21 preview catalog): every surveyed backend reports unsupported "
-                "with per-task validation errors 'agent: Unresolved Docker build context must be "
-                "built and pinned before execution'; DifficultyGap.TOOL_PROVIDER_REQUIRED "
-                "(2026-11-16 exclude ruling)."
-            ),
-        ),
-    ),
     "TaskTrove:laion__magicoder-v4": (
-        ExclusionClaim(
-            reason=ExclusionReason.NO_SUPPORTED_BACKEND,
-            evidence=_note(
-                "BackendSurvey (v21 preview catalog): every surveyed backend reports unsupported "
-                "with per-task validation errors 'agent: Unresolved Docker build context must be "
-                "built and pinned before execution'; DifficultyGap.TOOL_PROVIDER_REQUIRED "
-                "(2026-11-16 exclude ruling)."
-            ),
-        ),
-    ),
-    "TaskTrove:laion__nemotron-gym-instruction-following-freeform-v2": (
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
             evidence=_note(

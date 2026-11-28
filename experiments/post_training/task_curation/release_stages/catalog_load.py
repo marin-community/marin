@@ -20,9 +20,15 @@ import argparse
 import gzip
 import hashlib
 import json
+import logging
+import math
+import threading
+import time
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from itertools import batched
 from pathlib import Path
 from typing import Any, cast
 
@@ -34,6 +40,8 @@ from taskcompendium.backend_requirements import backend_schema_sha256
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
 import infra.marina.apps.rl_data_catalog.load as load_module
+import infra.marina.apps.rl_data_catalog.load_reviews as load_reviews_module
+from experiments.post_training.task_curation.backend_capabilities import verify_backend_blocker_reasons
 from experiments.post_training.task_curation.catalog_identity import (
     canonical_backend_survey,
     canonical_identity_survey,
@@ -50,12 +58,24 @@ from experiments.post_training.task_curation.release_stages.history_staging impo
 )
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref, sealed_contract_rows
 from experiments.post_training.task_curation.release_stages.paced_query import RetryControl, open_paced_query
+from experiments.post_training.task_curation.release_stages.qc_browse import pin_currency, selected_uri
+from experiments.post_training.task_curation.release_stages.sizing import catalog_replay_sizing
+from experiments.post_training.task_curation.source_status import served_snapshot_sources
 from infra.marina.apps.rl_data_catalog.load import CatalogDisplayPolicy
 from infra.marina.apps.rl_data_catalog.load_derived_contract import load_contracts
 from infra.marina.apps.rl_data_catalog.load_difficulty import publish_coverage
 from infra.marina.apps.rl_data_catalog.load_difficulty_seal import load_difficulty_seal
-from infra.marina.apps.rl_data_catalog.load_reviews import load_content_reviews
+from infra.marina.apps.rl_data_catalog.load_reviews import (
+    PreparedReviewPanel,
+    finish_content_review,
+    insert_review_segment,
+    load_content_reviews,
+    panel_row_groups,
+    prepare_content_review,
+)
+from infra.marina.apps.rl_data_catalog.load_reviews import ensure_tables as load_review_ensure_tables
 from infra.marina.apps.rl_data_catalog.parallel_history import retain_prior_assessments_parallel
+from infra.marina.apps.rl_data_catalog.server.content_access import content_is_withheld
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 
 CATALOG_DISPLAY_POLICY = CatalogDisplayPolicy.PREVIEW
@@ -103,8 +123,8 @@ class CatalogLoadInputs:
         for required in ("prior_qc_completion", "fresh_qc_index", "contracts", "history_receipt"):
             if required not in self.staging:
                 raise ValueError(f"staging refs must include {required!r}")
-        if self.expected_source_count <= 0 or self.expected_selected_panels <= 0:
-            raise ValueError("expected counts must be positive")
+        if self.expected_source_count <= 0 or self.expected_selected_panels < 0:
+            raise ValueError("source count must be positive and selected panel count nonnegative")
 
 
 def read_catalog_state(catalog_root: str, inputs: CatalogLoadInputs, publication: dict) -> list:
@@ -115,7 +135,7 @@ def read_catalog_state(catalog_root: str, inputs: CatalogLoadInputs, publication
         raise ValueError(f"catalog snapshot is {snapshot.snapshot_id!r}, expected {inputs.snapshot_id!r}")
     backend_document = read_ref(ArtifactRef(**publication["backend"]))
     identity_document = read_ref(ArtifactRef(**publication["identity"]))
-    snapshot_sources = [canonical_snapshot_source(row) for row in catalog.sources(inputs.snapshot_id)]
+    snapshot_sources = [canonical_snapshot_source(row) for row in served_snapshot_sources(catalog, inputs.snapshot_id)]
     source_ids = {row.id for row in snapshot_sources}
     fingerprint_ids = set(identity_document["fingerprints"])
     backend_ids = {row["source_id"] for row in backend_document["sources"]}
@@ -165,6 +185,7 @@ def run_dry_run(inputs: CatalogLoadInputs) -> dict:
     snapshot_sources = read_catalog_state(inputs.catalog_root, inputs, publication)
     backend_document = read_ref(ArtifactRef(**publication["backend"]))
     survey = canonical_backend_survey(backend_document)
+    verify_backend_blocker_reasons(survey)
     review_admissions(
         {row.id: row.declaration.model_dump(mode="json") for row in snapshot_sources},
         survey,
@@ -194,6 +215,42 @@ def verify_history_receipt(inputs: CatalogLoadInputs) -> dict:
     if history.get("selected_pointer_changed"):
         raise ValueError("history receipt reports a changed selection pointer; catalog load must not build on it")
     return history
+
+
+def verify_assessment_resume(inputs: CatalogLoadInputs, headers: int, panels: list[dict], query: Query) -> list[str]:
+    """Allow partial QC headers only when every stored field matches its sealed panel."""
+    count = query("SELECT COUNT(*) AS n FROM atlas_assessments WHERE load_id=:load", {"load": inputs.target_load_id})[
+        "rows"
+    ][0]["n"]
+    if headers <= count <= headers + 1:
+        return []
+    if not headers <= count <= headers + len(panels):
+        raise ValueError(f"target load holds {count} assessments, outside staged history and QC")
+    extra = query(
+        "SELECT current.pipeline_key,current.source_id FROM atlas_assessments current"
+        " WHERE current.load_id=:target AND NOT EXISTS (SELECT 1 FROM atlas_assessments prior"
+        " WHERE prior.load_id=:prior AND prior.pipeline_key=current.pipeline_key)"
+        " ORDER BY current.pipeline_key LIMIT :limit",
+        {"target": inputs.target_load_id, "prior": inputs.prior_load_id, "limit": len(panels) + 1},
+    )["rows"]
+    if count - len(extra) != headers:
+        raise ValueError("target assessment history differs from its staged receipt")
+    by_source = {panel["source_id"]: panel for panel in panels}
+    names = [column.strip().split()[0] for column in load_module.TABLE_COLUMNS["assessments"].split(",")]
+    for row in extra:
+        panel = by_source.get(row["source_id"])
+        if panel is None:
+            raise ValueError(f"unexpected assessment on QC resume: {row['source_id']}")
+        assessment = _validate_staged_panel(inputs, panel)["assessment"]
+        if assessment["pipeline_key"] != row["pipeline_key"]:
+            raise ValueError(f"resumed assessment selects another panel: {row['source_id']}")
+        stored = query(
+            f"SELECT {','.join(names)} FROM atlas_assessments WHERE load_id=:load AND pipeline_key=:key",
+            {"load": inputs.target_load_id, "key": row["pipeline_key"]},
+        )["rows"]
+        if stored != [{name: assessment.get(name) for name in names}]:
+            raise ValueError(f"resumed assessment differs from its sealed QC panel: {row['source_id']}")
+    return [row["pipeline_key"] for row in extra]
 
 
 def run_catalog_load(
@@ -257,8 +314,9 @@ def _run_write(
         raise ValueError(f"catalog snapshot moved to {catalog.current().snapshot_id!r}")
     publication = read_ref(inputs.publication)
     backend = canonical_backend_survey(read_ref(ArtifactRef(**publication["backend"])))
+    verify_backend_blocker_reasons(backend)
     identity = canonical_identity_survey(read_ref(ArtifactRef(**publication["identity"])))
-    sources = [canonical_snapshot_source(row) for row in catalog.sources(inputs.snapshot_id)]
+    sources = [canonical_snapshot_source(row) for row in served_snapshot_sources(catalog, inputs.snapshot_id)]
     if len(sources) != inputs.expected_source_count or {row.id for row in sources} != set(identity.fingerprints):
         raise ValueError("catalog sources and identity fingerprints disagree at write time")
     browse = read_ref(inputs.staging["prior_qc_completion"])
@@ -284,12 +342,12 @@ def _run_write(
     result_contracts = contracts_loader(contracts, query)
 
     history = verify_history_receipt(inputs)
-    counts = query("SELECT COUNT(*) AS n FROM atlas_assessments WHERE load_id=:load", {"load": inputs.target_load_id})[
-        "rows"
-    ][0]["n"]
-    headers = int(history["prior_assessment_headers"])
-    if not headers <= counts <= headers + 1:
-        raise ValueError(f"target load holds {counts} assessments, outside the staged history range")
+    fresh_qc = read_ref(inputs.staging["fresh_qc_index"])
+    if fresh_qc["load_id"] != inputs.target_load_id or fresh_qc["snapshot_id"] != inputs.snapshot_id:
+        raise ValueError("fresh QC index names different loads than this release")
+    resumed_assessments = verify_assessment_resume(
+        inputs, int(history["prior_assessment_headers"]), fresh_qc["receipts"], query
+    )
 
     # Route load_catalog's internal history copy through the paced client; an explicit
     # retain parameter on load_catalog would remove this patch (see module docstring).
@@ -318,16 +376,31 @@ def _run_write(
     if selected != [{"load_id": inputs.target_load_id}]:
         raise ValueError(f"serving pointer is {selected!r}, expected the target load")
 
-    fresh_qc = read_ref(inputs.staging["fresh_qc_index"])
-    if fresh_qc["load_id"] != inputs.target_load_id or fresh_qc["snapshot_id"] != inputs.snapshot_id:
-        raise ValueError("fresh QC index names different loads than this release")
-    reviews_loader = reviews_loader if reviews_loader is not None else load_content_reviews
-    qc_results = [_stage_qc_panel(inputs, panel, reviews_loader, query) for panel in fresh_qc["receipts"]]
-    selected_panels = query(
-        "SELECT COUNT(*) AS n FROM atlas_review_current WHERE load_id=:load", {"load": inputs.target_load_id}
-    )["rows"][0]["n"]
-    if selected_panels != inputs.expected_selected_panels:
-        raise ValueError(f"{selected_panels} selected review panels, expected {inputs.expected_selected_panels}")
+    qc_results: list[dict] = []
+    if reviews_loader is not None:
+        # An injected loader keeps the serial per-panel contract exactly (tests).
+        qc_results = [_stage_qc_panel(inputs, panel, reviews_loader, query) for panel in fresh_qc["receipts"]]
+    else:
+        qc_results = replay_catalog_reviews(
+            inputs,
+            fresh_qc["receipts"],
+            browse,
+            {row.id: row.declaration.model_dump(mode="json") for row in sources},
+            query,
+            query_factory,
+            control,
+        )
+    orphaned_panels = _drop_orphaned_review_panels(query, inputs.target_load_id)
+    selected = {
+        row["source_id"]
+        for row in query(
+            "SELECT source_id FROM atlas_review_current WHERE load_id=:load", {"load": inputs.target_load_id}
+        )["rows"]
+    }
+    unselected = sorted({result["source_id"] for result in qc_results} - selected)
+    if unselected:
+        raise ValueError(f"fresh QC panels are not selected after the replay: {unselected[:5]}")
+    selected_panels = len(selected)
     sealed_difficulty = None
     if inputs.difficulty_snapshot is not None:
         sealed_difficulty = load_difficulty_seal(inputs.difficulty_snapshot, query, inputs.target_load_id)
@@ -348,7 +421,14 @@ def _run_write(
         "snapshot_id": inputs.snapshot_id,
         "contracts": result_contracts,
         "fresh_qc_results": qc_results,
+        "resumed_qc_assessments": resumed_assessments,
+        "stale_pin_panels": sorted(row["source_id"] for row in qc_results if not row["current_pin"]),
         "selected_review_panels": selected_panels,
+        # The plan's hand-counted expectation is recorded, not enforced: it predates the
+        # release's removals. The enforced invariant is above (every fresh panel selected,
+        # no panel for a source outside the load).
+        "plan_expected_selected_panels": inputs.expected_selected_panels,
+        "orphaned_review_panels_dropped": orphaned_panels,
         "difficulty_coverage": coverage_result,
         "sealed_difficulty": sealed_difficulty,
         "result": result,
@@ -392,23 +472,349 @@ def _default_retain(query_factory: Callable[[], Query], control: RetryControl, s
     return retain
 
 
-def _stage_qc_panel(inputs: CatalogLoadInputs, panel: dict, reviews_loader: Callable[..., dict], query: Query) -> dict:
-    if panel["status"] != "complete" or panel["records"] != QC_PANEL_RECORDS:
-        raise ValueError(f"fresh QC panel {panel['source_id']} is {panel['status']!r} with {panel['records']} records")
+def replay_catalog_reviews(
+    inputs: CatalogLoadInputs,
+    panels: list[dict],
+    browse: dict,
+    declarations: dict[str, dict],
+    query: Query,
+    query_factory: Callable[[], Query],
+    control: RetryControl,
+) -> list[dict]:
+    """Reuse verified SQL copies of unchanged panels and replay the remaining reviews.
+
+    The sealed QC index already verified staged payloads. A matching copy receipt
+    proves exact SQL row equality; check its live selection before reusing those
+    rows without downloading or inserting their payloads again.
+    """
+    copied = {row["source_id"]: row for row in browse["results"]}
+    reused = {}
+    for panel in panels:
+        source_id = panel["source_id"]
+        copy = copied.get(source_id)
+        if copy is None:
+            continue
+        receipt = copy["original_receipt"]
+        identity = hashlib.sha256(json.dumps(receipt, sort_keys=True).encode()).hexdigest()
+        if panel["identity"] != identity:
+            continue  # A newly selected panel replaces the prior SQL copy.
+        declaration = declarations[source_id]
+        if (
+            copy["catalog_load_id"] != inputs.target_load_id
+            or copy["selected_receipt"] != receipt
+            or copy["qa_bindings_changed"] is not False
+            or copy["task_or_reviewer_identities_changed"] is not False
+            or copy["presentation_pin_currency_preserved"] is not True
+            or any(table["mismatches"] != 0 for table in copy["tables"].values())
+            or panel["records"] != copy["tables"]["atlas_raw_reviews"]["rows"]
+            or panel["status"] != "complete"
+            or copy["pipeline_key"] != f"qc:{receipt['artifact']['sha256']}"
+            or content_is_withheld(declaration)
+            or selected_uri(declaration) != receipt["artifact"]["uri"]
+            or pin_currency(declaration, receipt) != receipt["current_pin"]
+        ):
+            raise ValueError(f"copied QC panel differs from its index or declaration: {source_id}")
+        reused[source_id] = {
+            "source_id": source_id,
+            "reference": panel["reference"],
+            "counts": {name: table["rows"] for name, table in copy["tables"].items()},
+            "review": receipt,
+            "current_pin": bool(receipt["current_pin"]),
+            "retained_sql_copy": True,
+        }
+    for group in batched(reused, 32):
+        stored = query(
+            "SELECT source_id,pipeline_key,receipt FROM atlas_review_current WHERE load_id=:load"
+            " AND source_id IN (SELECT jsonb_array_elements_text(CAST(:sources AS JSONB)))",
+            {"load": inputs.target_load_id, "sources": json.dumps(group)},
+        )["rows"]
+        expected = [
+            {
+                "source_id": source_id,
+                "pipeline_key": copied[source_id]["pipeline_key"],
+                "receipt": copied[source_id]["selected_receipt"],
+            }
+            for source_id in group
+        ]
+        if sorted(stored, key=lambda row: row["source_id"]) != sorted(expected, key=lambda row: row["source_id"]):
+            raise ValueError("copied QC panel selection changed after SQL copy")
+    pending = [panel for panel in panels if panel["source_id"] not in reused]
+    results = list(reused.values())
+    if not pending:
+        return results
+    staged_panels = [_validate_staged_panel(inputs, panel) for panel in pending]
+    total = _replay_record_total(staged_panels)
+    progress = _ReplayProgress(total)
+    if catalog_replay_sizing(total).workers == 1:
+        for panel, staged in zip(pending, staged_panels, strict=True):
+            loaded = load_content_reviews(staged, inputs.target_load_id, panel["source_id"], query, progress)
+            results.append(
+                {
+                    "source_id": panel["source_id"],
+                    "reference": panel["reference"],
+                    "counts": loaded,
+                    "review": staged["receipt"],
+                    "current_pin": bool(staged["receipt"]["current_pin"]),
+                }
+            )
+    else:
+        results.extend(
+            _replay_qc_panels_parallel(inputs, pending, staged_panels, total, progress, query, query_factory, control)
+        )
+    progress.finish()
+    return results
+
+
+def _drop_orphaned_review_panels(query: Query, load_id: str) -> list[str]:
+    """Drop selected review panels whose source is not in the load; return their sources.
+
+    History staging carries the prior load's selections, including the release's planned
+    removals; a removed source's panel must not survive into the new load.
+    """
+    orphans = sorted(
+        row["source_id"]
+        for row in query(
+            "SELECT r.source_id FROM atlas_review_current r WHERE r.load_id=:load AND NOT EXISTS"
+            " (SELECT 1 FROM atlas_sources s WHERE s.load_id=:load AND s.id=r.source_id)",
+            {"load": load_id},
+        )["rows"]
+    )
+    if orphans:
+        query(
+            "DELETE FROM atlas_review_current r WHERE r.load_id=:load AND NOT EXISTS"
+            " (SELECT 1 FROM atlas_sources s WHERE s.load_id=:load AND s.id=r.source_id)",
+            {"load": load_id},
+        )
+    return orphans
+
+
+def _validate_staged_panel(inputs: CatalogLoadInputs, panel: dict) -> dict:
+    """Digest-verify a fresh QC panel's staged document and check its declared scope."""
+    if panel["status"] != "complete":
+        raise ValueError(f"fresh QC panel {panel['source_id']} is {panel['status']!r}")
     raw = StoragePath(panel["reference"]["uri"]).read_bytes()
     if hashlib.sha256(raw).hexdigest() != panel["reference"]["sha256"]:
         raise ValueError(f"fresh QC panel digest mismatch for {panel['source_id']}")
     staged = json.loads(gzip.decompress(raw))
-    complete_panel = len(staged["items"]) == len(staged["raw"]) == QC_PANEL_RECORDS
-    if not complete_panel or not staged["receipt"]["current_pin"]:
-        raise ValueError(f"fresh QC panel {panel['source_id']} is not a complete pinned panel")
+    # A SAMPLE panel holds its drawn sample (QC_PANEL_RECORDS, or the whole population of a
+    # smaller source); a FULL panel holds every retained task.
+    scope = staged["assessment"]["scope"]
+    measured = staged["receipt"]["panel"]
+    expected = measured["sample_size"] if scope == "sample" else measured["retained_tasks"] if scope == "full" else None
+    if expected is None or (scope == "sample" and expected > QC_PANEL_RECORDS):
+        raise ValueError(f"fresh QC panel {panel['source_id']} has scope {scope!r} of size {expected}")
+    if not panel["records"] == len(staged["items"]) == len(staged["raw"]) == expected:
+        raise ValueError(f"fresh QC panel {panel['source_id']} is not a complete panel")
+    return staged
+
+
+def _stage_qc_panel(inputs: CatalogLoadInputs, panel: dict, reviews_loader: Callable[..., dict], query: Query) -> dict:
+    staged = _validate_staged_panel(inputs, panel)
+    # A panel the prior load served at an older population pin replays as stale: the
+    # loader records its pin currency, matching the admission gate's sample_pin_stale.
     loaded = reviews_loader(staged, inputs.target_load_id, panel["source_id"], query)
     return {
         "source_id": panel["source_id"],
         "reference": panel["reference"],
         "counts": loaded,
         "review": staged["receipt"],
+        "current_pin": bool(staged["receipt"]["current_pin"]),
     }
+
+
+class _ReplayClient(threading.local):
+    """One paced SQL client per replay worker, built lazily from the factory."""
+
+    query: Query | None = None
+
+
+_REPLAY_LOG_INTERVAL_S = 30.0
+# Rows per replay segment: small enough that the five monster panels cannot bound
+# the makespan (the largest holds ~122k records), large enough that the per-batch
+# verify statements do not dominate the statement budget.
+_REPLAY_SEGMENT_ROWS = 20_000
+
+
+class _ReplayProgress:
+    """The replay's record progress: done/total, percent, rate and ETA at a fixed cadence.
+
+    ``total`` is computed before the replay starts from the staged panels' row groups
+    (the rows at their pins); ``done`` accumulates the rows whose insert-and-verify
+    completed, across panels and threads.
+    """
+
+    def __init__(
+        self, total: int, interval_s: float = _REPLAY_LOG_INTERVAL_S, log: Callable[[str], None] = logging.info
+    ) -> None:
+        if total <= 0:
+            raise ValueError(f"the replay progress needs a positive record total, got {total}")
+        self.total = total
+        self.done = 0
+        self._interval_s = interval_s
+        self._log = log
+        self._started = time.monotonic()
+        self._last_logged = self._started
+        self._lock = threading.Lock()
+
+    def __call__(self, table: str, rows: int) -> None:
+        with self._lock:
+            self.done += rows
+            due = time.monotonic() - self._last_logged >= self._interval_s
+            if not due:
+                return
+            self._last_logged = time.monotonic()
+            done, total, elapsed = self.done, self.total, time.monotonic() - self._started
+        rate = done / elapsed if elapsed > 0 else 0.0
+        remaining = (total - done) / rate if rate > 0 else float("inf")
+        self._log(
+            f"PROGRESS replay done={done}/{total} ({100 * done / total:.1f}%,"
+            f" {rate:.0f} records/s, eta {duration_iso(remaining)})"
+        )
+
+    def finish(self) -> None:
+        """The final line: the whole total processed, with the wall clock."""
+        with self._lock:
+            done, total, elapsed = self.done, self.total, time.monotonic() - self._started
+        rate = done / elapsed if elapsed > 0 else 0.0
+        self._log(f"PROGRESS replay done={done}/{total} (100.0%, {rate:.0f} records/s, wall {duration_iso(elapsed)})")
+
+
+def duration_iso(seconds: float) -> str:
+    """A bounded HH:MM:SS rendering for progress lines (ceil so an ETA never reads zero early)."""
+    if seconds == float("inf"):
+        return "?"
+    total = math.ceil(seconds)
+    return f"{total // 3600:02d}:{total % 3600 // 60:02d}:{total % 60:02d}"
+
+
+def _replay_record_total(staged_panels: list[dict]) -> int:
+    """The records the replay will process: every panel's tables at their pins.
+
+    The staged documents are the source load's panel rows sealed at their pins, and
+    the row groups are the loader's own insert plan, so this total matches what the
+    loader's progress callback reports.
+    """
+    total = 0
+    for staged in staged_panels:
+        for _table, rows, _columns in panel_row_groups(staged):
+            total += len(rows)
+    if total <= 0:
+        raise ValueError("the fresh QC panels carry no records to replay")
+    return total
+
+
+def _segment_rows(rows: list[dict]) -> list[list[dict]]:
+    """Split one table's rows into page-range segments of at most _REPLAY_SEGMENT_ROWS."""
+    return [rows[start : start + _REPLAY_SEGMENT_ROWS] for start in range(0, len(rows), _REPLAY_SEGMENT_ROWS)] or [[]]
+
+
+def _replay_qc_panels_parallel(
+    inputs: CatalogLoadInputs,
+    panels: list[dict],
+    staged_panels: list[dict],
+    total: int,
+    progress: _ReplayProgress,
+    query: Query,
+    query_factory: Callable[[], Query],
+    control: RetryControl,
+) -> list[dict]:
+    """Replay the panels with page-range segments fanned out over paced workers.
+
+    Each panel's insertable groups split into CopySegments; the segments of all
+    panels share one worker pool, so no single panel bounds the makespan. The
+    per-panel preamble (validation, chunk metadata) runs before its segments and
+    the cohort summaries plus the presentation pointer publish after them — the
+    ordering that matters. One failure sets the shared stop event so the peers
+    halt instead of retrying against a broken budget.
+    """
+    workers = catalog_replay_sizing(total).workers
+    load_review_ensure_tables(query, load_reviews_module.REVIEW_TABLES)
+    clients = _ReplayClient()
+
+    def client() -> Query:
+        if clients.query is None:
+            clients.query = query_factory()
+        return clients.query
+
+    def stop_if_halted() -> None:
+        if control.stop.is_set():
+            raise RuntimeError("the QC replay stopped after another client failed")
+
+    prepared: list[PreparedReviewPanel | None] = [None] * len(panels)
+
+    def prepare(index: int) -> int:
+        stop_if_halted()
+        try:
+            prepared[index] = prepare_content_review(
+                staged_panels[index], inputs.target_load_id, panels[index]["source_id"], client(), ensure_tables_=False
+            )
+        except BaseException:
+            control.stop.set()
+            raise
+        return index
+
+    batch_segments: list[tuple[int, str, str, list[dict]]] = []
+    segments: list[tuple[int, str, str, list[dict]]] = []
+    for index, staged in enumerate(staged_panels):
+        for table, rows, columns in panel_row_groups(staged):
+            for piece in _segment_rows(rows):
+                segment = (index, table, columns, piece)
+                if table == "atlas_review_batches":
+                    batch_segments.append(segment)
+                else:
+                    segments.append(segment)
+
+    def run_segment(segment: tuple[int, str, str, list[dict]]) -> tuple[int, str, int]:
+        panel_index, table, columns, rows = segment
+        stop_if_halted()
+        panel = prepared[panel_index]
+        if panel is None:
+            raise RuntimeError(f"panel {panels[panel_index]['source_id']} never prepared")
+        try:
+            count = insert_review_segment(client(), inputs.target_load_id, panel.key, table, columns, rows, progress)
+        except BaseException:
+            control.stop.set()
+            raise
+        return panel_index, table, count
+
+    def finish(panel_index: int) -> dict:
+        stop_if_halted()
+        panel = prepared[panel_index]
+        if panel is None:
+            raise RuntimeError(f"panel {panels[panel_index]['source_id']} never prepared")
+        try:
+            finish_content_review(client(), panel, progress)
+        except BaseException:
+            control.stop.set()
+            raise
+        return {
+            "source_id": panels[panel_index]["source_id"],
+            "reference": panels[panel_index]["reference"],
+            "counts": counts[panel_index],
+            "review": panel.staged["receipt"],
+            "current_pin": bool(panel.staged["receipt"]["current_pin"]),
+        }
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="atlas-replay") as executor:
+        for _ in executor.map(prepare, range(len(panels))):
+            pass
+        counts = [{table: 0 for table, _rows, _columns in panel_row_groups(staged)} for staged in staged_panels]
+        # Batch chunks and task links have foreign keys to the committed batch rows.
+        for phase in (batch_segments, segments):
+            failures = []
+            futures = [executor.submit(run_segment, segment) for segment in phase]
+            for future in as_completed(futures):
+                try:
+                    panel_index, table, count = future.result()
+                    counts[panel_index][table] += count
+                except BaseException as error:
+                    failures.append(error)
+            if failures:
+                raise BaseExceptionGroup("QC replay segments failed", failures)
+        results: list[dict] = []
+        for result in executor.map(finish, range(len(panels))):
+            results.append(result)
+    return results
 
 
 def _write_receipt(inputs: CatalogLoadInputs, proof: dict) -> dict:
@@ -432,6 +838,8 @@ def main() -> None:
     document = json.loads(args.inputs.read_text(encoding="utf-8"))
     document["publication"] = ArtifactRef(**document["publication"])
     document["staging"] = {name: ArtifactRef(**ref) for name, ref in document["staging"].items()}
+    if document.get("difficulty_snapshot") is not None:
+        document["difficulty_snapshot"] = ArtifactRef(**document["difficulty_snapshot"])
     inputs = CatalogLoadInputs(**document)
     proof = run_catalog_load(inputs, dry_run=args.mode == "dry-run")
     label = "CATALOG-LOAD-DRY-RUN" if args.mode == "dry-run" else "CATALOG-LOAD-SEALED"

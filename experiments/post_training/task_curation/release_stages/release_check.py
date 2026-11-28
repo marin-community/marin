@@ -17,6 +17,11 @@ point, and it drives heavy gates of its own — the module invocation in the
 release checkout is the pattern the maintained postpublish launcher itself uses.
 The stage seals its receipt only after the produced checker receipt exists,
 parses, and reports this phase as passed at the expected revision.
+
+The maintained checker reads and writes local files only, so the stage stages its
+digest-verified inputs (count and inventory documents, the preflight baseline) under
+a local work directory, runs the checker there, and seals the checker receipt beside
+the stage receipt. The work directory keeps the checker's logs and screenshots.
 """
 
 import argparse
@@ -32,7 +37,8 @@ from pathlib import Path
 from rigging.filesystem.storage_path import StoragePath
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
-from experiments.post_training.task_curation.release_stages.guard import attested_revision
+from experiments.post_training.task_curation.release_stages import live_applet as live_applet_module
+from experiments.post_training.task_curation.release_stages.guard import attested_revision, repo_head
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref
 from experiments.post_training.task_curation.release_stages.package_preview import receipt_kind as package_receipt_kind
 from infra.marina.apps.rl_data_catalog.release_receipts import PreflightBaseline
@@ -40,6 +46,7 @@ from infra.marina.apps.rl_data_catalog.release_receipts import PreflightBaseline
 CHECKER_MODULE = "infra.marina.apps.rl_data_catalog.release_check"
 RELEASE_CHECK_PHASES = ("preflight", "hosted", "postpublish")
 CHECKER_RECEIPT_PATTERN = "checker/{phase}.json"
+REMOTE_SCHEMES = ("gs://", "s3://", "mirror://", "memory://")
 STAGE_RECEIPT_PATTERN = "release-check-{phase}.json"
 
 
@@ -55,6 +62,7 @@ class ReleaseCheckInputs:
     applet_id: str
     expected_source_count: int
     production_version: int
+    work_root: str
     package: ArtifactRef | None = None
     oracle_inventory: ArtifactRef | None = None
     source_counts: ArtifactRef | None = None
@@ -73,6 +81,8 @@ class ReleaseCheckInputs:
             raise ValueError(f"expected_source_count must be positive, got {self.expected_source_count}")
         if self.production_version <= 0:
             raise ValueError("production_version must be the explicit expected production version")
+        if not self.work_root or self.work_root.startswith(REMOTE_SCHEMES):
+            raise ValueError(f"work_root must be a local directory for the checker, got {self.work_root!r}")
         if self.phase == "preflight":
             if self.package is None or self.oracle_inventory is None or self.source_counts is None:
                 raise ValueError("the preflight check requires the package, oracle-inventory and source-counts refs")
@@ -83,6 +93,7 @@ class ReleaseCheckInputs:
             raise ValueError(f"the {self.phase} check runs the published revision with its preflight baseline inputs")
         if self.preflight_receipt is None:
             raise ValueError(f"the {self.phase} check requires the sealed preflight receipt ref")
+        # RELEASE.md: the hosted check runs after the publish, against the new immutable revision.
         if self.published_revision is None:
             raise ValueError(f"the {self.phase} check requires the published revision to verify")
         if self.phase == "postpublish" and self.hosted_receipt is None:
@@ -91,7 +102,11 @@ class ReleaseCheckInputs:
 
 def seal(path: str, value: dict) -> ArtifactRef:
     """Write-once seal with byte-identical readback; returns the artifact reference."""
-    raw = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+    return seal_bytes(path, (json.dumps(value, indent=2, sort_keys=True) + "\n").encode())
+
+
+def seal_bytes(path: str, raw: bytes) -> ArtifactRef:
+    """Write-once seal of exact bytes; identical bytes reseal as a no-op."""
     target = StoragePath(path)
     if target.exists():
         if target.read_bytes() != raw:
@@ -104,7 +119,7 @@ def seal(path: str, value: dict) -> ArtifactRef:
 
 
 def verify_phase_receipt(ref: ArtifactRef, expected_phase: str, revision: str) -> dict:
-    """Digest-verify a prior checker receipt; require its phase, pass state and revision."""
+    """Digest-verify a prior stage receipt; require its phase, pass state and revision."""
     payload = StoragePath(ref.uri).read_bytes()
     if hashlib.sha256(payload).hexdigest() != ref.sha256:
         raise ValueError(f"{expected_phase} receipt digest mismatch: {ref.uri}")
@@ -118,6 +133,48 @@ def verify_phase_receipt(ref: ArtifactRef, expected_phase: str, revision: str) -
     return document
 
 
+def checker_baseline(phase_document: dict, phase: str = "preflight") -> bytes:
+    """The digest-verified maintained checker receipt a phase's stage receipt sealed."""
+    ref = phase_document.get("checker_receipt")
+    if not ref:
+        raise ValueError(f"the {phase} stage receipt does not bind its checker receipt")
+    raw = StoragePath(ref["uri"]).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != ref["sha256"]:
+        raise ValueError(f"{phase} checker receipt digest mismatch: {ref['uri']}")
+    return raw
+
+
+def checker_work_dir(inputs: ReleaseCheckInputs) -> Path:
+    """The phase's local checker directory: staged inputs, receipt, logs, screenshots."""
+    return Path(inputs.work_root) / f"release-check-{inputs.phase}"
+
+
+def local_checker_paths(inputs: ReleaseCheckInputs) -> dict[str, Path]:
+    """Where the checker reads each staged input and writes its receipt."""
+    work = checker_work_dir(inputs)
+    paths = {"receipt": work / CHECKER_RECEIPT_PATTERN.format(phase=inputs.phase)}
+    if inputs.phase == "preflight":
+        paths["source_counts"] = work / "inputs" / "source-counts.json"
+        paths["oracle_inventory"] = work / "inputs" / "oracle-inventory.json"
+    else:
+        paths["baseline"] = work / "inputs" / "preflight-baseline.json"
+    if inputs.phase == "postpublish":
+        paths["hosted_receipt"] = work / "inputs" / "hosted-receipt.json"
+    return paths
+
+
+def _stage_local(path: Path, raw: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw)
+
+
+def _verified_bytes(ref: ArtifactRef) -> bytes:
+    raw = StoragePath(ref.uri).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != ref.sha256:
+        raise ValueError(f"sealed reference digest mismatch: {ref.uri}")
+    return raw
+
+
 def verify_package_receipt(inputs: ReleaseCheckInputs) -> dict:
     """Digest-verify the sealed package receipt and its release bindings."""
     document = read_ref(inputs.package)
@@ -127,28 +184,39 @@ def verify_package_receipt(inputs: ReleaseCheckInputs) -> dict:
     if document.get("release_id") != inputs.release_id or document.get("source_revision") != inputs.source_revision:
         raise ValueError("the package receipt binds a different release or revision")
     packaged = document.get("packaged") or {}
-    if packaged.get("source_revision") != inputs.source_revision:
+    if packaged.get("source_revision") != document.get("code_revision"):
         raise ValueError(
-            f"packaged provenance pins revision {packaged.get('source_revision')!r}, expected {inputs.source_revision!r}"
+            f"packaged provenance pins revision {packaged.get('source_revision')!r},"
+            f" expected the packaging checkout {document.get('code_revision')!r}"
         )
     for name, ref in (("oracle_inventory", inputs.oracle_inventory), ("source_counts", inputs.source_counts)):
         if ref is not None and document.get(name) != {"uri": ref.uri, "sha256": ref.sha256}:
             raise ValueError(f"the package receipt's {name} ref differs from the typed input")
-    counts = (packaged.get("source_counts") or {}).get("sources")
-    if counts != inputs.expected_source_count:
-        raise ValueError(f"the package carries {counts} sources, expected {inputs.expected_source_count}")
-    inventory = (packaged.get("oracle_inventory") or {}).get("sources")
-    if inventory is not None and inventory != inputs.expected_source_count:
+    # The package derives its counts from the release census; sources without a
+    # measured population carry no count row, so the census covers the plan's sources.
+    if document.get("census_sources") != inputs.expected_source_count:
         raise ValueError(
-            f"the packaged oracle inventory covers {inventory} sources, expected {inputs.expected_source_count}"
+            f"the package derives from a census of {document.get('census_sources')} sources,"
+            f" expected {inputs.expected_source_count}"
         )
+    counted = document.get("counted_sources")
+    counts = (packaged.get("source_counts") or {}).get("sources")
+    if counts != counted:
+        raise ValueError(f"the package carries {counts} count rows, the census measured {counted} sources")
+    inventory = (packaged.get("oracle_inventory") or {}).get("sources")
+    if inventory is not None and inventory != counted:
+        raise ValueError(f"the packaged oracle inventory covers {inventory} sources, the census measured {counted}")
     if not StoragePath(document["package"]["uri"]).exists():
         raise ValueError(f"the staged package directory is missing: {document['package']['uri']}")
     return document
 
 
 def planned_checker_arguments(
-    inputs: ReleaseCheckInputs, package_document: dict | None, receipt_path: str, attested: str | None
+    inputs: ReleaseCheckInputs,
+    package_document: dict | None,
+    paths: dict[str, Path],
+    attested: str | None,
+    live: live_applet_module.LiveApplet,
 ) -> list[str]:
     """The exact maintained-checker arguments for the phase, computed as data.
 
@@ -157,12 +225,15 @@ def planned_checker_arguments(
     """
     argv = [
         "--receipt",
-        receipt_path,
+        str(paths["receipt"]),
         *(("--attested-revision", attested) if attested is not None else ()),
         "--service-url",
         inputs.service_url,
         "--production-version",
         str(inputs.production_version),
+        # The release never changes the preview's access mode (R40 ruling).
+        "--expected-mode",
+        live.mode,
     ]
     if inputs.phase == "preflight":
         if package_document is None:
@@ -171,14 +242,14 @@ def planned_checker_arguments(
             "--dist",
             package_document["package"]["uri"],
             "--source-counts",
-            inputs.source_counts.uri,
+            str(paths["source_counts"]),
             "--oracle-inventory",
-            inputs.oracle_inventory.uri,
+            str(paths["oracle_inventory"]),
         ]
         return argv
-    argv += ["--revision", str(inputs.published_revision), "--baseline", inputs.preflight_receipt.uri]
+    argv += ["--revision", str(inputs.published_revision), "--baseline", str(paths["baseline"])]
     if inputs.phase == "postpublish":
-        argv.append("--full-browser-sweep")
+        argv += ["--postpublish", "--hosted-receipt", str(paths["hosted_receipt"])]
     return argv
 
 
@@ -198,7 +269,7 @@ def subprocess_checker(repo_root: Path, argv: list[str], receipt_path: str) -> N
         )
 
 
-def verify_checker_receipt(receipt_path: str, inputs: ReleaseCheckInputs) -> dict:
+def verify_checker_receipt(receipt_path: str, inputs: ReleaseCheckInputs, code_revision: str) -> dict:
     """The produced checker receipt must exist, parse, and pass this phase."""
     path = StoragePath(receipt_path)
     if not path.exists():
@@ -208,9 +279,10 @@ def verify_checker_receipt(receipt_path: str, inputs: ReleaseCheckInputs) -> dic
         raise ValueError(f"checker receipt phase is {document.get('phase')!r}, expected {inputs.phase!r}")
     if document.get("passed") is not True:
         raise ValueError(f"the maintained {inputs.phase} check failed; see {receipt_path}")
-    if document.get("source_revision") != inputs.source_revision:
+    # The maintained checker records the checkout it ran from (the landed cut).
+    if document.get("source_revision") != code_revision:
         raise ValueError(
-            f"checker receipt pins revision {document.get('source_revision')!r}, expected {inputs.source_revision!r}"
+            f"checker receipt pins revision {document.get('source_revision')!r}, expected {code_revision!r}"
         )
     return document
 
@@ -234,16 +306,24 @@ def run_release_check(
     try:
         inputs.validate()
         package_document = verify_package_receipt(inputs) if inputs.package is not None else None
+        staged: dict[str, bytes] = {}
+        if inputs.phase == "preflight":
+            staged["source_counts"] = _verified_bytes(inputs.source_counts)
+            staged["oracle_inventory"] = _verified_bytes(inputs.oracle_inventory)
         if inputs.preflight_receipt is not None:
             preflight_document = verify_phase_receipt(inputs.preflight_receipt, "preflight", inputs.source_revision)
             if inputs.phase in ("hosted", "postpublish"):
-                baseline = PreflightBaseline.model_validate(preflight_document)
+                staged["baseline"] = checker_baseline(preflight_document)
+                baseline = PreflightBaseline.model_validate_json(staged["baseline"])
                 if baseline.production_version != inputs.production_version:
                     raise ValueError("the preflight baseline pins a different production version")
         if inputs.hosted_receipt is not None:
-            verify_phase_receipt(inputs.hosted_receipt, "hosted", inputs.source_revision)
-        receipt_path = f"{inputs.output_root}/{CHECKER_RECEIPT_PATTERN.format(phase=inputs.phase)}"
-        argv = planned_checker_arguments(inputs, package_document, receipt_path, attested_revision())
+            hosted_document = verify_phase_receipt(inputs.hosted_receipt, "hosted", inputs.source_revision)
+            staged["hosted_receipt"] = checker_baseline(hosted_document, "hosted")
+        paths = local_checker_paths(inputs)
+        receipt_path = str(paths["receipt"])
+        live = live_applet_module.live_applet(inputs.service_url, inputs.applet_id)
+        argv = planned_checker_arguments(inputs, package_document, paths, attested_revision(), live)
         proof: dict = {
             "kind": f"atlas-{inputs.release_id}-release-check",
             "release_id": inputs.release_id,
@@ -255,6 +335,7 @@ def run_release_check(
             "preflight_receipt": _ref_pointer(inputs.preflight_receipt),
             "hosted_receipt": _ref_pointer(inputs.hosted_receipt),
             "published_revision": inputs.published_revision,
+            "live": {"version": live.version, "mode": live.mode},
             "planned_checker": {"module": CHECKER_MODULE, "arguments": argv, "receipt": receipt_path},
             "dry_run": dry_run,
             "sql_writes": 0,
@@ -262,8 +343,20 @@ def run_release_check(
         if dry_run:
             alerts.stage_finished(inputs.release_id, "release_check", {"mode": mode, "phase": inputs.phase}, alert_feeds)
             return proof
+        work = checker_work_dir(inputs)
+        if work.exists():
+            raise ValueError(f"checker work directory {work} exists; the checker never overwrites a receipt")
+        for name, raw in staged.items():
+            _stage_local(paths[name], raw)
         (checker if checker is not None else subprocess_checker)(repo_root, argv, receipt_path)
-        checker_document = verify_checker_receipt(receipt_path, inputs)
+        code_revision = repo_head(repo_root)
+        checker_document = verify_checker_receipt(receipt_path, inputs, code_revision)
+        checker_ref = seal_bytes(
+            f"{inputs.output_root}/{CHECKER_RECEIPT_PATTERN.format(phase=inputs.phase)}", paths["receipt"].read_bytes()
+        )
+        proof["checker_receipt"] = {"uri": checker_ref.uri, "sha256": checker_ref.sha256}
+        proof["code_revision"] = code_revision
+        proof["checker_artifacts"] = str(paths["receipt"].with_suffix(""))
         proof["passed"] = checker_document.get("passed") is True
         # The marina-release contract reads the maintained receipt vocabulary: the
         # boolean outcome field and the applet the check targets.

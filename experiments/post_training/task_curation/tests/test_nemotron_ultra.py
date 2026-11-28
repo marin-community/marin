@@ -461,6 +461,19 @@ def test_tool_math_rows_keep_the_python_tool_with_its_agent(staged):
     assert not environment.capabilities
 
 
+@pytest.mark.parametrize(
+    "task_name",
+    ["coin_flip", "complex_arithmetic", "game_of_life_halting", "propositional_logic", "puzzle24"],
+)
+def test_reasoning_gym_keeps_tasks_with_repaired_scorers(task_name):
+    path = "ultra_sft_step3200_reasoning_gym"
+    result = convert_row(
+        RECIPES[pipeline_name("rlvr2", path)],
+        {**COMPONENT_ROWS[path], "metadata": {"source_dataset": task_name}},
+    )
+    assert isinstance(result, NormalizedTask)
+
+
 def test_abstention_idk_gets_source_partial_credit_after_reasoning_is_removed(staged):
     task = task_for("ultra_sft_step3200_abstention", staged)
     spec = verifyit_spec(task.grader)

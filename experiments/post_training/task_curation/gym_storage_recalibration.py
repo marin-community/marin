@@ -44,7 +44,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import tomlkit
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import hf_hub_download
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import get_secret
@@ -56,6 +56,7 @@ from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 
 from experiments.post_training.task_curation.calibration_projection import calibrated_task_spec
 from experiments.post_training.task_curation.harbor_inspection import harbor_inspection
+from experiments.post_training.task_curation.license_publication import publish_licensed_population
 from experiments.post_training.task_curation.oracle_filter import (
     CALIBRATION_ATTEMPT_TIMEOUT,
     calibrate_cohort,
@@ -768,32 +769,21 @@ def publish_revision(
     revision_dir: Path,
     evidence_root: str,
     *,
-    private: bool = True,
+    use: str,
 ) -> dict:
-    """Create the private open-athena revision repository and upload its sealed artifacts."""
+    """Publish the sealed revision through the licensed publication chokepoint.
+
+    The recalibrated population derives from the retained release's receipt: the card
+    declares that receipt's resolved upstream, the upload is read back, and the new
+    pin's receipt registers before the summary is returned.
+    """
     repo, revision = RELEASES[source_id]
     name_parts = repo.split("-retained-")
     if len(name_parts) != 2:
         raise ValueError(f"Unexpected retained release name: {repo}")
     target_repo = f"{name_parts[0]}-{RECALIBRATION_LABEL}-v1"
     summary = json.loads((revision_dir / "revision-summary.json").read_text())
-    api = HfApi()
-    api.create_repo(repo_id=target_repo, repo_type="dataset", private=private, exist_ok=True)
-    api.upload_file(
-        repo_id=target_repo,
-        repo_type="dataset",
-        path_or_fileobj=str(revision_dir / "tasks.parquet"),
-        path_in_repo="tasks.parquet",
-        commit_message=f"{RECALIBRATION_LABEL}: measured stage-f storage {summary['measured_storage_mb']} MiB",
-    )
-    for name in ("revision-ledger.json", "revision-summary.json"):
-        api.upload_file(
-            repo_id=target_repo,
-            repo_type="dataset",
-            path_or_fileobj=str(revision_dir / name),
-            path_in_repo=name,
-        )
-    readme = (
+    body = (
         f"# {source_id} {RECALIBRATION_LABEL}\n\n"
         f"Versioned stage-f storage recalibration of {repo}@{revision}.\n\n"
         f"- Defect: every archived task.toml declared storage_mb = 20480 (20 GiB), above the Daytona\n"
@@ -804,10 +794,21 @@ def publish_revision(
         f"- Evidence: {evidence_root}\n"
         f"- Everything else (cpus, memory_mb, timeouts, instruction, verifier bytes) is unchanged.\n"
     )
-    readme_path = revision_dir / "README.md"
-    readme_path.write_text(readme)
-    api.upload_file(repo_id=target_repo, repo_type="dataset", path_or_fileobj=str(readme_path), path_in_repo="README.md")
-    return {"repo": target_repo, "summary": summary}
+    publication = publish_licensed_population(
+        source_id,
+        target_repo,
+        revision_dir,
+        ("tasks.parquet", "revision-ledger.json", "revision-summary.json"),
+        body=body,
+        pretty_name=f"{source_id} {RECALIBRATION_LABEL}",
+        use=use,
+    )
+    return {
+        "repo": publication.repo,
+        "revision": publication.revision,
+        "summary": summary,
+        "license_check_verdict": publication.license_check["verdict"],
+    }
 
 
 def main() -> None:
@@ -855,6 +856,7 @@ def main() -> None:
     publish.add_argument("--source-id", required=True)
     publish.add_argument("--revision-dir", type=Path, required=True)
     publish.add_argument("--evidence-root", required=True)
+    publish.add_argument("--use", required=True, choices=["train", "eval"], help="The publication use")
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
@@ -875,7 +877,7 @@ def main() -> None:
         print(text)
         return
     if args.command == "publish":
-        result = publish_revision(source_id, args.revision_dir, args.evidence_root)
+        result = publish_revision(source_id, args.revision_dir, args.evidence_root, use=args.use)
         print(json.dumps(result, indent=2, default=str))
         return
     release_parquet = args.release_parquet or read_release(source_id, args.cache_dir)

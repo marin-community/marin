@@ -54,6 +54,8 @@ dependencies = [
     # as marin-dupekit's runtime dependency. `scripts/rust_mode.py dev` swaps
     # marin-dupekit-native to a local source build.
     "marin-dupekit",
+    # StructEval's local grader tests use the parser pinned in its runtime environment.
+    "xmltodict==0.14.2",
 ]
 
 [project.scripts]
@@ -539,6 +541,9 @@ ignore-missing-imports = [
     "jaxlib.*",
     "kubernetes",
     "kubernetes.*",
+    # The harness grader image installs langdetect; the lint workspace does not.
+    "langdetect",
+    "langdetect.*",
     "librosa",
     "librosa.*",
     "lm_eval",

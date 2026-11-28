@@ -33,7 +33,7 @@ ATLAS_WATCHDOG_FEED_ENV = "ATLAS_WATCHDOG_FEED"
 # A 32-hex load ID anywhere in a string literal, bounded by non-hex characters.
 _HEX_LOAD_ID = re.compile(r"(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])")
 # Release/snapshot-shaped names: "r39-...", "current26-...", at a name boundary.
-_RELEASE_NAME = re.compile(r"(?<![0-9a-z])(r\d+[-_]|current\d+[-_])")
+_RELEASE_NAME = re.compile(r"(?<![0-9a-z])(atlas-\d{4}\.\d{2}\.\d{2}(?:\.\d+)?(?![0-9.])|r\d+[-_]|current\d+[-_])")
 
 
 @dataclasses.dataclass(frozen=True)

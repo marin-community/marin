@@ -1,0 +1,6 @@
+{
+  "repo": "open-athena/marin-rl-data-atlas-registry",
+  "revision": "00710e0f7672c0590c1bf52459f0324401ae4fa2",
+  "path": "experiments/post_training/task_curation/datasets/edge_websearch_admitted.json",
+  "sha256": "c8ed6364147abcc32a2bf7ef3898d66a51b4b12d753ccfc33e2a40738ee6f731"
+}

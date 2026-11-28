@@ -4,15 +4,16 @@ window.AtlasDifficulty = (() => {
   const titles = {small: 'Small', large: 'Large', hosted: 'Hosted', snowball: 'Snowball v0.1'};
   const solvers = Object.keys(titles);
   function selected(summary, solver) {
-    return summary?.models.find(model => model.solver === solver);
+    return summary?.models?.find(model => model?.solver === solver);
   }
   function tooltip(model, title) {
     if (!model || model.status !== 'measured') return `${title}: ${model?.reason || 'Not measured for this pinned release.'}`;
     const interval = model.wilson_95;
     return `${title}: ${(100 * model.solve_rate).toFixed(1)}% solved · ${model.solved}/${model.n} · n=${model.n}` +
-      ` · Wilson 95% CI ${(100 * interval.low).toFixed(1)}–${(100 * interval.high).toFixed(1)}%` +
-      ` · ${model.model.model} @ ${model.model.revision} · ${model.protocol_id}` +
-      (model.sample.pre_oracle_filter ? ' · Pre-oracle-filter sample; resampling required after filtering.' : '');
+      (interval ? ` · Wilson 95% CI ${(100 * interval.low).toFixed(1)}–${(100 * interval.high).toFixed(1)}%` : '') +
+      (model.model?.model ? ` · ${model.model.model} @ ${model.model?.revision || 'unknown revision'}` : '') +
+      (model.protocol_id ? ` · ${model.protocol_id}` : '') +
+      (model.sample?.pre_oracle_filter ? ' · Pre-oracle-filter sample; resampling required after filtering.' : '');
   }
   function comparison(summary, sourceId) {
     const chart = document.createElement(sourceId ? 'a' : 'div'); chart.className = 'difficulty-comparison';

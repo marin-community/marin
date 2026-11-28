@@ -31,6 +31,32 @@ outside the repository supplies any pipeline input.
 Repository-relative pins (for example the registry index under `plans/`) resolve
 from the checkout root: run `atlas-release` from the checkout.
 
+## Verify curriculum input reuse
+
+`public_input_reuse` checks every task belonging to its named target sources in a
+fresh census against the archived curriculum through `curriculum_projection.task_rebinding`. Its typed inputs
+name the release, frozen source revision, SHA-bound `archive_release` and
+`census_receipt`, target source IDs and an output root. The census must bind the
+same release and revision, and its public preparation must match its measured
+declarations and task stream. Changed public content or ambiguous correspondence
+refuses reuse.
+
+Run the comparison in the data's region:
+
+```bash
+uv run python -m experiments.post_training.task_curation.release_stages.public_input_reuse \
+  --inputs /workspace/reuse-inputs.json --mode dry-run
+uv run python -m experiments.post_training.task_curation.release_stages.public_input_reuse \
+  --inputs /workspace/reuse-inputs.json --mode write
+```
+
+The dry run checks every target population without publishing outputs. Write mode
+seals task-identity mappings and `reuse-receipt.json`. It computes no embeddings
+or alignment scores. The receipt establishes eligibility for curriculum semantic
+alignment reuse; grader execution and reward correctness retain their separate
+admission requirements. The composition stage still verifies its selected
+replacement manifests before applying a rebind.
+
 ## The release plan document
 
 Everything release-specific lives in one typed JSON document — the release plan.
@@ -116,9 +142,9 @@ Field notes:
 - `parity_receipt` + `gpu_runtime` decide GPU vs CPU embedding: both set → CUDA
   (a valid parity receipt for the serving runtime is required, BRIEF requirement 4);
   both null → CPU.
-- `rebound_source`/`rebound_tasks` are typed passthroughs. The maintained
-  additions-mode compose refuses a declared rebound (the projection pass is not
-  wired into the compose yet) — resolve the rebound before composing.
+- The singleton `rebound_source`/`rebound_tasks` plan fields are not a proof of
+  reusable alignment. Composition accepts per-source proofs through
+  `public_input_rebindings` in its composition-input manifest, as described below.
 - `slice_output_root` (optional) redirects preflight slice artifacts; the default
   is `<release_root>/preflight-slices`.
 
@@ -207,6 +233,16 @@ from silent defaults:
   copy thread, the shared retry budget halting peers on a failure), with the worker
   count from `qc_browse_sizing(...).workers`; panels are disjoint (one pipeline key
   each) and the results collect in the plan's declared order.
+- **catalog_load QC replay** — the fresh-panel replay computes its record total
+  before it starts (every panel's tables at their pins, from the loader's own row
+  groups) and logs `PROGRESS replay done/total (percent, records/s, eta)` at a
+  fixed cadence. The replay itself splits every panel's tables into page-range
+  segments (at most `_REPLAY_SEGMENT_ROWS` each) and fans the segments of all
+  panels over paced workers sized by `catalog_replay_sizing(...).workers`, so the
+  five largest panels cannot bound the makespan. Each panel's validation and its
+  cohort summaries plus pointer publish stay ordered around its segments, and the
+  shared retry budget halts the peers on a failure. The parallel path stores
+  exactly what the serial path stores (pinned byte-identical by test).
 - **history_staging** — already parallel (see `history_staging_sizing`).
 
 Per-stage receipts are byte-identical between a serial and a parallel run modulo
@@ -296,3 +332,131 @@ new load without overwriting a prior binding. Atlas source columns and aggregate
 coverage use only cells matching the loaded declaration's population. Partial
 cells keep their attempt counts while difficulty and pass rate remain null.
 The column retains the immutable manifest receipt for inspection.
+
+## Calendar release names and population replacements
+
+New catalog releases use `atlas-YYYY.MM.DD`, with `.N` for another cut on the
+same date. The config filename, `release_id`, and difficulty snapshot registry
+key use that same name. Marina's `/v/NN` identifies an applet revision. Historical
+release names retain their original spelling.
+
+Derivation selects new source IDs and existing IDs whose fingerprint differs
+from either the prior declarations or the retained curriculum inventory. This
+also detects a curriculum projection that lagged behind an earlier catalog cut.
+Every target passes the existing census, corpus preparation and fresh alignment
+stages. Composition removes replaced populations' archived assignments, source
+rows and coverage vectors before merging the fresh alignment. Assignments and
+statistics for unaffected sources retain their existing values. The handoff
+records replacement source IDs and scopes its unchanged-value evidence to the
+retained sources.
+
+Resuming the same frozen plan compares all derivation receipt fields except the
+generation timestamp. If they match, the original receipt stays unchanged;
+changed measured inputs refuse resume.
+
+QC browse staging preserves only prior panels whose source inputs and selected
+evidence still match the frozen declaration. Derivation omits changed panels
+from that copy and counts copied panels separately from the final selected set.
+The fresh-QC index combines copied SQL evidence with digest-bound review artifacts
+selected by the frozen declarations through the maintained content-review loader.
+Each review keeps the task IDs recorded in its artifact; its current-pin flag is
+computed against the frozen declaration. Reviews drawn from another pin remain stale. Empty browse
+copies are valid when all prior panels were omitted. Explicit policy exclusions
+stay excluded. No new reviews are requested.
+
+Catalog loading reuses panels whose receipt identities and row counts match the
+sealed browse-copy completion and current QC index. It checks their selected
+evidence and recorded current-pin flag against the current declarations: that
+flag must agree with whether the reviewed population matches the declared
+population. It then checks the target SQL presentation pointers in bounded
+batches. A changed pointer or failed binding check stops catalog loading. Only new or replaced panels download and replay staged review payloads;
+copied task, reviewer and QA identities remain unchanged.
+The parallel loader commits every reviewer-batch segment and compares all
+expected rows and fields against the sealed staged panel before dispatching
+chunks and task links, which reference those batches through SQL foreign keys.
+Segments run in parallel within each phase. The SQL pointer selecting the served
+review panel updates only after both phases succeed.
+The partial-QC resume check compares extra assessment headers with the
+corresponding digest-verified staged QC panels. Every stored header field must
+match, and the retained prior-header count must equal the staging receipt. An
+unknown panel or changed header stops the resume.
+
+To refresh an already staged index after a declaration changes, supply its
+digest-bound `prior_index` reference to `fresh_qc_index` and put replacement
+review references in `fresh_panels`. Use a new output root and current frozen
+declarations. A different target load may reuse staged panels when the prior
+index's browse completion and the new target's browse completion name the same
+release and source load. Each completion must bind its respective target load.
+For a retained panel copied to the new target, its stored review receipt must
+match that panel's original receipt in the new browse completion. The stage
+verifies every retained compressed panel's digest,
+counts, receipt identity, input binding and restriction, preserving its existing
+artifact reference. Changed task inputs, selected review or restriction require
+a fresh panel for that source. This path makes no
+SQL requests and records the prior index in the new index's provenance. Dry run
+performs the same verification without writing. The resulting index still needs
+the normal catalog-stage and catalog-load checks before release.
+
+When a source is deferred from the release, list it in `removed_sources` and
+omit its declaration and fresh panel. The index drops only explicitly removed
+panels and records those identities in provenance. A missing declaration without
+an explicit removal still refuses. Retained panel artifacts remain unchanged;
+the stage does not delete historical evidence.
+
+The content-review loader validates the selected artifact and completes panel
+row checks before publishing its QC presentation pointer. A changed selection
+updates the pointer for that load/source pair to reference the validated panel.
+Historical review rows and catalog declarations remain unchanged by the
+content-review loader.
+
+## Compose verified public-input rewrites with fresh alignment
+
+The composition-input manifest can contain `public_input_rebindings`, an array
+of `{source_id, source_manifest, public_inputs}` records. Both manifest fields
+are `{uri, sha256}` references to complete frozen public-input preparation.
+`current_target_declarations` covers the union of these sources and the fresh
+alignment inventory. A source must appear in only one group.
+
+Aligned declarations may adopt updated license receipts without recomputing
+alignment. The current receipt must pass the catalog's exact-pin permission and
+source-ban checks. Task-input fingerprints, actor census bindings and task counts
+must still match the aligned inventory.
+
+The graph seals selected derived-contract receipts in `target-contracts.json`
+and includes its digest-bound `target_contracts` reference in the composition
+manifest. A declaration may adopt newly measured contract fields after alignment
+only when its receipt binds the same source, complete actor census input and
+scanned TaskSpec digest. The catalog's contract projection must reproduce every
+current contract field. Missing, stale or contradictory evidence refuses
+composition; retained alignment scores and unrelated declaration fields remain
+subject to the existing checks.
+
+When an actor census embeds only a preview of its integrity groups, plan
+derivation resolves the full integrity artifact. Its population path, group
+count, embedded preview and total task coverage must match the actor census.
+Backend validation receives the complete group list and retains its
+whole-population coverage check.
+
+Identity/backend composition takes an explicit `snapshot_id` from the release
+plan. Both output surveys and their receipts bind that publication snapshot;
+input survey references and measurement code revisions remain unchanged. A
+metadata-only snapshot can reuse verified survey inputs. Registry fingerprints,
+runtime settings and the current backend schema are still checked.
+Snapshot publication refuses either survey if its catalog root or snapshot ID
+differs from the destination, before sealing or moving the selected pointer.
+
+Each rebind proves every current public input against its archived population.
+Stable IDs must preserve their public inputs. Changed IDs require unique public
+content or verified immutable upstream rows. A smaller current population may
+retain an injective subset; all omitted archived IDs are recorded in the identity
+mapping with null new IDs. The entire archived source must have uniform readiness; otherwise the subset
+requires fresh alignment, since source-level counts cannot establish the retained split.
+Changed public inputs or ambiguous archived matches cannot reuse scores.
+
+Composition applies these proofs in one transformation, verifies assignment
+publication by readback, removes obsolete rows, and adds fresh alignment for changed public inputs. It rebuilds
+statistics, confidence and review samples. Unaffected sources and complete
+rebindings preserve their exact statistics; reduced populations must have the
+new denominator and componentwise subset bounds. The loader checks each pinned
+identity mapping against the selected source's task count, unique old/new IDs,
+removal count and changed-ID count before accepting the scoped handoff.

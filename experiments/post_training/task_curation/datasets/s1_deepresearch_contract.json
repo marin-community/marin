@@ -1,0 +1,19 @@
+{
+  "source_id": "ScienceOne:S1-DeepResearch-15k",
+  "repo": "ScienceOne-AI/S1-DeepResearch-15k",
+  "revision": "1e9685c7c7277514a7eac1ba286a5b941cfca312",
+  "source_card": {
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/s1-deepresearch/2026.11.26.1/native-inventory-v1/s1-deepresearch/native/README.md",
+    "sha256": "fe0e56574f5360130a4ea7fa14d63bb59f885c9eca56228cadd52587963c0d3f"
+  },
+  "answer_provenance_receipt": {
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/s1-deepresearch/2026.11.26.1/answer-provenance-v1/receipt.json",
+    "sha256": "f88ecbb6c688bc43d8281310285df95d397a2d96646e79b45881c2482891dde1"
+  },
+  "grading": "two families under one population: closed-ended multi-hop rows on a MEDIUM reference judge against meta.answer (rubric reference, temperature 0, no exact gate); every open-ended exploration row on the one MEDIUM prompt-only research-quality checklist",
+  "reference_policy": "meta.answer is the dataset-authored reference gold for the closed-ended family per the card and the sealed provenance receipt; generated assistant and tool trajectory turns stay private provenance and never serve as judge gold for either family",
+  "public_normalization": "task context carries the verbatim native system instruction and first user message; generated trajectory turns are excluded from the context and recorded as a NormalizationChange",
+  "non_data_files": [".gitattributes", "README.md"],
+  "languages": ["en", "zh"],
+  "card_type_labels": ["Closed-ended Multi-hop Resolution", "Open-ended Exploration"]
+}

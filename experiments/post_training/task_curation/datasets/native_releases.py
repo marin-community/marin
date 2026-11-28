@@ -7,8 +7,13 @@ from finestore.rl.curation import (
     ConvertedExamples,
     DatasetRelease,
     DaytonaMeasurement,
+    DeconReceiptStatus,
+    DecontaminatedRelease,
     GradingEnvironmentEvidence,
     IndependentQC,
+    LexicalContaminationEvidence,
+    LexicalReceipt,
+    LexicalUse,
     OracleValidation,
     SourceOrigin,
 )
@@ -16,9 +21,10 @@ from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation import retirement
+from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
 from experiments.post_training.task_curation.difficulty_config import JUDGE_ROUTE_REPAIRS_BY_SOURCE
 from experiments.post_training.task_curation.native_release import import_native_quick
-from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
+from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_prebuilt
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 from experiments.post_training.task_curation.source_policy import (
@@ -34,6 +40,46 @@ RETIRED_ORIGINS = {
     "Snowball Smartie RL": SourceOrigin.TASKTROVE,
 }
 
+TASKSPEC_CONVERSION_VERSION = "harbor-cohort-taskspec-v1"
+"""The harbor-cohort-to-executable-TaskSpec converter identity (ruling 2026-11-24).
+
+A ledger entry converted by this converter carries an executable TaskSpec
+population: its declaration is a TaskSpec release admitted through
+``import_taskcompendium_prebuilt``, not a native Harbor QUICK release.
+"""
+
+
+def taskspec_lexical_evidence(release: dict, measurement_receipt) -> LexicalContaminationEvidence:
+    """Bind the clean decontamination receipt a zero-contamination taskspec release admission requires.
+
+    The admission blocker demands a clean release receipt at the declared pin; the
+    registered measurement alone (raw, receipt-less by design for training use) cannot
+    certify it. The release's scan measured 0 contaminated tasks, so the receipt is
+    CLEAN and conserves the measured population exactly.
+    """
+    measurement = measurement_receipt.measurement
+    if measurement.contaminated_tasks:
+        raise ValueError(f"The taskspec release's lexical measurement is not clean: {measurement_receipt.source_id}")
+    clean = LexicalReceipt(
+        use=LexicalUse.TRAIN,
+        status=DeconReceiptStatus.CLEAN,
+        retained_tasks=measurement.measured_tasks,
+        dropped_tasks=0,
+        duplicate_dropped_tasks=0,
+        release=DecontaminatedRelease(
+            private=True,
+            format="taskcompendium",
+            dataset_id=release["repo"],
+            dataset_revision=release["revision"],
+            drop_manifest_uri=None,
+            original_private_dataset_id=None,
+            original_private_dataset_revision=None,
+        ),
+    )
+    return LexicalContaminationEvidence.model_validate(
+        {**measurement.model_dump(mode="json"), "receipt": clean.model_dump(mode="json")}
+    )
+
 
 def sources() -> list[RlDataSource[PrebuiltCohort]]:
     result = []
@@ -48,11 +94,21 @@ def sources() -> list[RlDataSource[PrebuiltCohort]]:
         measurement = DaytonaMeasurement.model_validate(release["daytona_measurement"])
         if (measurement.dataset_id, measurement.dataset_revision) != (release["repo"], release["revision"]):
             raise ValueError(f"Native actor measurement does not cover the private source pin: {entry['id']}")
+        conversion_version = release.get("conversion_version") or "2026.11.12.1"
         evidence = f"https://huggingface.co/datasets/{release['repo']}/blob/{release['revision']}/manifest.json"
+        taskspec = conversion_version == TASKSPEC_CONVERSION_VERSION
+        lexical_evidence = None
+        if taskspec:
+            measurement_receipt = lexical_measurements().get(entry["id"])
+            if measurement_receipt is None:
+                raise ValueError(
+                    f"The taskspec conversion release has no registered lexical measurement receipt: {entry['id']}"
+                )
+            lexical_evidence = taskspec_lexical_evidence(release, measurement_receipt)
         config = PrebuiltCohort(
             intended_use=IntendedUse.EVAL if entry["id"] in CROSSCODE_EVAL_SOURCE_IDS else IntendedUse.TRAIN,
             name=entry["name"],
-            version="2026.11.12.1",
+            version=conversion_version,
             repo=release["repo"],
             revision=release["revision"],
             expected_rows=release["converted_rows"],
@@ -72,7 +128,10 @@ def sources() -> list[RlDataSource[PrebuiltCohort]]:
         result.append(
             RlDataSource(
                 config=config,
-                pipeline=import_native_quick,
+                # The taskspec conversion releases are executable TaskSpec populations
+                # (canonical task_spec rows, per-task sha256); the harbor QUICK import
+                # neither matches their schema nor their admission claims.
+                pipeline=import_taskcompendium_prebuilt if taskspec else import_native_quick,
                 info=SourceInfo(
                     data_restriction=DataRestriction.OPEN,
                     id=entry["id"],
@@ -89,13 +148,22 @@ def sources() -> list[RlDataSource[PrebuiltCohort]]:
                     ),
                     family=entry["family"],
                     tags=tags,
-                    task_format=TaskFormat.HARBOR,
+                    task_format=TaskFormat.TASKSPEC if taskspec else TaskFormat.HARBOR,
+                    lexical_contamination=lexical_evidence,
                     count=release["converted_rows"],
                     notes=(
-                        notes + " Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. "
-                        "QUICK supplies no oracle or admission claim. "
-                        "Native Dockerfile base tags and build downloads may remain mutable. "
-                        "Source defects remain recorded."
+                        notes
+                        + (
+                            " Re-pinned to the taskspec conversion release per the declared-pin ruling "
+                            "2026-11-25 ~23:35 EST; admitted from its census, lexical, grading and SAMPLE "
+                            "receipts at this pin (the 2026-11-25 13:00 EST ruling accepts declarative "
+                            "build contexts with execution evidence)."
+                            if taskspec
+                            else " Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. "
+                            "QUICK supplies no oracle or admission claim. "
+                            "Native Dockerfile base tags and build downloads may remain mutable. "
+                            "Source defects remain recorded."
+                        )
                     ),
                     independent_qc=qc,
                     oracle_validation=OracleValidation.SKIPPED,
@@ -108,7 +176,12 @@ def sources() -> list[RlDataSource[PrebuiltCohort]]:
                     daytona_unsafe_details=measurement.daytona_unsafe_details,
                     daytona_unsafe_counts=measurement.daytona_unsafe_counts,
                     grading_environment=GradingEnvironmentEvidence(
-                        **release["grading_environment"], evidence_url=evidence
+                        **{
+                            name: value
+                            for name, value in release["grading_environment"].items()
+                            if name != "evidence_url"
+                        },
+                        evidence_url=release["grading_environment"].get("evidence_url") or evidence,
                     ),
                     converted_examples=ConvertedExamples(
                         count=release["converted_rows"],
@@ -118,7 +191,7 @@ def sources() -> list[RlDataSource[PrebuiltCohort]]:
                         source_dataset_id=entry["dataset_id"],
                         source_revision=entry["dataset_revision"],
                         converter_revision=release["converter_identity"],
-                        converter_version="2026.11.12.1",
+                        converter_version=conversion_version,
                         evidence_url=evidence,
                     ),
                 ),

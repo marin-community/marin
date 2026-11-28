@@ -21,22 +21,31 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.release_stages import census as census_stage
 from experiments.post_training.task_curation.release_stages import graph as release_graph_module
+from experiments.post_training.task_curation.release_stages import release_check
+from experiments.post_training.task_curation.release_stages.exposure_probe import exposure_lists
 from experiments.post_training.task_curation.release_stages.graph import (
+    _STAGE_SPECS,
     GRAPH_RECEIPT_KIND,
+    REPO_ROOT,
     ComposeManifestDocument,
     StageReceipt,
     _execute_stage_node,
+    _plan_document_data,
     _seal_document,
+    _stage_receipt,
     graph_nodes,
+    load_plan,
     release_graph,
     typed_inputs,
 )
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 from experiments.post_training.task_curation.tests.release_graph_fixtures import fixture_plan
+from infra.marina.apps.rl_data_catalog.server.publication_scope import PUBLICATION_DECISIONS
 
 EXPECTED_NODES = (
     "declarations",
     "main_source_sync",
+    "main_grader_drift",
     "admission_check",
     "census_inputs",
     "census",
@@ -315,7 +324,7 @@ def test_curriculum_compose_fresh_total_comes_from_the_census_receipt(tmp_path):
     inputs = _materialized_inputs(built.stages["curriculum_compose"], prefix)
     assert inputs["expected_fresh_task_count"] == 12
     assert inputs["inputs"] == manifest
-    with pytest.raises(ValueError, match="carry no tasks for targets"):
+    with pytest.raises(ValueError, match="carry no rows for targets"):
         missing = [row for row in census_results if row["source_id"] != "Marin:fixture"]
         census_receipt_missing = _receipt_ref(
             tmp_path, "census-missing.json", {"kind": "census", "tasks": 5, "results": missing}
@@ -365,8 +374,51 @@ def test_catalog_load_staging_flows_from_the_catalog_stage_proof(tmp_path):
     assert inputs["publication"] == staged_refs["publication"]
     assert sorted(inputs["staging"]) == ["contracts", "fresh_qc_index", "history_receipt", "prior_qc_completion"]
     assert inputs["target_load_id"] == plan.catalog_target_load_id
-    assert inputs["measured_module"] == plan.measured.module
+    assert inputs["measured_module"] == str(release_graph_module.REPO_ROOT / plan.measured.module)
     assert inputs["previously_available"] == plan.previously_available
+
+
+def test_qc_inputs_replace_changed_panels_and_preserve_policy_exclusions(tmp_path):
+    def declaration(source_id, revision, evidence):
+        return {
+            "id": source_id,
+            "dataset_id": source_id,
+            "dataset_revision": revision,
+            "pipeline": None,
+            "data_restriction": "open",
+            "independent_qc": {"evidence_url": evidence},
+        }
+
+    review = _receipt_ref(tmp_path, "review.artifact.json", {"review": "selected"})
+    current = {
+        sid: declaration(sid, "current", review["uri"]) for sid in ("Marin:carried", "Marin:changed", "Marin:excluded")
+    }
+    prior = {**current, "Marin:changed": {**current["Marin:changed"], "dataset_revision": "old"}}
+    prior_ref = _receipt_ref(tmp_path, "prior-declarations.json", prior)
+    declarations = _receipt_ref(tmp_path, "declarations.json", current)
+    plan = fixture_plan(qc_exclusions=("Marin:excluded",))
+    plan = plan.model_copy(
+        update={"pins": plan.pins.model_copy(update={"prior_declarations": ArtifactRef(**prior_ref)})}
+    )
+    built = release_graph(plan)
+    prefix = str(tmp_path / "prefix")
+    _declarations_dep(built, prefix, plan, declarations)
+    copy_inputs = _materialized_inputs(built.stages["qc_browse_plan"], prefix)
+    assert set(copy_inputs["exclusions"]) == {"Marin:changed", "Marin:excluded"}
+
+    completion = _receipt_ref(tmp_path, "completion.json", {"status": "PASS"})
+    _write_dep(
+        built.stages["qc_browse"],
+        prefix,
+        "qc_browse",
+        plan.release_id,
+        completion,
+        results=[{"source_id": "Marin:carried"}],
+    )
+    fresh_inputs = _materialized_inputs(built.stages["fresh_qc_index"], prefix)
+    assert fresh_inputs["fresh_panels"] == {"Marin:changed": review}
+    typed = typed_inputs(release_graph_module.fresh_qc_index_stage.FreshQcIndexInputs, fresh_inputs)
+    assert typed.fresh_panels["Marin:changed"].sha256 == review["sha256"]
 
 
 def test_curriculum_load_expected_counts_come_from_the_compose_handoff(tmp_path):
@@ -381,6 +433,7 @@ def test_curriculum_load_expected_counts_come_from_the_compose_handoff(tmp_path)
         plan.release_id,
         handoff,
         handoff=handoff,
+        source_count=4,
         inventory_count=5,
         task_count=900,
         confidence_validated_rows=11,
@@ -391,6 +444,7 @@ def test_curriculum_load_expected_counts_come_from_the_compose_handoff(tmp_path)
     assert inputs["handoff"] == handoff
     assert inputs["text_scan"] == scan_receipt
     assert inputs["expected_inventory_count"] == 5
+    assert inputs["expected_aligned_sources"] == 4
     assert inputs["expected_task_count"] == 900
     assert inputs["expected_confidence_rows"] == 11
     assert inputs["prior_curriculum_load_id"] == plan.prior_curriculum_load_id
@@ -418,34 +472,38 @@ def test_release_check_phases_bind_their_receipts(tmp_path):
         documents=documents,
     )
     package_receipt = {"uri": "s3://bucket/package.json", "sha256": "c" * 64}
-    _write_dep(built.stages["package_preview"], prefix, "package_preview", plan.release_id, package_receipt)
+    derived = {
+        "oracle_inventory": {"uri": "s3://bucket/package-inputs/oracle-inventory.json", "sha256": "2" * 64},
+        "source_counts": {"uri": "s3://bucket/package-inputs/source-counts.json", "sha256": "3" * 64},
+    }
+    _write_dep(built.stages["package_preview"], prefix, "package_preview", plan.release_id, package_receipt, **derived)
     preflight_inputs = _materialized_inputs(built.stages["release_check_preflight"], prefix)
     assert preflight_inputs["package"] == package_receipt
+    # The preflight checks the census-derived inputs the package sealed, not plan pins.
+    assert {name: preflight_inputs[name] for name in derived} == derived
     assert preflight_inputs["phase"] == "preflight"
     assert "published_revision" not in preflight_inputs
     assert preflight_inputs["applet_id"] == plan.service.applet_id
 
     preflight_receipt = {"uri": "s3://bucket/preflight.json", "sha256": "d" * 64}
+    live_revision = plan.service.preview_base_version + 7
     _write_dep(
         built.stages["release_check_preflight"],
         prefix,
         "release_check_preflight",
         plan.release_id,
         preflight_receipt,
+        live={"version": live_revision, "mode": "public"},
     )
-    hosted_inputs = _materialized_inputs(built.stages["release_check_hosted"], prefix)
-    assert hosted_inputs["preflight_receipt"] == preflight_receipt
-    # The pre-publish hosted check verifies the live preview revision (r39-quirk note).
-    assert hosted_inputs["published_revision"] == plan.service.preview_base_version
-
-    hosted_check_receipt = {"uri": "s3://bucket/hosted-check.json", "sha256": "1" * 64}
-    _write_dep(
-        built.stages["release_check_hosted"],
-        prefix,
-        "release_check_hosted",
-        plan.release_id,
-        hosted_check_receipt,
-    )
+    package_dep = {"uri": "s3://bucket/package.json", "sha256": "c" * 64}
+    marina_inputs = _materialized_inputs(built.stages["marina_release"], prefix)
+    # A stale planned base never blocks the publish: it compare-and-sets against the
+    # live revision and mode the preflight check recorded (R40: planned 32, live 39, public).
+    assert marina_inputs["base_version"] == live_revision != plan.service.preview_base_version
+    assert marina_inputs["access_mode"] == "public"
+    assert marina_inputs["package"] == package_dep
+    assert marina_inputs["preflight_receipt"] == preflight_receipt
+    assert "hosted_receipt" not in marina_inputs
     marina_receipt = {"uri": "s3://bucket/manifest.json", "sha256": "e" * 64}
     _write_dep(
         built.stages["marina_release"],
@@ -461,13 +519,30 @@ def test_release_check_phases_bind_their_receipts(tmp_path):
             "mode": "private",
         },
     )
+    # RELEASE.md: the hosted check runs after the publish, on the new revision (R40 #51).
+    hosted_inputs = _materialized_inputs(built.stages["release_check_hosted"], prefix)
+    assert hosted_inputs["preflight_receipt"] == preflight_receipt
+    assert hosted_inputs["published_revision"] == 31
+    assert "hosted_receipt" not in hosted_inputs
+    hosted_check_receipt = {"uri": "s3://bucket/hosted-check.json", "sha256": "1" * 64}
+    _write_dep(
+        built.stages["release_check_hosted"],
+        prefix,
+        "release_check_hosted",
+        plan.release_id,
+        hosted_check_receipt,
+        published_revision=31,
+    )
     postpublish_inputs = _materialized_inputs(built.stages["release_check_postpublish"], prefix)
     assert postpublish_inputs["published_revision"] == 31
     assert postpublish_inputs["hosted_receipt"] == hosted_check_receipt
+    census_receipt = {"uri": "s3://bucket/census.json", "sha256": "c" * 64}
+    _write_dep(built.stages["census"], prefix, "census", plan.release_id, census_receipt, tasks=17)
     hosted_check_inputs = _materialized_inputs(built.stages["hosted_check"], prefix)
     assert hosted_check_inputs["revision"] == 31
     assert hosted_check_inputs["root"] == "https://applets.example.test"
     assert hosted_check_inputs["release_manifest"] == marina_receipt
+    assert hosted_check_inputs["retained_tasks"] == 17
 
 
 def test_snapshot_publication_binds_the_composed_surveys(tmp_path):
@@ -497,21 +572,29 @@ def test_snapshot_publication_binds_the_composed_surveys(tmp_path):
     assert inputs["prior_declarations_uri"] == plan.pins.prior_declarations.uri
 
 
-def test_exposure_probe_binds_the_input_check_evidence(tmp_path):
-    release_root = str(tmp_path / "release")
-    input_check = {
-        "withheld_sources": ["Marin:secret"],
-        "publication_grants": [
-            {"source_id": "Marin:open", "upstream_url": "https://upstream", "license_id": "cc-by-4.0"}
-        ],
+def _exposure_declarations() -> dict[str, dict]:
+    """A declaration cut with one license-withheld source and every recorded grant's release."""
+    declarations = {
+        decision.source_id: {
+            "id": decision.source_id,
+            "dataset_id": decision.dataset_id,
+            "dataset_revision": decision.dataset_revision,
+        }
+        for decision in PUBLICATION_DECISIONS
     }
-    input_check_ref = _receipt_ref(tmp_path, "exposure-input-check.json", input_check)
-    plan = fixture_plan(
-        release_root=release_root,
-        pins={**fixture_plan().pins.model_dump(mode="json"), "exposure_input_check": input_check_ref},
-    )
+    declarations["Marin:secret"] = {"id": "Marin:secret", "exclusion_claims": [{"reason": "license-ban"}]}
+    declarations["Marin:open"] = {"id": "Marin:open"}
+    return declarations
+
+
+def test_exposure_probe_derives_its_lists_from_the_declaration_cut(tmp_path):
+    """Regression (R40 #48): the R40 plan pins no exposure input check, so the probe
+    must read the withheld sources and grants from the sealed declarations."""
+    plan = fixture_plan(release_root=str(tmp_path / "release"))
+    assert plan.pins.exposure_input_check is None
     built = release_graph(plan)
     prefix = str(tmp_path / "prefix")
+    _declarations_dep(built, prefix, plan, _receipt_ref(tmp_path, "declarations.json", _exposure_declarations()))
     marina_receipt = {"uri": "s3://bucket/manifest.json", "sha256": "e" * 64}
     _write_dep(
         built.stages["marina_release"],
@@ -520,13 +603,33 @@ def test_exposure_probe_binds_the_input_check_evidence(tmp_path):
         plan.release_id,
         marina_receipt,
         manifest=marina_receipt,
-        publish={"id": "x", "version": 31, "url": "https://applets.example.test", "mode": "private"},
+        publish={"id": "x", "version": 31, "url": "https://applets.example.test", "mode": "public"},
     )
     inputs = _materialized_inputs(built.stages["exposure_probe"], prefix)
     assert inputs["withheld_sources"] == ("Marin:secret",)
-    assert inputs["publication_grants"] == tuple(input_check["publication_grants"])
+    assert [grant["source_id"] for grant in inputs["publication_grants"]] == [
+        decision.source_id for decision in PUBLICATION_DECISIONS
+    ]
+    assert all(grant["upstream_url"] and grant["license_id"] for grant in inputs["publication_grants"])
+    assert inputs["input_check_receipt"] is None
     assert inputs["revision"] == 31
     assert inputs["root"] == plan.service.public_root
+
+
+def test_exposure_lists_refuse_a_grant_declared_at_another_release():
+    declarations = _exposure_declarations()
+    granted = PUBLICATION_DECISIONS[0].source_id
+    declarations[granted] = {**declarations[granted], "dataset_revision": "0" * 40}
+    with pytest.raises(ValueError, match="does not match its declared release"):
+        exposure_lists(declarations)
+
+
+def test_exposure_lists_refuse_a_withheld_grant():
+    declarations = _exposure_declarations()
+    granted = PUBLICATION_DECISIONS[0].source_id
+    declarations[granted] = {**declarations[granted], "exclusion_claims": [{"reason": "license-ban"}]}
+    with pytest.raises(ValueError, match="names a withheld source"):
+        exposure_lists(declarations)
 
 
 def test_cluster_stage_run_reads_back_its_graph_receipt_without_dispatch(tmp_path, monkeypatch):
@@ -658,6 +761,15 @@ def test_cpu_embed_dispatch_installs_the_torch_cpu_extra(tmp_path, monkeypatch):
     assert captured["pip_dependency_groups"] == [release_graph_module.EMBED_CPU_DEPENDENCY_GROUP]
 
 
+def test_measured_module_path_resolves_a_dotted_module_or_a_repo_path():
+    """A hand-written plan names the measured module; a derived plan records its repo path."""
+    from_name = release_graph_module.measured_module_path("taskcompendium.models")
+    relative = str(Path(from_name).resolve().relative_to(release_graph_module.REPO_ROOT.resolve()))
+    assert Path(release_graph_module.measured_module_path(relative)).resolve() == Path(from_name).resolve()
+    with pytest.raises(ValueError, match="neither a repo path nor an importable module"):
+        release_graph_module.measured_module_path("not_a_module_anywhere")
+
+
 def test_stage_child_env_forwards_the_attestation_and_credentials(monkeypatch):
     """Dispatched stage jobs carry the attestation and credentials, nothing else."""
     monkeypatch.setenv("ATLAS_RELEASE_SOURCE_REVISION", "a" * 40)
@@ -699,3 +811,56 @@ def test_typed_inputs_coerce_reference_fields():
     assert isinstance(inputs.inputs, ArtifactRef)
     assert inputs.expected_sources == 2
     assert inputs.workers == 4
+
+
+def test_in_flight_r40_plan_reseals_its_recorded_plan_document():
+    """R40's sealed plan step pins its fingerprint; a plan-model edit must not move it.
+
+    The R40 plan still carries the prior oracle-inventory pin that the package no
+    longer reads; dropping the field from the model refused every R40 resume.
+    """
+    plan = load_plan(REPO_ROOT / "experiments/post_training/task_curation/release_stages/plans/r40.json")
+    assert release_graph(plan).plan_handle.fingerprint() == "c0088866"
+    without = plan.model_copy(update={"pins": plan.pins.model_copy(update={"oracle_inventory": None})})
+    assert "oracle_inventory" not in _plan_document_data(without)["pins"]
+
+
+def test_curriculum_compose_receipt_is_its_sealed_handoff():
+    """R40: compose sealed its handoff, then the graph refused a proof without a 'receipt' key."""
+    handoff = {"uri": "s3://bucket/compose/composed/attempt-1/handoff.json", "sha256": "a" * 64}
+    proof = {"release_id": "r40", "handoff": handoff, "task_count": 3, "source_count": 1}
+    receipt = _stage_receipt("curriculum_compose", proof, _STAGE_SPECS["curriculum_compose"].receipt_key)
+    assert receipt.receipt.model_dump(mode="json") == handoff
+
+
+def test_typed_inputs_keep_defaults_for_inputs_a_phase_omits(tmp_path):
+    """R40: the preflight config names no preflight receipt; typed_inputs raised KeyError."""
+    plan = fixture_plan()
+    built = release_graph(plan)
+    prefix = str(tmp_path / "prefix")
+    package_receipt = {"uri": "s3://bucket/package.json", "sha256": "c" * 64}
+    derived = {
+        "oracle_inventory": {"uri": "s3://bucket/package-inputs/oracle-inventory.json", "sha256": "2" * 64},
+        "source_counts": {"uri": "s3://bucket/package-inputs/source-counts.json", "sha256": "3" * 64},
+    }
+    _write_dep(built.stages["package_preview"], prefix, "package_preview", plan.release_id, package_receipt, **derived)
+    config = _materialized_inputs(built.stages["release_check_preflight"], prefix)
+    config.pop("graph_receipt_root")
+    inputs = typed_inputs(release_check.ReleaseCheckInputs, config)
+    assert inputs.preflight_receipt is None and inputs.published_revision is None
+    inputs.validate()
+
+
+def test_grader_drift_leaf_runs_only_when_the_plan_opt_in(tmp_path):
+    """The drift leaf exists for every plan but refuses without the derivation-pinned reference."""
+    plan = fixture_plan()
+    built = release_graph(plan)
+    prefix = str(tmp_path / "prefix")
+    _declarations_dep(built, prefix, plan, {"uri": "s3://bucket/declarations.json", "sha256": "9" * 64})
+    inputs = _materialized_inputs(built.stages["main_grader_drift"], prefix)
+    assert inputs["reference"].main.revision == "e" * 40
+    refused = fixture_plan(grader_drift_reference=None)
+    unbound = release_graph(refused)
+    _declarations_dep(unbound, prefix, refused, {"uri": "s3://bucket/declarations.json", "sha256": "9" * 64})
+    with pytest.raises(ValueError, match="pins no grader_drift_reference"):
+        _materialized_inputs(unbound.stages["main_grader_drift"], prefix)

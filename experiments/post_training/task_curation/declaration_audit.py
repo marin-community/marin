@@ -20,6 +20,8 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from finestore.rl.status_taxonomy import SourceStatus
+
 from experiments.post_training.task_curation.ensure_current_projections import (
     PROJECTION_WAIVER_CONFIG,
     DeclarationPin,
@@ -469,6 +471,36 @@ def audit_replacement_links() -> list[str]:
     return findings
 
 
+def exempt_unmeasured_sources(sources: dict) -> frozenset[str]:
+    """The sources the projection audit raises no census demand for (ruling 2026-11-26).
+
+    Exactly the sources that are Excluded or Deprecated with an empty retained
+    population: they have no derived-contract or curriculum projection to bind (the
+    coordinator extended the ruling to Deprecated with zero tasks, 2026-11-26 5:25 AM).
+    Every other unmeasured source — Available, Pending, or any source with tasks —
+    still reports.
+    """
+    exempt_statuses = (SourceStatus.EXCLUDED, SourceStatus.DEPRECATED)
+    return frozenset(
+        source.info.id
+        for source in sources.values()
+        if source.status in exempt_statuses and (source.info.count or 0) == 0
+    )
+
+
+def registry_index_gaps(declared_ids: frozenset[str], index: dict) -> list[str]:
+    """Declared sources the compose's registry index does not cover.
+
+    The admission flow registers each newly declared source's identity document in
+    `plans/registry-index.json` (the compose reads its targets' fingerprints there);
+    a declaration without an entry fails the landing gate before the cut.
+    """
+    sources = index.get("sources")
+    if not isinstance(sources, dict):
+        return sorted(declared_ids)
+    return sorted(declared_ids - set(sources))
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -485,11 +517,12 @@ def main() -> None:
 
     from experiments.post_training.task_curation.sources import configured_sources  # noqa: PLC0415
 
+    configured_ids = frozenset(source.info.id for source in configured_sources())
     declarations = audit_declarations(
         families,
         layer=layer,
         releases=release_rows,
-        configured_ids=frozenset(source.info.id for source in configured_sources()),
+        configured_ids=configured_ids,
     )
     findings, notes = declarations.findings, declarations.notes
 
@@ -500,6 +533,18 @@ def main() -> None:
     # structurally; the extras rows are plain JSON and can drift silently, so
     # the audit measures both.
     findings.extend(audit_typed_status())
+
+    # The compose reads each newly admitted source's identity document through the
+    # registry index (ruling 2026-11-27, pending-stage-cleanup re-cut): an admission
+    # that skips the registry-index update fails the landing gate here, before any
+    # cut composes against an incomplete index. The gate covers the configured
+    # declarations — the intake queue composes only when it graduates.
+    from experiments.post_training.task_curation.release_stages.plan_derivation import (  # noqa: PLC0415
+        REGISTRY_INDEX_PATH,
+    )
+
+    registry_gaps = registry_index_gaps(configured_ids, json.loads(REGISTRY_INDEX_PATH.read_bytes()))
+    findings.extend(f"registry index holds no entry for declared source {source_id}" for source_id in registry_gaps)
 
     # A superseded Deprecated source's replacement link must resolve inside the
     # Atlas (ruling 2026-11-23); the status page renders the replacement's
@@ -522,21 +567,28 @@ def main() -> None:
         )
         for source_id, source in sources.items()
     ]
+    # Ruling 2026-11-26: a source that is Excluded with an empty retained population has
+    # no derived-contract or curriculum projection to bind, so the audit raises no actor
+    # census demand for it; every other unmeasured source (Available, Pending, or any
+    # source with tasks) still reports and the audit keeps failing closed on real gaps.
     selection = atlas_catalog_selection()
     projection_findings, projection_notes = projection_gaps(
         projection_pins,
         atlas_contract_receipts(),
         atlas_curriculum_rows(),
         served_pins=served_pin_map(served_declaration_pins(selection)),
+        exempt_unmeasured=exempt_unmeasured_sources(sources),
     )
     if atlas_catalog_selection() != selection:
         raise ValueError("Catalog selection changed during declaration audit; retry")
     from experiments.post_training.task_curation.sample_qc_binding import SAMPLE_BINDING_DRIFTS  # noqa: PLC0415
     from experiments.post_training.task_curation.sources import RETAINED_BINDING_DRIFTS  # noqa: PLC0415
 
-    # A retained release whose conversion pin drifted from the configured declaration is
-    # a serving-projection gap at the receipt's pinned revision: reported, waivable under
-    # the ruling-60b rule, and never a crash (ruling 2026-11-19).
+    # Once the current actor census is bound, projection_gaps checks its served pin,
+    # derived contract and curriculum directly. An archived retention drift must not
+    # add a permanent failure after those projections have been refreshed. Without
+    # that census, preserve the explicit drift finding (ruling 2026-11-19).
+    measured_sources = {pin.source_id for pin in projection_pins if pin.measured}
     projection_findings.extend(
         ProjectionGap(
             source_id=source_id,
@@ -545,6 +597,7 @@ def main() -> None:
             last_computed_revision=pinned_revision,
         )
         for source_id, pinned_revision in sorted(RETAINED_BINDING_DRIFTS.items())
+        if source_id not in measured_sources
     )
     projection_findings.extend(
         ProjectionGap(
@@ -554,6 +607,7 @@ def main() -> None:
             last_computed_revision=pinned_revision,
         )
         for source_id, pinned_revision in sorted(SAMPLE_BINDING_DRIFTS.items())
+        if source_id not in measured_sources
     )
     waiver_result = apply_projection_waivers(
         projection_findings,
@@ -576,6 +630,7 @@ def main() -> None:
         "grading_census_receipts": len(families["grading census receipts"]),
         "dedup_rows": len(families["within-source dedup"]),
         "retained_release_receipts": len(release_rows),
+        "registry_index_missing": registry_gaps,
         "findings": findings,
         "projection_waivers": [
             {"source_projection": record.key, **record.model_dump(mode="json")} for record in waiver_result.waived

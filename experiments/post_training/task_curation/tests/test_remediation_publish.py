@@ -7,6 +7,7 @@ import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pyarrow as pa
@@ -27,7 +28,9 @@ from finestore.rl.curation import (
     TaskFormat,
     WithinSourceDedupEvidence,
 )
+from finestore.rl.licenses import LICENSE_RESOLVER_VERSION, LicenseReceipt
 from finestore.rl.status_taxonomy import DataRestriction
+from huggingface_hub import DatasetCard
 from huggingface_hub.hf_api import RepoFile
 from marin.execution.lazy import StepContext
 from rigging.filesystem.storage_path import StoragePath
@@ -37,7 +40,6 @@ from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation import (
-    calibforge_publish,
     license_publication,
     remediation_publish,
     retained_release,
@@ -169,29 +171,6 @@ def test_unknown_manifest_task_prevents_publication(tmp_path, frozen_population)
     pq.write_table(pa.table({"task_id": ["duplicate", "unknown"]}), plan.combined_drop_manifest_uri)
     with pytest.raises(ValueError, match="does not match plan"):
         filter_population(plan, str(specs), tmp_path / "retained.parquet", None)
-
-
-def test_existing_hf_destination_is_never_uploaded(tmp_path, monkeypatch):
-    tasks, card = tmp_path / "tasks.parquet", tmp_path / "README.md"
-    serialized = json.dumps(json.loads(prebuilt_task("existing")["lowered_task_spec"])["task"])
-    pq.write_table(
-        pa.table({"task_spec": [serialized], "task_sha256": [hashlib.sha256(serialized.encode()).hexdigest()]}), tasks
-    )
-    card.write_text("fixture")
-    uploaded = []
-
-    class ExistingRepo:
-        def create_repo(self, *, repo_id, repo_type, private, exist_ok):
-            if not exist_ok:
-                raise FileExistsError("Repository already exists")
-
-        def upload_folder(self, **kwargs):
-            uploaded.append(kwargs["repo_id"])
-
-    monkeypatch.setattr(calibforge_publish, "HfApi", ExistingRepo)
-    with pytest.raises(FileExistsError, match="already exists"):
-        calibforge_publish.publish(tasks, card, "open-athena/existing", data_restriction=DataRestriction.OPEN)
-    assert uploaded == []
 
 
 @pytest.fixture
@@ -621,34 +600,51 @@ def staged_publication(tmp_path, monkeypatch, frozen_population):
     hub = tmp_path / "hub"
     upstream = hub / plan.source_dataset_id
     upstream.mkdir(parents=True)
-    (upstream / "LICENSE").write_bytes(b"SPDX-License-Identifier: MIT\n")
+    license_bytes = b"SPDX-License-Identifier: MIT\n"
+    (upstream / "LICENSE").write_bytes(license_bytes)
 
     class LocalHub:
         def create_repo(self, *, repo_id, repo_type, private, exist_ok):
             (hub / repo_id).mkdir(parents=True, exist_ok=exist_ok)
 
         def repo_info(self, *args, **kwargs):
-            return SimpleNamespace(private=True)
+            return SimpleNamespace(private=True, sha=kwargs.get("revision", "c" * 40))
 
         def list_repo_tree(self, repo_id, *, repo_type, revision, recursive):
             return [
                 RepoFile(path=path.name, size=path.stat().st_size, oid="b" * 40) for path in (hub / repo_id).iterdir()
             ]
 
-        def upload_folder(self, *, repo_id, repo_type, folder_path, commit_message):
+        def upload_folder(self, *, repo_id, repo_type, folder_path, commit_message, **kwargs):
             shutil.copytree(folder_path, hub / repo_id, dirs_exist_ok=True)
             return SimpleNamespace(oid="d" * 40)
 
     def download(repo_id, filename, *, repo_type, revision):
         return str(hub / repo_id / filename)
 
-    for module in (calibforge_publish, remediation_publish, license_publication):
+    for module in (remediation_publish, license_publication):
         monkeypatch.setattr(module, "HfApi", LocalHub)
         monkeypatch.setattr(module, "hf_hub_download", download)
     monkeypatch.setattr(
         license_publication,
         "resolve_license",
         lambda target: fixture_license(target.source_id, target.dataset_id, target.revision),
+    )
+    # The chokepoint reads the parent's receipt from the registry and re-pins it:
+    # the fixture registers the pinned upstream grant and records the registry write.
+    prefix = f"https://huggingface.co/datasets/{plan.source_dataset_id}/resolve/{plan.source_revision}/"
+    parent_receipt = LicenseReceipt(
+        resolver_version=LICENSE_RESOLVER_VERSION,
+        source_id=plan.source_id,
+        dataset_id=plan.source_dataset_id,
+        revision=plan.source_revision,
+        resolved_at=datetime(2026, 11, 15, tzinfo=UTC).isoformat(),
+        evidence=[license_evidence(prefix + "LICENSE", license_bytes, "license_file")],
+        bundled_third_party=False,
+        model_generated_outputs=False,
+    )
+    monkeypatch.setattr(
+        license_publication, "read_license_receipts", lambda index_path: {plan.source_id: parent_receipt}
     )
     return plan, receipt, canonical, hub
 
@@ -724,10 +720,14 @@ def test_repaired_population_publishes_from_exact_receipt_without_replacing_sele
     assert [(row["id"], row["runtime"]) for row in tasks] == [("retained", '{ "cpus": 2 }')]
     assert json.loads((published / "manifest.json").read_text())["lexical"]["input_dataset_id"] == plan.source_dataset_id
     assert canonical[plan.source_id].model_dump_json() == selected_before
+    # The publication carried the licence forward mechanically: the card declares the
+    # ingest record's provenance and nothing is written to the receipts registry.
+    card = DatasetCard((hub / result["repo"] / "README.md").read_text()).data.to_dict()
+    assert card["license_source"]["dataset_id"] == plan.source_dataset_id
 
 
 def test_staged_receipt_for_same_count_but_different_tasks_cannot_publish(tmp_path, staged_publication):
-    plan, receipt, _, hub = staged_publication
+    plan, receipt, _unused, hub = staged_publication
     stale = receipt.model_copy(update={"input": receipt.input.model_copy(update={"task_specs_sha256": "f" * 64})})
     with pytest.raises(ValueError, match="Frozen lexical input differs"):
         remediation_publish.publish_plan(

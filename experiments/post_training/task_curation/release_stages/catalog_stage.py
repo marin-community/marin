@@ -29,7 +29,9 @@ from experiments.post_training.task_curation.release_stages.history_staging impo
     DEFAULT_SERVICE_URL,
 )
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref, sealed_contract_rows
+from experiments.post_training.task_curation.source_status import served_snapshot_sources
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 CATALOG_STAGE_SUFFIX = "catalog-staging"
 REQUIRED_STAGING_REFS = (
@@ -77,8 +79,8 @@ class CatalogStageInputs:
             raise ValueError("release_id, snapshot_id and source_revision are required")
         if not self.catalog_root or not self.output_root:
             raise ValueError("catalog_root and output_root are required")
-        if self.expected_source_count <= 0 or self.expected_browse_source_count <= 0:
-            raise ValueError("expected source counts must be positive")
+        if self.expected_source_count <= 0 or self.expected_browse_source_count < 0:
+            raise ValueError("source count must be positive and browse count nonnegative")
         if self.expected_contract_count <= 0 or self.expected_contract_tasks <= 0:
             raise ValueError("expected contract counts must be positive")
 
@@ -111,7 +113,8 @@ def verify_staged_snapshot(inputs: CatalogStageInputs, staged: dict[str, dict]) 
     snapshot = catalog.current()
     if snapshot.snapshot_id != inputs.snapshot_id:
         raise ValueError(f"catalog snapshot is {snapshot.snapshot_id!r}, expected {inputs.snapshot_id!r}")
-    sources = [row.id for row in catalog.sources(inputs.snapshot_id)]
+    # The snapshot keeps original source ids; declarations and surveys use canonical ones.
+    sources = [canonical_source_id(row.id) for row in served_snapshot_sources(catalog, inputs.snapshot_id)]
     if len(sources) != inputs.expected_source_count:
         raise ValueError(f"snapshot holds {len(sources)} sources, expected {inputs.expected_source_count}")
     declarations = read_ref(inputs.declarations)

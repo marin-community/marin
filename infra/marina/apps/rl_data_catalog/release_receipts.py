@@ -67,7 +67,8 @@ class ReleaseReceipt:
     expected_sources: dict[str, Any] | None = None
     browser: dict[str, Any] | None = None
     api_invariants: dict[str, Any] | None = None
-    postpublish_job: dict[str, Any] | None = None
+    code_gates_from: str | None = None
+    """The passing preflight checkout that covers this check's code gates, when they were not rerun."""
     error: ReleaseFailure | None = None
 
 

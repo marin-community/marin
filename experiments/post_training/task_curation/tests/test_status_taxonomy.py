@@ -188,8 +188,16 @@ def test_pending_rows_cover_the_intake_queue():
     rows = source_status.pending_rows()
     assert {row["id"] for row in rows} == {source.info.id for source in PENDING_MEASUREMENT_SOURCES}
     for row in rows:
-        assert row["status"] == SourceStatus.PENDING
-        assert row["stage"] in {stage.value for stage in source_status.PendingStage}
+        assert row["status"] in (SourceStatus.PENDING.value, SourceStatus.EXCLUDED.value)
+        # Row payloads carry the enum VALUES (the page renders strings), so the
+        # comparisons are equality against .value, never identity against the member.
+        if row["status"] == SourceStatus.PENDING.value:
+            assert row["stage"] in {stage.value for stage in source_status.PendingStage}
+        else:
+            # The 2026-11-26 15:20 EST user rule: a queued row with recorded manual
+            # exclusion claims renders Excluded with its claims and keeps its owner.
+            assert row["reasons"], row["id"]
+            assert row["owner"], row["id"]
 
 
 @pytest.mark.data_integration
@@ -428,11 +436,16 @@ def test_metadata_exclusions_never_enter_the_catalog():
             assert claim.evidence.uri, f"Metadata exclusion evidence without a link: {row.id}"
 
 
-def test_pending_stage_derivation():
-    receipts = {"actor census": {"a"}, "dedup": {"a", "b"}}
-    assert source_status.pending_stage("a", receipts) is source_status.PendingStage.ADMISSION_PENDING
-    assert source_status.pending_stage("b", receipts) is source_status.PendingStage.MEASUREMENTS_PENDING
-    assert source_status.pending_stage("c", receipts) is source_status.PendingStage.INTAKE_QUEUED
+@pytest.mark.parametrize(
+    "receipts,expected",
+    [
+        ({"actor census": set(), "grading": set()}, PendingStage.INTAKE_QUEUED),
+        ({"actor census": {"fixture"}, "grading": set()}, PendingStage.MEASUREMENTS_PENDING),
+        ({"actor census": {"fixture"}, "grading": {"fixture"}}, None),
+    ],
+)
+def test_intake_without_data_or_grader_stays_pending_until_prepared(receipts, expected):
+    assert source_status.pending_stage("fixture", receipts) is expected
 
 
 def _admitted_source(tmp_path):
@@ -470,7 +483,7 @@ def test_pending_declaration_without_stage_fails_the_build(tmp_path):
     with pytest.raises(ValueError, match="carries no PendingStage"):
         require_typed_status_fields(copy)
     # The load-time downgrade assigns the stage from the backend evidence.
-    staged = copy.model_copy(update={"stage": PendingStage.BACKEND_VERIFICATION_PENDING})
+    staged = copy.model_copy(update={"stage": PendingStage.BACKEND_PREPARATION_PENDING})
     require_typed_status_fields(staged)
     with pytest.raises(ValueError, match="Only a Pending source carries a PendingStage"):
         require_typed_status_fields(staged.model_copy(update={"status": SourceStatus.AVAILABLE}))
@@ -490,7 +503,16 @@ def test_pending_extras_row_without_stage_fails_the_build():
         )
     with pytest.raises(ValueError, match="carries no ExclusionReason"):
         source_status.require_typed_rows(
-            [{"id": "Fixture:y", "display_name": "Fixture · y", "status": "Excluded", "stage": None, "reasons": []}]
+            [
+                {
+                    "id": "Fixture:y",
+                    "display_name": "Fixture · y",
+                    "status": "Excluded",
+                    "stage": None,
+                    "reasons": [],
+                    "owner": "fixture-owner",
+                }
+            ]
         )
     source_status.require_typed_rows(
         [
@@ -500,6 +522,7 @@ def test_pending_extras_row_without_stage_fails_the_build():
                 "status": "Pending",
                 "stage": "Intake queued",
                 "reasons": [],
+                "owner": "fixture-owner",
             },
             {
                 "id": "Fixture:excluded",
@@ -507,6 +530,7 @@ def test_pending_extras_row_without_stage_fails_the_build():
                 "status": "Excluded",
                 "stage": None,
                 "reasons": [{"reason": "license-ban"}],
+                "owner": "fixture-owner",
             },
         ]
     )
@@ -562,7 +586,7 @@ def test_removed_exclusion_reasons_stay_removed():
     """Ruling 2026-11-23: the three retired reasons are gone from the taxonomy.
 
     Eval-only benchmarks are admitted as Use=eval sources; a snapshot budget is
-    a capacity constraint that queues Pending repair; a superseded source is
+    a runtime capacity constraint; a superseded source is
     Deprecated with a replacement link. The scripted checks reject all three
     values because the enum no longer carries them.
     """
@@ -570,7 +594,6 @@ def test_removed_exclusion_reasons_stay_removed():
         with pytest.raises(ValueError):
             ExclusionReason(removed)
         assert removed not in REASON_EXPLANATIONS
-    assert PendingStage.SNAPSHOT_REPAIR_QUEUED in STAGE_EXPLANATIONS
 
 
 def test_production_backend_enum_matches_the_survey_deployment_classes():
@@ -711,7 +734,12 @@ def test_pending_rows_carry_typed_columns():
         assert row["use"] in uses, f"Pending row Use outside SourceUse: {row['id']}"
         assert "task_format" not in row, f"Pending row still carries the dropped Format column: {row['id']}"
         assert row["method_tags"] and set(row["method_tags"]) <= methods, row["id"]
-        assert row["stage"] in stages, f"Pending row stage outside PendingStage: {row['id']}"
+        # The 2026-11-26 15:20 EST user rule: a queued row with recorded manual
+        # exclusion claims renders Excluded and carries no PendingStage.
+        if row["status"] == SourceStatus.PENDING.value:
+            assert row["stage"] in stages, f"Pending row stage outside PendingStage: {row['id']}"
+        else:
+            assert row["stage"] is None and row["reasons"], row["id"]
 
 
 def test_status_enum_semantics(tmp_path, monkeypatch):

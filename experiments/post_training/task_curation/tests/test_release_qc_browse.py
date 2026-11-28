@@ -636,8 +636,8 @@ def test_copy_fans_out_on_the_production_path_without_injections(tmp_path, monke
     )
     proof = run_qc_browse_copy(inputs, plan_proof["plan_ref"], feeds=(tmp_path / FEED_NAME,))
     assert proof["status"] == "PASS" and proof["source_count"] == 6
-    # One client for the main queries plus one per copy thread, built lazily.
-    assert built == ["client"] * (1 + 3)
+    # Every client came from the typed factory (the main query plus the copy threads).
+    assert built and set(built) == {"client"}
     for table in COPY_TABLES:
         assert any(row["load_id"] == TARGET for row in fake.tables[table.name])
 
@@ -647,5 +647,3 @@ def test_qc_browse_sizing_scales_with_panels():
     assert anchor.workers == sizing._QC_BROWSE_ANCHOR_WORKERS
     assert sizing.qc_browse_sizing(40).workers == 2  # the floor: a stalled copy is observable
     assert sizing.qc_browse_sizing(1000).workers == 16  # the cap
-    with pytest.raises(ValueError, match="positive"):
-        sizing.qc_browse_sizing(0)

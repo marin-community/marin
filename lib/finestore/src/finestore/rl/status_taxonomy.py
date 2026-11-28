@@ -76,39 +76,20 @@ class PendingStage(StrEnum):
     """Intake stage of a queued source that is not configured for the catalog yet.
 
     Every Pending source carries exactly one stage, computed from pipeline
-    evidence (which admission receipts and backend qualifications exist), never
+    evidence of unfinished data or grader preparation, never
     hand-entered text. ``STAGE_EXPLANATIONS`` holds each stage's canonical
     label, meaning and advancing evidence.
     """
 
     INTAKE_QUEUED = "Intake queued"
-    """No measurement receipt covers the source at all yet."""
-
-    CONSUMER_CHECK_PENDING = "Consumer check pending"
-    """The source's consumer admission decision has not approved it yet."""
+    """No prepared task data or executable-grader evidence covers the source yet."""
 
     MEASUREMENTS_PENDING = "Measurements pending"
-    """Some catalog measurement receipts exist; the rest are outstanding."""
-
-    ADMISSION_PENDING = "Admission pending"
-    """All catalog measurement receipts exist; the source awaits configuration
-    and admission into the catalog."""
+    """Task data or executable-grader preparation remains incomplete."""
 
     LEXICAL_REMEDIATION_QUEUED = "Lexical remediation queued"
     """The source waits for a remediation agent to produce the clean or
     remediated private-release receipt its training use requires."""
-
-    SNAPSHOT_REPAIR_QUEUED = "Snapshot repair queued"
-    """The actor census measured the cohort's snapshot provisioning over the
-    shared budget; a snapshot-safe rebuild re-admits the source."""
-
-    BACKEND_VERIFICATION_PENDING = "Backend verification pending"
-    """A new admission awaits the live backend qualification: no production
-    backend admits it and VERIFY is its only positive production outcome."""
-
-    BACKEND_PROFILE_PENDING = "Backend profile pending"
-    """The grader needs network while the surveyed grader profile denies it;
-    a maintained per-source profile binding re-admits the source (r22 ruling)."""
 
     BACKEND_PREPARATION_PENDING = "Backend preparation pending"
     """The grader Docker build context is unresolved on every task, so no
@@ -355,46 +336,18 @@ STATUS_EXPLANATIONS: dict[SourceStatus, ReasonExplanation] = {
 STAGE_EXPLANATIONS: dict[PendingStage, ReasonExplanation] = {
     PendingStage.INTAKE_QUEUED: ReasonExplanation(
         label="Intake queued",
-        meaning="The source is registered for intake and no standard measurement receipt covers it yet.",
-        clears="The first standard measurement receipt (actor census, lexical, grading, sample, "
-        "oracle or retained) recorded at the current pin.",
-    ),
-    PendingStage.CONSUMER_CHECK_PENDING: ReasonExplanation(
-        label="Consumer check pending",
-        meaning="The source's consumer admission decision has not approved it yet.",
-        clears="A recorded consumer decision approving the source at the runtime commit.",
+        meaning="The source has neither nonempty task data nor executable-grader evidence.",
+        clears="Prepare nonempty task data and executable graders, recording their census evidence.",
     ),
     PendingStage.MEASUREMENTS_PENDING: ReasonExplanation(
         label="Measurements pending",
-        meaning="Some standard measurement receipts exist; the rest are outstanding.",
-        clears="Every remaining standard measurement receipt at the current pin.",
-    ),
-    PendingStage.ADMISSION_PENDING: ReasonExplanation(
-        label="Admission pending",
-        meaning="Every standard measurement receipt exists; the source awaits configuration and admission.",
-        clears="Configuration and admission into the catalog at the current pin.",
+        meaning="Task data exists without complete executable-grader evidence, or data preparation is incomplete.",
+        clears="Complete the missing task data or grader preparation.",
     ),
     PendingStage.LEXICAL_REMEDIATION_QUEUED: ReasonExplanation(
         label="Lexical remediation queued",
         meaning="Training use waits on a remediation agent's clean or remediated private-release receipt.",
         clears="The remediated private-release decontamination receipt bound to the current pin.",
-    ),
-    PendingStage.SNAPSHOT_REPAIR_QUEUED: ReasonExplanation(
-        label="Snapshot repair queued",
-        meaning="The cohort's measured snapshot provisioning exceeds the shared machine-snapshot budget; "
-        "the constraint is capacity, not a property of the data.",
-        clears="A snapshot-safe rebuild whose provisioning fits the budget — declarative or registry-image "
-        "builds, shared images, LOCAL-tier routing, or snapshot cleanup — re-admitting the source.",
-    ),
-    PendingStage.BACKEND_VERIFICATION_PENDING: ReasonExplanation(
-        label="Backend verification pending",
-        meaning="No production backend admits the new source and VERIFY is its only positive production outcome.",
-        clears="A live backend qualification admitting at least one production backend at the current pin.",
-    ),
-    PendingStage.BACKEND_PROFILE_PENDING: ReasonExplanation(
-        label="Backend profile pending",
-        meaning="The grader needs network while the surveyed grader profile denies it.",
-        clears="A maintained per-source profile binding that allows the grader's network use (r22 ruling).",
     ),
     PendingStage.BACKEND_PREPARATION_PENDING: ReasonExplanation(
         label="Backend preparation pending",
@@ -461,6 +414,9 @@ class BackendBlockerReason(StrEnum):
     VALIDATION_ERROR = "validation-error"
     """The backend's checker refused the task's declared environment."""
 
+    UNSUPPORTED_ENVIRONMENT_KIND = "unsupported-environment-kind"
+    """The role's declared environment kind (for example a host image) is one the backend cannot run."""
+
 
 BACKEND_EXPLANATIONS: dict[ProductionBackend, ValueExplanation] = {
     ProductionBackend.DAYTONA: ValueExplanation(
@@ -491,7 +447,22 @@ BACKEND_BLOCKER_EXPLANATIONS: dict[BackendBlockerReason, ValueExplanation] = {
         label="Validation error",
         meaning="The backend's checker refused the task's declared environment outright.",
     ),
+    BackendBlockerReason.UNSUPPORTED_ENVIRONMENT_KIND: ValueExplanation(
+        label="Unsupported environment kind",
+        meaning="The role declares an environment kind (such as a host image or a Docker build) that this "
+        "backend does not run, so the survey marks the role not applicable here.",
+    ),
 }
+
+
+def backend_blocker_reason_slugs(requirement_values: Sequence[str]) -> frozenset[str]:
+    """Every blocker-reason slug the served backend-reason table can render.
+
+    The backend-fit derivation labels each blocker it emits with one of these
+    slugs and fails closed on a blocker it cannot label, so the evidence pages
+    never meet a blocker the taxonomy has no reason for.
+    """
+    return frozenset({reason.value for reason in BackendBlockerReason} | set(requirement_values))
 
 
 def requirement_blocker_explanation(requirement: str) -> ValueExplanation:

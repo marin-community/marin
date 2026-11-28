@@ -1,0 +1,156 @@
+{
+ "corrected": {
+  "TaskTrove:DCAgent__exp_rle_adversarial-v6": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/fe7082c4c978202a5789/2026.11.26.1437/.artifact.json",
+   "part": "part-003.json"
+  },
+  "TaskTrove:DCAgent__exp_rpt_nemotron-cpp": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/277af7d7f63d7a044346/2026.11.26.1437/.artifact.json",
+   "part": "part-003.json"
+  },
+  "TaskTrove:DCAgent__inferredbugs-sandboxes-verifier": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/757e7303df5aa6dbdc70/2026.11.26.1437/.artifact.json",
+   "part": "part-003.json"
+  },
+  "TaskTrove:laion__codeelo-v2": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/cb5853979599a468dd18/2026.11.26.1437/.artifact.json",
+   "part": "part-004.json"
+  },
+  "TaskTrove:laion__exp_rpt_ghactions-v3": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/dbed90574012db40ff47/2026.11.26.1437/.artifact.json",
+   "part": "part-004.json"
+  },
+  "TaskTrove:laion__exp_rpt_scaffold-v3": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/8ecffb5088098925b4b3/2026.11.26.1437/.artifact.json",
+   "part": "part-004.json"
+  },
+  "TaskTrove:laion__exp_rpt_stack-cpp-v4": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/b66f694b1e95540d577e/2026.11.26.1437/.artifact.json",
+   "part": "part-004.json"
+  },
+  "TaskTrove:laion__exp_rpt_stack-dockerfile-gpt5mini-v7": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/552c63d5821ceaca0720/2026.11.26.1437/.artifact.json",
+   "part": "part-004.json"
+  },
+  "TaskTrove:laion__exp_rpt_stack-go-v5": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/8ef0801bbe67bc7742fb/2026.11.26.1437/.artifact.json",
+   "part": "part-004.json"
+  },
+  "TaskTrove:laion__exp_rpt_stack-jest-v5": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/74eeddd79d33937c7e7a/2026.11.26.1437/.artifact.json",
+   "part": "part-004.json"
+  },
+  "TaskTrove:laion__exp_rpt_stack-junit-v6": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/9b400f339b1d09742f45/2026.11.26.1437/.artifact.json",
+   "part": "part-004.json"
+  },
+  "TaskTrove:laion__exp_rpt_stack-pytest-large-v3": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/c026a0f78984e90b04c8/2026.11.26.1437/.artifact.json",
+   "part": "part-004.json"
+  },
+  "TaskTrove:laion__exp_rpt_stack-rspec-v4": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/41840f7a8c5673583a71/2026.11.26.1437/.artifact.json",
+   "part": "part-004.json"
+  },
+  "TaskTrove:laion__mix_h10_reward_proportional-v2": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/666717602d7c349405c9/2026.11.26.1437/.artifact.json",
+   "part": "part-004.json"
+  },
+  "TaskTrove:laion__nemotron-gym-agentic-function-calling-pivot-v3": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/02676bdeec23d54f45d1/2026.11.26.1437/.artifact.json",
+   "part": "part-004.json"
+  },
+  "TaskTrove:laion__nemotron-gym-instruction-following-citation-v2": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/fa62f39c347e88e4ecd7/2026.11.26.1437/.artifact.json",
+   "part": "part-004.json"
+  },
+  "TaskTrove:laion__nemotron-gym-instruction-following-freeform-v2": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/9a96a0c2c646a5f2f844/2026.11.26.1437/.artifact.json",
+   "part": "part-004.json"
+  },
+  "TaskTrove:laion__nemotron-gym-litmus-bench-v2": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/de1e3d9442317cd613a5/2026.11.26.1437/.artifact.json",
+   "part": "part-004.json"
+  },
+  "TaskTrove:laion__nemotron-gym-math-advanced-calculations-v4": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/d560ca817263834188cf/2026.11.26.1437/.artifact.json",
+   "part": "part-004.json"
+  },
+  "TaskTrove:laion__nemotron-gym-multichallenge-vanilla-v3": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/b261dbbc7eb0b9966780/2026.11.26.1437/.artifact.json",
+   "part": "part-004.json"
+  },
+  "TaskTrove:swesmith-verifier-repaired-v5": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/ba83ebf5ecb958937ee8/2026.11.26.1437/.artifact.json",
+   "part": "part-005.json"
+  }
+ },
+ "kind": "atlas-census-evidence-workspace-fix",
+ "note": "Each durable path came from the served snapshot's sealed declarations (the census-era actor-artifact paths) and was verified to exist before the rewrite.",
+ "release_id": "atlas-2026.11.27",
+ "verified": {
+  "TaskTrove:DCAgent__exp_rle_adversarial-v6": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/fe7082c4c978202a5789/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:DCAgent__exp_rpt_nemotron-cpp": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/277af7d7f63d7a044346/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:DCAgent__inferredbugs-sandboxes-verifier": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/757e7303df5aa6dbdc70/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:laion__codeelo-v2": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/cb5853979599a468dd18/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:laion__exp_rpt_ghactions-v3": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/dbed90574012db40ff47/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:laion__exp_rpt_scaffold-v3": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/8ecffb5088098925b4b3/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:laion__exp_rpt_stack-cpp-v4": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/b66f694b1e95540d577e/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:laion__exp_rpt_stack-dockerfile-gpt5mini-v7": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/552c63d5821ceaca0720/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:laion__exp_rpt_stack-go-v5": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/8ef0801bbe67bc7742fb/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:laion__exp_rpt_stack-jest-v5": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/74eeddd79d33937c7e7a/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:laion__exp_rpt_stack-junit-v6": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/9b400f339b1d09742f45/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:laion__exp_rpt_stack-pytest-large-v3": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/c026a0f78984e90b04c8/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:laion__exp_rpt_stack-rspec-v4": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/41840f7a8c5673583a71/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:laion__mix_h10_reward_proportional-v2": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/666717602d7c349405c9/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:laion__nemotron-gym-agentic-function-calling-pivot-v3": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/02676bdeec23d54f45d1/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:laion__nemotron-gym-instruction-following-citation-v2": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/fa62f39c347e88e4ecd7/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:laion__nemotron-gym-instruction-following-freeform-v2": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/9a96a0c2c646a5f2f844/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:laion__nemotron-gym-litmus-bench-v2": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/de1e3d9442317cd613a5/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:laion__nemotron-gym-math-advanced-calculations-v4": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/d560ca817263834188cf/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:laion__nemotron-gym-multichallenge-vanilla-v3": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/b261dbbc7eb0b9966780/2026.11.26.1437/.artifact.json"
+  },
+  "TaskTrove:swesmith-verifier-repaired-v5": {
+   "durable": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261126-v1/actor-artifacts/rl-data/atlas/actor-census/ba83ebf5ecb958937ee8/2026.11.26.1437/.artifact.json"
+  }
+ }
+}

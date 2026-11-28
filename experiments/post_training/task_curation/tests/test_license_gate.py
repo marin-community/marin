@@ -8,7 +8,14 @@ from datetime import UTC, datetime
 import pytest
 from click.testing import CliRunner
 from finestore.rl.curation import OversightEvidence, OversightLevel
-from finestore.rl.licenses import LicenseClass, LicenseDecision, LicenseDecisionKind, LicenseReceipt, require_license
+from finestore.rl.licenses import (
+    LicenseClass,
+    LicenseDecision,
+    LicenseDecisionKind,
+    LicenseReceipt,
+    LicenseSourcePin,
+    require_license,
+)
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation import driver
@@ -26,7 +33,7 @@ from experiments.post_training.task_curation.source import SourceOrigin
 from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license, with_license
 from experiments.post_training.task_curation.tests.numbers_pipeline import NUMBERS_DATASET, number_source
-from infra.marina.apps.rl_data_catalog.server import licensing
+from infra.marina.apps.rl_data_catalog.server import license_registry, licensing
 from infra.marina.apps.rl_data_catalog.server.admission import require_catalog_declaration, require_declaration_admission
 from infra.marina.apps.rl_data_catalog.server.filtration import filtration
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
@@ -55,11 +62,11 @@ def test_license_evidence_controls_permission(license_id, classification, allowe
     receipt = LicenseReceipt.model_validate_json(receipt.model_dump_json())
     assert receipt.classification is classification
     if allowed:
-        require_license(receipt, "Marin:fixture", "fixture/data", "a" * 40, "train", ban=None)
+        require_license(receipt, "Marin:fixture", "train", ban=None)
         assert receipt.evidence[0].sha256
     else:
         with pytest.raises(ValueError, match="blocks ingest and admission"):
-            require_license(receipt, "Marin:fixture", "fixture/data", "a" * 40, "train", ban=None)
+            require_license(receipt, "Marin:fixture", "train", ban=None)
 
 
 def test_restrictive_file_overrides_permissive_card_and_affirmative_terms_do_not_restrict():
@@ -95,32 +102,116 @@ def test_scoped_exception_is_preserved_and_cannot_override_a_ban():
         issue_url=BANNED_SOURCES_ISSUE,
     )
     receipt = LicenseReceipt.model_validate_json(receipt.model_copy(update={"decisions": [approval]}).model_dump_json())
-    require_license(receipt, receipt.source_id, receipt.dataset_id, receipt.revision, "train", ban=None)
+    require_license(receipt, receipt.source_id, "train", ban=None)
     assert receipt.decisions[0].issue_url == BANNED_SOURCES_ISSUE
     with pytest.raises(ValueError, match="blocks ingest"):
-        require_license(receipt, receipt.source_id, receipt.dataset_id, receipt.revision, "eval", ban=None)
-    with pytest.raises(ValueError, match="another source revision"):
-        require_license(receipt, receipt.source_id, receipt.dataset_id, "b" * 40, "train", ban=None)
+        require_license(receipt, receipt.source_id, "eval", ban=None)
+    with pytest.raises(ValueError, match="belongs to another source"):
+        require_license(receipt.model_copy(update={"source_id": "Other:source"}), receipt.source_id, "train", ban=None)
     # Informational provenance flags alone do not override a dataset-level grant or scoped user decision.
     for flag in ("bundled_third_party", "model_generated_outputs"):
-        require_license(
-            receipt.model_copy(update={flag: True}),
-            receipt.source_id,
-            receipt.dataset_id,
-            receipt.revision,
-            "train",
-            ban=None,
-        )
+        require_license(receipt.model_copy(update={flag: True}), receipt.source_id, "train", ban=None)
     ban = approval.model_copy(update={"kind": LicenseDecisionKind.BAN, "approved": False})
     with pytest.raises(ValueError, match="bans this source"):
-        require_license(
-            receipt.model_copy(update={"decisions": [approval, ban]}),
-            receipt.source_id,
-            receipt.dataset_id,
-            receipt.revision,
-            "train",
-            ban=None,
+        require_license(receipt.model_copy(update={"decisions": [approval, ban]}), receipt.source_id, "train", ban=None)
+
+
+def test_hardmath_exception_admits_exactly_this_source_and_scope(monkeypatch):
+    """The pafitis:hardmath ban exception admits only the verified lineage pin at train use."""
+    source_id = "pafitis:hardmath"
+    dataset = "pafitis/HARDMath_processed_training"
+    revision = "937e9f10356e31e854f6efb9a2507f1e200c8b25"
+    monkeypatch.setattr(licensing, "LICENSE_BANS", license_registry.LICENSE_BANS)
+    licensing.license_bans.cache_clear()
+    try:
+        registry = json.loads(license_registry.LICENSE_BANS)
+        exceptions = [ban for ban in registry["bans"] if ban.get("exception")]
+        # The 2026-11-26 option-(a) ruling adds the pafitis:hardmath@rhs variant row; this row
+        # stays the base identity's exception.
+        assert len(exceptions) == 2 and exceptions[0]["source_id"] == source_id
+        exception = exceptions[0]["exception"]
+        assert exception["upstream_revision"] == revision
+        assert exception["use"] == "train"
+        assert exception["receipt_sha256"] == ("fe67508421dd34ee42d5dbb92926320697d211a173981fa98c331c043565b2ef")
+        receipt = fixture_license(source_id, dataset, revision)
+        assert licensing.source_license_ban(source_id, dataset, receipt, "train") is None
+        licensing.require_unbanned(source_id, dataset, receipt, "train")
+        ban = licensing.source_license_ban(source_id, dataset, receipt, "eval")
+        assert ban is not None
+        with pytest.raises(ValueError, match="License banned: pafitis:hardmath"):
+            licensing.require_unbanned(source_id, dataset, receipt, "eval")
+        assert (
+            licensing.source_license_ban(source_id, dataset, fixture_license(source_id, dataset, "b" * 40), "train")
+            is not None
         )
+        assert licensing.source_license_ban(source_id, dataset, None, "train") is not None
+        other = "FWeindel:validated-tasks/tmax11-v1.1"
+        assert licensing.source_license_ban(other, "TMaxxx/tmax-13k-v1.1", None, "train") is not None
+        release = "open-athena/pafitis-hardmath-processed-training-repaired-20261126-v1"
+        release_receipt = fixture_license(source_id, release, "c" * 40)
+        lineage_pin = LicenseSourcePin(
+            dataset_id=dataset,
+            revision=revision,
+            url=f"https://huggingface.co/datasets/{dataset}",
+            declaration=release_receipt.evidence[0],
+        )
+        resolved = release_receipt.model_copy(update={"resolved_source": lineage_pin})
+        assert licensing.source_license_ban(source_id, release, resolved, "train") is None
+        wrong_pin = lineage_pin.model_copy(update={"revision": "b" * 40})
+        assert (
+            licensing.source_license_ban(
+                source_id, release, resolved.model_copy(update={"resolved_source": wrong_pin}), "train"
+            )
+            is not None
+        )
+        wrapped = release_receipt.model_copy(update={"wrapper_chain": [lineage_pin]})
+        assert licensing.source_license_ban(source_id, release, wrapped, "train") is None
+    finally:
+        licensing.license_bans.cache_clear()
+
+
+def test_hardmath_rhs_variant_exception_admits_the_declared_pin_and_scopes_exactly(monkeypatch):
+    """The pafitis:hardmath@rhs exception admits only the declared upstream pin at train use.
+
+    The coordinator's 2026-11-26 option-(a) ruling: a registry exception row for the variant
+    identity, same verified lineage and train scope as the base exception, with the validated
+    republish release @ b87667c4 (content bytes identical to the declared pin) as evidence. The
+    variant's receipt family binds the declared pin — the same pairing the within-source dedup
+    census carries. An unrelated variant of the same source still fails closed through the base
+    ban's upstream fallback.
+    """
+    variant_id = "pafitis:hardmath@rhs"
+    unrelated_variant = "pafitis:hardmath@other"
+    upstream = "pafitis/HARDMath_processed_training"
+    upstream_revision = "937e9f10356e31e854f6efb9a2507f1e200c8b25"
+    monkeypatch.setattr(licensing, "LICENSE_BANS", license_registry.LICENSE_BANS)
+    licensing.license_bans.cache_clear()
+    try:
+        registry = json.loads(license_registry.LICENSE_BANS)
+        exceptions = [ban for ban in registry["bans"] if ban.get("exception")]
+        assert len(exceptions) == 2
+        variant_row = next(ban for ban in exceptions if ban["source_id"] == variant_id)
+        assert variant_row["upstream_id"] == upstream
+        assert variant_row["exception"]["use"] == "train"
+        assert variant_row["exception"]["upstream_revision"] == upstream_revision
+        assert variant_row["exception"]["receipt_sha256"] == (
+            "eb4f7527271cd23953b93e0b3c8466e91ebf4f1853f098135e1849e6e0942800"
+        )
+        receipt = fixture_license(variant_id, upstream, upstream_revision)
+        assert licensing.source_license_ban(variant_id, upstream, receipt, "train") is None
+        licensing.require_unbanned(variant_id, upstream, receipt, "train")
+        assert licensing.source_license_ban(variant_id, upstream, receipt, "eval") is not None
+        with pytest.raises(ValueError, match="License banned: pafitis:hardmath@rhs"):
+            licensing.require_unbanned(variant_id, upstream, receipt, "eval")
+        wrong_pin = fixture_license(variant_id, upstream, "b" * 40)
+        assert licensing.source_license_ban(variant_id, upstream, wrong_pin, "train") is not None
+        assert licensing.source_license_ban(variant_id, upstream, None, "train") is not None
+        # An unrelated variant of the same source stays banned: the base row's upstream fallback
+        # consults no exception, so only the exact variant identity admits.
+        other = fixture_license(unrelated_variant, upstream, upstream_revision)
+        assert licensing.source_license_ban(unrelated_variant, upstream, other, "train") is not None
+    finally:
+        licensing.license_bans.cache_clear()
 
 
 def test_source_rename_carries_its_license_receipt(tmp_path):

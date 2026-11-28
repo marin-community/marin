@@ -6,8 +6,11 @@
 import json
 import sys
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
+from finestore.rl.curation import ActorCensusInput, PipelineReference
+from finestore.rl.status_taxonomy import SourceStatus
 
 from experiments.post_training.task_curation import declaration_audit, ensure_current_projections
 from experiments.post_training.task_curation import sources as sources_module
@@ -295,10 +298,8 @@ def waived_audit_cli(monkeypatch, tmp_path):
     monkeypatch.setattr(
         declaration_audit,
         "atlas_catalog_selection",
-        lambda: (
-            ensure_current_projections.CatalogSelection(
-                "https://marina.example", "preview", "lagging", refresh_sealed=False
-            )
+        lambda: ensure_current_projections.CatalogSelection(
+            "https://marina.example", "preview", "lagging", refresh_sealed=False
         ),
     )
     monkeypatch.setattr(declaration_audit, "atlas_contract_receipts", lambda: {})
@@ -311,6 +312,74 @@ def test_projection_waivers_cannot_clear_declaration_drift(waived_audit_cli, cap
     with pytest.raises(SystemExit, match="1 mismatches"):
         waived_audit_cli()
     assert "but the canonical layer declares" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("gap", [None, "served-catalog", "derived-contract", "curriculum", "unmeasured"])
+def test_a_remeasured_pin_clears_archived_retention_drift_only_through_current_projections(
+    waived_audit_cli, monkeypatch, capsys, gap
+):
+    source_id = "Test:declared-source"
+    actor = ActorCensusInput(
+        dataset_id="open-athena/example-source",
+        dataset_revision="1" * 40,
+        converter_version="2026.11.13.1",
+        converter_revision="2" * 40,
+        measured_tasks=10,
+        task_specs_sha256="c" * 64,
+        evidence_url="memory://current-census",
+    )
+    old_actor = actor.model_copy(update={"dataset_revision": "9" * 40})
+    pipeline = PipelineReference(
+        name="example",
+        version=actor.converter_version,
+        source=actor.dataset_id,
+        revision=actor.dataset_revision,
+        files=[],
+    )
+    source = SimpleNamespace(
+        info=SimpleNamespace(id=source_id, actor_census_input=None if gap == "unmeasured" else actor, count=10),
+        dataset=SimpleNamespace(name=actor.dataset_id, revision=actor.dataset_revision),
+        pipeline_reference=pipeline,
+        status=SourceStatus.AVAILABLE,
+    )
+    served = ensure_current_projections.DeclarationPin(
+        source_id, actor.dataset_id, actor.dataset_revision, pipeline.model_dump(mode="json"), actor
+    )
+    if gap == "served-catalog":
+        served = replace(served, dataset_revision=old_actor.dataset_revision, actor_binding=old_actor)
+    contracts = {source_id: [SimpleNamespace(input=old_actor if gap == "derived-contract" else actor, summary={})]}
+    curriculum = {
+        source_id: {
+            "declaration": {
+                "dataset_id": actor.dataset_id,
+                "dataset_revision": old_actor.dataset_revision if gap == "curriculum" else actor.dataset_revision,
+                "pipeline": pipeline.model_dump(mode="json"),
+            },
+            "has_alignment": True,
+        }
+    }
+    monkeypatch.setattr(sys, "argv", ["declaration_audit"])
+    families = {
+        name: {} for name in ("census receipts", "lexical receipts", "grading census receipts", "within-source dedup")
+    }
+    monkeypatch.setattr(declaration_audit, "canonical_layer", lambda: (layer(), families, {}, {source_id: source}))
+    monkeypatch.setattr(declaration_audit, "audit_replacement_links", lambda: [])
+    monkeypatch.setattr(declaration_audit, "atlas_contract_receipts", lambda: contracts)
+    monkeypatch.setattr(declaration_audit, "atlas_curriculum_rows", lambda: curriculum)
+    monkeypatch.setattr(declaration_audit, "served_declaration_pins", lambda selection: [served])
+    monkeypatch.setattr(sources_module, "RETAINED_BINDING_DRIFTS", {source_id: old_actor.dataset_revision})
+    monkeypatch.setattr("experiments.post_training.task_curation.sample_qc_binding.SAMPLE_BINDING_DRIFTS", {})
+    if gap is None:
+        waived_audit_cli()
+    else:
+        with pytest.raises(SystemExit, match="1 mismatches"):
+            waived_audit_cli()
+    result = json.loads(capsys.readouterr().out)
+    expected_projection = "served-catalog" if gap == "unmeasured" else gap
+    assert len(result["findings"]) == (0 if gap is None else 1)
+    if gap is not None:
+        assert f"serving projection {expected_projection}/stale-pin:" in result["findings"][0]
+    assert result["projection_waivers"] == []
 
 
 def test_typed_status_audit_reports_each_violation(monkeypatch):
@@ -459,3 +528,60 @@ def test_only_a_passing_strict_finalizer_records_the_refresh_seal(waived_audit_c
     assert receipt["refresh_sealed"] is True
     assert receipt["waived_projection_count"] == 0
     assert receipt["waiver_scope"] is None
+
+
+def test_the_census_demand_exemption_names_exactly_excluded_empty_sources():
+    """Ruling 2026-11-26: the projection audit exempts exactly Excluded or Deprecated sources whose
+    retained population is empty; any other status or a nonempty population stays
+    inside the census demand."""
+
+    class Source:
+        def __init__(self, source_id, status, count):
+            self.info = type("Info", (), {"id": source_id, "count": count})()
+            self._status = status
+
+        @property
+        def status(self):
+            return self._status
+
+    sources = {
+        "Test:zero-excluded": Source("Test:zero-excluded", SourceStatus.EXCLUDED, 0),
+        "Test:none-excluded": Source("Test:none-excluded", SourceStatus.EXCLUDED, None),
+        "Test:excluded-with-tasks": Source("Test:excluded-with-tasks", SourceStatus.EXCLUDED, 2574),
+        "Test:pending-empty": Source("Test:pending-empty", SourceStatus.PENDING, 0),
+        "Test:available-empty": Source("Test:available-empty", SourceStatus.AVAILABLE, 0),
+        "Test:deprecated-empty": Source("Test:deprecated-empty", SourceStatus.DEPRECATED, 0),
+        "Test:deprecated-with-tasks": Source("Test:deprecated-with-tasks", SourceStatus.DEPRECATED, 12927),
+    }
+    assert declaration_audit.exempt_unmeasured_sources(sources) == frozenset(
+        {"Test:zero-excluded", "Test:none-excluded", "Test:deprecated-empty"}
+    )
+
+
+def test_registry_index_gaps_name_every_uncovered_declared_source():
+    """The admission flow registers each newly declared source's identity document in
+    the registry index (the compose reads its targets there); the landing gate names
+    every declared source the index does not cover, and only those."""
+    index = {"sources": {"Test:covered": {"uri": "s3://example/covered.json", "sha256": "a" * 64}}}
+    declared = frozenset({"Test:covered", "Test:uncovered-a", "Test:uncovered-b"})
+    assert declaration_audit.registry_index_gaps(declared, index) == ["Test:uncovered-a", "Test:uncovered-b"]
+
+
+def test_registry_index_gaps_refuse_a_shapeless_index():
+    declared = frozenset({"Test:declared-source"})
+    assert declaration_audit.registry_index_gaps(declared, {}) == ["Test:declared-source"]
+    assert declaration_audit.registry_index_gaps(declared, {"sources": "not-a-mapping"}) == ["Test:declared-source"]
+
+
+def test_registry_index_gaps_pass_when_every_declared_source_is_covered():
+    index = {
+        "sources": {
+            source_id: {"uri": "s3://example/x.json", "sha256": "b" * 64}
+            for source_id in (
+                "Test:one",
+                "Test:two",
+                "Test:unrelated-retained-source",
+            )
+        }
+    }
+    assert declaration_audit.registry_index_gaps(frozenset({"Test:one", "Test:two"}), index) == []

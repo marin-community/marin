@@ -1,0 +1,6 @@
+{
+  "repo": "open-athena/marin-rl-data-atlas-registry",
+  "revision": "d0b972fc8d6c24f5e2fff82d48ebec3390ed3526",
+  "path": "experiments/post_training/task_curation/datasets/citation_formatting_admitted.json",
+  "sha256": "03c94c1192aaecb9aac77b6e772af6d0946dfea1f3ca36e99400d2448c9013d9"
+}

@@ -1,0 +1,6 @@
+{
+  "template": "\nYou are an impartial LLM-Judge. Evaluate the model response based strictly on the specific question provided below.\n\nQUESTION TO EVALUATE AGAINST:\n{question}\n\nMODEL RESPONSE TO EVALUATE:\n{model_response}\n\nDoes the model's response satisfy the criterion described in the evaluation question?\nAnalyze carefully, then respond with exactly [[YES]] or [[NO]] on the last line.\n",
+  "upstream_url": "https://raw.githubusercontent.com/NVIDIA-NeMo/Gym/e597c962af405a9c2c6aa91296be51fdcc2f44bb/resources_servers/verifif/vif_validators/data_loader.py",
+  "file_sha256": "1700a19273433fc279afc44e2dabd074db915a53719e296d5ace75a86a473459",
+  "code_revision": "e597c962af405a9c2c6aa91296be51fdcc2f44bb"
+}

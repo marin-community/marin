@@ -13,6 +13,7 @@ the injected boundaries (the release resolves the real ones at run time).
 import hashlib
 import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,11 +22,21 @@ import pyarrow.parquet as pq
 import pytest
 from finestore.rl.curation import ActorCensusInput, QualifiedSourceDeclaration, SourceOrigin, source_identifier
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
+from rigging.filesystem.storage_path import StoragePath
+from shellbox.machine import Backend
+from shellbox.requirements import Requirement
 from taskcompendium.backend_requirements import backend_schema_sha256
 
 from experiments.post_training.task_curation import atlas_deployment
-from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
+from experiments.post_training.task_curation.atlas_deployment import region_deployment
+from experiments.post_training.task_curation.grader_drift import (
+    GraderDriftReference,
+    MainRecipeReference,
+    SealedRecipeReference,
+)
+from experiments.post_training.task_curation.lexical_artifacts import ActorCensus, SourceTextPopulation
 from experiments.post_training.task_curation.release_stages import declarations as declarations_stage
+from experiments.post_training.task_curation.release_stages import graph as graph_module
 from experiments.post_training.task_curation.release_stages import plan_derivation
 from experiments.post_training.task_curation.release_stages import (
     snapshot_publication as snapshot_publication_stage,
@@ -167,6 +178,75 @@ def _declaration_dump(layer: dict) -> dict:
     return {source_id: source.declaration.model_dump(mode="json") for source_id, source in layer.items()}
 
 
+@pytest.mark.parametrize("evidence", ["current", "foreign_population", "changed_preview", "incomplete"])
+def test_derivation_resolves_the_complete_integrity_group_artifact(tmp_path, evidence):
+    population_dir = _write_population(tmp_path, TARGET_ID, "fixture-target", task_count=65)
+    groups = [{"id": "shared-source", "count": 1, "harness_policy": {"test": index}} for index in range(65)]
+    full_path = tmp_path / "integrity-contracts.json"
+    summary = {"groups": groups[:64], "distinct_groups": 65, "evidence_url": str(full_path)}
+    actor_path = tmp_path / "actor"
+    actor = ActorCensus(
+        path=str(actor_path),
+        source_id=TARGET_ID,
+        dataset_id="fixture-target",
+        dataset_revision="1",
+        converter_version="1",
+        converter_revision="1",
+        input_artifact=population_dir,
+        task_specs_sha256="f" * 64,
+        task_count=65,
+        daytona_safety="not_applicable",
+        daytona_snapshot_count=0,
+        daytona_machine_slots=0,
+        daytona_execution_failures=0,
+        daytona_count_basis="Fixture contains no actor environment.",
+        daytona_unsafe_reasons=[],
+        daytona_unsafe_details={},
+        daytona_unsafe_counts={},
+        daytona_roles={},
+        actor_environment_counts={},
+        empty_declared_environment_tasks={},
+        snapshot_sizes={},
+        execution_failures={},
+        mapping_failures={},
+        integrity_contracts=summary,
+    )
+    write_record(
+        ArtifactRecord(
+            output_path=str(actor_path), result_type=result_type_name(ActorCensus), result=actor.result_payload()
+        )
+    )
+    full = {"groups": groups, "input_artifact": population_dir}
+    if evidence == "foreign_population":
+        full["input_artifact"] = str(tmp_path / "foreign-population")
+    if evidence == "changed_preview":
+        full["groups"] = [{**groups[0], "count": 2}, *groups[1:]]
+    if evidence == "incomplete":
+        full["groups"] = groups[:-1]
+    full_path.write_text(json.dumps(full))
+    declaration = _declaration(TARGET_ID, population_dir)
+    binding = declaration.actor_census_input
+    assert binding is not None
+    source = SimpleNamespace(
+        info=SimpleNamespace(id=TARGET_ID, oracle_filtration=None),
+        declaration=declaration.model_copy(
+            update={
+                "task_count": 65,
+                "within_source_dedup": deduplication_evidence("fixture-target", "1", "1", count=65),
+                "actor_census_input": binding.model_copy(
+                    update={"measured_tasks": 65, "evidence_url": str(actor_path / ".artifact.json")}
+                ),
+            }
+        ),
+    )
+    if evidence != "current":
+        with pytest.raises(ValueError, match="integrity"):
+            plan_derivation._target_integrity_contract(TARGET_ID, source)
+        return
+    resolved = plan_derivation._target_integrity_contract(TARGET_ID, source)
+    assert resolved == {**summary, "groups": groups}
+
+
 def _prior_pins(tmp_path: Path, declared: dict) -> PriorRelease:
     """Digest-bound prior-state pins over local fixture documents."""
 
@@ -181,7 +261,9 @@ def _prior_pins(tmp_path: Path, declared: dict) -> PriorRelease:
         declarations=ArtifactRef(**pin("declarations", declared)),
         identity=ArtifactRef(**pin("identity", {"fingerprints": {}, "reviews": []})),
         backend=ArtifactRef(**pin("backend", {"sources": [], "snapshot_id": "assembly-prior-v1"})),
-        composed_release=ArtifactRef(**pin("composed_release", {"release_id": "priorrelease"})),
+        composed_release=ArtifactRef(
+            **pin("composed_release", {"release_id": "priorrelease", "inventory": list(declared.values())})
+        ),
         composed_coverage=ArtifactRef(**pin("composed_coverage", {"coverage": {}})),
         oracle_inventory=ArtifactRef(**pin("oracle_inventory", {"sources": 2})),
         source_counts=ArtifactRef(**pin("source_counts", {"sources": 2})),
@@ -207,10 +289,13 @@ def _applet_query(prior_load_id: str, curriculum_load_id: str, panels: list[str]
     return query
 
 
-def _catalog_factory(source_ids: tuple[str, ...]):
+def _catalog_factory(source_ids: tuple[str, ...], declarations: dict[str, dict] | None = None):
+    declarations = declarations or {}
     catalog = SimpleNamespace(
         current=lambda: SimpleNamespace(snapshot_id="assembly-prior-v1"),
-        sources=lambda snapshot_id, pending_stage_of=None: [SimpleNamespace(id=source_id) for source_id in source_ids],
+        sources=lambda snapshot_id, pending_stage_of=None: [
+            SimpleNamespace(id=source_id, declaration=declarations.get(source_id, {})) for source_id in source_ids
+        ],
     )
     return lambda root: catalog
 
@@ -223,7 +308,12 @@ def frozen_layer(tmp_path, monkeypatch):
     monkeypatch.setattr(plan_derivation, "_freeze_artifact_version", lambda repo_root, revision: FREEZE_ARTIFACT_VERSION)
     registry_index = tmp_path / "registry-index.json"
     registry_index.write_text(
-        json.dumps({"revision": "registryrev", "sources": {TARGET_ID: {"repo": "r"}, LATE_ID: {"repo": "r"}}})
+        json.dumps(
+            {
+                "revision": "registryrev",
+                "sources": {RETAINED_ID: {"repo": "r"}, TARGET_ID: {"repo": "r"}, LATE_ID: {"repo": "r"}},
+            }
+        )
     )
     monkeypatch.setattr(plan_derivation, "REGISTRY_INDEX_PATH", registry_index)
     return tmp_path
@@ -247,6 +337,7 @@ def _config(prior: PriorRelease, **overrides) -> ReleaseConfig:
         cluster=CLUSTER,
         freeze_source_revision=FREEZE_REVISION,
         prior_release=prior,
+        prior_snapshot_id="assembly-prior-v1",
         production_version=41,
         preview_base_version=30,
     )
@@ -273,6 +364,13 @@ def _derive(
         repo_root=REPO_ROOT,
         query=_applet_query(PRIOR_LOAD_ID, PRIOR_CURRICULUM_LOAD_ID, panels, available),
         sources_fn=lambda: layer,
+        drift_reference_fn=lambda root, revision, declared: GraderDriftReference(
+            main=MainRecipeReference(revision="e" * 40, merge_base=revision),
+            sources={
+                source_id: SealedRecipeReference(source_id=source_id, converter_revision=revision)
+                for source_id in declared
+            },
+        ),
         prior_catalog_reader=lambda root, q: read_prior_catalog_state(
             root,
             q,
@@ -288,6 +386,138 @@ def _contract_receipts_factory(measured_tasks: dict[str, int]):
         for source_id, tasks in measured_tasks.items()
     }
     return lambda: receipts
+
+
+@pytest.fixture(autouse=True)
+def _no_deliberate_exclusions(monkeypatch):
+    """The policy's real deliberate exclusions name production sources the fixtures
+    never declare; tests opt in explicitly."""
+    monkeypatch.setattr(plan_derivation, "DELIBERATE_EXCLUSIONS", {})
+
+
+def test_recut_retains_against_the_served_state(tmp_path, frozen_layer, deployment, monkeypatch):
+    """A re-cut (the catalog serves a snapshot this release published, not the config's
+    pinned prior snapshot) retains against what is SERVED: the compose and the
+    declaration drift gate read the served declarations and surveys, sealed under the
+    release prefix as the retained prior state."""
+    layer = _source_layer(tmp_path, (RETAINED_ID, TARGET_ID))
+    prior = _prior_pins(tmp_path, _declaration_dump(layer))
+    config = _config(prior, prior_snapshot_id="assembly-config-prior-snapshot-v1")
+
+    served_declarations = _declaration_dump(layer)
+    survey = {
+        "catalog_root": "s3://example/catalog",
+        "snapshot_id": "assembly-served-prior-v1",
+        "generated_at": "2026-11-23T00:00:00Z",
+        "git_revision": "c" * 40,
+        "schema_sha256": "0" * 64,
+        "runtime_defaults": {
+            "agent": {
+                "network": "deny",
+                "cpus": 1,
+                "memory_mb": 512,
+                "storage_mb": 1024,
+                "gpus": 0,
+                "user": None,
+                "startup_timeout": 60.0,
+                "cleanup_timeout": 30.0,
+            },
+            "grader": {
+                "network": "deny",
+                "cpus": 1,
+                "memory_mb": 512,
+                "storage_mb": 1024,
+                "gpus": 0,
+                "user": None,
+                "startup_timeout": 60.0,
+                "cleanup_timeout": 30.0,
+            },
+        },
+        "matrix": [
+            {"backend": backend, "requirement": requirement, "support": "supported", "evidence": [], "note": ""}
+            for backend in sorted({b.value for b in Backend} | {"iris"})
+            for requirement in [r.value for r in Requirement]
+        ],
+        "deployment_limits": {},
+        "deployment_classes": {},
+        "sources": [],
+    }
+    identity_survey = {
+        "catalog_root": "s3://example/catalog",
+        "snapshot_id": "assembly-served-prior-v1",
+        "generated_at": "2026-11-23T00:00:00Z",
+        "fingerprints": {},
+        "reviews": [],
+        "groups": [],
+        "judge": None,
+    }
+
+    def query(sql: str, parameters: dict) -> dict:
+        if "FROM atlas_current" in sql:
+            return {"rows": [{"load_id": PRIOR_LOAD_ID}]}
+        if "FROM curriculum_current" in sql:
+            return {"rows": [{"load_id": PRIOR_CURRICULUM_LOAD_ID}]}
+        if "FROM atlas_review_current" in sql:
+            return {"rows": []}
+        if "FROM atlas_sources" in sql:
+            if "declaration->>'status'" in sql:
+                return {"rows": [{"source_id": RETAINED_ID}]}
+            if "source_fingerprint IS NOT NULL" in sql:
+                return {"rows": []}
+            if "duplicate_group IS NOT NULL" in sql:
+                return {"rows": []}
+            return {"rows": [{"source_id": source_id} for source_id in sorted(served_declarations)]}
+        if "FROM atlas_backend_surveys" in sql:
+            return {"rows": [{"survey": survey, "survey_id": "served-survey"}]}
+        if "FROM atlas_identity_surveys" in sql:
+            return {"rows": [{"metadata": identity_survey, "survey_id": "served-identity"}]}
+        if "FROM atlas_backend_sources" in sql:
+            return {"rows": []}
+        if "FROM atlas_backend_cells" in sql:
+            return {"rows": [{"cell": cell} for cell in survey["matrix"]]}
+        if "FROM atlas_duplicate_reviews" in sql:
+            return {"rows": []}
+        raise AssertionError(f"unexpected derivation query: {sql}")
+
+    monkeypatch.setattr(plan_derivation, "derived_contract_receipts", _contract_receipts_factory({TARGET_ID: 2}))
+    derived = derive_release_plan(
+        config,
+        repo_root=REPO_ROOT,
+        query=query,
+        sources_fn=lambda: layer,
+        prior_catalog_reader=lambda root, q: read_prior_catalog_state(
+            root,
+            q,
+            catalog_factory=_catalog_factory((RETAINED_ID,), declarations=served_declarations),
+            receipt_keys_fn=lambda: {},
+        ),
+        drift_reference_fn=lambda root, revision, declared: GraderDriftReference(
+            main=MainRecipeReference(revision="e" * 40, merge_base=revision),
+            sources={
+                source_id: SealedRecipeReference(source_id=source_id, converter_revision=revision)
+                for source_id in declared
+            },
+        ),
+    )
+
+    plan = ReleasePlan.model_validate(derived.plan_document)
+    plan.validate_shape()
+    pins = plan.pins
+    assert pins.prior_declarations.uri.endswith("prior-state/declarations.json")
+    assert pins.prior_identity.uri.endswith("prior-state/identity.json")
+    assert pins.prior_backend.uri.endswith("prior-state/backend.json")
+    deployment = region_deployment(CLUSTER)
+    release_root = f"{deployment.region_prefix}preview-release/testrelease-{FREEZE_ARTIFACT_VERSION}"
+    sealed = json.loads(StoragePath(f"{release_root}/prior-state/declarations.json").read_bytes())
+    # the retained prior state carries exactly the served catalog's rows
+    assert sorted(sealed["declarations"]) == sorted(
+        source_id for source_id in served_declarations if source_id in (RETAINED_ID,)
+    )
+    assert sealed["declarations"][RETAINED_ID] == served_declarations[RETAINED_ID]
+    backend = json.loads(StoragePath(f"{release_root}/prior-state/backend.json").read_bytes())
+    assert backend["snapshot_id"] == "assembly-served-prior-v1"
+    identity = json.loads(StoragePath(f"{release_root}/prior-state/identity.json").read_bytes())
+    assert identity["snapshot_id"] == "assembly-served-prior-v1"
 
 
 def test_derive_release_plan_from_fixture_state(tmp_path, frozen_layer, deployment, monkeypatch):
@@ -364,15 +594,43 @@ def test_derivation_refuses_unresolvable_populations(tmp_path, frozen_layer, dep
         _derive(tmp_path, layer, config, monkeypatch, panels=[RETAINED_ID], available=[RETAINED_ID])
 
 
-def test_derivation_refuses_prior_drift(tmp_path, frozen_layer, deployment, monkeypatch):
-    """A drifted retained declaration fails the derivation before any stage runs."""
+@pytest.mark.parametrize("lagging_projection", ["declarations", "composed_release"])
+def test_derivation_targets_changed_existing_populations(
+    tmp_path, frozen_layer, deployment, monkeypatch, lagging_projection
+):
     layer = _source_layer(tmp_path, (RETAINED_ID, TARGET_ID))
     declared = _declaration_dump(layer)
-    drifted = json.loads(json.dumps(declared[RETAINED_ID]))
-    drifted["dataset_revision"] = "2"
-    prior = _prior_pins(tmp_path, {RETAINED_ID: drifted, TARGET_ID: declared[TARGET_ID]})
-    with pytest.raises(ValueError, match="drifted from the prior release"):
-        _derive(tmp_path, layer, _config(prior), monkeypatch, panels=[RETAINED_ID], available=[RETAINED_ID])
+    prior = _prior_pins(tmp_path, declared)
+    old = {**declared[RETAINED_ID], "dataset_revision": "old-pin"}
+    ref = getattr(prior, lagging_projection)
+    path = Path(ref.uri)
+    document = {**declared, RETAINED_ID: old} if lagging_projection == "declarations" else {"inventory": [old]}
+    path.write_text(json.dumps(document))
+    prior = prior.model_copy(
+        update={lagging_projection: ArtifactRef(uri=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())}
+    )
+    derived = _derive(
+        tmp_path,
+        layer,
+        _config(prior),
+        monkeypatch,
+        panels=[RETAINED_ID],
+        available=[RETAINED_ID],
+        contract_tasks={RETAINED_ID: 2, TARGET_ID: 2},
+    )
+    plan = ReleasePlan.model_validate(derived.plan_document)
+    assert set(plan.targets) == {RETAINED_ID, TARGET_ID}
+    assert plan.expected_contract_tasks == 4
+    assert derived.receipt["measured"]["replacement_sources"] == [RETAINED_ID]
+    if lagging_projection == "declarations":
+        assert plan.qc_exclusions == ()
+        assert derived.receipt["measured"]["qc_copy_exclusions"] == [RETAINED_ID]
+        assert plan.expected_browse_source_count == plan.expected_panels == 0
+        assert plan.expected_selected_panels == 0
+    else:
+        assert plan.qc_exclusions == ()
+        assert derived.receipt["measured"]["qc_copy_exclusions"] == []
+        assert plan.expected_browse_source_count == plan.expected_selected_panels == 1
 
 
 def test_derivation_applies_config_policy(tmp_path, frozen_layer, deployment, monkeypatch):
@@ -464,6 +722,7 @@ def test_interrupted_derivation_resumes_at_the_same_version(tmp_path, frozen_lay
     release_root = derived.plan_document["release_root"]
     seal_derivation(release_root, derived)
     sealed = (Path(release_root) / "release-plan.json").read_bytes()
+    sealed_receipt = (Path(release_root) / "derivation-receipt.json").read_bytes()
     plan = ReleasePlan.model_validate(derived.plan_document)
     fingerprints_before = {node["name"]: node["fingerprint"] for node in graph_nodes(release_graph(plan))}
 
@@ -471,12 +730,25 @@ def test_interrupted_derivation_resumes_at_the_same_version(tmp_path, frozen_lay
     # every graph fingerprint matches so the runner skips sealed nodes instead of
     # rerunning them.
     derived_again = _derive(tmp_path, layer, config, monkeypatch, panels=[RETAINED_ID], available=[RETAINED_ID])
+    derived_again = replace(
+        derived_again, receipt={**derived_again.receipt, "generated_at": "2099-01-01T00:00:00+00:00"}
+    )
     seal_derivation(release_root, derived_again)
     resumed_plan = ReleasePlan.model_validate(derived_again.plan_document)
     fingerprints_after = {node["name"]: node["fingerprint"] for node in graph_nodes(release_graph(resumed_plan))}
     assert fingerprints_before == fingerprints_after
     assert (Path(release_root) / "release-plan.json").read_bytes() == sealed
-    assert (Path(release_root) / "derivation-receipt.json").exists()
+    assert (Path(release_root) / "derivation-receipt.json").read_bytes() == sealed_receipt
+    changed_measurement = replace(
+        derived_again,
+        receipt={
+            **derived_again.receipt,
+            "measured": {**derived_again.receipt["measured"], "expected_population_tasks": 999},
+        },
+    )
+    with pytest.raises(ValueError, match="release inputs moved"):
+        seal_derivation(release_root, changed_measurement)
+    assert (Path(release_root) / "derivation-receipt.json").read_bytes() == sealed_receipt
 
 
 def test_read_prior_catalog_state_measurements(tmp_path, frozen_layer, deployment):
@@ -552,3 +824,374 @@ def test_snapshot_publication_witness_runs_the_real_check_path(tmp_path, frozen_
     )
     with pytest.raises(ValueError, match="non-target declaration drift"):
         _snapshot_publication_witness(plan, SliceSelection(source=RETAINED_ID))
+
+
+def test_recut_census_is_incremental(tmp_path, frozen_layer, deployment, monkeypatch):
+    """A status-only re-cut's census is incremental: the census-inputs document covers
+    the new admissions only, so the retained populations are never re-read (the
+    retained population's census receipt is the prior publication's own)."""
+    layer = _source_layer(tmp_path, (RETAINED_ID, TARGET_ID))
+    prior = _prior_pins(tmp_path, _declaration_dump(layer))
+    config = _config(prior, prior_snapshot_id="assembly-config-prior-snapshot-v1")
+
+    served_declarations = _declaration_dump(layer)
+    survey = {
+        "catalog_root": "s3://example/catalog",
+        "snapshot_id": "assembly-served-prior-v1",
+        "generated_at": "2026-11-23T00:00:00Z",
+        "git_revision": "c" * 40,
+        "schema_sha256": "0" * 64,
+        "runtime_defaults": {
+            "agent": {
+                "network": "deny",
+                "cpus": 1,
+                "memory_mb": 512,
+                "storage_mb": 1024,
+                "gpus": 0,
+                "user": None,
+                "startup_timeout": 60.0,
+                "cleanup_timeout": 30.0,
+            },
+            "grader": {
+                "network": "deny",
+                "cpus": 1,
+                "memory_mb": 512,
+                "storage_mb": 1024,
+                "gpus": 0,
+                "user": None,
+                "startup_timeout": 60.0,
+                "cleanup_timeout": 30.0,
+            },
+        },
+        "matrix": [
+            {"backend": backend, "requirement": requirement, "support": "supported", "evidence": [], "note": ""}
+            for backend in sorted({b.value for b in Backend} | {"iris"})
+            for requirement in [r.value for r in Requirement]
+        ],
+        "deployment_limits": {},
+        "deployment_classes": {},
+        "sources": [],
+    }
+    identity_survey = {
+        "catalog_root": "s3://example/catalog",
+        "snapshot_id": "assembly-served-prior-v1",
+        "generated_at": "2026-11-23T00:00:00Z",
+        "fingerprints": {},
+        "reviews": [],
+        "groups": [],
+        "judge": None,
+    }
+    seen_census_inputs = {}
+
+    def query(sql: str, parameters: dict) -> dict:
+        if "FROM atlas_current" in sql:
+            return {"rows": [{"load_id": PRIOR_LOAD_ID}]}
+        if "FROM curriculum_current" in sql:
+            return {"rows": [{"load_id": PRIOR_CURRICULUM_LOAD_ID}]}
+        if "FROM atlas_review_current" in sql:
+            return {"rows": []}
+        if "FROM atlas_sources" in sql:
+            if "declaration->>'status'" in sql:
+                return {"rows": [{"source_id": RETAINED_ID}]}
+            if "source_fingerprint IS NOT NULL" in sql:
+                return {"rows": []}
+            if "duplicate_group IS NOT NULL" in sql:
+                return {"rows": []}
+            return {"rows": [{"source_id": source_id} for source_id in sorted(served_declarations)]}
+        if "FROM atlas_backend_surveys" in sql:
+            return {
+                "rows": [
+                    {
+                        "survey": {key: value for key, value in survey.items() if key not in ("sources", "matrix")},
+                        "survey_id": "served-survey",
+                    }
+                ]
+            }
+        if "FROM atlas_backend_sources" in sql:
+            return {"rows": []}
+        if "FROM atlas_backend_cells" in sql:
+            return {"rows": [{"cell": cell} for cell in survey["matrix"]]}
+        if "FROM atlas_identity_surveys" in sql:
+            return {"rows": [{"metadata": identity_survey, "survey_id": "served-identity"}]}
+        if "FROM atlas_backend_sources" in sql:
+            return {"rows": []}
+        if "FROM atlas_backend_cells" in sql:
+            return {"rows": []}
+        if "FROM atlas_duplicate_reviews" in sql:
+            return {"rows": []}
+        raise AssertionError(f"unexpected derivation query: {sql}")
+
+    monkeypatch.setattr(plan_derivation, "derived_contract_receipts", _contract_receipts_factory({TARGET_ID: 2}))
+
+    # Capture the census-inputs document the graph's census-inputs step seals: run the
+    # step's executor directly against the sealed declarations document.
+    declarations_document = {"declarations": served_declarations}
+    declarations_path = tmp_path / "declarations-sealed.json"
+    declarations_path.write_text(json.dumps(declarations_document, sort_keys=True))
+    sealed_declarations = {
+        "uri": str(declarations_path),
+        "sha256": hashlib.sha256(declarations_path.read_bytes()).hexdigest(),
+    }
+
+    def fake_seal_census_inputs(declarations, populations, *, release_root, source_revision):
+        seen_census_inputs["declarations"] = dict(declarations)
+        seen_census_inputs["populations"] = dict(populations)
+        document = {
+            "kind": "atlas-population-census-inputs",
+            "source_revision": source_revision,
+            "rows": [
+                {
+                    "source_id": source_id,
+                    "declaration": declarations[source_id],
+                    "population_path": populations[source_id],
+                }
+                for source_id in sorted(declarations)
+            ],
+        }
+        raw = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
+        path = Path(release_root) / "census-inputs.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+        return {
+            "uri": str(path),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "source_count": len(document["rows"]),
+        }
+
+    monkeypatch.setattr(graph_module, "_seal_census_inputs", fake_seal_census_inputs)
+
+    derived = derive_release_plan(
+        config,
+        repo_root=REPO_ROOT,
+        query=query,
+        sources_fn=lambda: layer,
+        prior_catalog_reader=lambda root, q: read_prior_catalog_state(
+            root,
+            q,
+            catalog_factory=_catalog_factory((RETAINED_ID,), declarations=served_declarations),
+            receipt_keys_fn=lambda: {},
+        ),
+        drift_reference_fn=lambda root, revision, declared: GraderDriftReference(
+            main=MainRecipeReference(revision="e" * 40, merge_base=revision),
+            sources={
+                source_id: SealedRecipeReference(source_id=source_id, converter_revision=revision)
+                for source_id in declared
+            },
+        ),
+    )
+
+    plan = ReleasePlan.model_validate(derived.plan_document)
+    assert plan.recut is True
+    assert plan.targets == (TARGET_ID,)
+
+    # The graph's census-inputs step seals the incremental document: the new
+    # admissions' rows only.
+    lowered = release_graph(plan)
+    assert lowered.stages["census_inputs"] is not None
+
+    def read_ref_stub(ref):
+        document = json.loads(Path(ref.uri).read_text())
+        assert hashlib.sha256(Path(ref.uri).read_bytes()).hexdigest() == ref.sha256
+        return document["declarations"]
+
+    config_document = {
+        "populations": plan.populations,
+        "release_root": str(tmp_path / "release"),
+        "source_revision": plan.source_revision,
+        "recut": plan.recut,
+        "targets": list(plan.targets),
+        "declarations": sealed_declarations,
+    }
+    monkeypatch.setattr(graph_module, "read_ref", read_ref_stub)
+    graph_module._execute_census_inputs(config_document)
+    assert sorted(seen_census_inputs["declarations"]) == [TARGET_ID]
+    assert sorted(seen_census_inputs["populations"]) == [TARGET_ID]
+
+
+def _recut_query(served_declarations: dict[str, dict]):
+    """The applet SQL fakes for a re-cut derivation over the fixture survey documents."""
+    survey = {
+        "catalog_root": "s3://example/catalog",
+        "snapshot_id": "assembly-served-prior-v1",
+        "generated_at": "2026-11-23T00:00:00Z",
+        "git_revision": "c" * 40,
+        "schema_sha256": "0" * 64,
+        "runtime_defaults": {
+            "agent": {
+                "network": "deny",
+                "cpus": 1,
+                "memory_mb": 512,
+                "storage_mb": 1024,
+                "gpus": 0,
+                "user": None,
+                "startup_timeout": 60.0,
+                "cleanup_timeout": 30.0,
+            },
+            "grader": {
+                "network": "deny",
+                "cpus": 1,
+                "memory_mb": 512,
+                "storage_mb": 1024,
+                "gpus": 0,
+                "user": None,
+                "startup_timeout": 60.0,
+                "cleanup_timeout": 30.0,
+            },
+        },
+        "matrix": [
+            {"backend": backend, "requirement": requirement, "support": "supported", "evidence": [], "note": ""}
+            for backend in sorted({b.value for b in Backend} | {"iris"})
+            for requirement in [r.value for r in Requirement]
+        ],
+        "deployment_limits": {},
+        "deployment_classes": {},
+        "sources": [],
+    }
+    identity_survey = {
+        "catalog_root": "s3://example/catalog",
+        "snapshot_id": "assembly-served-prior-v1",
+        "generated_at": "2026-11-23T00:00:00Z",
+        "fingerprints": {},
+        "reviews": [],
+        "groups": [],
+        "judge": None,
+    }
+
+    def query(sql: str, parameters: dict) -> dict:
+        if "FROM atlas_current" in sql:
+            return {"rows": [{"load_id": PRIOR_LOAD_ID}]}
+        if "FROM curriculum_current" in sql:
+            return {"rows": [{"load_id": PRIOR_CURRICULUM_LOAD_ID}]}
+        if "FROM atlas_review_current" in sql:
+            return {"rows": []}
+        if "FROM atlas_sources" in sql:
+            if "declaration->>'status'" in sql:
+                return {"rows": [{"source_id": source_id} for source_id in sorted(served_declarations)]}
+            if "source_fingerprint IS NOT NULL" in sql:
+                return {"rows": []}
+            if "duplicate_group IS NOT NULL" in sql:
+                return {"rows": []}
+            return {"rows": [{"source_id": source_id} for source_id in sorted(served_declarations)]}
+        if "FROM atlas_backend_surveys" in sql:
+            return {"rows": [{"survey": dict(survey), "survey_id": "served-survey"}]}
+        if "FROM atlas_identity_surveys" in sql:
+            return {"rows": [{"metadata": identity_survey, "survey_id": "served-identity"}]}
+        if "FROM atlas_backend_sources" in sql:
+            return {"rows": []}
+        if "FROM atlas_backend_cells" in sql:
+            return {"rows": [{"cell": cell} for cell in survey["matrix"]]}
+        if "FROM atlas_duplicate_reviews" in sql:
+            return {"rows": []}
+        raise AssertionError(f"unexpected derivation query: {sql}")
+
+    return query
+
+
+def test_deliberate_exclusion_is_not_a_target(tmp_path, frozen_layer, deployment, monkeypatch):
+    """A policy-listed deliberate exclusion is neither a target nor a removal: the
+    frozen layer's re-pin is not adopted (the release keeps the served row), the
+    source stays in the expected source count, and the plan records the exclusion."""
+    layer = _source_layer(tmp_path, (RETAINED_ID, TARGET_ID))
+    prior = _prior_pins(tmp_path, _declaration_dump(layer))
+    config = _config(prior, prior_snapshot_id="assembly-config-prior-snapshot-v1")
+    served_declarations = _declaration_dump(layer)
+
+    # the frozen layer re-pins the retained source (the openswe 20261127a situation)
+    drifted = layer[RETAINED_ID].declaration.model_copy(update={"dataset_id": "fixture-drifted"})
+    layer[RETAINED_ID] = SimpleNamespace(info=layer[RETAINED_ID].info, declaration=drifted)
+
+    monkeypatch.setattr(plan_derivation, "DELIBERATE_EXCLUSIONS", {RETAINED_ID: "fixture reason"})
+    monkeypatch.setattr(plan_derivation, "derived_contract_receipts", _contract_receipts_factory({TARGET_ID: 2}))
+    derived = derive_release_plan(
+        config,
+        repo_root=REPO_ROOT,
+        query=_recut_query(served_declarations),
+        sources_fn=lambda: layer,
+        prior_catalog_reader=lambda root, q: read_prior_catalog_state(
+            root,
+            q,
+            # the catalog serves only the retained source: TARGET_ID is a genuine
+            # admission, RETAINED_ID the drifted re-pin the policy excludes
+            catalog_factory=_catalog_factory((RETAINED_ID,), declarations=served_declarations),
+            receipt_keys_fn=lambda: {},
+        ),
+        drift_reference_fn=lambda root, revision, declared: GraderDriftReference(
+            main=MainRecipeReference(revision="e" * 40, merge_base=revision),
+            sources={
+                source_id: SealedRecipeReference(source_id=source_id, converter_revision=revision)
+                for source_id in declared
+            },
+        ),
+    )
+
+    plan = ReleasePlan.model_validate(derived.plan_document)
+    plan.validate_shape()
+    assert plan.deliberate_exclusions == (RETAINED_ID,)
+    assert plan.targets == (TARGET_ID,)
+    assert plan.expected_source_count == 2
+
+
+def test_served_survey_reconstruction_keyset_pages():
+    """The reconstruction's fingerprint read walks the keyset pages: the first page
+    binds no :after, later pages resume after the last row id, and every row lands."""
+    fingerprint_rows = [{"id": f"Marin:source-{index:03d}", "source_fingerprint": None} for index in range(150)]
+    calls: list[tuple[str, dict]] = []
+
+    backend_survey = {
+        "catalog_root": "s3://example/catalog",
+        "snapshot_id": "assembly-served-prior-v1",
+        "generated_at": "2026-11-23T00:00:00Z",
+        "git_revision": "c" * 40,
+        "schema_sha256": "0" * 64,
+        "runtime_defaults": {},
+        "matrix": [
+            {"backend": backend, "requirement": requirement, "support": "supported", "evidence": [], "note": ""}
+            for backend in sorted({b.value for b in Backend} | {"iris"})
+            for requirement in [r.value for r in Requirement]
+        ],
+        "deployment_limits": {},
+        "deployment_classes": {},
+        "sources": [],
+    }
+
+    def query(sql: str, parameters: dict) -> dict:
+        calls.append((sql, dict(parameters)))
+        if "FROM atlas_backend_surveys" in sql:
+            return {"rows": [{"survey": dict(backend_survey), "survey_id": "s"}]}
+        if "FROM atlas_backend_sources" in sql:
+            return {"rows": []}
+        if "FROM atlas_backend_cells" in sql:
+            return {"rows": [{"cell": cell} for cell in backend_survey["matrix"]]}
+        if "FROM atlas_identity_surveys" in sql:
+            return {
+                "rows": [
+                    {
+                        "metadata": {
+                            "catalog_root": "s3://example/catalog",
+                            "snapshot_id": "assembly-served-prior-v1",
+                            "generated_at": "2026-11-23T00:00:00Z",
+                            "judge": None,
+                        },
+                        "survey_id": "i",
+                    }
+                ]
+            }
+        if "source_fingerprint IS NOT NULL" in sql:
+            after = parameters.get("after")
+            rows = [row for row in fingerprint_rows if after is None or row["id"] > after]
+            return {"rows": rows[: parameters["limit"]]}
+        if "FROM atlas_duplicate_reviews" in sql:
+            return {"rows": []}
+        if "duplicate_group IS NOT NULL" in sql:
+            return {"rows": []}
+        raise AssertionError(f"unexpected reconstruction query: {sql}")
+
+    backend, identity = plan_derivation.reconstruct_prior_surveys(query, "load-1")
+
+    fingerprint_calls = [params for sql, params in calls if "source_fingerprint IS NOT NULL" in sql]
+    assert len(fingerprint_calls) == 3
+    assert "after" not in fingerprint_calls[0]
+    assert [params.get("after") for params in fingerprint_calls[1:]] == ["Marin:source-063", "Marin:source-127"]
+    assert all(params["limit"] == 64 for params in fingerprint_calls)
+    assert len(identity["fingerprints"]) == 150
+    assert len(backend["matrix"]) == len(backend_survey["matrix"]) and backend["sources"] == []

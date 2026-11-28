@@ -19,6 +19,11 @@ from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
 
 from taskcompendium.convert.answers import exact_answer_task, source_defect
+from taskcompendium.grading_environment import (
+    GradingEnvironmentMode,
+    GradingEnvironmentStatus,
+    assess_grading_environment,
+)
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -444,6 +449,55 @@ def test_conversion_rejects_split_workspace_grading_and_retains_assessment(tmp_p
     assert record["grading_environment"]["required"] == "shared"
     assert record["grading_environment"]["declared"] == "separate"
     assert result.grading_environment["status_counts"] == {"mismatch": 1}
+
+
+def paper_contract_task(row: RawRow, _context: ConversionContext) -> TaskSpec:
+    """A file answer graded by a shipped script over the task's captured declared outputs."""
+    task = exact_answer_task(row, prompt="Answer from the paper", answers=("fixed",), ignore_case=False)
+    assert isinstance(task, TaskSpec)
+    environment = EnvironmentRequirements(
+        docker_image="python@sha256:" + "a" * 64, command_semantics=CommandSemantics.LINUX_PROCESS
+    )
+    return TaskSpec.model_validate(
+        {
+            **task.model_dump(),
+            "answer_type": AnswerType.FILE,
+            "environment_requirements": environment,
+            "output_paths": ("/app/answer.json",),
+            "grader": ScriptGrader(argv=("python", "/tests/grade.py"), environment=environment, answer_path=None),
+            "resources": ResourceGroups(worker=(inline_resource("app/paper.json", b"public paper"),)),
+        }
+    )
+
+
+def test_conversion_accepts_captured_file_grading_with_worker_resources(tmp_path: Path):
+    """A script grader with no extracted answer grades the staged captured declared output files."""
+    row = RawRow(
+        "paper", Source(dataset="papers", revision="pinned", row="0", importer_revision="1"), {"workspace": False}
+    )
+    converted = convert_raw_row(row, paper_contract_task, ConversionContext(inputs={}, grader_environment=None))
+    assert isinstance(converted.result, NormalizedTask)
+    task = converted.result.task
+    assert task.answer_type is AnswerType.FILE
+    assert resource_bytes(task.resources.worker[0]) == b"public paper"
+    assessment = assess_grading_environment(task)
+    assert assessment.required is GradingEnvironmentMode.SEPARATE
+    assert assessment.declared is GradingEnvironmentMode.SEPARATE
+    assert assessment.status is GradingEnvironmentStatus.MATCHED
+    with ZephyrContext(client=LocalClient(), max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+        result = write_conversion(
+            Dataset.from_list([converted]),
+            context,
+            str(tmp_path / "output"),
+            declared_task_format=TaskFormat.TASKSPEC,
+        )
+    (record,) = [row for shard in Path(result.normalized_path).glob("*.parquet") for row in load_parquet(str(shard))]
+    assert record["task_json"] is not None
+    assert record["grading_environment"]["required"] == "separate"
+    assert record["grading_environment"]["status"] == "matched"
+    assert result.grading_environment["status_counts"] == {"matched": 1}
+    carried = TaskSpec.model_validate_json(record["task_json"])
+    assert resource_bytes(carried.resources.worker[0]) == b"public paper"
 
 
 def test_conversion_accepts_independent_stdio_grading():

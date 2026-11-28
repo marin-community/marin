@@ -138,23 +138,39 @@ SAMPLE_SQL = (
 , selected_tasks AS (
     SELECT t.load_id,t.source_id,t.task_id,t.content_hash,t.description_status
     FROM curriculum_tasks t JOIN selected_sources s USING (load_id, source_id)
-    WHERE (:node_id='' OR EXISTS (
-        SELECT 1 FROM curriculum_matches area_match
-        WHERE area_match.load_id=t.load_id AND area_match.source_id=t.source_id
-            AND area_match.task_id=t.task_id AND area_match.subject_id=:subject_id
-            AND area_match.membership_similarity >= CAST(:subject_similarity AS DOUBLE PRECISION)))
+    WHERE :node_id=''
+    UNION ALL
+    -- An area selection starts from the subject's matches (the area index) and joins
+    -- its tasks by key. A filter under an OR has no row estimate, so the planner sized
+    -- the selection at half the load and scanned it (R40, over 60 s at worst).
+    SELECT t.load_id,t.source_id,t.task_id,t.content_hash,t.description_status
+    FROM curriculum_matches area_match
+    JOIN curriculum_tasks t ON t.load_id=area_match.load_id
+        AND t.source_id=area_match.source_id AND t.task_id=area_match.task_id
+    JOIN selected_sources s ON s.load_id=t.load_id AND s.source_id=t.source_id
+    WHERE :node_id<>'' AND area_match.load_id=:load_id AND area_match.subject_id=:subject_id
+        AND area_match.membership_similarity >= CAST(:subject_similarity AS DOUBLE PRECISION)
 ), members AS (
     SELECT t.source_id, t.task_id, t.content_hash, m.subject_id, m.capability_id,
         m.capability_similarity
-    FROM selected_tasks t JOIN curriculum_matches m USING (load_id, source_id, task_id)
+    FROM selected_tasks t JOIN curriculum_matches m ON m.load_id=:load_id
+        AND m.source_id=t.source_id AND m.task_id=t.task_id
     WHERE m.membership_similarity >= CAST(:subject_similarity AS DOUBLE PRECISION)
 ), placements AS (
     SELECT source_id, task_id, content_hash, subject_id, 'subject:' || subject_id AS node_id FROM members
     UNION ALL
-    SELECT m.source_id, m.task_id, m.content_hash, m.subject_id, a.ancestor_id AS node_id
-    FROM members m JOIN curriculum_ancestors a ON a.load_id=:load_id
+    -- The ancestor arm reads the match table, not the members CTE: a CTE carries no
+    -- statistics, and its one-row estimate made the planner rescan it per ancestor row
+    -- (R40, over 60 s for the largest subjects). Every match read binds the load id so the
+    -- primary-key and area indexes serve one load, never every retained load.
+    SELECT m.source_id, m.task_id, t.content_hash, m.subject_id, a.ancestor_id AS node_id
+    FROM curriculum_matches m
+    JOIN curriculum_ancestors a ON a.load_id=m.load_id
         AND a.subject_id=m.subject_id AND a.node_id=m.capability_id
-    WHERE m.capability_similarity >= CAST(:capability_similarity AS DOUBLE PRECISION)
+    JOIN selected_tasks t ON t.source_id=m.source_id AND t.task_id=m.task_id
+    WHERE m.load_id=:load_id
+        AND m.membership_similarity >= CAST(:subject_similarity AS DOUBLE PRECISION)
+        AND m.capability_similarity >= CAST(:capability_similarity AS DOUBLE PRECISION)
         AND a.ancestor_id <> 'subject:' || m.subject_id
 ), states AS (
     SELECT t.source_id, t.task_id, t.content_hash, CASE
@@ -166,7 +182,8 @@ SAMPLE_SQL = (
         WHEN COUNT(m.task_id) FILTER (
             WHERE m.membership_similarity >= CAST(:subject_similarity AS DOUBLE PRECISION))>0 THEN 'subject_only'
         ELSE 'out_of_scope' END AS outcome
-    FROM selected_tasks t LEFT JOIN curriculum_matches m USING (load_id, source_id, task_id)
+    FROM selected_tasks t LEFT JOIN curriculum_matches m ON m.load_id=:load_id
+        AND m.source_id=t.source_id AND m.task_id=t.task_id
     GROUP BY t.source_id, t.task_id, t.content_hash, t.description_status
 )
 

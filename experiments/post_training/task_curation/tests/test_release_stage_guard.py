@@ -51,6 +51,12 @@ def test_scanner_flags_load_id_and_snapshot_literals(tmp_path):
     }
 
 
+@pytest.mark.parametrize("release", ["atlas-2026.11.27", "atlas-2026.11.27.2"])
+def test_scanner_refuses_calendar_release_literals_in_stage_code(tmp_path, release):
+    source = _write(tmp_path / "stage.py", f'ROOT = "s3://bucket/{release}/outputs"\n')
+    assert [row.value for row in guard.scan_release_literals([source])] == [f"s3://bucket/{release}/outputs"]
+
+
 def test_scanner_allows_benign_source(tmp_path):
     source = _write(tmp_path / "benign.py", _BENIGN)
     assert guard.scan_release_literals([source]) == []

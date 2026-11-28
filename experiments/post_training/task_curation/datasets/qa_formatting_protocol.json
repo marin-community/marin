@@ -1,0 +1,41 @@
+{
+  "repo": "NVIDIA-NeMo/Gym",
+  "revision": "e597c962af405a9c2c6aa91296be51fdcc2f44bb",
+  "files": {
+    "LICENSE": {
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "git_blob": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+      "bytes": 11357
+    },
+    "resources_servers/abstention/app.py": {
+      "sha256": "e82ac792ed31d817850049e9e9636a7f48e9d8aa0c93743d3ef987f5e97b3c84",
+      "git_blob": "c2fff0e8115d4de5707489db356615b2c55fb4eb",
+      "bytes": 16509
+    },
+    "resources_servers/abstention/configs/abstention.yaml": {
+      "sha256": "ee9f8e787817173776545d9e27d360933f54ece55ba97ba0204c02d6a5dcc034",
+      "git_blob": "f8ac49fb83d5eea07d67934e226dd84a1993295d",
+      "bytes": 2258
+    },
+    "resources_servers/format_verification/configs/citation_format.yaml": {
+      "sha256": "4b97e927cb12a0466323105fab21eff5d01a94841fe5733c80421d635523c491",
+      "git_blob": "8908d67152a7295588139432285e0b3a73c18688",
+      "bytes": 1406
+    },
+    "resources_servers/format_verification/configs/freeform_formatting.yaml": {
+      "sha256": "fa6284b7a2fb124026d6dc2cab565a2049832a00660e8a5ce19a709de7fe24e6",
+      "git_blob": "222eaaf5e1a323584bdbd44c31d50603b6f0ad2b",
+      "bytes": 1452
+    },
+    "resources_servers/format_verification/app.py": {
+      "sha256": "6c207597c556c86052d6d3d69a37771681fb92834744811b846656f4c19cea79",
+      "git_blob": "f277dd559a4b004f85e51a05dbb381f065294e45",
+      "bytes": 5335
+    }
+  },
+  "grader_image": "ghcr.io/marin-community/iris-task@sha256:c646ef8b571571edfc96c75fd9c8cc712ad286b61b33781070bdc29ab9f9a6ab",
+  "abstention_original_judge": "genrm_model (deployment alias, no checkpoint in native config)",
+  "abstention_bound_tier": "medium",
+  "adaptation": "Native pure parsing helpers copied without function-body changes; format reward reuses existing equivalent vendored Gym port. Native request/answer/resources unchanged. HTTP chat transport replaces Responses API envelope only. No physical or semantic-judge success claimed by conversion.",
+  "native_judge_prompt_sha256": "67c1b23042b6a089233ce8e2dd59702d1ae4ea030488e1ca5d9bf9e064336c9b"
+}

@@ -172,6 +172,9 @@ function row(item) {
   if (item.stage) status.append(chipRow(item.stage, 'stage'));
   if (item.replacement_source_id) status.append(replacementLink(item));
   tr.append(status, columnCell(item.use, 'use'), columnCell(item.method_tags, 'method'));
+  const owner = node('td', item.owner || '—');
+  if (item.owner) owner.title = `Owning lane: ${item.owner}`;
+  tr.append(owner);
   const claims = item.reasons || [];
   const reasons = node('td');
   if (claims.length) {
@@ -268,6 +271,26 @@ function needsRuling(rows) {
   }
 }
 
+// The advisory re-seal queue (ruling 2026-11-26): train publications whose
+// stored graders predate main's recipe fixes, with the main commits and PRs
+// that touch the changed files. Never gates anything; the queue drives re-seal.
+function graderDrift(extras) {
+  const rows = extras.grader_drift || [];
+  if (!rows.length) return;
+  const section = $('grader-drift');
+  section.hidden = false;
+  const list = $('grader-drift-list');
+  for (const item of rows) {
+    const entry = node('li');
+    const fixes = (item.fix_commits || [])
+      .map(commit => commit.pr ? `#${commit.pr}` : commit.sha.slice(0, 7))
+      .join(', ');
+    entry.append(node('strong', item.display_name || item.id), node('span', ` — ${item.id}`));
+    if (fixes) entry.append(node('span', ` · main fixes: ${fixes}`));
+    list.append(entry);
+  }
+}
+
 async function load() {
   const [catalog, extras, taxonomy] = await Promise.all([
     json('api/source-statuses'),
@@ -312,6 +335,13 @@ async function load() {
     byId.set(item.id, item);
   }
   state.rows = [...byId.values()];
+  // The owners overlay (atlas-2026.11.27): every unresolved row renders its owning
+  // lane. Queued extras rows carry owner on the row; served catalog rows take it
+  // from the extras' owners map.
+  const owners = extras.owners || {};
+  for (const item of state.rows) {
+    if (!item.owner) item.owner = owners[item.id] || null;
+  }
   requireTypedRows(state.rows);
   const generated = Math.max(
     0,
@@ -324,6 +354,7 @@ async function load() {
   counts();
   render();
   needsRuling(state.rows);
+  graderDrift(extras);
   $('message').textContent = '';
 }
 window.addEventListener('DOMContentLoaded', () => {

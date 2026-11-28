@@ -86,17 +86,49 @@ HARBOR_TEST_EXIT = "/logs/verifier/exit-code.txt"
 HARBOR_VERDICT = "/logs/verifier/verdict.json"
 HARBOR_REWARD_JSON = "/logs/verifier/reward.json"
 HARBOR_REWARD_TEXT = "/logs/verifier/reward.txt"
+HARBOR_EVAL_OUTPUT = "/logs/verifier/eval-output.txt"
 COPIED_TEST_STDOUT = "/source-test-output.txt"
 COPIED_TEST_EXIT = "/source-exit-code.txt"
 COPIED_VERDICT = "/source-verdict.json"
 COPIED_REWARD_JSON = "/source-reward.json"
 COPIED_REWARD_TEXT = "/source-reward.txt"
+COPIED_EVAL_OUTPUT = "/source-eval-output.txt"
 REWARD_PATH = "/converted-verdict.json"
 REWARD_JSON_PATH = "/converted-reward.json"
 REWARD_TEXT_PATH = "/converted-reward.txt"
+REWARD_DIVERGENCE_PATH = "/converted-reward-divergence.txt"
 CONVERSION_PROTOCOL = "harbor-cohort-taskspec-v1"
 HARBOR_VERIFIER_TIMEOUT = 600.0
 _ROOT_USERS = frozenset({"root", "0"})
+
+# Close the tamper race (coordinator ruling 2026-11-26: harden before OpenSWE
+# admission): kill every process the sandbox still carries that is neither this
+# command's own ancestry nor the sandbox's service infrastructure, before the
+# verifier runs and before the artifact copies. Daytona provides no confirmed
+# scoped descendant teardown, so an agent process that outlived its command
+# could otherwise rewrite the reward file while the artifacts copy. Best effort
+# by design: a kill failure must never fail grading, and the sandbox's own
+# services (the Daytona agent and toolbox) survive by cmdline identity.
+KILL_AGENT_LEFTOVERS_SCRIPT = r"""ppid_of() { awk '/^PPid:/{print $2}' "/proc/$1/status" 2>/dev/null; }
+set +e
+self=$$
+ancestors=" "
+walk=$self
+while [ -n "$walk" ] && [ "$walk" != "1" ] && [ "$walk" != "0" ]; do
+  ancestors="$ancestors$walk "
+  walk=$(ppid_of "$walk")
+done
+for entry in /proc/[0-9]*; do
+  pid=${entry#/proc/}
+  case "$ancestors" in *" $pid "*) continue ;; esac
+  [ "$pid" = "1" ] && continue
+  cmdline=$(cat "$entry/cmdline" 2>/dev/null | tr '\0' ' ')
+  [ -n "$cmdline" ] || continue
+  case "$cmdline" in *daytona*|*toolbox*|*shellbox*) continue ;; esac
+  kill -KILL "$pid" 2>/dev/null
+done
+exit 0
+"""
 
 
 class CohortConversionRejected(ValueError):
@@ -185,7 +217,31 @@ def _restore_commands(task: TaskSpec, staged: list[StagedFile]) -> tuple[Verifie
     )
 
 
-def _reward_files(has_verifier_config: bool) -> tuple[tuple[VerifierArtifact, ...], FileReward, VerifierCommand]:
+# The OpenSWE fail-closed marker rule recomputed from the copied eval output
+# (coordinator ruling 2026-11-26): a planted or rewritten reward that disagrees
+# with the output's own verdict scores zero and leaves the divergence beside
+# it. Runs on the grading machine over the copied artifacts; the eval output is
+# the exact bytes the verifier captured (the profile's verifier cats it into the
+# stdout as well, so the stdout is the fallback source).
+OPENSWE_RECOMPUTE_SCRIPT = r"""if [ -f /source-reward.txt ]; then
+  out=/source-eval-output.txt
+  [ -f "$out" ] || out=/source-test-output.txt
+  total=$(grep -c '^OPENSWE_EXIT_CODE=' "$out" || true)
+  zero=$(grep -c '^OPENSWE_EXIT_CODE=0$' "$out" || true)
+  expected=0
+  if [ "$total" -eq 1 ] && [ "$zero" -eq 1 ]; then expected=1; fi
+  recorded=$(cat /source-reward.txt 2>/dev/null)
+  if [ "$recorded" != "$expected" ]; then
+    printf 'recorded=%s recomputed=%s\n' "${recorded-<missing>}" "$expected" > /converted-reward-divergence.txt
+    echo 0 > /converted-reward.txt
+  fi
+fi
+"""
+
+
+def _reward_files(
+    has_verifier_config: bool, recompute: str | None = None
+) -> tuple[tuple[VerifierArtifact, ...], FileReward, VerifierCommand]:
     """Copy Harbor's reward artifacts and read them at the grader's own reward paths.
 
     The grading runtime clears the reward-file paths before the grader command
@@ -197,6 +253,13 @@ def _reward_files(has_verifier_config: bool) -> tuple[tuple[VerifierArtifact, ..
     the copy (and so the grading) failed. The test script's own exit code is
     copied beside the reward for diagnostics, exactly as Harbor records it in
     the control detail.
+
+    ``recompute`` hardens the fallback's text path: the grader's argv re-derives
+    the expected verdict from the copied eval output and scores zero on any
+    disagreement with the copied reward file, so a planted or rewritten reward
+    cannot score (the divergence lands beside the reward as evidence). A family
+    without a verified derivation rule keeps the plain copy; the mechanism is
+    per-family opt-in.
     """
     skipped = MissingArtifactPolicy.SKIP
     exit_artifact = (
@@ -216,6 +279,7 @@ def _reward_files(has_verifier_config: bool) -> tuple[tuple[VerifierArtifact, ..
         VerifierArtifact(source=HARBOR_TEST_STDOUT, target=COPIED_TEST_STDOUT, kind=ArtifactKind.FILE, missing=skipped),
         VerifierArtifact(source=HARBOR_REWARD_JSON, target=COPIED_REWARD_JSON, kind=ArtifactKind.FILE, missing=skipped),
         VerifierArtifact(source=HARBOR_REWARD_TEXT, target=COPIED_REWARD_TEXT, kind=ArtifactKind.FILE, missing=skipped),
+        VerifierArtifact(source=HARBOR_EVAL_OUTPUT, target=COPIED_EVAL_OUTPUT, kind=ArtifactKind.FILE, missing=skipped),
         *exit_artifact,
     )
     reward = FileReward(
@@ -224,10 +288,14 @@ def _reward_files(has_verifier_config: bool) -> tuple[tuple[VerifierArtifact, ..
             RewardFile(path=REWARD_TEXT_PATH, format=RewardFileFormat.NUMBER),
         )
     )
+    recompute_text = recompute or ":"
     argv = (
         "bash",
         "-c",
-        f"cp {COPIED_REWARD_JSON} {REWARD_JSON_PATH} 2>/dev/null || cp {COPIED_REWARD_TEXT} {REWARD_TEXT_PATH}",
+        f"if cp {COPIED_REWARD_JSON} {REWARD_JSON_PATH} 2>/dev/null; then :; else\n"
+        f"cp {COPIED_REWARD_TEXT} {REWARD_TEXT_PATH}\n"
+        f"{recompute_text}\n"
+        f"fi",
     )
     return artifacts, reward, VerifierCommand(argv=argv, cwd="/")
 
@@ -288,6 +356,15 @@ def convert_cohort_task(task: TaskSpec, *, input_task_sha256: str) -> CohortConv
         for block in verifier["collect"]
     )
     workdir = environment["workdir"] or "/"
+    # The OpenSWE profile's fail-closed verifier carries its own marker rule; its
+    # copied eval output re-derives the verdict at the reward path (the grader
+    # hardening: a planted reward that disagrees scores zero).
+    recompute = (
+        OPENSWE_RECOMPUTE_SCRIPT
+        if any(file.path == "tests/eval_script.sh" for file in task.resources.verifier)
+        else None
+    )
+    artifacts, reward, guard = _reward_files(has_verifier_config, recompute)
     # Native reward-file result mode: the verifier log directory is recreated
     # clean (the cohort images may carry a recorded trial's stale verdict —
     # grading it would be a false pass), the script runs unchanged even when
@@ -305,7 +382,6 @@ def convert_cohort_task(task: TaskSpec, *, input_task_sha256: str) -> CohortConv
         cwd=workdir,
         env=verifier_env,
     )
-    artifacts, reward, guard = _reward_files(has_verifier_config)
     grader = ScriptGrader(
         argv=guard.argv,
         cwd=guard.cwd,
@@ -317,6 +393,7 @@ def convert_cohort_task(task: TaskSpec, *, input_task_sha256: str) -> CohortConv
         ),
         answer_path=None,
         collect=(
+            VerifierCommand(argv=("bash", "-c", KILL_AGENT_LEFTOVERS_SCRIPT), cwd="/"),
             *_restore_commands(task, staged),
             *chmod_commands,
             *collect_blocks,

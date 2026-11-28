@@ -29,10 +29,7 @@ from experiments.post_training.task_curation.datasets.lexical_measurements impor
 from experiments.post_training.task_curation.lexical_binding import LexicalMeasurementReceipt
 from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
 from experiments.post_training.task_curation.license_publication import (
-    LicensePublication,
     check_publication,
-    licensed_dataset_card,
-    prepare_license_publication,
     require_publication_license,
 )
 from experiments.post_training.task_curation.native_quick import source_slug
@@ -220,9 +217,7 @@ def verify_retained(tasks: Path, expected: dict[str, tuple[str, str]]) -> str:
     return digest.hexdigest()
 
 
-def dataset_card(
-    plan: ReleasePlan, *, population: str, count: int, evidence_root: str, publication: LicensePublication
-) -> str:
+def retention_card_body(plan: ReleasePlan, *, population: str, count: int, evidence_root: str) -> str:
     body = (
         f"# {plan.source_id}\n\n"
         f"Private TaskCompendium {population}; {count:,} tasks. Use: {plan.lexical_use.value}.\n\n"
@@ -240,7 +235,7 @@ def dataset_card(
         "Retained TaskSpec and runtime bytes are unchanged. Readback verifies every retained content hash "
         "and count. This mechanical selection supplies no new oracle, execution or quality qualification.\n"
     )
-    return licensed_dataset_card(body, publication, pretty_name="Atlas TaskCompendium retention release")
+    return body
 
 
 def publish_plan(
@@ -251,6 +246,7 @@ def publish_plan(
     raw_archive: RawSourceArchive | None,
     *,
     measurement_receipt: LexicalMeasurementReceipt | None = None,
+    index_path: Path = LICENSE_RECEIPT_INDEX,
 ) -> dict:
     """Publish one approved selection and its immutable regional readback receipt.
 
@@ -262,9 +258,7 @@ def publish_plan(
     if plan.data_restriction is None:
         raise ValueError(f"Staged release plan declares no restriction tier: {plan.source_id}")
     require_public_data(plan.data_restriction, plan.source_id, plan.lexical_use.value + " release")
-    require_publication_license(
-        license_receipt, plan.source_id, plan.source_dataset_id, plan.source_revision, plan.lexical_use.value
-    )
+    require_publication_license(license_receipt, plan.source_id, plan.source_dataset_id, plan.lexical_use.value)
     snapshot_required = (
         plan.lexical_use is LexicalUse.TRAIN
         and plan.raw_lexical_count > 0
@@ -332,7 +326,6 @@ def publish_plan(
         raise ValueError(f"Frozen lexical measurement differs: {plan.source_id}")
     with TemporaryDirectory(prefix="atlas-retention-") as scratch:
         root = Path(scratch)
-        publication = prepare_license_publication(license_receipt, root, use=plan.lexical_use.value)
         tasks = root / "tasks.parquet"
         original = root / "original.parquet" if snapshot_required else None
         selected = filter_population(plan, metadata["specs_output_dir"], tasks, original)
@@ -357,52 +350,61 @@ def publish_plan(
             "repo": raw_pin.repo if raw_pin is not None else plan.source_dataset_id,
             "revision": raw_pin.revision if raw_pin is not None else plan.source_revision,
         }
+        publish_kwargs = {
+            "data_restriction": plan.data_restriction,
+            "source_id": plan.source_id,
+            "use": plan.lexical_use.value,
+            "pretty_name": "Atlas TaskCompendium retention release",
+            "index_path": index_path,
+        }
         if original is not None:
             card.write_text(
-                dataset_card(
+                retention_card_body(
                     plan,
                     population="unfiltered converted archive",
                     count=plan.raw_count,
                     evidence_root=str(output),
-                    publication=publication,
                 )
             )
             original_repo = repo.replace("-retained-", "-original-")
-            original_revision = publish(
+            original_publication = publish(
                 original,
                 card,
                 original_repo,
-                data_restriction=plan.data_restriction,
-                evidence_files=(manifest, *publication.notice_files),
-            )
-            original_license = check_publication(
-                plan.source_id, original_repo, original_revision, plan.lexical_use.value
+                evidence_files=(manifest,),
+                **publish_kwargs,
             )
             (output / "converted-original-pin.json").write_text(
-                json.dumps({"repo": original_repo, "revision": original_revision, "license_check": original_license})
+                json.dumps(
+                    {
+                        "repo": original_publication.repo,
+                        "revision": original_publication.revision,
+                        "license_check": original_publication.license_check,
+                    }
+                )
                 + "\n",
                 auto_mkdir=True,
             )
         card.write_text(
-            dataset_card(
+            retention_card_body(
                 plan,
                 population="retained release",
                 count=plan.retained_count,
                 evidence_root=str(output),
-                publication=publication,
             )
         )
         duplicate_manifest, combined_manifest = root / "duplicates.parquet", root / "combined-drops.parquet"
         copy(plan.drop_manifest_uri, str(duplicate_manifest))
         copy(plan.combined_drop_manifest_uri, str(combined_manifest))
-        revision = publish(
+        publication = publish(
             tasks,
             card,
             repo,
-            data_restriction=plan.data_restriction,
-            evidence_files=(manifest, duplicate_manifest, combined_manifest, *publication.notice_files),
+            evidence_files=(manifest, duplicate_manifest, combined_manifest),
+            **publish_kwargs,
         )
-        final_license = check_publication(plan.source_id, repo, revision, plan.lexical_use.value)
+        revision = publication.revision
+        final_license = publication.license_check
         downloaded = Path(hf_hub_download(repo, "tasks.parquet", repo_type="dataset", revision=revision))
         if verify_retained(downloaded, hashes) != content_sha256:
             raise ValueError(f"Readback content digest differs: {plan.source_id}")
@@ -456,11 +458,7 @@ def main() -> None:
     receipts = read_license_receipts(args.license_receipts)
     for plan in plans:
         require_publication_license(
-            receipts.get(plan.source_id),
-            plan.source_id,
-            plan.source_dataset_id,
-            plan.source_revision,
-            plan.lexical_use.value,
+            receipts.get(plan.source_id), plan.source_id, plan.source_dataset_id, plan.lexical_use.value
         )
     staged_measurements = None
     if args.lexical_receipts is not None:
@@ -483,6 +481,7 @@ def main() -> None:
                 receipts[plan.source_id],
                 raw_archives.get(plan.source_id),
                 measurement_receipt=None if staged_measurements is None else staged_measurements[plan.source_id],
+                index_path=args.license_receipts,
             )
             for plan in plans
         ]

@@ -7,6 +7,7 @@ import json
 from functools import partial
 
 import pytest
+from finestore.rl.curation import TaskFormat
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from shellbox.machine import PackageSpec
@@ -67,7 +68,13 @@ def test_instruction_publication_preserves_prompt_channel_and_private_constraint
             ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context,
         ):
             publish_evaluation_corpus(
-                recipe, protocol, partial(instruction_item, profile=profile), context, str(root), output
+                recipe,
+                protocol,
+                partial(instruction_item, profile=profile),
+                context,
+                str(root),
+                output,
+                declared_task_format=TaskFormat.TASKSPEC,
             )
         (case,) = list(evaluation_cases(output))
     finally:

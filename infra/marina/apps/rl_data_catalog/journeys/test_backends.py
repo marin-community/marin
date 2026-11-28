@@ -3,6 +3,7 @@
 
 """The Backend Evidence page renders the production-backend enum and typed reasons."""
 
+import re
 from urllib.parse import urlencode
 
 from marina.journeys import Journey
@@ -55,3 +56,25 @@ def test_backend_evidence_fails_loudly_on_an_unmapped_blocker(journey: Journey) 
     banner = page.locator("#message")
     expect(banner).to_contain_text("some_mystery_demand")
     expect(page.locator("#fit table")).to_have_count(0)
+
+
+def test_backend_evidence_types_an_unsupported_environment_kind(journey: Journey) -> None:
+    """R40: a production backend's not_applicable environment kind (host image) refused the whole page."""
+    page = journey.page
+    page.goto(f"{journey.origin}/a/{APP_ID}/")
+    expect(page.locator("#rows tr").first).to_be_visible()
+    source = page.evaluate("async () => (await (await fetch('api/source?source_id=Marin%3Aclean')).json())")
+    capabilities = dict(source["backend_capabilities"])
+    fit = dict(capabilities["backends"]["local"])
+    fit["not_applicable"] = {"grader:host_image": 3}
+    capabilities["backends"] = {**capabilities["backends"], "local": fit}
+    page.route(
+        "**/api/source?*",
+        lambda route: route.fulfill(json={**source, "backend_capabilities": capabilities}),
+    )
+    base = page.url.rstrip("/") + "/"
+    page.goto(base + "backends.html#" + urlencode({"source_id": "Marin:clean"}))
+    expect(page.locator("#title")).to_have_text("Marin · clean")
+    expect(page.locator("#message")).not_to_have_class(re.compile("error"))
+    local = page.locator("#fit table tbody tr").filter(has=page.get_by_role("cell", name="LOCAL", exact=True))
+    expect(local.locator(".backends-cell .chip", has_text="Unsupported environment kind")).to_have_count(1)

@@ -3,10 +3,12 @@
 
 """Stage frozen SAMPLE panels and exact per-task reviewer request/response evidence."""
 
+import dataclasses
 import hashlib
 import io
 import json
 import logging
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -322,8 +324,75 @@ def matched_review_rows(query: AppletQuery, sql: str, load_id: str, rows: list[d
         )
 
 
-def load_content_reviews(staged: dict, load_id: str, source_id: str, query: AppletQuery) -> dict[str, int]:
-    """Select a verified panel additively, leaving catalog declarations and old review bytes intact."""
+def panel_row_groups(staged: dict) -> list[tuple[str, list[dict], str]]:
+    """The panel's per-table row groups exactly as the loader inserts them.
+
+    Shared by the loading path and the replay's pre-replay record total, so the
+    two can never disagree about what one panel replays.
+    """
+    key = staged["assessment"]["pipeline_key"]
+    batch_rows = staged.get("batches", [])
+    chunk_rows = []
+    stored_batches = []
+    for row in batch_rows:
+        record = dict(row["record"])
+        encoded = json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        if len(json.dumps(encoded).encode()) + 3 > MAX_BATCH_BYTES:
+            payload = record.pop("payload")
+            chunks = [payload[start : start + 400_000] for start in range(0, len(payload), 400_000)]
+            record["payload_chunks"] = len(chunks)
+            chunk_rows.extend(
+                {"pipeline_key": key, "batch_key": row["batch_key"], "chunk_index": index, "payload": part}
+                for index, part in enumerate(chunks)
+            )
+        stored_batches.append({**row, "record": record, "chunk_count": record.get("payload_chunks", 0)})
+    return [
+        ("atlas_review_batches", stored_batches, "pipeline_key TEXT,batch_key TEXT,record JSONB,chunk_count INTEGER"),
+        ("atlas_review_batch_chunks", chunk_rows, "pipeline_key TEXT,batch_key TEXT,chunk_index INTEGER,payload TEXT"),
+        ("atlas_review_batch_tasks", staged.get("batch_links", []), "pipeline_key TEXT,task_id TEXT,batch_key TEXT"),
+        ("atlas_assessments", [staged["assessment"]], TABLE_COLUMNS["assessments"]),
+        ("atlas_populations", staged["populations"], TABLE_COLUMNS["populations"]),
+        ("atlas_items", staged["items"], TABLE_COLUMNS["items"]),
+        (
+            "atlas_raw_reviews",
+            [{**row, "record": pack_content(row["record"]), "reviewer": row.get("reviewer")} for row in staged["raw"]],
+            "pipeline_key TEXT,task_id TEXT,record JSONB,reviewer JSONB",
+        ),
+    ]
+
+
+REVIEW_TABLES = (
+    "atlas_review_batches",
+    "atlas_review_batch_chunks",
+    "atlas_review_batch_tasks",
+    "atlas_review_current",
+    "atlas_raw_reviews",
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class PreparedReviewPanel:
+    """One staged panel past its validation, ready to insert segment by segment."""
+
+    source_id: str
+    load_id: str
+    key: str
+    staged: dict
+    groups: list[tuple[str, list[dict], str]]
+
+
+def prepare_content_review(
+    staged: dict, load_id: str, source_id: str, query: AppletQuery, *, ensure_tables_: bool = True
+) -> PreparedReviewPanel:
+    """Validate the staged panel against the load's selected source and mark chunk metadata.
+
+    The parallel replay runs this once per panel before any segment inserts: the
+    checks read the load's declarations, the panel-scoped chunk_count update touches
+    only this panel's rows, and the insertable groups are computed from the sealed
+    document alone. ``ensure_tables_=False`` skips the idempotent table DDL — the
+    parallel driver has already run it once for the whole replay, and concurrent
+    ``CREATE TABLE IF NOT EXISTS`` statements race.
+    """
     declarations = query(
         "SELECT declaration FROM atlas_sources WHERE load_id=:load AND id=:source",
         {"load": load_id, "source": source_id},
@@ -356,30 +425,8 @@ def load_content_reviews(staged: dict, load_id: str, source_id: str, query: Appl
         raise ValueError("Original-batch links contain duplicate or unknown reviewed task IDs")
     if any(row["pipeline_key"] != key for row in [*batch_rows, *links]):
         raise ValueError("Original reviewer batches belong to another immutable panel")
-    chunk_rows = []
-    stored_batches = []
-    for row in batch_rows:
-        record = dict(row["record"])
-        encoded = json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-        if len(json.dumps(encoded).encode()) + 3 > MAX_BATCH_BYTES:
-            payload = record.pop("payload")
-            chunks = [payload[start : start + 400_000] for start in range(0, len(payload), 400_000)]
-            record["payload_chunks"] = len(chunks)
-            chunk_rows.extend(
-                {"pipeline_key": key, "batch_key": row["batch_key"], "chunk_index": index, "payload": part}
-                for index, part in enumerate(chunks)
-            )
-        stored_batches.append({**row, "record": record, "chunk_count": record.get("payload_chunks", 0)})
-    ensure_tables(
-        query,
-        (
-            "atlas_review_batches",
-            "atlas_review_batch_chunks",
-            "atlas_review_batch_tasks",
-            "atlas_review_current",
-            "atlas_raw_reviews",
-        ),
-    )
+    if ensure_tables_:
+        ensure_tables(query, REVIEW_TABLES)
     query("ALTER TABLE atlas_review_batches ADD COLUMN IF NOT EXISTS chunk_count INTEGER NOT NULL DEFAULT 0", {})
     # Old chunked records contain only small hash/size/count metadata; avoid detoasting unchunked payloads.
     query(
@@ -389,65 +436,103 @@ def load_content_reviews(staged: dict, load_id: str, source_id: str, query: Appl
         "AND CASE WHEN pg_column_size(record)<1024 THEN record ? 'payload_chunks' ELSE FALSE END",
         {"load": load_id, "key": key},
     )
-    key = staged["assessment"]["pipeline_key"]
-    counts = {}
-    for table, rows, columns in [
-        ("atlas_review_batches", stored_batches, "pipeline_key TEXT,batch_key TEXT,record JSONB,chunk_count INTEGER"),
-        ("atlas_review_batch_chunks", chunk_rows, "pipeline_key TEXT,batch_key TEXT,chunk_index INTEGER,payload TEXT"),
-        ("atlas_review_batch_tasks", links, "pipeline_key TEXT,task_id TEXT,batch_key TEXT"),
-        ("atlas_assessments", [staged["assessment"]], TABLE_COLUMNS["assessments"]),
-        ("atlas_populations", staged["populations"], TABLE_COLUMNS["populations"]),
-        ("atlas_items", staged["items"], TABLE_COLUMNS["items"]),
-        (
-            "atlas_raw_reviews",
-            [{**row, "record": pack_content(row["record"]), "reviewer": row.get("reviewer")} for row in staged["raw"]],
-            "pipeline_key TEXT,task_id TEXT,record JSONB,reviewer JSONB",
-        ),
-    ]:
-        names = ",".join(column.strip().split()[0] for column in columns.split(","))
-        count = 0
-        for body in batches(rows):
-            count += query(
-                f"INSERT INTO {table} (load_id,{names}) SELECT :load,{names} "
-                f"FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS r({columns}) ON CONFLICT DO NOTHING",
-                {"load": load_id, "rows": body},
-            )["row_count"]
-            identities = {
-                "atlas_populations": ("cohort",),
-                "atlas_items": ("task_id",),
-                "atlas_raw_reviews": ("task_id",),
-                "atlas_review_batches": ("batch_key",),
-                "atlas_review_batch_chunks": ("batch_key", "chunk_index"),
-                "atlas_review_batch_tasks": ("task_id",),
-            }.get(table, ())
-            join = " AND ".join(f"stored.{name}=expected.{name}" for name in ("pipeline_key", *identities))
-            fields = names.split(",")
-            stored_fields = ",".join(f"stored.{name}" for name in fields)
-            expected_fields = ",".join(f"expected.{name}" for name in fields)
-            try:
-                matched = matched_review_rows(
-                    query,
-                    f"SELECT COUNT(*) AS matched FROM jsonb_to_recordset(CAST(:rows AS JSONB)) "
-                    f"AS expected({columns}) JOIN {table} stored ON stored.load_id=:load AND {join} "
-                    f"WHERE ROW({stored_fields}) IS NOT DISTINCT FROM ROW({expected_fields})",
-                    load_id,
-                    json.loads(body),
-                )
-            except Exception as error:
-                raise RuntimeError(f"{table} exact readback failed for {key}, {len(json.loads(body))} rows") from error
-            if matched != len(json.loads(body)):
-                raise ValueError(f"Stored {table} differs from its sealed panel")
-        counts[table] = count
-    materialize_cohort_summaries(lambda sql, params: query(sql, params)["rows"], load_id, pipeline_key=key)
+    return PreparedReviewPanel(
+        source_id=source_id, load_id=load_id, key=key, staged=staged, groups=panel_row_groups(staged)
+    )
+
+
+def insert_review_segment(
+    query: AppletQuery,
+    load_id: str,
+    key: str,
+    table: str,
+    columns: str,
+    rows: list[dict],
+    progress: Callable[[str, int], None] | None = None,
+) -> int:
+    """Insert one table's rows with the exact per-batch readback, returning the inserted count."""
+    names = ",".join(column.strip().split()[0] for column in columns.split(","))
+    count = 0
+    for body in batches(rows):
+        count += query(
+            f"INSERT INTO {table} (load_id,{names}) SELECT :load,{names} "
+            f"FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS r({columns}) ON CONFLICT DO NOTHING",
+            {"load": load_id, "rows": body},
+        )["row_count"]
+        identities = {
+            "atlas_populations": ("cohort",),
+            "atlas_items": ("task_id",),
+            "atlas_raw_reviews": ("task_id",),
+            "atlas_review_batches": ("batch_key",),
+            "atlas_review_batch_chunks": ("batch_key", "chunk_index"),
+            "atlas_review_batch_tasks": ("task_id",),
+        }.get(table, ())
+        join = " AND ".join(f"stored.{name}=expected.{name}" for name in ("pipeline_key", *identities))
+        fields = names.split(",")
+        stored_fields = ",".join(f"stored.{name}" for name in fields)
+        expected_fields = ",".join(f"expected.{name}" for name in fields)
+        try:
+            matched = matched_review_rows(
+                query,
+                f"SELECT COUNT(*) AS matched FROM jsonb_to_recordset(CAST(:rows AS JSONB)) "
+                f"AS expected({columns}) JOIN {table} stored ON stored.load_id=:load AND {join} "
+                f"WHERE ROW({stored_fields}) IS NOT DISTINCT FROM ROW({expected_fields})",
+                load_id,
+                json.loads(body),
+            )
+        except Exception as error:
+            raise RuntimeError(f"{table} exact readback failed for {key}, {len(json.loads(body))} rows") from error
+        if matched != len(json.loads(body)):
+            raise ValueError(f"Stored {table} differs from its sealed panel")
+    if progress is not None:
+        progress(table, len(rows))
+    return count
+
+
+def finish_content_review(
+    query: AppletQuery,
+    prepared: PreparedReviewPanel,
+    progress: Callable[[str, int], None] | None = None,
+) -> None:
+    """Materialize the panel's cohort summaries and publish its presentation pointer last."""
+    materialize_cohort_summaries(
+        lambda sql, params: query(sql, params)["rows"], prepared.load_id, pipeline_key=prepared.key
+    )
     query(
-        "INSERT INTO atlas_review_current VALUES (:load,:source,:key,CAST(:receipt AS JSONB)) ON CONFLICT DO NOTHING",
-        {"load": load_id, "source": source_id, "key": key, "receipt": json.dumps(staged["receipt"])},
+        "INSERT INTO atlas_review_current VALUES (:load,:source,:key,CAST(:receipt AS JSONB)) "
+        "ON CONFLICT (load_id,source_id) DO UPDATE SET "
+        "pipeline_key=EXCLUDED.pipeline_key,receipt=EXCLUDED.receipt "
+        "WHERE atlas_review_current.pipeline_key IS DISTINCT FROM EXCLUDED.pipeline_key "
+        "OR atlas_review_current.receipt IS DISTINCT FROM EXCLUDED.receipt",
+        {
+            "load": prepared.load_id,
+            "source": prepared.source_id,
+            "key": prepared.key,
+            "receipt": json.dumps(prepared.staged["receipt"]),
+        },
     )
     if query(
         "SELECT pipeline_key,receipt FROM atlas_review_current WHERE load_id=:load AND source_id=:source",
-        {"load": load_id, "source": source_id},
-    )["rows"] != [{"pipeline_key": key, "receipt": staged["receipt"]}]:
+        {"load": prepared.load_id, "source": prepared.source_id},
+    )["rows"] != [{"pipeline_key": prepared.key, "receipt": prepared.staged["receipt"]}]:
         raise ValueError("Frozen source already selects another review panel")
+    if progress is not None:
+        progress("atlas_review_current", 1)
+
+
+def load_content_reviews(
+    staged: dict,
+    load_id: str,
+    source_id: str,
+    query: AppletQuery,
+    progress: Callable[[str, int], None] | None = None,
+) -> dict[str, int]:
+    """Select a verified panel additively, leaving catalog declarations and old review bytes intact."""
+    prepared = prepare_content_review(staged, load_id, source_id, query)
+    counts: dict[str, int] = {}
+    for table, rows, columns in prepared.groups:
+        counts[table] = insert_review_segment(query, load_id, prepared.key, table, columns, rows, progress)
+    finish_content_review(query, prepared, progress)
     return counts
 
 
