@@ -46,6 +46,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -509,6 +510,27 @@ def _root_command(plan: ReleasePlan, plan_relative: str) -> list[str]:
     return ["bash", "-lc", script]
 
 
+def _bundled_landing_log(landing_log: Path, freeze_revision: str) -> bytes:
+    """The landing log the bundle carries: the submitting checkout's log, with the
+    plan freeze's git-verified landing entry appended when this machine's log lacks it.
+
+    The atlas-push landing log is per-machine (~/.local/share/atlas-push), and a freeze
+    another checkout landed never appears in it — the submitter therefore verifies the
+    freeze's containment against the landed branch tip with git (proof this checkout
+    actually has) and records that attestation in the bundled copy.
+    """
+    entries = landing_log.read_text(encoding="utf-8") if landing_log.is_file() else ""
+    if guard.sha_in_landing_log(freeze_revision, landing_log):
+        return entries.encode()
+    entry = {
+        "at": datetime.now(tz=UTC).isoformat(timespec="seconds"),
+        "sha": freeze_revision,
+        "who": "atlas-release submit",
+        "what": "attested landed: git containment of the plan freeze against the atlas-env-audit tip",
+    }
+    return (entries.rstrip("\n") + "\n" + json.dumps(entry, sort_keys=True) + "\n").encode()
+
+
 def _submit_root(args) -> int:
     """Submit the in-region root job that runs (or resumes) the plan's graph."""
     configure_coreweave_s3()
@@ -523,6 +545,14 @@ def _submit_root(args) -> int:
     revision = _bundle_revision(plan, plan_path)
     relative = _plan_argument(plan_path)
 
+    # The submitting checkout has git: verify the plan's freeze is actually landed
+    # before composing the bundle's proof of it.
+    if not guard.sha_is_ancestor(plan.source_revision, guard.atlas_landed_tip(REPO_ROOT), REPO_ROOT):
+        raise ValueError(
+            f"the plan's freeze {plan.source_revision[:12]} is not landed on {guard.ATLAS_ENV_AUDIT_BRANCH};"
+            " land it via atlas-push before submitting"
+        )
+
     landing_log = guard.landing_log_path()
     if not landing_log.is_file():
         raise ValueError(f"the atlas-push landing log is missing at {landing_log}; the guard verifies against it")
@@ -530,7 +560,7 @@ def _submit_root(args) -> int:
     snapshot = Path(tempfile.mkdtemp(prefix="atlas-release-bundle-"))
     subprocess.run(["git", "worktree", "add", "--detach", str(snapshot), revision], cwd=REPO_ROOT, check=True)
     try:
-        (snapshot / "atlas-landing-log.jsonl").write_bytes(landing_log.read_bytes())
+        (snapshot / "atlas-landing-log.jsonl").write_bytes(_bundled_landing_log(landing_log, plan.source_revision))
         command = _root_command(plan, relative)
         name = f"atlas-release-{plan.release_id}-{plan.artifact_version}-{uuid.uuid4().hex[:8]}"
         with connect_controller(cluster_name=args.cluster) as endpoint:

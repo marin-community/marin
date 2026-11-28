@@ -550,3 +550,24 @@ def test_plan_argument_preserves_storage_uris():
     assert isinstance(args.plan, str)
     # the collapse this regression guards against
     assert str(Path("s3://bucket/plan.json")) == "s3:/bucket/plan.json"
+
+
+def test_bundled_landing_log_attests_a_freeze_this_machine_never_landed(tmp_path):
+    """The atlas-push landing log is per-machine: a freeze another checkout landed
+    never appears in it, so the submitter composes the bundle's log with its own
+    git-verified attestation entry — and leaves a log that already records the
+    freeze byte-for-byte unchanged."""
+    freeze = "4575c6990764595891d0ea1cb513f9268152170b"
+    log = tmp_path / "landings.jsonl"
+    log.write_text('{"at": "2026-11-27T00:00:00+00:00", "sha": "' + "b" * 64 + '", "who": "other"}\n')
+
+    bundled = entry_point._bundled_landing_log(log, freeze).decode()
+    entries = [json.loads(line) for line in bundled.splitlines()]
+    assert len(entries) == 2
+    assert entries[0]["sha"] == "b" * 64
+    assert entries[1]["sha"] == freeze
+    assert entries[1]["who"] == "atlas-release submit"
+
+    # a log that already records the freeze travels unchanged
+    log.write_text(bundled)
+    assert entry_point._bundled_landing_log(log, freeze).decode() == bundled
