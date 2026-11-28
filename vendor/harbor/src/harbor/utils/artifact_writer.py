@@ -667,6 +667,18 @@ def get_artifact_writer() -> ArtifactWriter:
     return _WRITER
 
 
+async def write_required(
+    destination: Path | UPath,
+    render: Callable[[], str],
+    *,
+    description: str,
+) -> None:
+    """Render and persist a required artifact without blocking the event loop."""
+    writer = get_artifact_writer()
+    future = await writer.submit_required(destination, render, description=description)
+    await writer.await_write(future)
+
+
 def _drain_at_exit(writer: ArtifactWriter) -> None:
     """Bounded best-effort drain so queued artifacts survive process exit."""
     try:

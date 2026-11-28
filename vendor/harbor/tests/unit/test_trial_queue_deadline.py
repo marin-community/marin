@@ -1055,7 +1055,7 @@ async def test_result_persistence_failure_is_primary_and_retryable(
             ),
         },
     )
-    monkeypatch.setattr("harbor.trial.attempt.get_artifact_writer", FailingWriter)
+    monkeypatch.setattr(artifact_writer, "_WRITER", FailingWriter())
     queue = TrialQueue(
         n_concurrent=1,
         retry_config=RetrySettings(
