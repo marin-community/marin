@@ -3,29 +3,64 @@
 
 """Grade a code reply against the shipped AceCode assert cases: 1 when every case passes.
 
-``config.json`` carries the row's assert strings verbatim. The candidate's last fenced block
-is exec'd, then each assert case runs in the same namespace. A failed or erroring case scores
-0; harness defects exit nonzero as infrastructure errors.
+The candidate's last fenced block runs in a child process with the row's assert cases.
+Candidate failures and timeouts score 0. Invalid grader inputs exit nonzero.
 """
 
 import json
+import multiprocessing
+import os
 import re
+from multiprocessing.connection import Connection
 from pathlib import Path
+from types import CodeType
 
-config = json.loads(Path("/tests/config.json").read_text())
-answer = Path("/app/answer.txt").read_text()
+CANDIDATE_TIMEOUT = 30.0  # Leave time for the grader to return a reward before its 330-second timeout.
+CODE_BLOCK = re.compile(r"```(?:\w+)?\n(.*?)```", re.DOTALL)
 
-blocks = re.findall(r"```(?:\w+)?\n(.*?)```", answer, re.DOTALL)
-code = blocks[-1] if blocks else answer
 
-namespace: dict = {}
-exec(code, namespace)
-cases = config["test_cases"]
-assert isinstance(cases, list) and cases, "the shipped case list must be nonempty"
-for case in cases:
+def run_candidate(code: str, cases: tuple[CodeType, ...], verdict: Connection, output_fd: int) -> None:
+    os.dup2(output_fd, 1)  # Only the parent writes to the reward stream.
+    os.dup2(output_fd, 2)
+    namespace: dict = {}
     try:
-        exec(case, namespace)
-    except Exception:
-        print(0)
-        raise SystemExit(0) from None
-print(1)
+        exec(code, namespace)
+        for case in cases:
+            exec(case, namespace)
+    except (Exception, SystemExit, KeyboardInterrupt):
+        verdict.send_bytes(b"0")
+    else:
+        verdict.send_bytes(b"1")
+
+
+def candidate_passes(code: str, cases: tuple[CodeType, ...], timeout: float) -> bool:
+    context = multiprocessing.get_context("fork")
+    receiver, sender = context.Pipe(duplex=False)
+    with receiver, sender, open(os.devnull, "wb") as output:
+        with context.Process(target=run_candidate, args=(code, cases, sender, output.fileno())) as child:
+            child.start()
+            sender.close()
+            try:
+                return receiver.poll(timeout) and receiver.recv_bytes() == b"1"
+            except EOFError:
+                return False
+            finally:
+                if child.is_alive():
+                    child.kill()
+                child.join()
+
+
+def main(timeout: float = CANDIDATE_TIMEOUT) -> None:
+    config = json.loads(Path("/tests/config.json").read_text())
+    cases = config["test_cases"]
+    assert isinstance(cases, list) and cases, "the shipped case list must be nonempty"
+    compiled_cases = tuple(compile(case, f"<AceCode case {index}>", "exec") for index, case in enumerate(cases, 1))
+
+    answer = Path("/app/answer.txt").read_text()
+    blocks = CODE_BLOCK.findall(answer)
+    code = blocks[-1] if blocks else answer
+    print(int(candidate_passes(code, compiled_cases, timeout)))
+
+
+if __name__ == "__main__":
+    main()
