@@ -229,6 +229,22 @@ def read_snapshot(layout: FineStoreLayout) -> ArchiveSnapshot:
     return ArchiveSnapshot(manifest=manifest, token=token)
 
 
+def read_snapshot_id(layout: FineStoreLayout, snapshot_id: str) -> ArchiveSnapshot:
+    """Open an immutable manifest by commit ID without consulting the mutable HEAD."""
+    if snapshot_id == "empty":
+        return ArchiveSnapshot(manifest=_empty_manifest(), token=None)
+    if not snapshot_id or "/" in snapshot_id or ".." in snapshot_id:
+        raise ValueError(f"invalid FineStore snapshot ID: {snapshot_id!r}")
+    path = layout.manifest_path(snapshot_id)
+    manifest = Manifest.model_validate_json(StoragePath(path).read_bytes())
+    if manifest.format_version != FORMAT_VERSION or manifest.commit_id != snapshot_id:
+        raise ValueError(f"manifest {path} does not match snapshot ID {snapshot_id!r}")
+    unsupported = set(manifest.required_features) - SUPPORTED_MANIFEST_FEATURES
+    if unsupported:
+        raise ValueError(f"manifest {path} requires unsupported FineStore features: {', '.join(sorted(unsupported))}")
+    return ArchiveSnapshot(manifest=manifest, token=None)
+
+
 def _commit_info(attribution: Attribution | None, sequence: int) -> CommitInfo | None:
     if attribution is None:
         return None

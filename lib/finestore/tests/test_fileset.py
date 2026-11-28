@@ -31,6 +31,23 @@ def test_file_set_round_trips_nested_files_in_one_level_zero(tmp_path):
     )
 
 
+def test_file_set_pinned_snapshot_ignores_later_commits(tmp_path):
+    root = str(tmp_path / "remote")
+    with DataStore.open(root) as store:
+        store.write_object("first.textproto", b"first")
+        store.flush()
+        snapshot_id = ReadView(root).token.commit_id
+        store.write_object("second.textproto", b"second")
+        store.flush()
+
+    first_node = tmp_path / "first-node"
+    second_node = tmp_path / "second-node"
+    assert fetch_file_set(root, str(first_node), snapshot_id=snapshot_id) == {"first.textproto"}
+    assert fetch_file_set(root, str(second_node), snapshot_id=snapshot_id) == {"first.textproto"}
+    assert sorted(path.name for path in first_node.iterdir()) == sorted(path.name for path in second_node.iterdir())
+    assert fetch_file_set(root, str(tmp_path / "head")) == {"first.textproto", "second.textproto"}
+
+
 def test_file_set_materializes_chunked_file(tmp_path):
     root = str(tmp_path / "remote")
     local = tmp_path / "local"

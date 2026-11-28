@@ -6,10 +6,12 @@ import traceback
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from finestore.reader import ReadView
+from finestore.store import DataStore
 from iris.cluster.client.endpoint_client import EndpointClient
 from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
-from iris.cluster.types import Entrypoint, JobName
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName
 from iris.preemption import TERMINATION_GRACE_ENV
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.errors import connect_error_sanitized
@@ -104,6 +106,46 @@ def test_submission_serializes_termination_grace_as_duration():
     assert stub.request is not None
     assert stub.request.termination_grace.milliseconds == 60_000
     assert TERMINATION_GRACE_ENV not in stub.request.environment.env_vars
+
+
+def test_gpu_submission_pins_one_autotune_snapshot_before_remote_commit(tmp_path):
+    root = str(tmp_path / "autotune-store")
+    with DataStore.open(root) as store:
+        store.write_object("tuned.textproto", b"first")
+        store.flush()
+        expected_id = ReadView(root).token.commit_id
+
+    class ControllerStub:
+        request: controller_pb2.Controller.LaunchJobRequest | None = None
+
+        def launch_job(self, request, *, timeout_ms=None):
+            self.request = request
+            return controller_pb2.Controller.LaunchJobResponse(job_id=request.name)
+
+        def close(self):
+            pass
+
+    stub = ControllerStub()
+    client = RemoteClusterClient("http://controller.example:8080/", bundle_id="test-bundle")
+    client._client = stub
+    try:
+        client.submit_job(
+            job_id=JobName.root("alice", "training"),
+            entrypoint=Entrypoint.from_command("python", "train.py"),
+            resources=job_pb2.ResourceSpecProto(
+                device=job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="H100", count=8))
+            ),
+            environment=EnvironmentSpec(env_vars={"IRIS_AUTOTUNE_STORE_ROOT": root}).to_proto(),
+            replicas=2,
+        )
+    finally:
+        client.shutdown()
+
+    with DataStore.open(root) as store:
+        store.write_object("new.textproto", b"second")
+        store.flush()
+    assert stub.request.environment.env_vars["IRIS_AUTOTUNE_SNAPSHOT_ID"] == expected_id
+    assert ReadView(root).token.commit_id != expected_id
 
 
 @pytest.mark.parametrize("rpc_code", [None, Code.NOT_FOUND, Code.PERMISSION_DENIED])

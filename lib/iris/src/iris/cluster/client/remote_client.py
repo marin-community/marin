@@ -15,6 +15,8 @@ from connectrpc.errors import ConnectError
 from connectrpc.interceptor import InterceptorSync
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from finestore.commit import read_snapshot
+from finestore.layout import FineStoreLayout
 from rigging.connect import proxy_path
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
@@ -181,6 +183,14 @@ class RemoteClusterClient:
         if environment is None:
             environment = EnvironmentSpec().to_sandbox_proto() if sandboxed else EnvironmentSpec().to_proto()
         env_config = with_slice_topology_env(environment, resources, replicas)
+        if resources.HasField("device") and resources.device.HasField("gpu"):
+            snapshot_id = env_config.env_vars.get("IRIS_AUTOTUNE_SNAPSHOT_ID")
+            store_root = env_config.env_vars.get("IRIS_AUTOTUNE_STORE_ROOT")
+            if snapshot_id is None:
+                snapshot = read_snapshot(FineStoreLayout(store_root)) if store_root else None
+                env_config.env_vars["IRIS_AUTOTUNE_SNAPSHOT_ID"] = (
+                    snapshot.manifest.commit_id if snapshot and snapshot.token else "empty"
+                )
 
         runtime_ep = build_runtime_entrypoint(entrypoint, env_config)
 
