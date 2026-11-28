@@ -54,6 +54,8 @@ VERIFIER_TIMEOUT = 600
 
 PI_THINKING_FORMAT = "thinking_format"
 MINI_SWE_MODEL_FORMAT = "model_format"
+TERMINUS_INTERLEAVED_THINKING = "interleaved_thinking"
+AGENT_BOOLEANS = {"true": True, "false": False}
 AGENT_EXTRA_BODY = "extra_body"
 
 
@@ -71,6 +73,14 @@ def pi_thinking_format(model: ModelConfig) -> PiThinkingFormat | None:
 def mini_swe_model_format(model: ModelConfig) -> MiniSweModelFormat:
     """How mini-swe-agent formats this model's history, from the ``model_format`` agent argument, as in Harbor."""
     return MiniSweModelFormat(model.agent.agent_kwargs.get(MINI_SWE_MODEL_FORMAT, MiniSweModelFormat.OPENAI))
+
+
+def terminus_interleaved_thinking(model: ModelConfig) -> bool:
+    """Whether Terminus resends each reply's reasoning, from Harbor's ``interleaved_thinking`` agent argument."""
+    value = model.agent.agent_kwargs.get(TERMINUS_INTERLEAVED_THINKING, "false").lower()
+    if value not in AGENT_BOOLEANS:
+        raise ValueError(f"{model.name}: agent argument {TERMINUS_INTERLEAVED_THINKING} must be true or false")
+    return AGENT_BOOLEANS[value]
 
 
 def runtime_config(
@@ -102,6 +112,7 @@ def runtime_config(
         agent_extra_body=json.loads(model.agent.agent_kwargs.get(AGENT_EXTRA_BODY, "{}")),
         pi_thinking_format=pi_thinking_format(model),
         mini_swe_model_format=mini_swe_model_format(model),
+        terminus_interleaved_thinking=terminus_interleaved_thinking(model),
         concurrency=settings.concurrency,
         source_limit=settings.source_limit,
         seed=settings.seed,
