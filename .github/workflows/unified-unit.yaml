@@ -162,6 +162,43 @@ jobs:
           path: /tmp/rl-progress-journey
           if-no-files-found: ignore
 
+  cluster_occupancy:
+    name: cluster-occupancy
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'cluster-occupancy') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          check-latest: true
+      - name: Build the occupancy web bundle
+        run: npm ci && npm run build
+        working-directory: infra/marina/apps/cluster_occupancy/web
+      - name: Install browser for the occupancy journey
+        run: uv run --package marin-marina --no-default-groups playwright install --with-deps chromium
+      - name: Test the live and history views in Chromium
+        run: |
+          mkdir -p "$RUNNER_TEMP/cluster-occupancy-apps"
+          ln -s "$GITHUB_WORKSPACE/infra/marina/apps/cluster_occupancy" "$RUNNER_TEMP/cluster-occupancy-apps/cluster_occupancy"
+          # The journey conftest imports the shared fixture module by repo path,
+          # and its embedded hub needs the finelog native server from the test group.
+          PYTHONPATH="$GITHUB_WORKSPACE" uv run --package marin-marina marina journey cluster_occupancy \
+            --apps-dir "$RUNNER_TEMP/cluster-occupancy-apps" --shots /tmp/cluster-occupancy-journey
+      - name: Retain browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cluster-occupancy-journey-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/cluster-occupancy-journey
+          if-no-files-found: ignore
+
   slow:
     if: ${{ github.event_name == 'schedule' }}
     name: slow

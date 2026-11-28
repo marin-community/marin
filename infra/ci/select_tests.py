@@ -216,6 +216,12 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         ".github/workflows/unified-unit.yaml",
         *DEPENDENCY_MANIFESTS,
     ),
+    "cluster-occupancy": (
+        "infra/marina/",
+        "infra/ci/",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
     "skyrl-wheel": (
         "lib/skyrlrecipe/",
         "vendor/skyrl/",

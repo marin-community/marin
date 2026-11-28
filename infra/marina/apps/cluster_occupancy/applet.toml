@@ -1,0 +1,6 @@
+applet_id = "bac9d260-3208-4db8-8b36-64890bff58c1"
+
+title = "Cluster Occupancy"
+description = "See which users held which parts of the CoreWeave clusters at which time. Drag through time on a per-node GPU map of each cluster."
+python_entrypoint = "backend.app:create_api"
+build_command = "cd web && npm ci && npm run build"
