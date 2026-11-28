@@ -10,6 +10,8 @@ committed fixture is the real consumed-config.json of that stage
 """
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -49,3 +51,32 @@ def test_legacy_consumed_config_is_rejected():
     """The legacy Grug shape still cannot drive native accounting."""
     with pytest.raises(ValueError, match="native SFTSpec producer"):
         accounting_train_config({"trainer": {"trainer": {}}})
+
+
+def test_real_config_decodes_in_fresh_subprocess(tmp_path):
+    """The accounting step registers the MuonH choice itself: a fresh interpreter decodes.
+
+    In-region the step runs without the test module's imports; the decode must not depend on
+    any prior import of the registering module.
+    """
+    script = "\n".join(
+        [
+            "import json",
+            "from experiments.post_training.long_loop.sft_accounting import accounting_train_config",
+            f"document = json.loads(open({str(FIXTURE)!r}).read())",
+            "config, shape = accounting_train_config(document)",
+            "assert shape == 'launcher-request'",
+            "assert config.trainer.train_batch_size == 256",
+            "assert config.train_seq_len == 262144",
+            "print('DECODE-OK')",
+        ]
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parents[4],
+        timeout=600,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert "DECODE-OK" in result.stdout

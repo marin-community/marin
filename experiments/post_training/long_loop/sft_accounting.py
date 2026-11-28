@@ -24,6 +24,7 @@ from levanter.utils.datetime_utils import encode_timedelta
 from levanter.utils.thread_utils import blocking_wait
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.grug.moe.optimizer import GrugMoeMuonHConfig  # noqa: F401 -- register optimizer
 from experiments.post_training.long_loop.archive import ArchiveInput, digest, write_once
 from experiments.post_training.long_loop.source_loss import SourceLossMode, source_loss_metadata
 
