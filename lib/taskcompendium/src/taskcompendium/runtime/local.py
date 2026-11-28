@@ -18,7 +18,7 @@ import stat
 import subprocess
 import tarfile
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cache, cached_property
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -33,14 +33,11 @@ from shellbox.backends.local.python_environment import (
     PythonEnvironment,
     build_python_environment,
 )
-from shellbox.context import MachineRoute
-from shellbox.image import RegistryImage, is_digest_pinned_image
-from shellbox.machine import Backend, HostImage, MachineFactory, MachineSpec, Mount, NetworkPolicy
+from shellbox.context import MachineRoute, declared_spec
+from shellbox.image import is_digest_pinned_image
+from shellbox.machine import Backend, MachineFactory, Mount, NetworkPolicy
 
-from taskcompendium.models import (
-    DEFAULT_WORKSPACE,
-    EnvironmentRequirements,
-)
+from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.requirements import require_resolved_environment
 
 # Compiled extension modules are host-platform artifacts of optimized wheels. Staging ships the
@@ -280,21 +277,9 @@ class LocalGraderMachines:
         an unpinned image has no local route.
         """
         require_resolved_environment(environment)
-        if environment.docker_image is not None:
-            if not is_digest_pinned_image(environment.docker_image):
-                return ()
-            return (
-                MachineRoute(
-                    local_factory(),
-                    MachineSpec(
-                        RegistryImage(environment.docker_image),
-                        network=NetworkPolicy.DENY,
-                        memory_mb=memory_mb,
-                        workdir=environment.working_directory if environment.working_directory is not None else "",
-                    ),
-                ),
-            )
-        if environment.packages_lock is None and environment.package_spec is None:
+        if environment.docker_image is not None and not is_digest_pinned_image(environment.docker_image):
             return ()
-        spec = MachineSpec(HostImage(), network=NetworkPolicy.DENY, workdir=DEFAULT_WORKSPACE, memory_mb=memory_mb)
+        if environment.docker_image is None and environment.packages_lock is None and environment.package_spec is None:
+            return ()
+        spec = replace(declared_spec(environment, NetworkPolicy.DENY), memory_mb=memory_mb)
         return (MachineRoute(local_factory(), spec),)

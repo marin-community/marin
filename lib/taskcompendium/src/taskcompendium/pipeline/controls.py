@@ -356,12 +356,13 @@ async def _oracle_control(
             sandbox.grader_routes,
             _submission_grader(task, oracle.attempt, judge_connection),
         )
-        verdicts.extend(verifier_verdicts)
         if result.status is CheckStatus.PASS:
             passed = _verdict(MachineRole.TASK, route, CheckStatus.PASS, "The oracle's submission passed the control")
-            return _ControlOutcome(result, (*verdicts, passed))
+            return _ControlOutcome(result, (*verdicts, *verifier_verdicts, passed))
         if result.status is CheckStatus.INFRA_ERROR:
             return _ControlOutcome(result, tuple(verdicts))
+        # A wrong submission's verifier outcomes say nothing about the verifier backends —
+        # they correctly rejected it. Only the failing task backend's verdict is evidence.
         verdicts.append(_verdict(MachineRole.TASK, route, CheckStatus.FAIL, "Grading failed on every verifier backend"))
     return _ControlOutcome(_exhausted(name, verdicts), tuple(verdicts))
 

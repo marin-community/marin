@@ -9,7 +9,7 @@ import pytest
 from shellbox.backends.daytona.support import check_environment as check_daytona_environment
 from shellbox.backends.local.support import check_local_environment
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.context import MachineRoute, ShellboxContext, source_spec
+from shellbox.context import MachineRoute, ShellboxContext, declared_spec
 from shellbox.machine import (
     Backend,
     CommandSemantics,
@@ -34,6 +34,7 @@ class Requirements:
     packages_lock: str | None = None
     package_spec: PackageSpec | None = None
     network: NetworkPolicy = NetworkPolicy.DENY
+    working_directory: str | None = None
 
     requirements = property(task_requirements)
 
@@ -151,7 +152,7 @@ class DaytonaAdmissionFactory:
 def test_declared_requirements_route_to_the_satisfying_tiers(requirements: Requirements, expected: tuple):
     factories = (ShellSimMachineFactory(), LocalAdmissionFactory(), DaytonaAdmissionFactory())
     try:
-        spec = source_spec(requirements, requirements.network)
+        spec = declared_spec(requirements, requirements.network)
         routes = ShellboxContext(tuple(MachineRoute(factory, spec) for factory in factories)).routes(
             requirements.requirements
         )

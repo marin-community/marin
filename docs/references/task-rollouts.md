@@ -82,7 +82,7 @@ Other tasks use `harness_by_dataset[task.source.dataset]` when configured, or
 `default_harness`, which defaults to Shellbox.
 Machine tasks use `task_machine_by_dataset`, or the first supported backend in `task_machines_by_backend` insertion order.
 Shellbox checks software and capabilities; `network` binds `allow`. Controls record each tried backend's outcome per machine role in `machine.verdicts`; RL excludes backends whose control failed or was rejected for that role.
-Image graders use the configured image verifier backend, and package graders the configured local verifier, unless the task's evidence excludes that verifier's failed control. The task-selection artifact contains the
+Verifiers bind one fixed template: image graders use `image_verifier` and package graders `package_verifier`, refused when the task's evidence excludes that backend's failed verifier control. The task-selection artifact contains the
 task and private grader, so changing rollout resources or deadlines does not
 rewrite the task Parquet.
 

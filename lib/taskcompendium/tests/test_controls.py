@@ -315,9 +315,13 @@ class WrongThenRightAnswerMachines(FixtureGradingMachines):
     """A task ladder whose cheapest backend's oracle submits a wrong answer and whose next backend passes."""
 
     def routes(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineRoute, ...]:
-        routes = super().routes(environment, memory_mb)
         if environment.docker_image != AGENT_IMAGE:
-            return routes
+            # Two verifier candidates: the first fails the wrong submission, and the
+            # passing attempt's ladder stops at it, never revisiting the second.
+            return (
+                MachineRoute(self.factory, MachineSpec(DockerImage(environment.docker_image), memory_mb=memory_mb)),
+                MachineRoute(self.factory, MachineSpec(DockerImage(environment.docker_image), memory_mb=memory_mb)),
+            )
         wrong = scripted_answer_route(b"wrong\n", Backend.SHELLSIM, memory_mb)
         right = scripted_answer_route(b"7\n", Backend.DAYTONA, memory_mb)
         return (wrong, right)
@@ -347,7 +351,12 @@ def test_passing_oracle_retains_higher_candidates_for_other_deployments():
 
 
 def test_oracle_fails_up_when_its_submission_fails_grading():
-    """An oracle that runs cleanly but submits a wrong answer fails up to the next task backend."""
+    """An oracle that runs cleanly but submits a wrong answer fails up to the next task backend.
+
+    The wrong attempt's verifier ladder correctly rejects the submission on both verifier
+    candidates; only the passing attempt's ladder is evidence, so the second verifier —
+    which the passing ladder stops before — is not excluded for rejecting a wrong answer.
+    """
     task = answer_task()
     requirements = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=AGENT_IMAGE)
     task = TaskSpec.model_validate(task.model_copy(update={"environment_requirements": requirements}).model_dump())
@@ -362,7 +371,6 @@ def test_oracle_fails_up_when_its_submission_fails_grading():
         for verdict in check.verdicts
     ] == [
         ("task", "shellsim", "skipped"),
-        ("verifier", "docker", "fail"),
         ("task", "shellsim", "fail"),
         ("task", "daytona", "skipped"),
         ("verifier", "docker", "pass"),

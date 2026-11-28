@@ -12,23 +12,21 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from rigging.task_errors import RetryDisposition, setup_exit_is_task_failure
-from shellbox.image import DockerfileSource, RegistryImage
+from shellbox.context import declared_spec
+from shellbox.image import DockerfileSource
 from shellbox.machine import (
     Backend,
     Command,
     ExitReason,
-    HostImage,
     Machine,
     MachineFactory,
     MachineSpec,
-    PackageSpec,
     ProcessMachine,
     ProcessSession,
     Result,
     TaskRequirements,
-    UnsupportedMachineSpec,
 )
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskResource, TaskSpec
+from taskcompendium.models import EnvironmentRequirements, TaskResource, TaskSpec
 from taskcompendium.runtime.environment import prepare_machine_spec
 from taskcompendium.runtime.resources import resource_bytes, write_build_context
 
@@ -94,25 +92,14 @@ def machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeS
     name one.
     """
     with ExitStack() as stack:
-        if requirements.docker_image is not None:
-            source = RegistryImage(requirements.docker_image)
-        elif requirements.docker_build is not None:
+        build_source = None
+        if requirements.docker_build is not None:
             context = Path(stack.enter_context(TemporaryDirectory(prefix="rollout-build-")))
-            source = DockerfileSource(context, write_build_context(requirements.docker_build, context))
-        elif requirements.packages_lock is not None:
-            source = HostImage()
-        elif requirements.package_spec is not None:
-            source = requirements.package_spec
-        elif requirements.command_semantics == CommandSemantics.SHELL_SIMULATOR:
-            source = PackageSpec()
-        else:
-            raise UnsupportedMachineSpec("Machine execution requires explicit semantics and native dependencies")
-        workdir = requirements.working_directory
-        if workdir is None:
-            workdir = "" if isinstance(source, RegistryImage | DockerfileSource) else "/workspace"
+            build_source = DockerfileSource(context, write_build_context(requirements.docker_build, context))
+        spec = declared_spec(requirements, runtime.network, build_source=build_source)
         yield MachineSpec(
-            source=source,
-            workdir=workdir,
+            source=spec.source,
+            workdir=spec.workdir,
             network=runtime.network,
             memory_mb=runtime.memory_mb,
             cpus=runtime.cpus,

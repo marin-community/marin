@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, replace
 from functools import cached_property
 from typing import Any
 
-from shellbox.context import MachineRoute, ShellboxContext, source_spec
+from shellbox.context import MachineRoute, ShellboxContext, declared_spec
 from shellbox.machine import Backend, MachineFactory, NetworkPolicy, PackageSpec
 from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.local import LocalGraderMachines
@@ -63,7 +63,7 @@ class CampaignMachines:
     def routes(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineRoute, ...]:
         """Bind supported factory candidates in deployment order with denied networking."""
         require_resolved_environment(environment)
-        spec = source_spec(environment, NetworkPolicy.DENY)
+        spec = declared_spec(environment, NetworkPolicy.DENY)
         routes: list[MachineRoute] = []
         if isinstance(spec.source, PackageSpec):
             simulator = self._simulator_factory
