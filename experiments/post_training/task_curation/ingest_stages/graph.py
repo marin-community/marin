@@ -12,9 +12,11 @@ from marin.execution.artifact import read_record
 from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
 from marin.execution.lazy import run as run_handles
 from pydantic import BaseModel, ConfigDict, Field
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 
 from experiments.post_training.task_curation.ingest_stages.ingest_config import GIT_REVISION, IngestConfig
+from experiments.post_training.task_curation.ingest_stages.placement import regional_worker
 from experiments.post_training.task_curation.ingest_stages.receipts import (
     IngestStage,
     StageArtifact,
@@ -149,6 +151,9 @@ def ingest_graph(execution: IngestExecution, handlers: Mapping[IngestStage, Stag
 
 def verify_built_stages(graph: IngestGraph) -> None:
     """Validate all cached stages even when terminal pruning would skip ancestors."""
+    execution = graph.execution
+    if StoragePath(execution.artifact_root).scheme not in (None, "file"):
+        regional_worker(execution.policy.cluster, execution.artifact_root, execution.artifact_root)
     for step in graph.nodes:
         path = step.path(graph.execution.artifact_root)
         if read_record(path) is None:
