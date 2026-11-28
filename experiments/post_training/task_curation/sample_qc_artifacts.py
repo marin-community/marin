@@ -14,17 +14,27 @@ SAMPLE_SEED = 0
 PINNED_REVIEWER_SHA256 = "cad081d2e6c013e083ee1737ea42d65a175117ebaae9b56dfacbc8fb1cd2489a"
 PINNED_REVIEWER_V4_SHA256 = "9c0d83d65755be99ec382ac5c061c05db36ade8a2a800d3d48ddd82f7a88f3dc"
 PINNED_REVIEWER_V5_SHA256 = "2fb4ff7d1134d63db62b8a186fa2e841f284dca7dc60c38681a07c96c6333c64"
+PINNED_REVIEWER_V6_SHA256 = "96dbd396d2d0635592e0900aae85d3332152a50d703bc90b22b1ae32b5da7a4b"
 # The pinned reviewer identities each payload revision may produce. Payload
-# Revision 6 admits the V3, V4 and V5 profiles at their recorded identities.
+# Revision 6 admits the V3, V4, V5 and V6 profiles at their recorded
+# identities (V6 = MiniMax-M3-MXFP8, user ruling 2026-11-29).
 SAMPLE_REVIEWER_SHA256_BY_PAYLOAD_REVISION = {
     "4": frozenset({"a3e17ee0607a1bf59bdbb8e0b9bffda2e8788390aaf41c7ab73c20b68325c9ea"}),
     "5": frozenset({"0a00cdd8682fe13ae169d724cb630c73ebab9be1dab3b4d6d971eca04fa0e308"}),
-    "6": frozenset({PINNED_REVIEWER_SHA256, PINNED_REVIEWER_V4_SHA256, PINNED_REVIEWER_V5_SHA256}),
+    "6": frozenset(
+        {
+            PINNED_REVIEWER_SHA256,
+            PINNED_REVIEWER_V4_SHA256,
+            PINNED_REVIEWER_V5_SHA256,
+            PINNED_REVIEWER_V6_SHA256,
+        }
+    ),
 }
 SAMPLE_REVIEWER_SHAS = {
     "v3": PINNED_REVIEWER_SHA256,
     "v4": PINNED_REVIEWER_V4_SHA256,
     "v5": PINNED_REVIEWER_V5_SHA256,
+    "v6": PINNED_REVIEWER_V6_SHA256,
 }
 """The pinned reviewer identity per SAMPLE profile version."""
 

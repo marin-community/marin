@@ -12,6 +12,10 @@ live in the region.
 import argparse
 import subprocess
 
+from experiments.post_training.task_curation.full_qc import (
+    REVIEWER_SERVING_GPU_TYPE,
+    SAMPLE_REVIEWER_VERSION,
+)
 from experiments.post_training.task_curation.judges import require_review_serving_root
 
 
@@ -42,7 +46,7 @@ def main() -> None:
     )
     parser.add_argument("--timeout", default="259200", help="Job timeout in seconds (default: three days).")
     args = parser.parse_args()
-    require_review_serving_root(args.target_cluster)
+    require_review_serving_root(args.target_cluster, gpu_type=REVIEWER_SERVING_GPU_TYPE[SAMPLE_REVIEWER_VERSION])
 
     script_uri = (
         "https://raw.githubusercontent.com/marin-community/marin/"

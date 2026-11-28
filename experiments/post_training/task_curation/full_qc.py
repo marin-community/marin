@@ -48,6 +48,7 @@ from experiments.post_training.task_curation.judges import (
 logger = logging.getLogger(__name__)
 MODEL_CONFIG = Path("experiments/evaluation/serve/models/zai-org/GLM-5.3.yaml")
 V3_MODEL_CONFIG = Path("experiments/evaluation/serve/models/zai-org/GLM-5.3-full-qc-v3.yaml")
+V6_MODEL_CONFIG = Path("experiments/evaluation/serve/models/minimaxai/MiniMax-M3-full-qc-v6.yaml")
 WORKER_IMAGE = "vllm/vllm-openai@sha256:61fc8a896b0a4fbbbdc063bc4b0dbc25ce98e02b5050c24aeb7830ac02039b14"
 # Standing policy: data jobs default to a three-day timeout.
 FULL_QC_JOB_TIMEOUT = Duration.from_hours(72)
@@ -67,12 +68,25 @@ class ReviewerVersion(StrEnum):
     V3 = "v3"
     V4 = "v4"
     V5 = "v5"
+    V6 = "v6"
 
 
-SAMPLE_REVIEWER_VERSION = ReviewerVersion.V5
+SAMPLE_REVIEWER_VERSION = ReviewerVersion.V6
 """The pinned default SAMPLE reviewer profile for new campaigns (user ruling
-2026-11-28: V5 = V4 with max_tokens 32768 and retry_max_tokens 32768; V4/V3
+2026-11-29: V6 = MiniMax-M3-MXFP8 on 8xH100, off GLM-5.3 — the GLM-5.3 canary
+never concludes within its token budget at either effort setting; V2-V5
 receipts stay untouched)."""
+
+
+REVIEWER_SERVING_GPU_TYPE: dict[ReviewerVersion, str] = {
+    ReviewerVersion.V2: "GB200",
+    ReviewerVersion.V3: "GB200",
+    ReviewerVersion.V4: "GB200",
+    ReviewerVersion.V5: "GB200",
+    ReviewerVersion.V6: "H100",
+}
+"""The serving accelerator each reviewer profile's tree requests (the
+serving-root check validates the root against it at submission time)."""
 
 
 LONG_REQUEST_TIMEOUT = 1200
@@ -81,6 +95,7 @@ REVIEW_REQUEST_TIMEOUTS = {
     ReviewerVersion.V3: LONG_REQUEST_TIMEOUT,
     ReviewerVersion.V4: LONG_REQUEST_TIMEOUT,
     ReviewerVersion.V5: LONG_REQUEST_TIMEOUT,
+    ReviewerVersion.V6: LONG_REQUEST_TIMEOUT,
 }
 
 
@@ -126,11 +141,6 @@ class ReadyChatReviewer:
         current = self.session.ready_direct_session()
         return self._reviewer(current).review(tasks, rubric, originals=originals, cached=cached)
 
-
-SAMPLE_REVIEWER_VERSION = ReviewerVersion.V5
-"""The pinned default SAMPLE reviewer profile for new campaigns (user ruling
-2026-11-28: V5 = V4 with max_tokens 32768 and retry_max_tokens 32768; V4/V3
-receipts stay untouched)."""
 
 QUALIFICATION_TASK = TaskSpec(
     id="sample-profile-qualification",
@@ -188,7 +198,67 @@ def _local_endpoint(model_config: Path, context_window_tokens: int) -> LocalJudg
     )
 
 
+def _v6_local_endpoint(model_config: Path, context_window_tokens: int) -> LocalJudgeEndpoint:
+    # Placement note: only ROOT jobs federate in Iris, so this child serving request's
+    # cluster would be ignored - the submitter roots the review job on a cluster that
+    # places 8xH100 (require_review_serving_root enforces it at submission time;
+    # cw-rno2a is the reserved H100 fleet). The serving holds non-preemptible
+    # capacity: long reviewer serving must not be evicted mid-review.
+    return LocalJudgeEndpoint(
+        tier=JudgeTier.MEDIUM,
+        model_config=model_config,
+        context_window_tokens=context_window_tokens,
+        accelerator=AcceleratorChoice(
+            Platform.GPU,
+            gpu_type="H100",
+            gpu_count=8,
+            region=ANY_REGION,
+            preemptible=False,
+        ),
+        priority=job_pb2.PRIORITY_BAND_BATCH,
+        env_vars={"MARIN_TEMP_PREFIX": "s3://marin-rno2a"},
+        worker_image=WORKER_IMAGE,
+        worker_setup_scripts=(
+            "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends git",
+        ),
+        worker_timeout=FULL_QC_JOB_TIMEOUT,
+    )
+
+
 def local_reviewer(version: ReviewerVersion, *, payload_revision: str = REVIEW_PAYLOAD_REVISION) -> ReviewerSpec:
+    if version is ReviewerVersion.V6:
+        # User ruling 2026-11-29: V6 moves the SAMPLE reviewer off GLM-5.3 onto
+        # MiniMax-M3-MXFP8 (8xH100, cw-rno2a) - the GLM-5.3 canary never emits
+        # the review_task tool call within its token budget at either effort
+        # setting (probe v6: finish_reason length at 32768 with zero content and
+        # zero tool calls, byte-identical with and without the effort kwarg).
+        # The context is 262144 tokens; a longer review prompt fails closed as a
+        # typed context outcome (ReviewStatus.UNAVAILABLE), never truncated.
+        pin = LocalJudgeModel(
+            model_identity="MiniMaxAI/MiniMax-M3-MXFP8",
+            model_revision="c5454eb03678d8710e54a4e0fc681b9f3b4a3dba",
+            api_model="minimax-m3",
+            context_window_tokens=262144,
+        )
+        return ReviewerSpec(
+            tier=JudgeTier.MEDIUM,
+            model=pin.api_model,
+            model_revision=pin.model_revision,
+            endpoint=PinnedLocalJudgeEndpoint(_v6_local_endpoint(V6_MODEL_CONFIG, pin.context_window_tokens), pin),
+            precision="native-mxfp8",
+            temperature=0.7,
+            top_p=0.95,
+            top_k=0,
+            reasoning_effort="low",
+            max_tokens=32768,
+            retry_max_tokens=32768,
+            max_attempts=3,
+            prompt_budget=262000,
+            retry_prompt_budget=262000,
+            base_rubric_version="task-quality-v2",
+            base_rubric_sha256="af7ae2a33e3f73d17f27907d930beae35453a22b63ef6f28138c50a8d65131eb",
+            payload_revision=payload_revision,
+        )
     if version is ReviewerVersion.V5:
         # User ruling 2026-11-28: V5 is V4 with max_tokens 32768 and
         # retry_max_tokens 32768, everything else identical - the V4 canary

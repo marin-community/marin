@@ -152,6 +152,7 @@ class LocalJudgeModel:
 
 
 GB200_UNPLACABLE_CLUSTERS = frozenset({"cw-us-east-02a", "cw-rno2a"})
+H100_ROOT_CLUSTER = "cw-rno2a"
 """Clusters whose Kueue topology can never place a 4xGB200 serving request.
 
 A serving job queued there does not fail; Kueue silently gates it, so the
@@ -163,20 +164,33 @@ placement governs the tree.
 """
 
 
-def require_review_serving_root(target_cluster: str | None) -> str:
-    """Refuse a review-job root whose tree will request 4xGB200 serving it cannot place.
+def require_review_serving_root(target_cluster: str | None, *, gpu_type: str = "GB200") -> str:
+    """Refuse a review-job root whose tree requests serving the root cannot place.
 
     The root job's peer hosts the entire tree, child serving requests included, so a
     root on (or unpinned and able to federate onto) a gated cluster silently gates the
     reviewer forever. Returns the validated root cluster.
+
+    ``gpu_type`` selects the serving request the tree carries: the 4xGB200 GLM
+    profiles refuse roots that cannot place GB200; the 8xH100 MiniMax profile
+    (V6) must root on cw-rno2a, the reserved H100 fleet.
     """
-    if target_cluster is None or target_cluster in GB200_UNPLACABLE_CLUSTERS:
-        raise ValueError(
-            "A review tree that requests 4xGB200 serving must root on a cluster that places it; "
-            f"an unpinned root can federate onto {sorted(GB200_UNPLACABLE_CLUSTERS)}, whose Kueue "
-            "topology gates 4xGB200 silently (child serving pins are ignored - only roots federate)"
-        )
-    return target_cluster
+    if gpu_type == "GB200":
+        if target_cluster is None or target_cluster in GB200_UNPLACABLE_CLUSTERS:
+            raise ValueError(
+                "A review tree that requests 4xGB200 serving must root on a cluster that places it; "
+                f"an unpinned root can federate onto {sorted(GB200_UNPLACABLE_CLUSTERS)}, whose Kueue "
+                "topology gates 4xGB200 silently (child serving pins are ignored - only roots federate)"
+            )
+        return target_cluster
+    if gpu_type == "H100":
+        if target_cluster != H100_ROOT_CLUSTER:
+            raise ValueError(
+                "A review tree that requests 8xH100 serving must root on cw-rno2a, the reserved "
+                f"H100 fleet; root {target_cluster!r} cannot place it"
+            )
+        return target_cluster
+    raise ValueError(f"Unsupported review serving gpu_type: {gpu_type}")
 
 
 @dataclass(frozen=True)
