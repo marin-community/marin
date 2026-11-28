@@ -361,7 +361,10 @@ Async callers can await `verified_local_disk_pool(root)` from the same module;
 it runs the probe off the event loop and reuses the pool within a worker process
 and mount namespace. Harbor uses this path before acquiring LOCAL sandboxes.
 Guardians allocate devices explicitly with `losetup --find --show --nooverlap`,
-serializing cooperating pools through `/dev/loop-control`. Mounted devices are
+serializing pools in one device namespace through `/dev/loop-control`. The kernel
+can select a loop number absent from a container's `/dev`; guardians expose that
+block node using its sysfs major/minor identity and reject conflicting paths.
+Mounted devices are
 marked autoclear and released on final unmount. Startup recovery detaches only
 devices associated with released allocations under the pool root; it preserves
 live leases. Allocation errors include the Iris node name when available.

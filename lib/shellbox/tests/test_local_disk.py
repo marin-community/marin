@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -74,6 +75,11 @@ async def test_local_disk_concurrent_pools_release_their_loop_devices(tmp_path):
         disk = pool.create(64)
         try:
             ready.wait(timeout=15)
+            if index == 0:
+                observed = disk_state(tmp_path)
+                assert len(observed["loops"]) == pool_count
+                print(json.dumps({"concurrent_pools": pool_count, "attached_owned_loops": len(observed["loops"])}))
+            ready.wait(timeout=15)
             marker = disk.data / "marker"
             marker.write_text(str(index))
             assert marker.read_text() == str(index)
@@ -81,7 +87,9 @@ async def test_local_disk_concurrent_pools_release_their_loop_devices(tmp_path):
             disk.close()
         assert disk_state(pool.root) == {"loops": [], "mounts": [], "allocations": []}
 
-    await asyncio.gather(*(asyncio.to_thread(allocate, index) for index in range(pool_count)))
+    loop = asyncio.get_running_loop()
+    with ThreadPoolExecutor(max_workers=pool_count) as executor:
+        await asyncio.gather(*(loop.run_in_executor(executor, allocate, index) for index in range(pool_count)))
 
 
 async def test_local_disk_command_timeout_releases_spools_before_unmount(tmp_path, executable_oci_image, monkeypatch):

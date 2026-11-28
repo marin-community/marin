@@ -12,15 +12,19 @@ import fcntl
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
 from contextlib import ExitStack
 from pathlib import Path
+from typing import BinaryIO
 
 COMMAND_TIMEOUT = 30
 CLEANUP_TIMEOUT = 30
 LOOP_CONTROL = Path("/dev/loop-control")
+LOOP_SYSFS = Path("/sys/class/block")
+LOOP_CTL_GET_FREE = 0x4C82
 
 
 def node_name() -> str:
@@ -34,10 +38,27 @@ def run(*argv: str) -> str:
     return result.stdout.strip()
 
 
+def expose_free_loop_device(control: BinaryIO) -> None:
+    """Expose the kernel-selected free loop in this container's device namespace."""
+    number = fcntl.ioctl(control, LOOP_CTL_GET_FREE)
+    name = f"loop{number}"
+    major, minor = map(int, (LOOP_SYSFS / name / "dev").read_text().strip().split(":"))
+    identity = os.makedev(major, minor)
+    device = Path("/dev") / name
+    try:
+        os.mknod(device, stat.S_IFBLK | 0o600, identity)
+    except FileExistsError:
+        pass  # Another creator or the container runtime already exposed this node.
+    metadata = device.lstat()
+    if not stat.S_ISBLK(metadata.st_mode) or metadata.st_rdev != identity:
+        raise RuntimeError(f"Kernel loop path {device} has the wrong device identity on node {node_name()}")
+
+
 def attach(image: Path) -> str:
-    """Allocate one loop device, serializing cooperating pools across mount namespaces."""
+    """Allocate one loop device, serializing pools sharing this device namespace."""
     with LOOP_CONTROL.open("rb") as control:
         fcntl.flock(control, fcntl.LOCK_EX)
+        expose_free_loop_device(control)
         return run("losetup", "--find", "--show", "--nooverlap", str(image))
 
 

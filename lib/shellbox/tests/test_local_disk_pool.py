@@ -6,6 +6,7 @@
 import asyncio
 import io
 import shutil
+import stat
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from itertools import count
@@ -120,6 +121,7 @@ def test_startup_recovery_does_not_reclaim_guardian_during_directory_removal(tmp
     control = tmp_path / "loop-control"
     control.touch()
     monkeypatch.setattr(disk_lifecycle, "LOOP_CONTROL", control)
+    monkeypatch.setattr(disk_lifecycle, "expose_free_loop_device", lambda control: None)
     monkeypatch.setattr(disk_lifecycle.shutil, "rmtree", remove_during_recovery)
     monkeypatch.setattr(disk_lifecycle.sys, "stdin", SimpleNamespace(buffer=io.BytesIO()))
     disk_lifecycle.guard(directory, storage_mb=1)
@@ -136,6 +138,19 @@ def test_guardian_owns_explicit_loop_through_mount_failure_and_cleanup(tmp_path,
     mounts = set()
     autoclear = set()
     device = "/dev/loop19"
+    nodes = {}
+    sysfs = tmp_path / "sysfs" / "loop19"
+    sysfs.mkdir(parents=True)
+    (sysfs / "dev").write_text("7:19\n")
+    real_lstat = disk_lifecycle.Path.lstat
+
+    def create_node(path, mode, identity):
+        nodes[str(path)] = SimpleNamespace(st_mode=mode, st_rdev=identity)
+
+    def node_stat(path, *args, **kwargs):
+        if str(path) == device:
+            return nodes[device]
+        return real_lstat(path, *args, **kwargs)
 
     def command(argv, **kwargs):
         output = ""
@@ -143,8 +158,11 @@ def test_guardian_owns_explicit_loop_through_mount_failure_and_cleanup(tmp_path,
         if argv[0] == "mkfs.ext4":
             pass
         elif argv[:3] == ("losetup", "--find", "--show"):
-            devices[device] = str(directory / "disk.img")
-            output = device
+            if device not in nodes:
+                error = "failed to set up loop device: No such file or directory"
+            else:
+                devices[device] = str(directory / "disk.img")
+                output = device
         elif argv[0] == "mount":
             # The affected worker cannot allocate a loop implicitly through mount.
             if argv[-2] != device or mount_fails:
@@ -167,6 +185,10 @@ def test_guardian_owns_explicit_loop_through_mount_failure_and_cleanup(tmp_path,
         return SimpleNamespace(returncode=int(bool(error)), stdout=output, stderr=error)
 
     monkeypatch.setattr(disk_lifecycle, "LOOP_CONTROL", control, raising=False)
+    monkeypatch.setattr(disk_lifecycle, "LOOP_SYSFS", sysfs.parent, raising=False)
+    monkeypatch.setattr(disk_lifecycle.fcntl, "ioctl", lambda control, operation: 19)
+    monkeypatch.setattr(disk_lifecycle.os, "mknod", create_node)
+    monkeypatch.setattr(disk_lifecycle.Path, "lstat", node_stat)
     monkeypatch.setattr(disk_lifecycle.subprocess, "run", command)
     monkeypatch.setattr(disk_lifecycle.os.path, "ismount", lambda path: str(path) in mounts)
     monkeypatch.setattr(disk_lifecycle.sys, "stdin", SimpleNamespace(buffer=io.BytesIO()))
@@ -179,3 +201,26 @@ def test_guardian_owns_explicit_loop_through_mount_failure_and_cleanup(tmp_path,
         assert device in autoclear
     assert devices == {"/dev/loop8": "/another-owner/disk.img"}
     assert not mounts and not directory.exists()
+
+
+def test_loop_exposure_rejects_an_existing_path_with_the_wrong_identity(tmp_path, monkeypatch):
+    sysfs = tmp_path / "loop19"
+    sysfs.mkdir()
+    (sysfs / "dev").write_text("7:19\n")
+    mutations = []
+
+    def existing_node(path, mode, identity):
+        raise FileExistsError(path)
+
+    monkeypatch.setattr(disk_lifecycle, "LOOP_SYSFS", tmp_path)
+    monkeypatch.setattr(disk_lifecycle.fcntl, "ioctl", lambda control, operation: 19)
+    monkeypatch.setattr(disk_lifecycle.os, "mknod", existing_node)
+    monkeypatch.setattr(
+        disk_lifecycle.Path,
+        "lstat",
+        lambda path: SimpleNamespace(st_mode=stat.S_IFBLK, st_rdev=disk_lifecycle.os.makedev(7, 8)),
+    )
+    monkeypatch.setattr(disk_lifecycle.os, "unlink", lambda path: mutations.append(path))
+    with pytest.raises(RuntimeError, match="wrong device identity"):
+        disk_lifecycle.expose_free_loop_device(io.BytesIO())
+    assert mutations == []
