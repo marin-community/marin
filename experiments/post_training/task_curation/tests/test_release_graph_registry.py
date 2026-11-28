@@ -193,7 +193,7 @@ def test_fingerprint_configs_are_io_free_identity_payloads():
     plan = fixture_plan()
     built = release_graph(plan)
     for key, handle in built.stages.items():
-        payload = handle.build_config(StepContext.for_fingerprint())
+        payload = handle.build_config(StepContext.for_fingerprint(deps=handle.deps))
         assert payload["node"] == key
         assert payload["release_root"] == plan.release_root
 
