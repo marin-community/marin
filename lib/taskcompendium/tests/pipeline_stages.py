@@ -208,7 +208,9 @@ class ShellSimImages(DockerMachineFactory):
     backend = Backend.DOCKER
 
     async def create(self, spec: MachineSpec) -> Machine:
-        return await ShellSimMachineFactory().create(replace(spec, source=PackageSpec()))
+        # The shellsim machine has no image working directory to inherit, so an empty route
+        # workdir runs in its root, like the real Docker backend running without -w.
+        return await ShellSimMachineFactory().create(replace(spec, source=PackageSpec(), workdir=spec.workdir or "/"))
 
 
 class UnavailableImages(DockerMachineFactory):

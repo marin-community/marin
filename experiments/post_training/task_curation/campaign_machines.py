@@ -9,7 +9,7 @@ from typing import Any
 
 from shellbox.context import MachineRoute, ShellboxContext, declared_spec
 from shellbox.machine import Backend, MachineFactory, NetworkPolicy, PackageSpec
-from taskcompendium.models import EnvironmentRequirements
+from taskcompendium.models import DEFAULT_WORKSPACE, EnvironmentRequirements
 from taskcompendium.runtime.local import LocalGraderMachines
 from taskcompendium.runtime.requirements import require_resolved_environment
 
@@ -63,7 +63,7 @@ class CampaignMachines:
     def routes(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineRoute, ...]:
         """Bind supported factory candidates in deployment order with denied networking."""
         require_resolved_environment(environment)
-        spec = declared_spec(environment, NetworkPolicy.DENY)
+        spec = declared_spec(environment, NetworkPolicy.DENY, workspace=DEFAULT_WORKSPACE)
         routes: list[MachineRoute] = []
         if isinstance(spec.source, PackageSpec):
             simulator = self._simulator_factory

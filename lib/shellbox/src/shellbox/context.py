@@ -33,13 +33,17 @@ class EnvironmentSource(ExecutionRequirements, Protocol):
 
 
 def declared_spec(
-    requirements: EnvironmentSource, network: NetworkPolicy, *, build_source: DockerfileSource | None = None
+    requirements: EnvironmentSource,
+    network: NetworkPolicy,
+    *,
+    build_source: DockerfileSource | None = None,
+    workspace: str = "/workspace",
 ) -> MachineSpec:
     """Bind the declared software and its default working directory without installing it.
 
     ``build_source`` supplies a prepared DockerfileSource for an unresolved build context.
     An image machine starts in the image's own working directory (an empty spec workdir);
-    package and lock environments start in ``/workspace``; a declared working directory wins.
+    package and lock environments start in ``workspace``; a declared working directory wins.
     """
     if requirements.docker_image is not None:
         source, image = RegistryImage(requirements.docker_image), True
@@ -55,7 +59,7 @@ def declared_spec(
         raise UnsupportedMachineSpec("Machine execution requires declared software")
     workdir = requirements.working_directory
     if workdir is None:
-        workdir = "" if image else "/workspace"
+        workdir = "" if image else workspace
     return MachineSpec(source, network=network, workdir=workdir)
 
 

@@ -194,6 +194,33 @@ def test_oracle_uses_simulator_directory_and_setup_before_native_grading(monkeyp
     assert checks(task, controls, OracleMachines()) == {"golden": PASS}
 
 
+class ImageWorkdirMachines(FixtureGradingMachines):
+    """Image routes bound like the campaign's: the image's own working directory, no created workspace."""
+
+    def routes(self, environment: EnvironmentRequirements, memory_mb: int):
+        return (
+            MachineRoute(
+                self.factory,
+                MachineSpec(DockerImage(environment.docker_image or GRADER_IMAGE), memory_mb=memory_mb, workdir=""),
+            ),
+        )
+
+
+def test_oracle_runs_in_the_image_workdir_without_creating_a_workspace():
+    """An image route with no declared working directory skips workspace creation and runs in the image's own."""
+    task = answer_task().model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=AGENT_IMAGE
+            )
+        }
+    )
+    controls = Controls(
+        golden=lambda _: OracleCommand('test "$PWD" != /workspace && echo 7 > answer.out', answer_file="answer.out")
+    )
+    assert checks(task, controls, ImageWorkdirMachines(RecordingImages())) == {"golden": PASS}
+
+
 @dataclass(eq=False)
 class FailingOracleMachine:
     """A machine that stages files but refuses every oracle command."""

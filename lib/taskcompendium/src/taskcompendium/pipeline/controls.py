@@ -53,7 +53,7 @@ from taskcompendium.runtime.requirements import require_resolved_environment
 from taskcompendium.runtime.shell import ShellEnvironment, upload_resources
 from taskcompendium.runtime.task_grading import grade_task, sandbox_grade
 
-CONTROLS_REVISION = "24"
+CONTROLS_REVISION = "25"
 ORACLE_TIMEOUT = 600.0
 ORACLE_OUTPUT_LIMIT_BYTES = 1_048_576
 FILE_SUBMISSION_MESSAGE = TextMessage(role="assistant", content="The submission is in the workspace.")
@@ -445,9 +445,11 @@ async def _oracle_attempt(
             ORACLE_TIMEOUT,
             user=setup_user(factory.backend),
         )
-        commands = [Command(("mkdir", "-p", workspace), timeout=ORACLE_TIMEOUT)]
+        # An image route without a declared working directory runs in the image's own.
+        commands = [Command(("mkdir", "-p", workspace), timeout=ORACLE_TIMEOUT)] if workspace else []
+        cwd = workspace or None
         commands.extend(
-            Command(("sh", "-c", setup), cwd=workspace, timeout=ORACLE_TIMEOUT, user=setup_user(factory.backend))
+            Command(("sh", "-c", setup), cwd=cwd, timeout=ORACLE_TIMEOUT, user=setup_user(factory.backend))
             for setup in environment.setup_commands
         )
         commands.append(
@@ -457,7 +459,7 @@ async def _oracle_attempt(
                     "-lc",
                     command.command,
                 ),
-                cwd=workspace,
+                cwd=cwd,
                 timeout=ORACLE_TIMEOUT,
                 output_limit_bytes=ORACLE_OUTPUT_LIMIT_BYTES,
             )
@@ -479,7 +481,7 @@ async def _oracle_attempt(
         answer = await machine.run(
             Command(
                 ("cat", command.answer_file),
-                cwd=workspace,
+                cwd=workspace or None,
                 timeout=ORACLE_TIMEOUT,
                 output_limit_bytes=ORACLE_OUTPUT_LIMIT_BYTES,
             )

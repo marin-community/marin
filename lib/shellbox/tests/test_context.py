@@ -35,6 +35,7 @@ class Requirements:
     package_spec: PackageSpec | None = None
     network: NetworkPolicy = NetworkPolicy.DENY
     working_directory: str | None = None
+    workspace: str = "/workspace"
 
     requirements = property(task_requirements)
 
@@ -159,3 +160,19 @@ def test_declared_requirements_route_to_the_satisfying_tiers(requirements: Requi
     except UnsupportedMachineSpec:
         routes = ()
     assert tuple(route.backend for route in routes) == expected
+
+
+@pytest.mark.parametrize(
+    "requirements, expected",
+    [
+        (Requirements(LINUX, docker_image=PINNED_IMAGE), ""),
+        (Requirements(LINUX, docker_image=PINNED_IMAGE, working_directory="/app"), "/app"),
+        (Requirements(LINUX, packages_lock="s3://bucket/lock", workspace="/app"), "/app"),
+        (Requirements(LINUX, packages_lock="s3://bucket/lock"), "/workspace"),
+        (Requirements(LINUX, package_spec=PackageSpec(pypi_packages=("httpx==0.28.0",))), "/workspace"),
+    ],
+    ids=["image_default", "image_declared", "lock_workspace", "lock_default", "packages_default"],
+)
+def test_declared_spec_binds_the_working_directory_once(requirements: Requirements, expected: str):
+    spec = declared_spec(requirements, requirements.network, workspace=requirements.workspace)
+    assert spec.workdir == expected

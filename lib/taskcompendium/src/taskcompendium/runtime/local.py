@@ -37,7 +37,7 @@ from shellbox.context import MachineRoute, declared_spec
 from shellbox.image import is_digest_pinned_image
 from shellbox.machine import Backend, MachineFactory, Mount, NetworkPolicy
 
-from taskcompendium.models import EnvironmentRequirements
+from taskcompendium.models import DEFAULT_WORKSPACE, EnvironmentRequirements
 from taskcompendium.runtime.requirements import require_resolved_environment
 
 # Compiled extension modules are host-platform artifacts of optimized wheels. Staging ships the
@@ -281,5 +281,5 @@ class LocalGraderMachines:
             return ()
         if environment.docker_image is None and environment.packages_lock is None and environment.package_spec is None:
             return ()
-        spec = replace(declared_spec(environment, NetworkPolicy.DENY), memory_mb=memory_mb)
+        spec = replace(declared_spec(environment, NetworkPolicy.DENY, workspace=DEFAULT_WORKSPACE), memory_mb=memory_mb)
         return (MachineRoute(local_factory(), spec),)
