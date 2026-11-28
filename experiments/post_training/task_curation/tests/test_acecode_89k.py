@@ -2,7 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import subprocess
+import sys
+from pathlib import Path, PurePosixPath
 
+import pytest
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ScriptGrader, Source
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportRejection, NormalizedTask, RawRow
@@ -10,6 +14,7 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets import acecode_89k
 
+SUBPROCESS_TIMEOUT = 5
 NATIVE = {
     "id": "acecode-0001",
     "source": "bigcode_python_fns",
@@ -78,9 +83,84 @@ def test_the_assert_cases_are_the_grader_and_the_inferences_stay_out():
     payload = json.loads(resource_bytes(config))
     assert payload["test_cases"] == NATIVE["test_cases"]
     assert "inferences" not in json.dumps(payload)
-    grade = next(resource for resource in task.resources.verifier if resource.path == "grade.py")
-    script = resource_bytes(grade).decode()
-    assert "exec(case" in script and "print(1)" in script
+
+
+@pytest.fixture
+def staged_grader(tmp_path: Path) -> Path:
+    task = converted(NATIVE).task
+    grader = task.grader
+    assert isinstance(grader, ScriptGrader) and grader.answer_path is not None
+    for resource in task.resources.verifier:
+        (tmp_path / resource.path).write_bytes(resource_bytes(resource))
+    entrypoint = PurePosixPath(grader.argv[1])
+    script = tmp_path / entrypoint.name
+    config = entrypoint.with_name("config.json")
+    # Map the sandbox's absolute input paths into the test directory.
+    script.write_text(
+        script.read_text()
+        .replace(json.dumps(str(config)), repr(str(tmp_path / config.name)))
+        .replace(json.dumps(grader.answer_path), repr(str(tmp_path / "answer.txt")))
+    )
+    return script
+
+
+@pytest.mark.parametrize(
+    ("answer", "reward"),
+    [
+        ("```python\ndef staking_simulation(xs: List[int], ys, t):\n    return [0]\n```", 0),
+        ("def staking_simulation(:", 0),
+        ("import unavailable_acecode_dependency", 0),
+        ("This is a prose reply.", 0),
+        ("print(1)\nraise SystemExit(0)", 0),
+        ("def staking_simulation(xs, ys, t):\n    return [1500]", 0),
+        (
+            "```python\nraise RuntimeError\n```\n"
+            "```python\nprint('debug output', end='')\n"
+            "def staking_simulation(xs, ys, t):\n"
+            "    return [amount if duration <= t else 0 for amount, duration in xs]\n"
+            "```",
+            1,
+        ),
+    ],
+    ids=("missing_annotation_import", "syntax_error", "missing_package", "prose", "early_exit", "failed_case", "pass"),
+)
+def test_shipped_grader_emits_only_its_reward(staged_grader: Path, answer: str, reward: int):
+    (staged_grader.parent / "answer.txt").write_text(answer)
+    result = subprocess.run(
+        [sys.executable, str(staged_grader)], capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"{reward}\n"
+
+
+def test_shipped_grader_scores_a_timed_out_case_zero(staged_grader: Path):
+    (staged_grader.parent / "answer.txt").write_text(
+        "def staking_simulation(xs, ys, t):\n    while True:\n        pass\n"
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import runpy, sys; runpy.run_path(sys.argv[1])['main'](timeout=0.2)",
+            str(staged_grader),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=SUBPROCESS_TIMEOUT,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "0\n"
+
+
+@pytest.mark.parametrize("cases", [[], ["assert ("]], ids=("empty", "invalid_python"))
+def test_shipped_grader_exits_nonzero_for_invalid_cases(staged_grader: Path, cases: list[str]):
+    (staged_grader.parent / "config.json").write_text(json.dumps({"test_cases": cases}))
+    (staged_grader.parent / "answer.txt").write_text("def staking_simulation(xs, ys, t):\n    return [0]\n")
+    result = subprocess.run(
+        [sys.executable, str(staged_grader)], capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT
+    )
+    assert result.returncode != 0
+    assert result.stdout == ""
 
 
 def test_contract_defects_fail_closed():
