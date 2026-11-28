@@ -113,8 +113,9 @@ def _run_stage(args: argparse.Namespace, source: RlDataSource, run_root: str) ->
         cleanup.callback(client.shutdown)
         cleanup.enter_context(set_current_client(client))
         runtime = CampaignRuntime()
+        resources = ResourceConfig(cpu=2, ram="8g")
         with artifact_prefix(args.artifact_root):
-            with ZephyrContext(client=client, max_workers=args.max_workers) as context:
+            with ZephyrContext(client=client, max_workers=args.max_workers, resources=resources) as context:
                 with runtime.activate(context):
                     staged = run(download_step(source.config.source, runtime), max_concurrent=1)[0]
                     source_input = staged.path
@@ -131,7 +132,7 @@ def _run_stage(args: argparse.Namespace, source: RlDataSource, run_root: str) ->
                     quality_sample_size=SOURCE_QUALITY_SAMPLE_SIZE,
                     verification_sample_size=20,
                     max_workers=args.max_workers,
-                    worker_resources=ResourceConfig(cpu=2, ram="8g"),
+                    worker_resources=resources,
                     normalized_shards=2,
                 )
                 output = prefix_join(run_root, "pipeline")
