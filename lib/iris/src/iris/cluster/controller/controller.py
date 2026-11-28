@@ -15,7 +15,7 @@ import threading
 import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 import uvicorn
@@ -229,6 +229,31 @@ def with_task_token(
     stamped.CopyFrom(request)
     stamped.task_token = auth.jwt_manager.create_task_token(job_id)
     return stamped
+
+
+def with_assignments(
+    worker_status: dict[WorkerId, WorkerStatus], assignments: list[Assignment]
+) -> dict[WorkerId, WorkerStatus]:
+    """Add this tick's assignments to a worker snapshot taken before scheduling.
+
+    The autoscaler must see a worker that just received a task as busy, at that task's band.
+    Otherwise idle-first reservation reclaim could pick it as a victim and fail the new task.
+    An assignment without a band adds the ``PRIORITY_BAND_INHERIT`` sentinel, which reclaim never preempts.
+    """
+    if not assignments:
+        return worker_status
+    merged = dict(worker_status)
+    for assignment in assignments:
+        status = merged.get(assignment.worker_id)
+        if status is None:
+            continue
+        band = assignment.priority_band if assignment.priority_band is not None else job_pb2.PRIORITY_BAND_INHERIT
+        merged[assignment.worker_id] = replace(
+            status,
+            running_task_ids=status.running_task_ids | {assignment.task_id.to_wire()},
+            running_bands=status.running_bands | {band},
+        )
+    return merged
 
 
 def backend_observation_request(
@@ -1098,8 +1123,11 @@ class Controller:
         auto_result: AutoscaleResult | None = None
         if run_autoscale:
             residual_demand = sched_result.residual_demand if sched_result is not None else []
+            worker_status = with_assignments(
+                inputs.worker_status, sched_result.assignments if sched_result is not None else []
+            )
             auto_result = self.backend.autoscale(
-                AutoscaleRequest(residual_demand=residual_demand, worker_status=inputs.worker_status)
+                AutoscaleRequest(residual_demand=residual_demand, worker_status=worker_status)
             )
 
         confirmed_promotions = self._commit_tick(

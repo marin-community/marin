@@ -8,7 +8,12 @@ from dataclasses import dataclass, field
 
 from iris.cluster.config import AutoscalerConfig, ReservationReclaimConfig
 from iris.cluster.constraints import DeviceType
-from iris.cluster.controller.autoscaler.reclaim import PoolSlice, ReclaimDecision, plan_reservation_reclaim
+from iris.cluster.controller.autoscaler.reclaim import (
+    BLOCKED_AWAITING_CAPACITY,
+    PoolSlice,
+    ReclaimDecision,
+    plan_reservation_reclaim,
+)
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -27,9 +32,11 @@ from iris.cluster.controller.backend import (
     ScheduleResult,
     WorkerFleetReconcileRequest,
 )
+from iris.cluster.controller.controller import with_assignments
+from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind
-from iris.cluster.types import CapacityType, WorkerId, WorkerStatus
+from iris.cluster.types import CapacityType, JobName, WorkerId, WorkerStatus
 from iris.rpc import controller_pb2, job_pb2
 from iris.testing.backends import make_mock_platform, make_mock_slice_handle
 from iris.testing.controller import (
@@ -46,7 +53,7 @@ from iris.testing.controller import (
     worker_backend_descriptor,
 )
 from iris.testing.controller_state import ControllerTestState
-from rigging.timing import Duration, RateLimiter, Timestamp
+from rigging.timing import RateLimiter, Timestamp
 
 POOL = "v4-reserved/us-central2-b"
 PRODUCTION = job_pb2.PRIORITY_BAND_PRODUCTION
@@ -241,7 +248,19 @@ def _reserved_group(name: str, variant: str, num_vms: int, handles) -> ScalingGr
     return group
 
 
-def test_autoscaler_reclaims_for_a_waiting_production_slice_and_holds_victim_scale_ups():
+@dataclass
+class _ReclaimScenario:
+    """Two busy batch v4-8 slices fill the pool; a production v4-16 slice ``big-0`` waits on the cloud."""
+
+    autoscaler: object
+    small: ScalingGroup
+    big: ScalingGroup
+    busy: dict[str, WorkerStatus]
+    demand: list
+    small_demand: list
+
+
+def _reclaim_scenario() -> _ReclaimScenario:
     small_handles = [make_mock_slice_handle(f"small-{i}", scale_group="small", all_ready=True) for i in range(2)]
     small = _reserved_group("small", "v4-8", 1, small_handles)
     for handle in small_handles:
@@ -268,26 +287,85 @@ def test_autoscaler_reclaims_for_a_waiting_production_slice_and_holds_victim_sca
             priority_band=PRODUCTION,
         )
     ]
-    later = Timestamp.from_ms(Duration.from_minutes(11).to_ms())
+    small_demand = [
+        dataclasses.replace(entry, priority_band=BATCH)
+        for entry in make_demand_entries(3, device_type=DeviceType.TPU, device_variant="v4-8", task_prefix="b")
+    ]
+    return _ReclaimScenario(autoscaler, small, big, busy, demand, small_demand)
+
+
+def _at_min(minutes: int) -> Timestamp:
+    return Timestamp.from_ms(minutes * MINUTE_MS)
+
+
+def _actions(autoscaler, action_type: str) -> list:
+    return [a for a in autoscaler.get_status().recent_actions if a.action_type == action_type]
+
+
+def test_autoscaler_reclaims_for_a_waiting_production_slice_and_holds_victim_scale_ups():
+    sc = _reclaim_scenario()
     try:
-        autoscaler.run_once(demand, busy, timestamp=later)
-        (decision,) = autoscaler.take_reclaims()
+        sc.autoscaler.run_once(sc.demand, sc.busy, timestamp=_at_min(11))
+        (decision,) = sc.autoscaler.take_reclaims()
         assert decision.group == "big" and decision.chips_needed == 8
         assert sorted(v.slice_id for v in decision.victims) == ["small-0", "small-1"]
-        assert sorted(decision.worker_ids) == sorted(busy)
-        assert autoscaler.take_reclaims() == []
-        actions = [a.action_type for a in autoscaler.get_status().recent_actions]
-        assert "reservation_reclaim" in actions
+        assert sorted(decision.worker_ids) == sorted(sc.busy)
+        assert sc.autoscaler.take_reclaims() == []
+        assert _actions(sc.autoscaler, "reservation_reclaim")
 
-        # During the cooldown, the victims' own group may not scale back up into the freed chips.
-        small_demand = [
-            dataclasses.replace(entry, priority_band=BATCH)
-            for entry in make_demand_entries(3, device_type=DeviceType.TPU, device_variant="v4-8", task_prefix="b")
-        ]
-        autoscaler.run_once(small_demand, busy, timestamp=Timestamp.from_ms(later.epoch_ms() + MINUTE_MS))
-        assert small.slice_count() == 2
+        # While the waiting slice still waits, the victims' own group may not scale back up into the freed chips.
+        sc.autoscaler.run_once(sc.small_demand, sc.busy, timestamp=_at_min(12))
+        assert sc.small.slice_count() == 2
     finally:
-        autoscaler.shutdown()
+        sc.autoscaler.shutdown()
+
+
+def test_hold_lifts_once_the_waiting_slice_is_ready():
+    sc = _reclaim_scenario()
+    try:
+        sc.autoscaler.run_once(sc.demand, sc.busy, timestamp=_at_min(11))
+        assert len(sc.autoscaler.take_reclaims()) == 1
+
+        # The cloud fills the waiting slice well inside the cooldown; other groups may scale up again.
+        sc.big.mark_slice_ready("big-0", ["big-0-w0", "big-0-w1"])
+        sc.autoscaler.run_once(sc.small_demand, sc.busy, timestamp=_at_min(12))
+        assert sc.small.slice_count() > 2
+    finally:
+        sc.autoscaler.shutdown()
+
+
+def test_a_slice_the_cloud_never_fills_is_reclaimed_for_only_once():
+    sc = _reclaim_scenario()
+    try:
+        sc.autoscaler.run_once(sc.demand, sc.busy, timestamp=_at_min(11))
+        assert len(sc.autoscaler.take_reclaims()) == 1
+
+        # Past the cooldown, big-0 still waits and the pool again holds busy batch slices
+        # (e.g. other slices took the freed chips). No second reclaim for the same waiting slice.
+        sc.autoscaler.run_once(sc.demand, sc.busy, timestamp=_at_min(11 + 31))
+        assert sc.autoscaler.take_reclaims() == []
+        blocked = _actions(sc.autoscaler, "reclaim_blocked")
+        assert blocked and blocked[-1].slice_id == "big-0"
+        assert "awaiting_capacity" in blocked[-1].reason
+        assert len(_actions(sc.autoscaler, "reservation_reclaim")) == 1
+    finally:
+        sc.autoscaler.shutdown()
+
+
+def test_an_outstanding_reclaim_blocks_its_pool_until_the_slice_stops_waiting():
+    slices = [_slice("wait", "big", 8, ready=False), _slice("b", "small", 8)]
+    bands = {"b": BATCH}
+    status = _status(slices, bands)
+    plan = plan_reservation_reclaim(slices, {"big": PRODUCTION}, status, ON, {}, NOW, outstanding={POOL: "wait"})
+    assert plan.decisions == []
+    (blocked,) = plan.blocked
+    assert (blocked.waiting_slice_id, blocked.reason) == ("wait", BLOCKED_AWAITING_CAPACITY)
+
+    # Another pool's outstanding reclaim does not block this one.
+    plan = plan_reservation_reclaim(
+        slices, {"big": PRODUCTION}, status, ON, {}, NOW, outstanding={"v5p-reserved/us-east5-a": "x"}
+    )
+    assert len(plan.decisions) == 1
 
 
 @dataclass
@@ -374,3 +452,65 @@ def test_unknown_bands_never_trigger_reclaim_and_never_make_victims():
     assert _plan(slices, {"b": BATCH}, waiting={"big": unknown}).decisions == []
     plan = _plan(slices, {"b": unknown}, waiting={"big": PRODUCTION})
     assert plan.decisions == [] and plan.blocked[0].chips_reclaimable == 0
+
+
+@dataclass
+class _AssignThenPlanProvider(_ReclaimingProvider):
+    """Schedules one task onto an idle worker, then plans reclaim from the worker view the controller hands over."""
+
+    assignments: list[Assignment] = field(default_factory=list)
+    waiting: PoolSlice | None = None
+    victim: PoolSlice | None = None
+
+    def schedule(self, request: ScheduleRequest) -> ScheduleResult:
+        return ScheduleResult(assignments=self.assignments)
+
+    def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
+        assert self.waiting is not None and self.victim is not None
+        plan = plan_reservation_reclaim(
+            [self.waiting, self.victim], {self.waiting.group: PRODUCTION}, request.worker_status, ON, {}, NOW
+        )
+        return AutoscaleResult(reclaims=plan.decisions)
+
+
+def test_a_task_assigned_this_tick_keeps_its_idle_worker_out_of_reclaim(make_controller):
+    waiting = _slice("wait", "big", 4, ready=False)
+    victim = dataclasses.replace(_slice("victim", "small", 4), worker_ids=("worker-victim",))
+    provider = _AssignThenPlanProvider(reclaims=[], waiting=waiting, victim=victim)
+    ctrl = make_controller(provider=provider)
+    state = ControllerTestState(ctrl._db, health=ctrl.worker_health)
+    worker = register_worker(state, "worker-victim", "worker-victim:8080", make_worker_metadata())
+    [task] = submit_job(state, "prod-job", make_job_request("prod-job"))
+    # The worker is idle in the tick's snapshot; this tick's scheduling places a production task on it.
+    provider.assignments = [Assignment(task_id=task.task_id, worker_id=worker, priority_band=PRODUCTION)]
+
+    ctrl._control_tick(
+        woken=False,
+        schedule_limiter=RateLimiter(interval_seconds=1e9),
+        reconcile_limiter=RateLimiter(interval_seconds=1e9),
+        autoscale_limiter=RateLimiter(interval_seconds=1e9),
+    )
+
+    assert provider.remove_capacity_calls == []
+    assert query_worker(state, worker) is not None
+    row = query_task(state, task.task_id)
+    assert row.current_worker_id == worker
+    assert row.state != job_pb2.TASK_STATE_WORKER_FAILED
+
+
+def test_with_assignments_marks_workers_busy_at_the_assigned_band():
+    idle = WorkerStatus(worker_id="w", running_task_ids=frozenset())
+    task_id = JobName.from_wire("/user/job/0")
+    merged = with_assignments(
+        {WorkerId("w"): idle},
+        [
+            Assignment(task_id=task_id, worker_id=WorkerId("w"), priority_band=BATCH),
+            Assignment(task_id=JobName.from_wire("/user/job/1"), worker_id=WorkerId("gone")),
+        ],
+    )
+    assert merged[WorkerId("w")].running_bands == frozenset({BATCH})
+    assert merged[WorkerId("w")].running_task_ids == frozenset({task_id.to_wire()})
+    assert WorkerId("gone") not in merged
+    # No band known: an unknown band, which reclaim never preempts.
+    no_band = with_assignments({WorkerId("w"): idle}, [Assignment(task_id=task_id, worker_id=WorkerId("w"))])
+    assert no_band[WorkerId("w")].running_bands == frozenset({job_pb2.PRIORITY_BAND_INHERIT})

@@ -80,6 +80,17 @@ from iris.time_proto import timestamp_to_proto
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class _PoolReclaim:
+    """A pool's last reservation reclaim."""
+
+    at: Timestamp
+    group: str
+    waiting_slice_id: str
+    # True once the waiting slice stopped waiting on the cloud (READY, initializing, failed, or gone).
+    settled: bool = False
+
+
 # After this long in UNKNOWN state, treat the slice as FAILED (quota timeout is 5 min, so this is conservative)
 DEFAULT_UNRESOLVABLE_TIMEOUT = Duration.from_minutes(15)
 
@@ -212,8 +223,8 @@ class Autoscaler:
         self._reclaim_config = reservation_reclaim or ReservationReclaimConfig()
         # Latest controller worker snapshot (from ``refresh``), read by reservation reclaim.
         self._worker_status: WorkerStatusMap = {}
-        # Pool -> (time, waiting group) of its last reclaim. Memory-only: a restart only resets the cooldown.
-        self._last_reclaim: dict[str, tuple[Timestamp, str]] = {}
+        # Pool -> its last reclaim. Memory-only: a restart only resets the cooldown.
+        self._last_reclaim: dict[str, _PoolReclaim] = {}
         # Reclaims decided but not yet handed to the controller (see ``take_reclaims``).
         self._pending_reclaims: list[ReclaimDecision] = []
         self._make_draining_group = make_draining_group
@@ -458,16 +469,28 @@ class Autoscaler:
             ]
             if bands:
                 waiting_bands[group_name] = min(bands, key=priority_band_rank)
+        slices = [slice_ for group in self._groups.values() for slice_ in group.pool_slices()]
+        # A reclaim stays outstanding while its waiting slice still waits on the cloud. Once the slice
+        # is READY (or initializing), failed, or gone, the pool may reclaim again after the cooldown.
+        still_waiting = {slice_.slice_id for slice_ in slices if slice_.waiting}
+        for reclaim in self._last_reclaim.values():
+            if reclaim.waiting_slice_id not in still_waiting:
+                reclaim.settled = True
         plan = plan_reservation_reclaim(
-            slices=[slice_ for group in self._groups.values() for slice_ in group.pool_slices()],
+            slices=slices,
             waiting_bands=waiting_bands,
             worker_status=self._worker_status,
             config=self._reclaim_config,
-            last_reclaim={pool: at for pool, (at, _group) in self._last_reclaim.items()},
+            last_reclaim={pool: reclaim.at for pool, reclaim in self._last_reclaim.items()},
             now=ts,
+            outstanding={
+                pool: reclaim.waiting_slice_id for pool, reclaim in self._last_reclaim.items() if not reclaim.settled
+            },
         )
         for decision in plan.decisions:
-            self._last_reclaim[decision.quota_pool] = (ts, decision.group)
+            self._last_reclaim[decision.quota_pool] = _PoolReclaim(
+                at=ts, group=decision.group, waiting_slice_id=decision.waiting_slice_id
+            )
             self._pending_reclaims.append(decision)
             victims = ", ".join(f"{v.slice_id} ({v.group}, {v.chips} chips)" for v in decision.victims)
             self._log_action(
@@ -485,19 +508,21 @@ class Autoscaler:
                 blocked.group,
                 slice_id=blocked.waiting_slice_id,
                 reason=(
-                    f"pool={blocked.quota_pool} band={blocked.preemptor_band} "
+                    f"{blocked.reason} pool={blocked.quota_pool} band={blocked.preemptor_band} "
                     f"chips_needed={blocked.chips_needed} chips_reclaimable={blocked.chips_reclaimable}"
                 ),
                 status="blocked",
             )
 
     def _held_for_reclaim(self, group: ScalingGroup, ts: Timestamp) -> bool:
-        """Hold other groups' scale-ups in a pool during its reclaim cooldown, so freed chips reach the waiting slice."""
+        """Hold other groups' scale-ups in a pool so freed chips reach the waiting slice.
+
+        The hold lasts until the waiting slice stops waiting (READY, failed, or gone), at most one cooldown.
+        """
         reclaim = self._last_reclaim.get(group.config.quota_pool)
-        if reclaim is None:
+        if reclaim is None or reclaim.settled or group.name == reclaim.group:
             return False
-        at, waiting_group = reclaim
-        return group.name != waiting_group and ts.epoch_ms() - at.epoch_ms() < self._reclaim_config.cooldown.to_ms()
+        return ts.epoch_ms() - reclaim.at.epoch_ms() < self._reclaim_config.cooldown.to_ms()
 
     def take_reclaims(self) -> list[ReclaimDecision]:
         """Hand this tick's reclaim decisions to the controller, which fails the victims' workers."""

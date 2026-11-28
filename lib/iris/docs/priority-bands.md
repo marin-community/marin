@@ -99,11 +99,18 @@ Each autoscaler pass, per listed pool:
 - **Order:** idle slices first, then the lowest band, then the fewest chips, then
   the youngest. Reclaim stops once the freed chips reach the waiting slice's chips.
 - **All or nothing:** if the candidates cannot free enough chips, nothing is
-  deleted and the autoscaler logs `reclaim_blocked`.
+  deleted and the autoscaler logs `reclaim_blocked` with reason `too_few_chips`.
 - **Effect:** the controller fails the victims' workers (their tasks become
   `WORKER_FAILED` and retry on `max_retries_preemption`) and deletes the slices.
-  During `cooldown`, other groups in the pool may not scale up, so the freed chips
-  go to the waiting slice.
+  Other groups in the pool may not scale up until the waiting slice stops waiting
+  (READY, failed, or gone), for at most `cooldown`, so the freed chips go to it.
+- **Once per waiting slice:** the pool reclaims nothing more while that slice
+  still waits on the cloud. Each pass logs `reclaim_blocked` with reason
+  `awaiting_capacity` for it, so a reservation the cloud never fills is not
+  drained again and again. After the slice stops waiting, the pool may reclaim
+  again once `cooldown` has passed.
+- **Same-tick safety:** workers that receive a task in the same tick count as busy
+  at that task's band, so a task placed this tick is never a victim.
 - **Record:** a `reservation_reclaim` autoscaler action names the waiting slice,
   the band, the chips needed and freed, and every victim slice. Each victim worker's
   failure reason names the pool and the waiting slice.

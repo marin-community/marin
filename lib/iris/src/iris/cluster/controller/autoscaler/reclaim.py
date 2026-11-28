@@ -64,9 +64,18 @@ class ReclaimDecision:
         return [worker_id for victim in self.victims for worker_id in victim.worker_ids]
 
 
+# ``ReclaimBlocked.reason`` values.
+BLOCKED_TOO_FEW_CHIPS = "too_few_chips"
+BLOCKED_AWAITING_CAPACITY = "awaiting_capacity"
+
+
 @dataclass(frozen=True)
 class ReclaimBlocked:
-    """A waiting slice whose pool holds too few lower-priority chips to reclaim."""
+    """A waiting slice that gets no reclaim this pass.
+
+    ``reason`` is ``too_few_chips`` when the pool holds too few lower-priority chips, or
+    ``awaiting_capacity`` when an earlier reclaim already freed chips for this slice and it still waits.
+    """
 
     quota_pool: str
     group: str
@@ -74,6 +83,7 @@ class ReclaimBlocked:
     preemptor_band: int
     chips_needed: int
     chips_reclaimable: int
+    reason: str = BLOCKED_TOO_FEW_CHIPS
 
 
 @dataclass(frozen=True)
@@ -107,6 +117,7 @@ def plan_reservation_reclaim(
     config: ReservationReclaimConfig,
     last_reclaim: Mapping[str, Timestamp],
     now: Timestamp,
+    outstanding: Mapping[str, str] | None = None,
 ) -> ReclaimPlan:
     """Choose lower-priority slices to delete for each pool's most important waiting slice.
 
@@ -117,6 +128,7 @@ def plan_reservation_reclaim(
         config: Reclaim settings; pools not listed in ``quota_pools`` are never touched.
         last_reclaim: Pool -> time of its last reclaim, for the cooldown.
         now: Current time.
+        outstanding: Pool -> waiting slice of its last reclaim, while that slice still waits on the cloud.
 
     Rules:
         - A slice waits for reclaim once it has waited on the cloud for ``min_wait`` and its group has
@@ -129,7 +141,11 @@ def plan_reservation_reclaim(
         - Stop once the freed chips reach the waiting slice's chips. If the candidates cannot reach
           that, nothing is reclaimed and the shortfall is reported as blocked.
         - At most one reclaim per pool per ``cooldown``.
+        - A pool with an outstanding reclaim reclaims nothing more until that slice stops waiting
+          (READY, initializing, failed, or gone). The outstanding slice is reported as blocked
+          (``awaiting_capacity``), so a reservation the cloud never fills is not drained again and again.
     """
+    outstanding = outstanding or {}
     pools = set(config.quota_pools)
     victim_limit = priority_band_rank(priority_band_value(config.highest_victim_band))
 
@@ -145,6 +161,22 @@ def plan_reservation_reclaim(
     decisions: list[ReclaimDecision] = []
     blocked: list[ReclaimBlocked] = []
     for pool, waiting in sorted(waiting_by_pool.items()):
+        served = outstanding.get(pool)
+        if served is not None:
+            for slice_, band in waiting:
+                if slice_.slice_id == served:
+                    blocked.append(
+                        ReclaimBlocked(
+                            quota_pool=pool,
+                            group=slice_.group,
+                            waiting_slice_id=slice_.slice_id,
+                            preemptor_band=band,
+                            chips_needed=slice_.chips,
+                            chips_reclaimable=0,
+                            reason=BLOCKED_AWAITING_CAPACITY,
+                        )
+                    )
+            continue
         last = last_reclaim.get(pool)
         if last is not None and now.epoch_ms() - last.epoch_ms() < config.cooldown.to_ms():
             continue
