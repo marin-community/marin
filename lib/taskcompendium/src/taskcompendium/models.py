@@ -21,7 +21,18 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Annotated, Any, ClassVar, Literal, NoReturn
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    ModelWrapValidatorHandler,
+    PrivateAttr,
+    TypeAdapter,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
 from shellbox.machine import CommandSemantics as CommandSemantics
 from shellbox.machine import PackageSpec
@@ -1086,6 +1097,40 @@ class TaskSpec(BaseModel):
     """The complete semantic definition of one task, its grader, and its final result."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    _source_json: str | None = PrivateAttr(default=None)
+    _validated_model_json: str | None = PrivateAttr(default=None)
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def preserve_source_document(
+        cls, value: Any, handler: ModelWrapValidatorHandler["TaskSpec"], info: ValidationInfo
+    ) -> "TaskSpec":
+        source_json = (
+            json.dumps(value, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+            if info.mode == "json" and isinstance(value, dict)
+            else None
+        )
+        task = handler(value)
+        if source_json is not None:
+            task._source_json = source_json
+            task._validated_model_json = task.model_dump_json()
+        return task
+
+    def source_document(self, *, exclude: frozenset[str] = frozenset()) -> dict[str, Any]:
+        """Return the frozen source JSON until the relevant validated task state changes."""
+        current = {key: value for key, value in self.model_dump(mode="json").items() if key not in exclude}
+        if self._source_json is not None and self._validated_model_json is not None:
+            baseline = {
+                key: value for key, value in json.loads(self._validated_model_json).items() if key not in exclude
+            }
+            if current == baseline:
+                return {key: value for key, value in json.loads(self._source_json).items() if key not in exclude}
+        return current
+
+    def __eq__(self, other: object) -> bool:
+        # Validation caches do not change the semantic equality of task models.
+        return isinstance(other, TaskSpec) and type(self) is type(other) and self.__dict__ == other.__dict__
 
     id: str
     context: ConversationInput
