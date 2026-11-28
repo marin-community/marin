@@ -16,7 +16,7 @@ from iris.cluster.platforms.protocols import ControllerRestartNotStarted
 
 
 @pytest.mark.parametrize(
-    ("reached_vm", "prior_phase", "rollback_probe_fails"),
+    ("forward_restart_started", "prior_phase", "rollback_probe_fails"),
     [
         (False, RolloutPhase.COMMITTED, False),
         (False, RolloutPhase.PENDING, False),
@@ -28,7 +28,7 @@ from iris.cluster.platforms.protocols import ControllerRestartNotStarted
 def test_controller_restart_failure_preserves_or_requests_rollback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    reached_vm: bool,
+    forward_restart_started: bool,
     prior_phase: RolloutPhase,
     rollback_probe_fails: bool,
 ) -> None:
@@ -55,7 +55,7 @@ def test_controller_restart_failure_preserves_or_requests_rollback(
 
         def restart_controller(self, restarted_config: IrisClusterConfig) -> str:
             if restarted_config.controller.image == "controller:new":
-                if reached_vm:
+                if forward_restart_started:
                     raise RuntimeError("health check failed")
                 raise ControllerRestartNotStarted("SSH authorization failed")
             if rollback_probe_fails:
@@ -96,7 +96,7 @@ def test_controller_restart_failure_preserves_or_requests_rollback(
         assert record.image == "controller:new"
         assert record.previous_image == "controller:old"
         assert record.rollback_checkpoint == checkpoint_url
-    elif reached_vm:
+    elif forward_restart_started:
         assert record is not None
         assert record.phase is RolloutPhase.ROLLBACK_REQUESTED
         assert record.image == "controller:old"

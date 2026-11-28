@@ -660,7 +660,7 @@ class K8sControllerProvider:
         return self._apply_controller_start(config, preparation, fresh=fresh)
 
     def _prepare_controller_start(self, config: IrisClusterConfig) -> _ControllerStartPreparation:
-        """Resolve restart inputs and validate prerequisites without changing resources."""
+        """Resolve controller start inputs and validate prerequisites without changing resources."""
         cw = config.controller.coreweave
         if not cw.scale_group:
             raise InfraError("CoreWeave controller config must set scale_group")
