@@ -89,14 +89,15 @@ def machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeS
     A Docker build context becomes a ``DockerfileSource`` in a temporary directory that exists until the
     context exits: the backend checks it there and builds the image when it creates the machine. An
     image machine, pulled or built, starts in the image's working directory unless the requirements
-    name one.
+    name one. RL stages task resources at absolute declared paths under /workspace, so package and
+    lock machines start there; curation's grading machines bind the same declaration to /app.
     """
     with ExitStack() as stack:
         build_source = None
         if requirements.docker_build is not None:
             context = Path(stack.enter_context(TemporaryDirectory(prefix="rollout-build-")))
             build_source = DockerfileSource(context, write_build_context(requirements.docker_build, context))
-        spec = declared_spec(requirements, runtime.network, build_source=build_source)
+        spec = declared_spec(requirements, runtime.network, build_source=build_source, workspace="/workspace")
         yield MachineSpec(
             source=spec.source,
             workdir=spec.workdir,

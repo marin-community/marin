@@ -35,7 +35,7 @@ class Requirements:
     package_spec: PackageSpec | None = None
     network: NetworkPolicy = NetworkPolicy.DENY
     working_directory: str | None = None
-    workspace: str = "/workspace"
+    workspace: str = "/app"
 
     requirements = property(task_requirements)
 
@@ -153,7 +153,7 @@ class DaytonaAdmissionFactory:
 def test_declared_requirements_route_to_the_satisfying_tiers(requirements: Requirements, expected: tuple):
     factories = (ShellSimMachineFactory(), LocalAdmissionFactory(), DaytonaAdmissionFactory())
     try:
-        spec = declared_spec(requirements, requirements.network)
+        spec = declared_spec(requirements, requirements.network, workspace=requirements.workspace)
         routes = ShellboxContext(tuple(MachineRoute(factory, spec) for factory in factories)).routes(
             requirements.requirements
         )
@@ -168,10 +168,10 @@ def test_declared_requirements_route_to_the_satisfying_tiers(requirements: Requi
         (Requirements(LINUX, docker_image=PINNED_IMAGE), ""),
         (Requirements(LINUX, docker_image=PINNED_IMAGE, working_directory="/app"), "/app"),
         (Requirements(LINUX, packages_lock="s3://bucket/lock", workspace="/app"), "/app"),
-        (Requirements(LINUX, packages_lock="s3://bucket/lock"), "/workspace"),
-        (Requirements(LINUX, package_spec=PackageSpec(pypi_packages=("httpx==0.28.0",))), "/workspace"),
+        (Requirements(LINUX, packages_lock="s3://bucket/lock", workspace="/workspace"), "/workspace"),
+        (Requirements(LINUX, package_spec=PackageSpec(pypi_packages=("httpx==0.28.0",)), workspace="/app"), "/app"),
     ],
-    ids=["image_default", "image_declared", "lock_workspace", "lock_default", "packages_default"],
+    ids=["image_default", "image_declared", "lock_workspace", "lock_explicit", "packages_workspace"],
 )
 def test_declared_spec_binds_the_working_directory_once(requirements: Requirements, expected: str):
     spec = declared_spec(requirements, requirements.network, workspace=requirements.workspace)

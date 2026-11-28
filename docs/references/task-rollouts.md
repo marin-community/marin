@@ -118,7 +118,7 @@ Native environments explicitly declare `CommandSemantics.LINUX_PROCESS`.
 and uses host tools; Shellsim resolves the same declaration through its Context catalog.
 `CommandSemantics.SHELL_SIMULATOR` selects built-in shell and virtual filesystem semantics,
 which require `PackageSpec` and a ShellSim factory. Missing native dependencies do not imply simulation.
-The default workdir is the image's workdir, or `/workspace` for the built-in filesystem.
+The default workdir is the image's workdir, or `/workspace` for the built-in filesystem; curation's grading machines bind the same declaration to `/app` instead.
 An explicit `working_directory` overrides that selection.
 
 Machine setup commands run as trusted root before task operations.

@@ -37,13 +37,15 @@ def declared_spec(
     network: NetworkPolicy,
     *,
     build_source: DockerfileSource | None = None,
-    workspace: str = "/workspace",
+    workspace: str,
 ) -> MachineSpec:
     """Bind the declared software and its default working directory without installing it.
 
     ``build_source`` supplies a prepared DockerfileSource for an unresolved build context.
     An image machine starts in the image's own working directory (an empty spec workdir);
-    package and lock environments start in ``workspace``; a declared working directory wins.
+    package and lock environments start in ``workspace`` — the same shared constant for
+    curation and RL, so both admit a task against the same spec; a declared working
+    directory wins.
     """
     if requirements.docker_image is not None:
         source, image = RegistryImage(requirements.docker_image), True
