@@ -22,6 +22,8 @@ resource_hint:
 agent:
   agent_kwargs:
     thinking_format: chat-template
+    # Terminus otherwise resends content-only turns, and K2 stops reasoning as its history fills with empty think blocks.
+    interleaved_thinking: true
 serve:
   tensor_parallel_size: 4
   pipeline_parallel_size: 2
