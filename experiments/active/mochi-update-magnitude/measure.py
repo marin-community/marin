@@ -30,6 +30,7 @@ from dataclasses import dataclass
 import fsspec
 import numpy as np
 import registry
+from expert_perm import ROUTER_TENSOR, router_expert_permutation
 from megatron_map import LEVANTER_SHAPES, build_mapping, qkv_row_index
 from readers import (
     LevanterReader,
@@ -301,33 +302,48 @@ def expert_requests(sample: Sample) -> list[ExpertRequest]:
 
 
 class LevSide:
-    def __init__(self, checkpoint: Checkpoint, sample: Sample):
+    def __init__(self, checkpoint: Checkpoint, sample: Sample, expert_remap=None):
         self.checkpoint = checkpoint
         self.reader = LevanterReader(checkpoint)
         self.sample = sample
+        self.expert_remap = expert_remap
 
     def read(self, req: SliceRequest) -> np.ndarray:
-        return self.reader.read(req.tensor, req.slices)
+        arr = self.reader.read(req.tensor, req.slices)
+        if req.tensor == ROUTER_TENSOR and self.expert_remap is not None:
+            arr = arr[..., self.expert_remap]
+        return arr
 
     def read_experts(self, req: ExpertRequest) -> dict[tuple[int, int], np.ndarray]:
         d2, w2, d3, w3 = self.sample.expert_area
         out = {}
         for layer in range(req.layer_start, req.layer_start + req.layer_count):
             for expert in range(req.expert_start, req.expert_start + req.expert_count):
+                stored = int(self.expert_remap[expert]) if self.expert_remap is not None else expert
                 out[(layer, expert)] = self.reader.read(
                     f"stacked_blocks/stacked/mlp/expert_mlp/{req.part}",
-                    (layer, expert, slice(d2, d2 + w2), slice(d3, d3 + w3)),
+                    (layer, stored, slice(d2, d2 + w2), slice(d3, d3 + w3)),
                 )
         return out
 
 
 class HFSide:
-    def __init__(self, checkpoint: Checkpoint, sample: Sample):
+    HF_CACHE_BYTES = 2 * 2**30
+
+    def __init__(self, checkpoint: Checkpoint, sample: Sample, expert_remap=None):
         self.checkpoint = checkpoint
         self.reader = SafetensorsReader(checkpoint)
         self.sample = sample
+        self.expert_remap = expert_remap
         self._hf_cache: OrderedDict[tuple, np.ndarray] = OrderedDict()
         self._hf_cache_bytes = 0
+
+    def _cache_put(self, key: tuple, arr: np.ndarray) -> None:
+        while self._hf_cache and self._hf_cache_bytes + arr.nbytes > self.HF_CACHE_BYTES:
+            _, evicted = self._hf_cache.popitem()
+            self._hf_cache_bytes -= evicted.nbytes
+        self._hf_cache[key] = arr
+        self._hf_cache_bytes += arr.nbytes
 
     def _hf_name(self, tensor: str, layer: int | None) -> str:
         template, _ = HF_MAP[tensor]
@@ -396,12 +412,13 @@ class HFSide:
         out = {}
         for layer in range(req.layer_start, req.layer_start + req.layer_count):
             for expert in range(req.expert_start, req.expert_start + req.expert_count):
+                stored = int(self.expert_remap[expert]) if self.expert_remap is not None else expert
                 matrix = self._read_one(
                     f"stacked_blocks/stacked/mlp/expert_mlp/{req.part}",
                     layer,
                     (),
                     expected=(3072, 3072),
-                    expert=expert,
+                    expert=stored,
                 )
                 out[(layer, expert)] = np.ascontiguousarray(matrix[d2 : d2 + w2, d3 : d3 + w3])
         return out
@@ -416,10 +433,11 @@ class MegatronSide:
     fused Megatron tensor.
     """
 
-    def __init__(self, checkpoint: Checkpoint, mapping: dict):
+    def __init__(self, checkpoint: Checkpoint, mapping: dict, expert_remap=None):
         self.checkpoint = checkpoint
         self.mapping = mapping  # canonical tensor name -> entry
         self.sample = SAMPLE
+        self.expert_remap = expert_remap
 
     def _entry(self, name: str) -> dict:
         entry = self.mapping.get(name)
@@ -467,6 +485,8 @@ class MegatronSide:
         meg_slices, lev_slices = self._plan(entry, req.slices)
         block = load_megatron_block(self.checkpoint, entry["key"], meg_slices)
         lev_block = np.transpose(block, _axis_perm(block.ndim, entry["transpose"]))
+        if req.tensor == ROUTER_TENSOR and self.expert_remap is not None:
+            lev_block = lev_block[..., self.expert_remap]
         fused = entry.get("fused")
         if fused and fused.get("layout") == "qkv":
             # Megatron interleaves the fused qkv rows per query group; gather the
@@ -617,15 +637,15 @@ def apply_orientation(mapping: dict, choices: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def make_side(checkpoint: Checkpoint, sample: Sample, mapping: dict | None):
+def make_side(checkpoint: Checkpoint, sample: Sample, mapping: dict | None, expert_remap=None):
     if checkpoint.kind == LEVANTER:
-        return LevSide(checkpoint, sample)
+        return LevSide(checkpoint, sample, expert_remap)
     if checkpoint.kind == SAFETENSORS:
-        return HFSide(checkpoint, sample)
+        return HFSide(checkpoint, sample, expert_remap)
     if checkpoint.kind == MEGATRON:
         if mapping is None:
             raise ValueError(f"Megatron checkpoint {checkpoint.id} needs a key mapping")
-        return MegatronSide(checkpoint, mapping)
+        return MegatronSide(checkpoint, mapping, expert_remap)
     raise ValueError(f"unknown checkpoint kind {checkpoint.kind}")
 
 
@@ -641,8 +661,24 @@ def measure_pair(
         expert: int | None
 
     a_ckpt, b_ckpt = CHECKPOINTS[pair.side_a], CHECKPOINTS[pair.side_b]
-    side_a = make_side(a_ckpt, sample, mapping_a)
-    side_b = make_side(b_ckpt, sample, mapping_b)
+    side_a_probe = make_side(a_ckpt, sample, mapping_a)
+    side_b_probe = make_side(b_ckpt, sample, mapping_b)
+    # Align the routed-expert axis: checkpoint-specific placements permute experts,
+    # so match router columns and reindex side B (identity for aligned checkpoints).
+    expert_remap = None
+    try:
+        alignment = router_expert_permutation(side_a_probe, side_b_probe)
+        expert_remap = None if alignment["identity"] else alignment["perm"]
+        logger.info(
+            "expert alignment for %s: identity=%s mean_similarity=%.4f",
+            pair.id,
+            alignment["identity"],
+            alignment["mean_similarity"],
+        )
+    except Exception as error:
+        logger.warning("expert alignment failed for %s: %s", pair.id, error)
+    side_a = side_a_probe
+    side_b = side_b_probe if expert_remap is None else make_side(b_ckpt, sample, mapping_b, expert_remap)
     lands_options = ("as-stored", "bf16")
 
     group_acc: dict[tuple[str, str], dict] = {}
