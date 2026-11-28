@@ -222,9 +222,6 @@ R41_PENDING_SOURCE_IDS = (
         "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
         "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
         "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
-        # The Workplace admission landed after the 2026-11-24 freeze ruling: R40's source
-        # set is frozen at the cut, so the newly admitted population routes to R41.
-        "Nvidia:Nemotron-RL-agent-workplace_assistant",
         # The instruction-hierarchy admission (c42f355d09) also landed after the freeze.
         "Nvidia:Nemotron-System-User-Instruction-Hierarchy-v1",
         "AllenAI:Dolci-Think-SFT-Clean-v2/precise-if",
@@ -234,10 +231,20 @@ R41_PENDING_SOURCE_IDS = (
         "Nvidia:Nemotron-RL-QA-Abstention-v1",
         "ScienceOne:S1-DeepResearch-15k",
         "Yatin:Edge-Agent-Reasoning-WebSearch-260K",
-        "Nemotron:Nemotron-RL-knowledge-mcqa",
         # Preserve deferred cohort provenance and receipts in pending intake.
         "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@sealed-20261124",
-        # The native TaskTrove structured-output cohort qualified after the R40 freeze.
+    }
+)
+
+# The 2026-11-29 unfreeze ruling: these three admitted sources left the R41
+# freeze — "admitted sources are served unless broken" — and serve from their
+# qualification receipts. The v45 release stays pinned to its own freeze
+# revision, so this re-enters them at the next served load. They also leave the
+# pending-intake listing below.
+UNFROZEN_ADMITTED_IDS = frozenset(
+    {
+        "Nvidia:Nemotron-RL-agent-workplace_assistant",
+        "Nemotron:Nemotron-RL-knowledge-mcqa",
         "TaskTrove:laion__nemotron-gym-structured-outputs-v4",
     }
 )
@@ -268,8 +275,10 @@ def pending_measurement_sources() -> tuple[RlDataSource, ...]:
         *facet_terminal.sources(),
         *endless.cohort_source(),
         *pymethods2test.sources(),
-        *workplace.sources(),
-        *nemo_mcqa.sources(),
+        # The unfrozen admitted sources (UNFROZEN_ADMITTED_IDS) serve from their
+        # qualification receipts above, not as pending intake.
+        *(source for source in workplace.sources() if source.info.id not in UNFROZEN_ADMITTED_IDS),
+        *(source for source in nemo_mcqa.sources() if source.info.id not in UNFROZEN_ADMITTED_IDS),
         *hierarchy_intake.sources(),
         *dolci_precise_if_admitted.sources(),
         *inverse_ifeval_admitted.sources(),
@@ -320,7 +329,7 @@ def pending_measurement_sources() -> tuple[RlDataSource, ...]:
         *(source for source in skyrl_preference.sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
         *(source for source in nemotron_ultra.sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
         *goedel_lean.sources(),
-        *tasktrove_structured_native.sources(),
+        *(source for source in tasktrove_structured_native.sources() if source.info.id not in UNFROZEN_ADMITTED_IDS),
         *(source for source in tasktrove_judged.candidate_sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
     )
 
