@@ -749,8 +749,15 @@ def test_starting_checkpoint_binds_identity_and_rejects_cached_output_reuse(tmp_
         StepRunner().run([runs[1].lower()])
 
 
+@pytest.mark.parametrize(
+    ("checkpoint_ttl_days", "temporary_ttl_days", "resolved_checkpoint_ttl_days"),
+    [(None, 14, 14), (None, 3, 3), (1, 14, 1)],
+)
 def test_skyrl_step_routes_disposable_state_to_ttl_storage(
     monkeypatch: pytest.MonkeyPatch,
+    checkpoint_ttl_days: int | None,
+    temporary_ttl_days: int,
+    resolved_checkpoint_ttl_days: int,
 ) -> None:
     monkeypatch.setattr(
         "marin.rl.skyrl.skyrl_temporary_run_path",
@@ -759,7 +766,13 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
     recipe = yaml.safe_load(_spec().config_yaml)
     recipe["trainer"]["callbacks"] = [{"type": "best_checkpoint", "initial_model_uri": "wrong-model"}]
     spec = dataclasses.replace(
-        _spec(), name="users/alice/tests/iceball-rl", version="dev", config_yaml=yaml.safe_dump(recipe)
+        _spec(),
+        name="users/alice/tests/iceball-rl",
+        version="dev",
+        config_yaml=yaml.safe_dump(recipe),
+        retention=SkyRLRetentionPolicy(
+            checkpoint_ttl_days=checkpoint_ttl_days, temporary_storage_ttl_days=temporary_ttl_days
+        ),
     )
     monkeypatch.setattr("marin.rl.skyrl.get_job_info", lambda: None)
     outside = skyrl_step(spec, _execution()).fingerprint()
@@ -777,15 +790,16 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
     )
 
     assert step.name == "users/alice/tests/iceball-rl"
-    assert config.output.checkpoint_root == "s3://temp/ttl=1d/skyrl/users/alice/run/checkpoints"
+    checkpoint_root = f"s3://temp/ttl={resolved_checkpoint_ttl_days}d/skyrl/users/alice/run/checkpoints"
+    assert config.output.checkpoint_root == checkpoint_root
     assert config.output.export_root == f"{output_path}/exports"
     launch = yaml.safe_load(config.launch_config_yaml)
     assert launch["run"]["coordinator_iris_job_id"] == "/tests/coordinator"
     assert launch["skyrl"]["trainer"]["callbacks"][0]["initial_model_uri"] == config.model.uri
     assert launch["artifacts"] == {
-        "checkpoint_root": "s3://temp/ttl=1d/skyrl/users/alice/run/checkpoints",
+        "checkpoint_root": checkpoint_root,
         "export_root": f"{output_path}/exports",
-        "attempts_root": "s3://temp/ttl=14d/skyrl/users/alice/run/attempts",
+        "attempts_root": f"s3://temp/ttl={temporary_ttl_days}d/skyrl/users/alice/run/attempts",
         "resolved_config_uri": f"{output_path}/resolved-launch.yaml",
         "terminal_manifest_uri": f"{output_path}/terminal.json",
         "resume_checkpoint_count": 2,

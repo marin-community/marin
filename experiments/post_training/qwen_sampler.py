@@ -130,7 +130,7 @@ def sampler_preset(
         checkpoints="none",
         sample_namespace="datasets/qwen-sampler",
         wandb_entity="marin-community",
-        retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
+        retention=SkyRLRetentionPolicy(resume_checkpoint_count=1, checkpoint_ttl_days=1),
         budget=f"{layout.workload.plan.gpus_per_node} H100s; wall time unmeasured",
     )
 

@@ -73,6 +73,7 @@ def sampler_preset(name: str, updates: int, kind: str, epsilon: float, seed: int
         checkpoints="latest",
         checkpoint_every=cadence,
         export="latest",
+        retention=replace(base.retention, checkpoint_ttl_days=1),
     )
 
 

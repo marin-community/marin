@@ -61,7 +61,6 @@ _TRAJECTORIES_SUBDIR = "trajectories"
 _CPU_DIAGNOSTIC_BYTES = 64 * 1024
 _LAUNCHER_CANCEL_GRACE_SECONDS = 10
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
-_CHECKPOINT_TTL_DAYS = 1
 _BEST_CHECKPOINT_CALLBACK = "best_checkpoint"
 SKYRL_PROJECT = Path("vendor/skyrl")
 # The SkyRL runtime is packaged separately, so its matching limit is checked there too.
@@ -420,14 +419,14 @@ class SkyRLRetentionPolicy:
     resume_checkpoint_count: int = 2
     temporary_storage_ttl_days: int = SKYRL_TEMPORARY_STORAGE_TTL_DAYS
     checkpoints_in_run_output: bool = False
-    checkpoint_ttl_days: int = _CHECKPOINT_TTL_DAYS
+    checkpoint_ttl_days: int | None = None
 
     def __post_init__(self) -> None:
         if not 1 <= self.resume_checkpoint_count <= 10:
             raise ValueError("SkyRL resume_checkpoint_count must be between one and ten")
         if self.temporary_storage_ttl_days <= 0:
             raise ValueError("SkyRL temporary_storage_ttl_days must be positive")
-        if self.checkpoint_ttl_days <= 0:
+        if self.checkpoint_ttl_days is not None and self.checkpoint_ttl_days <= 0:
             raise ValueError("SkyRL checkpoint_ttl_days must be positive")
 
 
@@ -1255,7 +1254,7 @@ def skyrl_step(
             )
         if spec.retention.checkpoints_in_run_output:
             checkpoint_base = ctx.output_path
-        elif ctx.is_fingerprint:
+        elif ctx.is_fingerprint or spec.retention.checkpoint_ttl_days is None:
             checkpoint_base = temporary_root
         else:
             checkpoint_base = skyrl_temporary_run_path(ctx.output_path, ttl_days=spec.retention.checkpoint_ttl_days)
