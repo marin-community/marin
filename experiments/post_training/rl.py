@@ -157,7 +157,8 @@ def _run_rl(
         if get_path(recipe.override_document(inputs.settings), "trainer.project_name") is not MISSING:
             index = index.model_copy(update={"wandb_project": launch["skyrl"]["trainer"]["project_name"]})
         launch["run"]["index"] = index.model_dump(mode="json")
-        config = replace(config, launch_config_yaml=yaml.safe_dump(launch, sort_keys=False))
+        # JSON quotes version digests that OmegaConf's YAML loader reads as numbers.
+        config = replace(config, launch_config_yaml=json.dumps(launch, indent=2))
     return run_skyrl(config, forward_env=forward_env)
 
 

@@ -1325,6 +1325,8 @@ def test_refusals_use_exit_four(selection, arguments, capsys, tmp_path, request)
 def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations(
     recorded_runs, preset_table, tmp_path, monkeypatch
 ):
+    preset_version = "5e999999"
+    monkeypatch.setattr(gate, "config_version", lambda *_: preset_version)
     preset = snowball_model.SNOWBALL.by_name["train-long"]
     preset = replace(
         preset,
@@ -1397,6 +1399,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         assert completed is not None and completed.index is not None
         assert completed.result is not None and completed.result.state == "succeeded"
         assert completed.index.model == table.model and completed.index.preset == preset.name
+        assert completed.index.preset_version == preset_version
         assert completed.index.wandb_project == "fixture-project"
         assert completed.native.config["iris"]["allocation"]["disk"] == "3TB"
         assert completed.native.config["inputs"]["model"]["tokenizer_uri"] == "tests/python-tokenizer"
