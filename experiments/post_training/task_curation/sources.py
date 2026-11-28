@@ -243,6 +243,7 @@ R41_PENDING_SOURCE_IDS = (
 )
 
 
+@lru_cache(maxsize=1)
 def pending_measurement_sources() -> tuple[RlDataSource, ...]:
     """The pending-intake declarations the Atlas measures before admission.
 
