@@ -100,6 +100,7 @@ RUNNABLE_NODES = frozenset(
 )
 
 BLOCK_REASONS: dict[str, str] = {
+    "contract_census": "needs the frozen population census receipt",
     "main_source_sync": "needs the build's sealed declarations document",
     "compose_manifest": "needs the real embed release/coverage receipts",
     "curriculum_compose": "needs the sealed composition manifest and the real census receipt",
@@ -662,6 +663,7 @@ def _snapshot_publication_witness(plan: ReleasePlan, selection: SliceSelection) 
         census_receipt=_witness_placeholder_ref(plan, "census-receipt"),
         identity_receipt=plan.pins.prior_identity,
         backend_receipt=plan.pins.prior_backend,
+        contracts=_witness_placeholder_ref(plan, "fresh-contracts"),
     )
     revision = snapshot_publication_stage.verify_repo_state(REPO_ROOT, inputs)
     current = snapshot_publication_stage.carry_deliberate_exclusions(

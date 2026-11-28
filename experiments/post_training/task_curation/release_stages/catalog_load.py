@@ -56,7 +56,12 @@ from experiments.post_training.task_curation.release_stages.history_staging impo
     Query,
     history_staging_sizing,
 )
-from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref, sealed_contract_rows
+from experiments.post_training.task_curation.release_stages.manifest import (
+    ArtifactRef,
+    read_ref,
+    sealed_contract_rows,
+    verify_population_coverage,
+)
 from experiments.post_training.task_curation.release_stages.paced_query import RetryControl, open_paced_query
 from experiments.post_training.task_curation.release_stages.qc_browse import pin_currency, selected_uri
 from experiments.post_training.task_curation.release_stages.sizing import catalog_replay_sizing
@@ -136,14 +141,11 @@ def read_catalog_state(catalog_root: str, inputs: CatalogLoadInputs, publication
     backend_document = read_ref(ArtifactRef(**publication["backend"]))
     identity_document = read_ref(ArtifactRef(**publication["identity"]))
     snapshot_sources = [canonical_snapshot_source(row) for row in served_snapshot_sources(catalog, inputs.snapshot_id)]
-    source_ids = {row.id for row in snapshot_sources}
     fingerprint_ids = set(identity_document["fingerprints"])
     backend_ids = {row["source_id"] for row in backend_document["sources"]}
-    if not (source_ids == fingerprint_ids == backend_ids):
-        raise ValueError(
-            "catalog snapshot, identity fingerprints and backend sources disagree"
-            f" (snapshot {len(source_ids)}, identities {len(fingerprint_ids)}, backend {len(backend_ids)})"
-        )
+    verify_population_coverage(
+        {row.id: row.model_dump(mode="json") for row in snapshot_sources}, fingerprint_ids, backend_ids
+    )
     if len(snapshot_sources) != inputs.expected_source_count:
         raise ValueError(f"snapshot has {len(snapshot_sources)} sources, expected {inputs.expected_source_count}")
     return snapshot_sources

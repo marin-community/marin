@@ -157,6 +157,21 @@ def test_binder_stale_binding_stays_pending(tmp_path):
     assert bound.info.derived_contract is None
 
 
+def test_unchanged_shape_still_emits_a_receipt_for_a_changed_population(tmp_path):
+    old = population_fixture(tmp_path / "old", (reply_task("old", EXACT),))
+    changed = reply_task("new", EXACT).model_copy(
+        update={
+            "context": ConversationInput(events=(TextMessage(role="user", content="A different task."),)),
+        }
+    )
+    new = population_fixture(tmp_path / "new", (changed,))
+    prior = census_source(old, str(tmp_path / "prior"))
+    receipt = census_source(new, str(tmp_path / "new-contract"), prior=prior)
+    assert receipt is not None
+    assert receipt.summary == prior.summary
+    assert receipt.input == new.input and receipt.input != prior.input
+
+
 def test_binder_declared_contradiction_fails(tmp_path):
     receipt = census_source(population_fixture(tmp_path, (reply_task("task-1", JUDGE),)), str(tmp_path / "census"))
     with pytest.raises(ValueError, match="contradict its derived contract"):

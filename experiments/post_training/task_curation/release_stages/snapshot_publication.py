@@ -30,8 +30,11 @@ from experiments.post_training.task_curation.catalog_snapshot import (
     PublicationSource,
     publish_assembly_snapshot,
 )
-from experiments.post_training.task_curation.datasets.derived_contract_measurements import derived_contract_receipts
-from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+from experiments.post_training.task_curation.release_stages.manifest import (
+    ArtifactRef,
+    sealed_contract_rows,
+    verify_population_coverage,
+)
 from experiments.post_training.task_curation.source import SourceInfo
 from experiments.post_training.task_curation.source_duplicate_ci import fingerprint_input
 from experiments.post_training.task_curation.sources import all_sources
@@ -57,6 +60,7 @@ class SnapshotPublicationInputs:
     census_receipt: ArtifactRef
     identity_receipt: ArtifactRef
     backend_receipt: ArtifactRef
+    contracts: ArtifactRef
     deliberate_exclusions: tuple[str, ...] = ()
 
     def validate(self) -> None:
@@ -201,19 +205,7 @@ def verify_survey_alignment(inputs: SnapshotPublicationInputs, current: dict[str
     """Bind both surveys; only Excluded sources without a population may lack identity evidence."""
     identity = _read_ref(inputs.identity_receipt)
     backend = _read_ref(inputs.backend_receipt)
-    fingerprints = set(identity["fingerprints"])
-    missing = sorted(
-        source_id
-        for source_id in set(current) - fingerprints
-        if current[source_id].get("status") != "Excluded" or current[source_id].get("actor_census_input") is not None
-    )
-    extra = sorted(fingerprints - set(current))
-    if missing or extra:
-        raise ValueError(
-            f"identity fingerprints do not cover the declared populations (missing {missing}, extra {extra})"
-        )
-    if {row["source_id"] for row in backend["sources"]} != set(current):
-        raise ValueError("backend sources do not cover exactly the current declarations")
+    verify_population_coverage(current, set(identity["fingerprints"]), {row["source_id"] for row in backend["sources"]})
     expected = (inputs.catalog_root, inputs.snapshot_id)
     for name, document in (("identity", identity), ("backend", backend)):
         binding = (document.get("catalog_root"), document.get("snapshot_id"))
@@ -233,18 +225,18 @@ def seal_contracts(inputs: SnapshotPublicationInputs) -> ArtifactRef:
     uncensused = sorted(set(inputs.targets) - set(declarations))
     if uncensused:
         raise ValueError(f"targets missing from the census: {uncensused}")
-    receipts = derived_contract_receipts()
+    receipts = {row["source_id"]: row for row in sealed_contract_rows(_read_ref(inputs.contracts))}
     unregistered = sorted(set(inputs.targets) - set(receipts))
     if unregistered:
         raise ValueError(f"targets without a derived-contract receipt: {unregistered}")
     rows = []
     for source_id in inputs.targets:
         receipt = receipts[source_id]
-        if receipt.input.model_dump(mode="json") != declarations[source_id]["actor_census_input"]:
+        if receipt["input"] != declarations[source_id]["actor_census_input"]:
             raise ValueError(
                 f"derived-contract receipt actor binding does not match the frozen declaration: {source_id}"
             )
-        rows.append(receipt.model_dump(mode="json"))
+        rows.append(receipt)
     if len(rows) != inputs.expected_contract_count:
         raise ValueError(f"{len(rows)} sealed contracts, expected {inputs.expected_contract_count}")
     if sum(row["input"]["measured_tasks"] for row in rows) != inputs.expected_contract_tasks:
@@ -278,6 +270,8 @@ def run_snapshot_publication(
             "prior_snapshot": inputs.prior_snapshot_id,
             "source_revision": revision,
             "source_count": len(current),
+            "contract_count": inputs.expected_contract_count,
+            "contract_tasks": inputs.expected_contract_tasks,
             "new_admissions": sorted(inputs.targets),
             "identity": {"uri": inputs.identity_receipt.uri, "sha256": inputs.identity_receipt.sha256},
             "backend": {"uri": inputs.backend_receipt.uri, "sha256": inputs.backend_receipt.sha256},
@@ -351,7 +345,7 @@ def main() -> None:
     parser.add_argument("--mode", choices=("check-only", "write"), default="check-only")
     args = parser.parse_args()
     document = json.loads(args.inputs.read_text(encoding="utf-8"))
-    for field in ("census_receipt", "identity_receipt", "backend_receipt"):
+    for field in ("census_receipt", "identity_receipt", "backend_receipt", "contracts"):
         document[field] = ArtifactRef(**document[field])
     inputs = SnapshotPublicationInputs(**document)
     configure_coreweave_s3()

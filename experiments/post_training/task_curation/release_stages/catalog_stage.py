@@ -28,7 +28,12 @@ from experiments.post_training.task_curation.release_stages.history_staging impo
     DEFAULT_APPLET_ID,
     DEFAULT_SERVICE_URL,
 )
-from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref, sealed_contract_rows
+from experiments.post_training.task_curation.release_stages.manifest import (
+    ArtifactRef,
+    read_ref,
+    sealed_contract_rows,
+    verify_population_coverage,
+)
 from experiments.post_training.task_curation.source_status import served_snapshot_sources
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
@@ -125,8 +130,7 @@ def verify_staged_snapshot(inputs: CatalogStageInputs, staged: dict[str, dict]) 
     publication = read_ref(inputs.publication)
     backend_ids = {row["source_id"] for row in read_ref(ArtifactRef(**publication["backend"]))["sources"]}
     identity_ids = set(read_ref(ArtifactRef(**publication["identity"]))["fingerprints"])
-    if not (set(sources) == backend_ids == identity_ids):
-        raise ValueError("catalog snapshot, identity fingerprints and backend sources disagree")
+    verify_population_coverage(declarations, identity_ids, backend_ids)
     del staged
     return sorted(sources)
 

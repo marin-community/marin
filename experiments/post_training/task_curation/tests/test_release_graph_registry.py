@@ -62,6 +62,7 @@ EXPECTED_NODES = (
     "qc_browse_plan",
     "qc_browse",
     "snapshot_publication",
+    "contract_census",
     "catalog_stage",
     "catalog_load",
     "curriculum_load",
@@ -369,6 +370,7 @@ def test_catalog_load_staging_flows_from_the_catalog_stage_proof(tmp_path):
         plan.release_id,
         staged_refs["publication"],
         refs=staged_refs,
+        contract_tasks=23,
     )
     inputs = _materialized_inputs(built.stages["catalog_load"], prefix)
     assert inputs["publication"] == staged_refs["publication"]
@@ -376,6 +378,7 @@ def test_catalog_load_staging_flows_from_the_catalog_stage_proof(tmp_path):
     assert inputs["target_load_id"] == plan.catalog_target_load_id
     assert inputs["measured_module"] == str(release_graph_module.REPO_ROOT / plan.measured.module)
     assert inputs["previously_available"] == plan.previously_available
+    assert inputs["expected_contract_tasks"] == 23
 
 
 def test_qc_inputs_replace_changed_panels_and_preserve_policy_exclusions(tmp_path):
@@ -551,6 +554,16 @@ def test_snapshot_publication_binds_the_composed_surveys(tmp_path):
     prefix = str(tmp_path / "prefix")
     census_receipt = {"uri": "s3://bucket/census.json", "sha256": "c" * 64}
     _write_dep(built.stages["census"], prefix, "census", plan.release_id, census_receipt, tasks=17, results=[])
+    contracts_ref = {"uri": "s3://bucket/fresh-contracts.json", "sha256": "a" * 64}
+    _write_dep(
+        built.stages["contract_census"],
+        prefix,
+        "contract_census",
+        plan.release_id,
+        contracts_ref,
+        contracts=contracts_ref,
+        contract_tasks=23,
+    )
     documents = {
         "backend_map": {"uri": "s3://bucket/backend-map.json", "sha256": "d" * 64},
         "identity_survey": {"uri": "s3://bucket/identity.json", "sha256": "e" * 64},
@@ -570,6 +583,8 @@ def test_snapshot_publication_binds_the_composed_surveys(tmp_path):
     assert inputs["backend_receipt"] == documents["backend_map"]
     assert inputs["prior_snapshot_id"] == plan.prior_snapshot_id
     assert inputs["prior_declarations_uri"] == plan.pins.prior_declarations.uri
+    assert inputs["contracts"] == contracts_ref
+    assert inputs["expected_contract_tasks"] == 23
 
 
 def _exposure_declarations() -> dict[str, dict]:

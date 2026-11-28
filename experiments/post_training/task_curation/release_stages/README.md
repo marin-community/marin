@@ -59,6 +59,19 @@ replacement manifests before applying a rebind.
 
 ## The release plan document
 
+The graph's regional `contract_census` stage consumes the frozen population census.
+It reuses a registered contract only when its actor binding, population path and
+scanned TaskSpec digest match. Changed populations receive a new complete contract
+census; completed receipts resume without rescanning. The stage does not execute
+graders or call models.
+
+Contract task totals flow from the frozen target actor bindings through the
+contract-census proof, snapshot publication, catalog staging and catalog loading.
+A historical plan's registry-derived count cannot replace that measured total.
+Resuming the same sealed plan preserves upstream census, corpus and embedding
+artifacts. New plan derivations also count the frozen target bindings rather than
+older registry receipts.
+
 Everything release-specific lives in one typed JSON document — the release plan.
 Release plans are reviewed configuration: they live in this package at
 `plans/<release>.json`, landed via atlas-push like any other config, and the

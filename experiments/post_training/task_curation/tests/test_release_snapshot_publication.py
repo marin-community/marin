@@ -27,6 +27,7 @@ def _inputs(tmp_path, **overrides) -> sp.SnapshotPublicationInputs:
         "census_receipt": ("census-default.json", {"results": []}),
         "identity_receipt": ("identity-default.json", {"fingerprints": {}}),
         "backend_receipt": ("backend-default.json", {"sources": []}),
+        "contracts": ("contracts-default.json", {"contracts": []}),
     }
     defaults = {
         name: refs.get(name, _write_json(tmp_path, filename, document))
@@ -161,7 +162,6 @@ def test_survey_publication_binding_matches_the_destination(tmp_path, survey, fi
 def test_seal_contracts_refuses_uncensused_or_unregistered_targets(tmp_path, monkeypatch):
     """The census covers the whole population; every target needs a census row and a receipt."""
     one_only = _write_json(tmp_path, "census-one.json", {"results": [{"declaration": {"id": "Test:One"}}]})
-    monkeypatch.setattr(sp, "derived_contract_receipts", lambda: {"Test:One": object(), "Test:Two": object()})
     with pytest.raises(ValueError, match=r"targets missing from the census: \['Test:Two'\]"):
         sp.seal_contracts(_inputs(tmp_path, refs={"census_receipt": one_only}))
 
@@ -170,8 +170,7 @@ def test_seal_contracts_refuses_uncensused_or_unregistered_targets(tmp_path, mon
         "census-population.json",
         {"results": [{"declaration": {"id": source}} for source in ("Test:One", "Test:Two", "Test:Other")]},
     )
-    monkeypatch.setattr(sp, "derived_contract_receipts", lambda: {"Test:One": object()})
-    with pytest.raises(ValueError, match=r"targets without a derived-contract receipt: \['Test:Two'\]"):
+    with pytest.raises(ValueError, match=r"targets without a derived-contract receipt: \['Test:One', 'Test:Two'\]"):
         sp.seal_contracts(_inputs(tmp_path, refs={"census_receipt": population}))
 
 
@@ -187,26 +186,17 @@ def test_seal_contracts_verifies_actor_binding_and_seals(tmp_path, monkeypatch):
             ]
         },
     )
-    inputs = _inputs(tmp_path, refs={"census_receipt": census})
-
-    def fake_receipt(binding: dict):
-        return type(
-            "Receipt",
-            (),
-            {
-                "input": type("Input", (), {"model_dump": staticmethod(lambda mode=None: binding)})(),
-                "model_dump": staticmethod(lambda mode=None: {"input": binding}),
-            },
-        )()
-
-    monkeypatch.setattr(
-        sp,
-        "derived_contract_receipts",
-        lambda: {
-            "Test:One": fake_receipt({"x": 1, "measured_tasks": 5}),
-            "Test:Two": fake_receipt({"x": 2, "measured_tasks": 5}),
+    contracts = _write_json(
+        tmp_path,
+        "contracts.json",
+        {
+            "contracts": [
+                {"source_id": "Test:One", "input": {"x": 1, "measured_tasks": 5}},
+                {"source_id": "Test:Two", "input": {"x": 2, "measured_tasks": 5}},
+            ]
         },
     )
+    inputs = _inputs(tmp_path, refs={"census_receipt": census, "contracts": contracts})
     binding_ref = sp.seal_contracts(inputs)
     sealed = json.loads((tmp_path / "releases/rtest/fresh-contracts.json").read_text())
     # The catalog stages read the sealed document through the same helper.

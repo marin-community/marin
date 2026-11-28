@@ -91,6 +91,9 @@ from experiments.post_training.task_curation.release_stages import (
     census as census_stage,
 )
 from experiments.post_training.task_curation.release_stages import (
+    contract_census as contract_census_stage,
+)
+from experiments.post_training.task_curation.release_stages import (
     corpus_assembly as corpus_assembly_stage,
 )
 from experiments.post_training.task_curation.release_stages import (
@@ -640,6 +643,11 @@ def _execute_snapshot_publication(config: dict) -> dict:
     )
 
 
+def _execute_contract_census(config: dict) -> dict:
+    inputs = typed_inputs(contract_census_stage.ContractCensusInputs, config)
+    return contract_census_stage.run_contract_census(inputs, dry_run=False)
+
+
 def _execute_catalog_stage(config: dict) -> dict:
     inputs = typed_inputs(catalog_stage_stage.CatalogStageInputs, config)
     return catalog_stage_stage.run_catalog_stage(inputs, dry_run=False)
@@ -713,6 +721,7 @@ _STAGE_EXECUTORS: dict[str, Callable[[dict], dict]] = {
     "qc_browse_plan": _execute_qc_browse_plan,
     "qc_browse": _execute_qc_browse_copy,
     "snapshot_publication": _execute_snapshot_publication,
+    "contract_census": _execute_contract_census,
     "catalog_stage": _execute_catalog_stage,
     "catalog_load": _execute_catalog_load,
     "curriculum_load": _execute_curriculum_load,
@@ -986,6 +995,9 @@ class StageSpec:
 
 
 _STAGE_SPECS: dict[str, StageSpec] = {
+    "contract_census": StageSpec(
+        "contract_census", "contract_census", contract_census_stage.__name__, ("census",), True
+    ),
     "declarations": StageSpec(
         "declarations", "declarations", declarations_stage.__name__, (), False, receipt_key="declarations"
     ),
@@ -1809,6 +1821,7 @@ def _snapshot_publication_step(
     census: ArtifactStep,
     identity_backend: ArtifactStep,
     admission_check: ArtifactStep,
+    contracts: ArtifactStep,
 ) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["snapshot_publication"]
     identity = _identity_fields(
@@ -1839,7 +1852,8 @@ def _snapshot_publication_step(
             "removed_sources": plan.removed_sources,
             "expected_source_count": plan.expected_source_count,
             "expected_contract_count": plan.expected_contract_count,
-            "expected_contract_tasks": plan.expected_contract_tasks,
+            "expected_contract_tasks": _resolved_proof(ctx, contracts)["contract_tasks"],
+            "contracts": _resolved_proof(ctx, contracts)["contracts"],
             "census_receipt": _resolved_receipt(ctx, census),
             "identity_receipt": documents["identity_survey"],
             "backend_receipt": documents["backend_map"],
@@ -1850,7 +1864,7 @@ def _snapshot_publication_step(
         plan,
         "snapshot_publication",
         spec,
-        (census, identity_backend, admission_check),
+        (census, identity_backend, admission_check, contracts),
         build_inputs=build_inputs,
         identity=identity,
         inputs_type=snapshot_publication_stage.SnapshotPublicationInputs,
@@ -1893,7 +1907,7 @@ def _catalog_stage_step(
             "expected_source_count": plan.expected_source_count,
             "expected_browse_source_count": plan.expected_browse_source_count,
             "expected_contract_count": plan.expected_contract_count,
-            "expected_contract_tasks": plan.expected_contract_tasks,
+            "expected_contract_tasks": _resolved_proof(ctx, snapshot)["contract_tasks"],
             "declarations": _resolved_receipt(ctx, declarations),
             "publication": _resolved_receipt(ctx, snapshot),
             "history_receipt": _resolved_receipt(ctx, history),
@@ -2021,7 +2035,7 @@ def _catalog_load_step(plan: ReleasePlan, catalog_stage: ArtifactStep) -> Artifa
             },
             "expected_source_count": plan.expected_source_count,
             "expected_contract_count": plan.expected_contract_count,
-            "expected_contract_tasks": plan.expected_contract_tasks,
+            "expected_contract_tasks": _resolved_proof(ctx, catalog_stage)["contract_tasks"],
             "expected_selected_panels": plan.expected_selected_panels,
             "expected_browse_source_count": plan.expected_browse_source_count,
             "measured_module": measured_module_path(plan.measured.module),
@@ -2393,6 +2407,28 @@ def _preflight_wrapped_run(handle: ArtifactStep, node: str, policy: PreflightPol
     return run
 
 
+def _contract_census_step(plan: ReleasePlan, census: ArtifactStep) -> ArtifactStep[StageReceipt]:
+    def build_inputs(ctx: StepContext) -> dict:
+        return {
+            "release_id": plan.release_id,
+            "source_revision": plan.source_revision,
+            "census": _resolved_receipt(ctx, census),
+            "targets": plan.targets,
+            "output_root": stage_output_root(plan, "contract-census"),
+        }
+
+    return _stage_step(
+        plan,
+        "contract_census",
+        _STAGE_SPECS["contract_census"],
+        (census,),
+        build_inputs=build_inputs,
+        identity=_identity_fields(plan, "release_id", "source_revision", "targets"),
+        inputs_type=contract_census_stage.ContractCensusInputs,
+        resources=lambda: _resources_config(census_sizing(plan.expected_contract_tasks)),
+    )
+
+
 def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None) -> ReleaseGraph:
     """Build the full release graph for one sealed plan; constructs handles only.
 
@@ -2420,7 +2456,8 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
     qc_plan = _qc_browse_plan_step(plan, declarations)
     qc_browse = _qc_browse_copy_step(plan, qc_plan)
     fresh_qc_index = _fresh_qc_index_step(plan, qc_browse, declarations)
-    snapshot = _snapshot_publication_step(plan, census, identity_backend, admission_check)
+    contracts = _contract_census_step(plan, census)
+    snapshot = _snapshot_publication_step(plan, census, identity_backend, admission_check, contracts)
     catalog_stage = _catalog_stage_step(plan, declarations, snapshot, history, qc_browse, fresh_qc_index)
     catalog_load = _catalog_load_step(plan, catalog_stage)
     curriculum_load = _curriculum_load_step(plan, compose, text_scans)
@@ -2456,6 +2493,7 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
         "qc_browse_plan": qc_plan,
         "qc_browse": qc_browse,
         "snapshot_publication": snapshot,
+        "contract_census": contracts,
         "catalog_stage": catalog_stage,
         "catalog_load": catalog_load,
         "curriculum_load": curriculum_load,

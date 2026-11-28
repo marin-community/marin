@@ -571,6 +571,24 @@ def test_derive_release_plan_from_fixture_state(tmp_path, frozen_layer, deployme
     assert plan.validation_integrity_contracts == {}
 
 
+def test_contract_total_uses_the_frozen_population_instead_of_an_old_receipt(
+    tmp_path, frozen_layer, deployment, monkeypatch
+):
+    layer = _source_layer(tmp_path, (RETAINED_ID, TARGET_ID))
+    prior = _prior_pins(tmp_path, _declaration_dump(layer))
+    derived = _derive(
+        tmp_path,
+        layer,
+        _config(prior),
+        monkeypatch,
+        panels=[RETAINED_ID],
+        available=[RETAINED_ID],
+        contract_tasks={TARGET_ID: 1},
+    )
+    assert derived.plan_document["expected_contract_tasks"] == 2
+    assert derived.plan_document["expected_population_tasks"] == 4
+
+
 def _rederived_catalog_load_id(plan: ReleasePlan) -> str:
     identity = {
         "release_id": plan.release_id,

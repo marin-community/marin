@@ -20,7 +20,7 @@ from experiments.post_training.task_curation.release_stages.graph import write_p
 from experiments.post_training.task_curation.release_stages.plan_derivation import DerivedRelease
 from experiments.post_training.task_curation.tests.release_graph_fixtures import fixture_plan
 
-EXPECTED_NODE_COUNT = 32
+EXPECTED_NODE_COUNT = 33
 
 
 @pytest.fixture

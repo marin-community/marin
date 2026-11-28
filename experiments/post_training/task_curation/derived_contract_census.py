@@ -140,15 +140,22 @@ def census_source(
 ) -> DerivedContractReceipt | None:
     """Scan the frozen TaskSpecs and bind the complete derived-shape summary.
 
-    With ``prior``, a rescan whose summary equals the prior receipt's returns None without
-    writing: the re-census stages only receipts the corrected rule actually changed.
+    With ``prior``, an unchanged population, scanned bytes and summary return None
+    without writing. A changed population still receives its own receipt when
+    its contract shape happens to be unchanged.
     """
     population = config.population
     if SourceTextPopulation.raw_load(population.path) != population:
         raise ValueError(f"Derived contract population manifest changed: {population.source_id}")
     output = StoragePath(output_root) / canonical_sha256(population.source_id)[:20]
     summary, digest, _ = scan_population(population)
-    if prior is not None and prior.summary.model_dump() == summary.__dict__:
+    if (
+        prior is not None
+        and prior.input == config.input
+        and prior.population_path == population.path
+        and prior.scanned_task_specs_sha256 == digest
+        and prior.summary.model_dump() == summary.__dict__
+    ):
         return None
     if output.exists():
         raise FileExistsError(f"Derived contract census requires a new output version: {output}")

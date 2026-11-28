@@ -525,11 +525,11 @@ def read_prior_catalog_state(
     )
 
 
-def _measure_contract_counts(targets: tuple[str, ...]) -> tuple[int, int]:
-    """The contract counts the loads verify, measured from the receipts registry.
+def _measure_contract_counts(targets: tuple[str, ...], declarations: dict[str, dict]) -> tuple[int, int]:
+    """Count frozen target tasks; the graph refreshes contracts for changed bindings.
 
-    The same documents ``snapshot_publication.seal_contracts`` seals; a target the
-    registry does not cover refuses here with the itemized list.
+    Targets must be registered, but an older receipt cannot supply the count for
+    a newer population.
     """
     receipts = derived_contract_receipts()
     missing = [target for target in targets if target not in receipts]
@@ -538,7 +538,7 @@ def _measure_contract_counts(targets: tuple[str, ...]) -> tuple[int, int]:
             f"the derived-contract receipts registry lacks {len(missing)} targets;"
             " land their contract censuses before the cut: " + str(sorted(missing)[:5])
         )
-    return len(targets), sum(receipts[target].input.measured_tasks for target in targets)
+    return len(targets), sum(declarations[target]["actor_census_input"]["measured_tasks"] for target in targets)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -698,7 +698,7 @@ def derive_release_plan(
 
     registry_index = _read_registry_index(targets)
     measured = _measured_dependency(repo_root, config.freeze_source_revision)
-    expected_contract_count, expected_contract_tasks = _measure_contract_counts(targets)
+    expected_contract_count, expected_contract_tasks = _measure_contract_counts(targets, declared)
     grader_drift_reference = (drift_reference_fn or _measure_grader_drift_reference)(
         repo_root, config.freeze_source_revision, declared
     )
