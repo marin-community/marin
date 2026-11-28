@@ -17,12 +17,10 @@ The short loop, also called the quick loop, uses gated presets to compare one ch
 | `speed-short` | Generation throughput per GPU | 8 H100s, 512 prompts × four answers. 11m42s and 1.56 H100-hours in the four-proposal comparison. | Separate pass on the EvalLite pool. Gated on throughput and EvalLite pool family mean. | Screen a vLLM wheel, kernel or engine option before testing the full training loop with `speed-medium`. | [Direct GPU comparison](https://github.com/marin-community/marin/pull/11975) |
 | `data-short` | Fraction of prompts with both passing and failing answers | 8 H100s, 256 candidate training prompts × four answers, 10–15 min and about 2 H100-hours | Scores the sampled candidate tasks. Gated on mixed-answer fraction. | Screen a new `--tasks` selection before training on it with `data-medium`. | CPU plan only |
 | `eval-short` | Published model scores | 8 H100s. | Scores the full EvalLite pool without a control comparison. | Evaluate a published checkpoint in a generation-only job. | Ran as written |
-| `speed-medium` | Update time and policy agreement | 40 H100s, 10 updates. 20m12s and 13.47 H100-hours in the four-proposal comparison. | Training metrics on updates 2–10. Gated on speed and mismatch. | Check startup, trainer kernels, parallelism, weight synchronization or numerics. Use `learning-medium` to measure quality after a precision change. | [Direct GPU comparison](https://github.com/marin-community/marin/pull/11975) |
-| `speed-medium-16x16` | Update time and policy agreement with a smaller learner and two rollout engines | 16 learner and 16 rollout H100s, 10 updates. Adam optimizer state is offloaded to host memory. | Training metrics on updates 2–10. Ungated. | Compare rollout wait, learner time and GPU-hours with `speed-medium`. | Pending GPU measurement |
-| `speed-medium-8x8` | Update time and policy agreement on two nodes | 8 learner and 8 rollout H100s, 10 updates. The learner uses one pipeline stage and offloads Adam optimizer state to host memory. | Training metrics on updates 2–10. Ungated. | Measure memory fit and learner time on one node. | Pending GPU measurement |
-| `learning-medium` | EvalLite pool family mean and score gain per GPU-hour | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Gated on EvalLite pool family mean. | Compare objectives, optimizers, sampling, batch shape or initial weights. | CPU plan only |
-| `data-medium` | Learning on a candidate training selection | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Reports scores for the candidate selection. | Train on a `--tasks` selection after it passes the short screen. | CPU plan only |
-| `speed-long` | Sustained asynchronous update time and policy agreement | 40 H100s, 20 updates, 45–75 min and 30–50 H100-hours | Training metrics on updates 3–20. Gated on speed and mismatch. | Measure grading, admission or throughput changes over a longer window. | CPU plan only |
+| `speed-medium` | Update time and policy agreement | 32 H100s, 10 updates. 24 min and 12.9 H100-hours in the Reno comparison. | Training metrics on updates 2–10. Gated on speed and mismatch. | Check startup, trainer kernels, parallelism, weight synchronization or numerics. Use `learning-medium` to measure quality after a precision change. | [Direct GPU comparison](https://github.com/marin-community/marin/pull/12414) |
+| `learning-medium` | EvalLite pool family mean and score gain per GPU-hour | 32 H100s, 25 updates. | EvalLite pool at steps 0 and 25. Gated on EvalLite pool family mean. | Compare objectives, optimizers, sampling, batch shape or initial weights. | [GPU validation](https://github.com/marin-community/marin/pull/12414) |
+| `data-medium` | Learning on a candidate training selection | 32 H100s, 25 updates. | EvalLite pool at steps 0 and 25. Reports scores for the candidate selection. | Train on a `--tasks` selection after it passes the short screen. | Shares the `learning-medium` recipe |
+| `speed-long` | Sustained asynchronous update time and policy agreement | 32 H100s, 20 updates. | Training metrics on updates 3–20. Gated on speed and mismatch. | Measure grading, admission or throughput changes over a longer window. | [GPU validation](https://github.com/marin-community/marin/pull/12414) |
 
 ### Long loop
 
@@ -374,7 +372,9 @@ candidate training tasks with four sampled answers each; it does not evaluate Ev
 Speed-short measures 512 training tasks with four 4,096-token answers before its separate EvalLite pass.
 Learning/data medium evaluate at update 0 and 25; train-long evaluates before training and every ten updates.
 Speed-medium measures update time over updates 2–10, speed-long over 3–20. Their mismatch guard uses the
-selected-token-weighted staleness-0 KL over the measured window. Asynchronous medium runtimes are unmeasured.
+selected-token-weighted staleness-0 KL over the measured window. Quick-loop training on Reno uses 16 learner
+H100s with Adam state in host memory and two 8-H100 rollout engines. The rollout buffer can run up to 64 groups
+concurrently.
 
 Evaluation identity includes stored TaskSpec content and the recorded request. Answers join the manifest
 by task ID and count as scored only after successful verification without an exception or error treatment.
@@ -461,7 +461,6 @@ IDs and TaskSpec digests against the saved per-task results.
 
 | gap | implication and follow-up |
 |---|---|
-| layout-p40-only | calibrated training gates cover the 40-GPU layout; other layouts need qualification |
 | mismatch-is-agreement | mismatch measures policy agreement; exactness claims need an explicit zero-mismatch bound |
 | AAII coverage; no-agentic-tasks | scientific reasoning, coding, General and a single-turn Agents stand-in; multi-turn tools and long context need separate qualification |
 | no-image-sandbox | image-only tasks need a sandbox backend |

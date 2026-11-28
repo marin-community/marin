@@ -207,6 +207,18 @@ E8 = replace(
     ),
 )
 
+_CPU_OPTIMIZER_OFFLOAD = RecipePatch(
+    trainer=sections.Trainer(
+        policy=sections.Policy(
+            megatron_config=sections.PolicyMegatronConfig(
+                optimizer_config_kwargs=sections.OptimizerConfigKwargs(
+                    optimizer_cpu_offload=True, optimizer_offload_fraction=1.0
+                )
+            )
+        )
+    )
+)
+
 _ASYNC_P40 = Recipe(
     layout=P40,
     fixed_reply_tokens=None,
@@ -220,16 +232,29 @@ _ASYNC_P40 = Recipe(
     ),
 )
 
+_GRADER_REPORT = RecipePatch(trainer=sections.Trainer(dump_grader_report=True))
 _REPORTING_P40 = replace(
     _ASYNC_P40,
-    config=_ASYNC_P40.config.merge(RecipePatch(trainer=sections.Trainer(dump_grader_report=True))),
+    config=_ASYNC_P40.config.merge(_GRADER_REPORT),
 )
 
 _GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH, training_plan=_P40_PLAN)
 
 # The nightly Iris principal can submit H100 workloads in Reno.
-_RENO_P40 = replace(_ASYNC_P40, layout=replace(P40, cluster="cw-rno2a"))
-_RENO_GENERATING = replace(_GENERATING, layout=replace(E8, cluster=_RENO_P40.layout.cluster))
+_RENO_TRAINING = replace(
+    _ASYNC_P40,
+    layout=replace(
+        P40,
+        name="p16-r16",
+        workload=Training(replace(_P40_PLAN, policy_num_nodes=2, num_inference_engines=2)),
+        cluster="cw-rno2a",
+    ),
+    # At 128 concurrent groups the rollout engines filled future batches before the next policy sync.
+    config=_ASYNC_P40.config.merge(_CPU_OPTIMIZER_OFFLOAD).merge(
+        RecipePatch(trainer=sections.Trainer(rollout_buffer=sections.RolloutBuffer(max_in_flight=64)))
+    ),
+)
+_RENO_GENERATING = replace(_GENERATING, layout=replace(E8, cluster=_RENO_TRAINING.layout.cluster))
 
 _GAPS = ("aaii-coverage", NO_AGENTIC_TASKS, NO_IMAGE_SANDBOX)
 
@@ -267,7 +292,7 @@ _LEARNING_MEDIUM = _snowball(
     checkpoints="best",
     export="best",
     name="learning-medium",
-    recipe=replace(_REPORTING_P40, layout=_RENO_P40.layout),
+    recipe=replace(_RENO_TRAINING, config=_RENO_TRAINING.config.merge(_GRADER_REPORT)),
     owned_keys=_OWNED_KEYS,
     updates=25,
     measured=range(21, 26),
@@ -401,18 +426,6 @@ _TRAIN_MEDIUM_AGENTIC = replace(
     ),
 )
 
-_CPU_OPTIMIZER_OFFLOAD = RecipePatch(
-    trainer=sections.Trainer(
-        policy=sections.Policy(
-            megatron_config=sections.PolicyMegatronConfig(
-                optimizer_config_kwargs=sections.OptimizerConfigKwargs(
-                    optimizer_cpu_offload=True, optimizer_offload_fraction=1.0
-                )
-            )
-        )
-    )
-)
-
 _TRAIN_MEDIUM_TOOLS = shell_tool_preset(
     replace(
         _TRAIN_LONG.with_updates(10),
@@ -428,62 +441,6 @@ _TRAIN_MEDIUM_TOOLS = shell_tool_preset(
         budget="40 H100s plus Daytona sandboxes; wall time and cost are unmeasured",
     ),
     name="train-medium-tools",
-)
-
-_SPEED_MEDIUM_GAPS = (*_GAPS, "mismatch-is-agreement")
-
-_SPEED_MEDIUM = _snowball(
-    evaluations=(),
-    name="speed-medium",
-    checkpoints="none",
-    recipe=replace(
-        _RENO_P40,
-        fixed_reply_tokens=4096,
-        config=_RENO_P40.config.merge(
-            RecipePatch(trainer=sections.Trainer(algorithm=sections.Algorithm(rloo_n_filter_zero_reward_groups=False)))
-        ),
-    ),
-    updates=10,
-    measured=range(2, 11),
-    owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
-    guards=_SPEED_GUARDS,
-    objectives=_SPEED_OBJECTIVES,
-    gaps=(*_SPEED_MEDIUM_GAPS, "layout-p40-only"),
-    budget="20m12s and 13.5 H100-h in the four-proposal comparison",
-)
-
-_SPEED_MEDIUM_16X16 = replace(
-    _SPEED_MEDIUM,
-    name="speed-medium-16x16",
-    recipe=replace(
-        _SPEED_MEDIUM.recipe,
-        layout=replace(
-            _RENO_P40.layout,
-            name="p16-r16",
-            workload=Training(replace(_P40_PLAN, policy_num_nodes=2, num_inference_engines=2)),
-        ),
-        # Keep Adam state in host memory to give the smaller learner GPU memory headroom.
-        config=_SPEED_MEDIUM.recipe.config.merge(_CPU_OPTIMIZER_OFFLOAD),
-    ),
-    guards=(),
-    objectives=_SPEED_GUARDS,
-    gaps=_SPEED_MEDIUM_GAPS,
-    budget="32 H100s; wall time and cost are unmeasured",
-)
-
-_SPEED_MEDIUM_8X8 = replace(
-    _SPEED_MEDIUM_16X16,
-    name="speed-medium-8x8",
-    recipe=replace(
-        _SPEED_MEDIUM_16X16.recipe,
-        layout=replace(
-            _RENO_P40.layout,
-            name="p8-r8",
-            workload=Training(replace(_P40_PLAN, policy_num_nodes=1)),
-            megatron=replace(_RENO_P40.layout.megatron, pipeline_model_parallel_size=1),
-        ),
-    ),
-    budget="16 H100s; wall time and cost are unmeasured",
 )
 
 _PRESETS = (
@@ -519,21 +476,38 @@ _PRESETS = (
         objectives=(Metric("screen_256x4/mixed_fraction", True),),
         budget="10-15 min; 2 H100-h",
     ),
-    _SPEED_MEDIUM,
-    _SPEED_MEDIUM_16X16,
-    _SPEED_MEDIUM_8X8,
+    _snowball(
+        evaluations=(),
+        name="speed-medium",
+        checkpoints="none",
+        recipe=replace(
+            _RENO_TRAINING,
+            fixed_reply_tokens=4096,
+            config=_RENO_TRAINING.config.merge(
+                RecipePatch(
+                    trainer=sections.Trainer(algorithm=sections.Algorithm(rloo_n_filter_zero_reward_groups=False))
+                )
+            ),
+        ),
+        updates=10,
+        measured=range(2, 11),
+        owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
+        guards=_SPEED_GUARDS,
+        objectives=_SPEED_OBJECTIVES,
+        gaps=(*_GAPS, "mismatch-is-agreement"),
+        budget="24 min; about 13 H100-h",
+    ),
     _snowball(
         evaluations=(),
         name="speed-long",
         checkpoints="none",
-        recipe=_RENO_P40,
+        recipe=_RENO_TRAINING,
         updates=20,
         measured=range(3, 21),
         owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
         guards=_SPEED_GUARDS,
         objectives=_SPEED_OBJECTIVES,
-        gaps=(*_GAPS, "layout-p40-only"),
-        budget="45-75 min; 30-50 H100-h",
+        budget="32 H100s; wall time and cost are unmeasured",
     ),
     _LEARNING_MEDIUM,
     replace(
