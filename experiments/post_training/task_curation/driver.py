@@ -60,9 +60,6 @@ from experiments.post_training.task_curation.config import (
     RecipeSettings,
 )
 from experiments.post_training.task_curation.cross_source_step import (
-    CROSS_SOURCE_DEDUP_VERSION as CROSS_SOURCE_KEY,
-)
-from experiments.post_training.task_curation.cross_source_step import (
     cross_source_dedup_step,
 )
 from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY
@@ -855,12 +852,13 @@ def main(
         }
         cross_source = cross_source_dedup_step(
             training_sources,
+            order=tuple(source.info.id for source in selected.values() if source.intended_use is IntendedUse.TRAIN),
             max_workers=max_workers,
             worker_resources=worker_resources,
         )
         if cross_source is not None:
             cross_source_result = run(cross_source, max_concurrent=1)[0]
-            click.echo(json.dumps({CROSS_SOURCE_KEY: cross_source_result.path}, indent=2))
+            click.echo(json.dumps({"cross_source_dedup": cross_source_result.path}, indent=2))
         if selection_step is not None or embedding is not None:
             roots = {source.info.id: step.path() for source, step in zip(selected.values(), curation_steps, strict=True)}
             _write_corpus(roots, inventory, report_path, "admitted")

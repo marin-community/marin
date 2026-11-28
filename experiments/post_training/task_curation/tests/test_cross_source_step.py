@@ -1,7 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The campaign cross-source dedup step records per-source drops and evidence."""
+"""The campaign cross-source dedup step records per-source drops and evidence.
+
+The single-source guard is the step's contract: with fewer than two training
+sources there is no cross-source duplication to record, and the driver skips
+the artifact entirely.
+"""
 
 from pathlib import Path
 
@@ -11,6 +16,7 @@ from fray.types import ResourceConfig
 from marin.execution.lazy import ArtifactStep
 from taskcompendium.convert.answers import numeric_answer_task
 from taskcompendium.models import Source, TaskSpec
+from taskcompendium.pipeline.cross_source import RetainedSource
 from taskcompendium.pipeline.models import RawRow
 
 from experiments.post_training.task_curation.cross_source_step import (
@@ -18,6 +24,8 @@ from experiments.post_training.task_curation.cross_source_step import (
     cross_source_dedup_step,
     run_cross_source_dedup,
 )
+
+RESOURCES = ResourceConfig(cpu=1, ram="1g")
 
 
 def arithmetic_task(task_id: str, prompt: str, answer: str) -> TaskSpec:
@@ -33,17 +41,6 @@ def write_final(path: Path, tasks: list[TaskSpec]) -> None:
     pq.write_table(pa.Table.from_pylist(rows), path / "part-00000.parquet")
 
 
-def test_step_returns_none_for_a_single_source():
-    assert (
-        cross_source_dedup_step(
-            {"alpha": _fake_step("alpha")},
-            max_workers=1,
-            worker_resources=ResourceConfig(cpu=1, ram="1g"),
-        )
-        is None
-    )
-
-
 def _fake_step(source_id: str):
     return ArtifactStep(
         name=f"source/{source_id}",
@@ -55,6 +52,18 @@ def _fake_step(source_id: str):
     )
 
 
+def test_step_returns_none_for_a_single_source():
+    assert (
+        cross_source_dedup_step(
+            {"alpha": _fake_step("alpha")},
+            order=("alpha",),
+            max_workers=1,
+            worker_resources=RESOURCES,
+        )
+        is None
+    )
+
+
 def test_run_records_the_later_source_duplicates_and_the_campaign_evidence(tmp_path):
     shared = arithmetic_task("shared-task", "What is 7 + 5?", "12")
     later_copy = shared.model_copy(update={"id": "shared-task-copy"})
@@ -63,13 +72,15 @@ def test_run_records_the_later_source_duplicates_and_the_campaign_evidence(tmp_p
     output = tmp_path / "cross-source"
     request = CrossSourceRequest(
         sources=(
-            ("alpha", str(tmp_path / "alpha" / "final"), 0),
-            ("beta", str(tmp_path / "beta" / "final"), 1),
+            RetainedSource(source_id="alpha", final_path=str(tmp_path / "alpha" / "final"), order=0),
+            RetainedSource(source_id="beta", final_path=str(tmp_path / "beta" / "final"), order=1),
         ),
         output_path=str(output),
+        max_workers=1,
+        worker_resources=RESOURCES,
     )
 
-    artifact = run_cross_source_dedup(request, max_workers=1, worker_resources=ResourceConfig(cpu=1, ram="1g"))
+    artifact = run_cross_source_dedup(request)
 
     assert artifact.manifest["cross_source_duplicates"] == 1
     assert artifact.manifest["sources"]["beta"]["cross_source_duplicates"] == 1
