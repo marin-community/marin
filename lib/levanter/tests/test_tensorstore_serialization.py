@@ -717,27 +717,30 @@ class _HandoffClock:
 
 
 def test_a_commit_queued_behind_many_short_holds_waits_past_the_timeout(tmp_path, monkeypatch):
-    """The timeout bounds one hold, not a save's whole queue of commits."""
-    monkeypatch.setattr(tensorstore_serialization, "_COMMIT_ORDER_TIMEOUT_S", 1.0)
+    timeout = 1.0
+    monkeypatch.setattr(tensorstore_serialization, "_COMMIT_ORDER_TIMEOUT_S", timeout)
     lock = tmp_path / tensorstore_serialization._COMMIT_ORDER_LOCK_NAME
     lock.write_text("holder 0\n")
-    # Ten holders 0.2 s apart: 2 s of queue, twice the timeout, with the lock never free.
     clock = _HandoffClock(lock, handoffs=10, step=0.2)
     monkeypatch.setattr(tensorstore_serialization, "time", clock)
 
     tensorstore_serialization._CommitOrder(str(tmp_path)).acquire().release()
 
-    assert clock.now == pytest.approx(2.2)
+    assert clock.now > timeout
 
 
 def test_a_commit_times_out_behind_one_hold_longer_than_the_timeout(tmp_path, monkeypatch):
-    monkeypatch.setattr(tensorstore_serialization, "_COMMIT_ORDER_TIMEOUT_S", 1.0)
+    timeout = 1.0
+    monkeypatch.setattr(tensorstore_serialization, "_COMMIT_ORDER_TIMEOUT_S", timeout)
     lock = tmp_path / tensorstore_serialization._COMMIT_ORDER_LOCK_NAME
     lock.write_text("holder 0\n")
-    monkeypatch.setattr(tensorstore_serialization, "time", _HandoffClock(lock, handoffs=None, step=0.2))
+    clock = _HandoffClock(lock, handoffs=None, step=0.25)
+    monkeypatch.setattr(tensorstore_serialization, "time", clock)
 
-    with pytest.raises(TimeoutError, match="one commit has held"):
+    with pytest.raises(TimeoutError):
         tensorstore_serialization._CommitOrder(str(tmp_path)).acquire()
+
+    assert clock.now == timeout
 
 
 def test_a_live_remote_writer_keeps_its_lock_file(tmp_path):

@@ -59,11 +59,12 @@ _LOCK_FILE_SUFFIX = ".__lock"
 # Orders manifest commits across processes. TensorStore's lock excludes writers but does not
 # refresh another client's cached directory entry, so a commit can rename over a newer manifest.
 _COMMIT_ORDER_LOCK_NAME = ".commit-order.lock"
-# A waiter gives up once one holder has kept the lock this long. A save's hundreds of commits queue
-# on the lock and together take longer, so the wait restarts whenever the lock changes hands.
+# The wait deadline restarts each time the commit-order lock changes hands.
 _COMMIT_ORDER_TIMEOUT_S = 600
 # A live save refreshes this file. The next save removes lock files only after it is gone or stale.
 _WRITER_LEASE_NAME = ".writer-lease"
+# Bounds the total wait to acquire a writer lease.
+_WRITER_LEASE_TIMEOUT = 600
 _WRITER_LEASE_REFRESH_S = 30
 _WRITER_LEASE_STALE_S = 90
 _AT_FDCWD = -100
@@ -432,7 +433,7 @@ class _WriterLease:
         return True
 
     def acquire(self) -> None:
-        deadline = time.monotonic() + _COMMIT_ORDER_TIMEOUT_S
+        deadline = time.monotonic() + _WRITER_LEASE_TIMEOUT
         while not self.try_acquire():
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"Timed out waiting for the checkpoint writer holding {self.path}")
