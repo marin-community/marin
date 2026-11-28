@@ -37,7 +37,7 @@ from rigging.inference_clock import remote_execution_watchdog, current_inference
 from rolloutengine.models import ModelTurn, Prompt
 from rolloutengine.models import TaskRolloutSpec
 from shellbox.machine import Machine, NetworkPolicy
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskSpec
 from taskcompendium.submission import conversation_messages
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -69,6 +69,45 @@ def package_config(task: TaskSpec) -> PackageTaskConfig:
     return PackageTaskConfig.model_validate_toml(
         resource_bytes(next(resource for resource in task.resources.verifier if resource.path == "task.toml")).decode()
     )
+
+
+def package_environment_requirements(task: TaskSpec) -> EnvironmentRequirements:
+    """The Harbor package's declared [environment], as TaskSpec environment requirements.
+
+    Shared-source packages (SWE-rebench V2.1@repaired and the like) resolve their prebuilt
+    image once and deliberately declare the SAME docker image, command semantics and env
+    vars in both the package task.toml and the TaskSpec, so the catalog carries them. The
+    recording engine derives the trial environment from the run settings and this package
+    config instead; the TaskSpec copies are declarations, not second sources of truth.
+    """
+    environment = package_config(task).environment
+    return EnvironmentRequirements(
+        capabilities=task.environment_requirements.capabilities,
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_image=environment.docker_image,
+        environment_variables=dict(environment.env),
+    )
+
+
+def harbor_trial_engine_requirements(task: TaskSpec) -> EnvironmentRequirements:
+    """Engine-visible environment requirements for a Harbor-trial task.
+
+    Accepts the TaskSpec's declared requirements when they are IDENTICAL to the Harbor
+    package's [environment] (setup commands and the working directory keep their own
+    override paths); fails closed on any mismatch or extra requirement so a package and
+    its TaskSpec can never disagree about what runs.
+    """
+    engine = task.environment_requirements.model_copy(update={"setup_commands": (), "working_directory": None})
+    declared = package_environment_requirements(task)
+    if engine != declared:
+        raise ValueError(
+            "TaskSpec environment requirements disagree with the Harbor package's declared "
+            "[environment]; shared-source packages must declare the identical docker image, "
+            "command semantics and env vars in both places "
+            f"(TaskSpec: {engine.model_dump(exclude_none=True)}; "
+            f"package: {declared.model_dump(exclude_none=True)})"
+        )
+    return engine
 
 
 def trial_setup_commands(task: TaskSpec) -> tuple[str, ...]:

@@ -22,7 +22,8 @@ from rigging.redaction import redact_string
 from rigging.secrets import get_secret, require_secret
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
-from taskcompendium.models import EnvironmentRequirements, NoGrader, ReasoningMarkupPolicy
+from skyrl_train.rollouts.agent_runtime import harbor_trial_engine_requirements
+from taskcompendium.models import NoGrader, ReasoningMarkupPolicy
 from verifyit.modes.grade_judge import JudgeConnection
 from rolloutengine.harness.core import Harness
 from rolloutengine.harness.external import AgentHarness
@@ -570,14 +571,7 @@ class TaskRolloutWorker:
         if lowered.harness == HARBOR_TRIAL_SESSION:
             if harbor is None or self.installed_agents is None:
                 raise ValueError("Full Harbor trials require Harbor and installed-agent settings")
-            engine_requirements = lowered.task.environment_requirements.model_copy(
-                update={"setup_commands": (), "working_directory": None}
-            )
-            if engine_requirements != EnvironmentRequirements():
-                raise ValueError(
-                    "Declare environment requirements in the Harbor package; "
-                    "TaskSpec overrides support only setup_commands and their working_directory"
-                )
+            engine_requirements = harbor_trial_engine_requirements(lowered.task)
             harnesses[HARBOR_TRIAL_SESSION] = self.installed_agents.original_harness(lowered, session_id, harbor, phase)
             # The bound Harbor trial retains and executes the original setup.
             # The recording engine must not provision a second task machine for it.
